@@ -1,8 +1,0 @@
-/* 颜色变量 - 保留用于旧页面兼容 */
-:root {
-  --vt-c-white: #ffffff;
-  --vt-c-black: #181818;
-  --vt-c-indigo: #2c3e50;
-  --color-text: var(--vt-c-indigo);
-  --color-background: var(--vt-c-white);
-}
