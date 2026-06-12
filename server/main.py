@@ -32,35 +32,18 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-from apps.complaint_app.fastapi_routes import router as complaint_router  # noqa: E402
-from apps.inspection_app import violation_router  # noqa: E402
-from apps.specialist_app.routes import router as specialist_router  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
-from apps.word_fit_app import router as word_fit_router  # noqa: E402
-from apps.chat_assistant import router as chat_assistant_router  # noqa: E402
-import apps.general_app  # noqa: E402, F401  # 注册 general agent
 from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
 from utils.lang_util.checkpoint import setup_checkpointer  # noqa: E402
 from utils.file_service import file_router  # noqa: E402
-from routes.chat_routes import router as chat_router  # noqa: E402
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     from utils.lang_util.database import close_database
-    from apps.complaint_app.opencode_runtime.agents.agents import AgentRegistry
-    from apps.complaint_app.opencode_runtime.tools.registry import ToolRegistry
-    from apps.complaint_app.core.llm.models_info import load_models_info
 
     await setup_checkpointer()
-    AgentRegistry.registry()
-    ToolRegistry.registry()
-    try:
-        models = load_models_info()
-        logger.info("[startup] preloaded models_info count=%s", len(models))
-    except Exception as exc:
-        logger.warning("[startup] preload models_info failed: %s", exc)
     yield
     await close_database()
 
@@ -95,15 +78,9 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 app.add_middleware(APIAccessLogMiddleware)
-app.include_router(complaint_router)
-app.include_router(violation_router)
-app.include_router(specialist_router)
 app.include_router(chat_data_router)
-app.include_router(word_fit_router)
-app.include_router(chat_assistant_router)
 app.include_router(conversation_router)
 app.include_router(file_router)
-app.include_router(chat_router)
 
 
 @app.get("/healthz")

@@ -24,7 +24,7 @@ const router = createRouter({
         {
           path: 'inspection',
           name: 'Inspection',
-          component: () => import('@/views/inspection/views/index.vue'),
+          component: () => import('@/views/ComingSoon.vue'),
           meta: { title: '执法检查' }
         },
         {
@@ -42,13 +42,13 @@ const router = createRouter({
         {
           path: 'expert',
           name: 'Expert',
-          component: () => import('@/views/expert/index.vue'),
+          component: () => import('@/views/ComingSoon.vue'),
           meta: { title: '法律助手' }
         },
         {
           path: 'expert/:conversationId',
           name: 'ExpertConversation',
-          component: () => import('@/views/expert/index.vue'),
+          component: () => import('@/views/ComingSoon.vue'),
           meta: { title: '法律助手' }
         },
       ]
