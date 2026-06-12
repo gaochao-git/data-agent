@@ -1,6 +1,8 @@
 ---
 base_model:
 - ""
+frameworks:
+- other
 tasks: []
 ---
 # fxcjg
@@ -44,3 +46,4 @@ git push modelscope main:github-main
 git push origin release-20251211
 git push modelscope release-20251211:github-release-20251211
 git push modelscope_v2 main:github-main
+
