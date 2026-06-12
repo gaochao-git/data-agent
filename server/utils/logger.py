@@ -43,7 +43,7 @@ def get_current_log_dir() -> str:
 
 def get_current_log_file() -> str:
     """读取当前日志文件名。"""
-    return _env_text("LOG_FILE", "fxcjg_app.log")
+    return _env_text("LOG_FILE", "data_agent_app.log")
 
 
 def get_current_console_output() -> bool:
@@ -108,7 +108,7 @@ class LoggerManager:
         若环境变量中的日志路径配置发生变化，则重新创建 handler。
         """
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or '').strip() or 'fxcjg_app.log', int(backup_count))
+        handler_key = (resolved_dir, str(log_file_name or '').strip() or 'data_agent_app.log', int(backup_count))
         if cls._file_handler is not None and cls._file_handler_key == handler_key:
             return cls._file_handler
         if cls._file_handler is not None:
@@ -141,7 +141,7 @@ class LoggerManager:
         name: str,
         log_level: str = "INFO",
         log_dir: str = "logs",
-        log_file_name: str = "fxcjg_app.log",
+        log_file_name: str = "data_agent_app.log",
         backup_count: int = 30,
         console_output: bool = True,
         file_output: bool = True
