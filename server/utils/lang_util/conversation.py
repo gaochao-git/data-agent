@@ -531,7 +531,7 @@ async def get_detail(
     pending_tool = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
-    # 某些 agent（如 specialist_app）不使用 LangGraph，有自己的消息存储
+    # 部分 agent 不使用 LangGraph，有自己的消息存储
     if get_graph is not None:
         config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
         async with get_checkpointer_fn() as checkpointer:

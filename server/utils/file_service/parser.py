@@ -108,37 +108,15 @@ async def parse_file(file_id: str) -> bool:
 
 async def _parse_image(file_dir: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
     """
-    解析图片文件 - 使用 LLM OCR 识别文字
+    解析图片文件 - 生成 Markdown 原图引用
     """
     try:
-        from apps.complaint_app.tools.image_text_extractor_llm import recognize_image
-    except ImportError:
-        logger.error("OCR 模块导入失败")
-        return None
-
-    try:
-        # 调用 LLM OCR 识别
-        result = recognize_image(str(original_path), prompt="请识别图片中的所有文字内容")
-        ocr_text = result.get("text_content", "")
-
-        if not ocr_text or ocr_text.startswith("错误") or ocr_text.startswith("OCR识别失败"):
-            # OCR 失败，生成简单引用
-            md_content = f"""# {original_filename}
+        md_content = f"""# {original_filename}
 
 ![{original_filename}](original.{file_type})
 
-> 图片文字识别失败，请直接查看原图。
+> 当前服务未启用图片 OCR，请直接查看原图。
 """
-        else:
-            # OCR 成功
-            md_content = f"""# {original_filename}
-
-## 识别内容
-
-{ocr_text}
-"""
-
-        # 保存Markdown
         parse_filename = "parsed.md"
         md_path = file_dir / parse_filename
         with open(md_path, "w", encoding="utf-8") as f:

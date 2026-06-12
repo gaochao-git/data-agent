@@ -4,39 +4,21 @@
  */
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
 
-// 已开发的路由路径
-const availableRoutes = ['/chatdata', '/inspection', '/expert']
-
 // 侧边栏折叠状态
 const sidebarCollapsed = ref(false)
 
-// 展开的菜单
-const expandedMenu = ref<string[]>([])
-
-// 顶部一级导航菜单 - 执法检查子功能模块
+// 顶部一级导航菜单
 const topMenuItems = [
-  { key: 'home', label: '法律助手', icon: 'fa-scale-balanced', path: '/expert' },
-  { key: 'fact_analysis', label: '事实认定分析', icon: 'fa-file-lines', path: '/inspection' },
-  { key: 'inspection_report', label: '检查报告撰写', icon: 'fa-pen-to-square', path: '/inspection' },
-  { key: 'rectification_notice', label: '整改通知书撰写', icon: 'fa-envelope-open-text', path: '/inspection' },
-  { key: 'info_form', label: '信息简表撰写', icon: 'fa-table', path: '/inspection' },
-  { key: 'evidence_catalog', label: '证据目录撰写', icon: 'fa-list-check', path: '/inspection' },
-  { key: 'stats', label: '统计分析', icon: 'fa-chart-simple', path: '/chatdata' },
+  { key: 'chatdata', label: '智能问数', icon: 'fa-chart-simple', path: '/chatdata' },
 ]
 
-// 侧边栏二级菜单 - 执法检查子功能菜单
+// 侧边栏菜单
 const sidebarMenu = [
-  { key: 'fact_analysis', label: '事实认定分析', icon: 'fa-file-lines', path: '/inspection' },
-  { key: 'inspection_report', label: '检查报告撰写', icon: 'fa-pen-to-square', path: '/inspection' },
-  { key: 'rectification_notice', label: '整改通知书撰写', icon: 'fa-envelope-open-text', path: '/inspection' },
-  { key: 'info_form', label: '信息简表撰写', icon: 'fa-table', path: '/inspection' },
-  { key: 'evidence_catalog', label: '证据目录撰写', icon: 'fa-list-check', path: '/inspection' },
-  { key: 'stats', label: '统计分析', icon: 'fa-chart-simple', path: '/chatdata' },
+  { key: 'chatdata', label: '智能问数', icon: 'fa-chart-simple', path: '/chatdata' },
 ]
 
 // 兼容旧路由
@@ -45,56 +27,28 @@ const menuItems = topMenuItems
 // 当前激活的顶部菜单
 const activeTopMenu = computed(() => {
   const path = route.path
-  if (path.startsWith('/chatdata')) return 'stats'
-  if (path.startsWith('/expert')) return 'home'
-  if (path.startsWith('/inspection')) {
-    // 根据查询参数判断具体是哪个子功能
-    const agentId = route.query.agentId as string
-    if (agentId?.includes('fact') || agentId?.includes('ssrd')) return 'fact_analysis'
-    if (agentId?.includes('rectification') || agentId?.includes('zgtzs')) return 'rectification_notice'
-    if (agentId?.includes('info') || agentId?.includes('xxjb')) return 'info_form'
-    if (agentId?.includes('evidence') || agentId?.includes('zjml')) return 'evidence_catalog'
-    return 'inspection_report' // 默认检查报告
-  }
-  return 'home'
+  if (path.startsWith('/chatdata')) return 'chatdata'
+  return 'chatdata'
 })
 
-// 当前模块信息（根据路由显示执法检查或子功能）
+// 当前模块信息
 const currentModule = computed(() => {
-  const path = route.path
-  if (path.startsWith('/inspection')) {
-    return { label: '执法检查', icon: 'fa-magnifying-glass' }
-  }
-  return { label: '执法检查', icon: 'fa-magnifying-glass' }
+  return { label: '智能问数', icon: 'fa-chart-simple' }
 })
 
 // 当前侧边栏菜单
 const currentSidebarMenu = computed(() => {
-  // 如果当前在执法检查路径下，返回执法检查子功能菜单
-  if (route.path.startsWith('/inspection')) {
-    return sidebarMenu.filter(item => item.key !== 'stats') // 移除统计，只保留执法检查相关
-  }
-  return sidebarMenu.filter(item => item.key !== 'stats') // 默认显示执法检查菜单
+  return sidebarMenu
 })
 
 // 当前激活的侧边栏菜单项
 const activeSidebarItem = computed(() => {
   const path = route.path
-  // 检查路径匹配
-  if (path.startsWith('/chatdata')) return 'stats'
-  if (path.startsWith('/inspection')) {
-    // 根据查询参数判断具体是哪个子功能
-    const agentId = route.query.agentId as string
-    if (agentId?.includes('fact') || agentId?.includes('ssrd')) return 'fact_analysis'
-    if (agentId?.includes('rectification') || agentId?.includes('zgtzs')) return 'rectification_notice'
-    if (agentId?.includes('info') || agentId?.includes('xxjb')) return 'info_form'
-    if (agentId?.includes('evidence') || agentId?.includes('zjml')) return 'evidence_catalog'
-    return 'inspection_report' // 默认检查报告
-  }
+  if (path.startsWith('/chatdata')) return 'chatdata'
   for (const item of currentSidebarMenu.value) {
     if (path === item.path || path.startsWith(item.path + '/')) return item.key
   }
-  return 'fact_analysis'
+  return 'chatdata'
 })
 
 // 兼容旧代码
@@ -105,53 +59,12 @@ const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-// 切换子菜单
-const toggleSubmenu = (key: string) => {
-  if (expandedMenu.value.includes(key)) {
-    expandedMenu.value = expandedMenu.value.filter(k => k !== key)
-  } else {
-    expandedMenu.value = [...expandedMenu.value, key]
-  }
-}
-
-// 顶部菜单到agentId的映射
-const menuToAgentId: Record<string, string> = {
-  'fact_analysis': 'fact_analysis',   // 事实认定分析
-  'inspection_report': 'report_jcbg', // 检查报告撰写
-  'rectification_notice': 'report_zgtzs',   // 整改通知书撰写
-  'info_form': 'report_xxjb',               // 信息简表撰写
-  'evidence_catalog': 'report_zjml',        // 证据目录撰写
-}
-
 // 导航 - 接受菜单key作为参数
 const navigateTo = (menuKey: string) => {
-  // 处理专家/法律助手页面
-  if (menuKey === 'home') {
-    router.push({ path: '/expert' })
-    return
-  }
-
-  // 处理统计分析页面
-  if (menuKey === 'stats') {
-    router.push({ path: '/chatdata' })
-    return
-  }
-
-  // 检查是否是执法检查相关菜单
-  if (menuToAgentId[menuKey]) {
-    router.push({
-      path: '/inspection',
-      query: { agentId: menuToAgentId[menuKey] }
-    })
-    return
-  }
-
-  // 其他情况查找菜单项的path
-  const menuItem = topMenuItems.find(item => item.key === menuKey)
-  if (menuItem && availableRoutes.some(r => menuItem.path.startsWith(r))) {
+  const menuItem = topMenuItems.find(item => item.key === menuKey) || sidebarMenu.find(item => item.key === menuKey)
+  if (menuItem) {
     router.push({ path: menuItem.path })
-  } else {
-    ElMessage.info('功能开发中，敬请期待')
+    return
   }
 }
 </script>
@@ -164,11 +77,11 @@ const navigateTo = (menuKey: string) => {
         <button class="toggle-btn" @click="toggleSidebar">
           <i class="fa-solid fa-bars"></i>
         </button>
-        <div class="logo">
+          <div class="logo">
           <div class="logo-icon">
-            <i class="fa-solid fa-file-lines"></i>
+            <i class="fa-solid fa-chart-simple"></i>
           </div>
-          <span class="logo-text">审批监管管理系统</span>
+          <span class="logo-text">Data Agent</span>
         </div>
       </div>
 
@@ -226,37 +139,10 @@ const navigateTo = (menuKey: string) => {
           <i class="fa-solid fa-chevron-right module-arrow"></i>
         </div>
 
-        <!-- 导航菜单 - 二级菜单 -->
+        <!-- 导航菜单 -->
         <nav class="sidebar-nav">
           <template v-for="item in currentSidebarMenu" :key="item.key">
-            <!-- 有子菜单的项 -->
-            <div v-if="item.hasSubmenu">
-              <div
-                class="nav-item"
-                :class="{ expanded: expandedMenu.includes(item.key) }"
-                @click="toggleSubmenu(item.key)"
-              >
-                <i :class="['fa-solid', item.icon, 'nav-icon']"></i>
-                <span v-if="!sidebarCollapsed" class="nav-label">{{ item.label }}</span>
-                <i v-if="!sidebarCollapsed" :class="['fa-solid', 'fa-chevron-down', 'nav-arrow', { rotated: expandedMenu.includes(item.key) }]"></i>
-              </div>
-              <!-- 子菜单 -->
-              <div v-if="expandedMenu.includes(item.key) && !sidebarCollapsed" class="submenu">
-                <div
-                  v-for="sub in item.submenu"
-                  :key="sub.key"
-                  class="submenu-item"
-                  :class="{ active: activeSidebarItem === sub.key }"
-                  @click.stop="navigateTo(sub.key)"
-                >
-                  <span class="submenu-dot"></span>
-                  <span>{{ sub.label }}</span>
-                </div>
-              </div>
-            </div>
-            <!-- 普通菜单项 -->
             <div
-              v-else
               class="nav-item"
               :class="{ active: activeSidebarItem === item.key }"
               @click="navigateTo(item.key)"
@@ -600,61 +486,6 @@ const navigateTo = (menuKey: string) => {
   font-weight: 500;
   white-space: nowrap;
   flex: 1;
-}
-
-.nav-arrow {
-  font-size: 10px;
-  color: #94a3b8;
-  transition: transform 0.2s;
-}
-
-.nav-arrow.rotated {
-  transform: rotate(180deg);
-}
-
-.nav-item.expanded {
-  background: #f1f5f9;
-  color: #1e293b;
-}
-
-/* 子菜单 */
-.submenu {
-  margin-left: 20px;
-  padding: 4px 0;
-}
-
-.submenu-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  color: #64748b;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.submenu-item:hover {
-  background: #f1f5f9;
-  color: #1e293b;
-}
-
-.submenu-item.active {
-  background: #eff6ff;
-  color: #1f82d9;
-  font-weight: 500;
-}
-
-.submenu-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #cbd5e1;
-}
-
-.submenu-item.active .submenu-dot {
-  background: #1f82d9;
 }
 
 /* 内容区 */

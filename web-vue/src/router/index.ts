@@ -16,41 +16,11 @@ const router = createRouter({
           meta: { title: '智能问数' }
         },
         {
-          path: 'assistant',
-          name: 'Assistant',
-          component: () => import('@/views/ComingSoon.vue'),
-          meta: { title: '智能助手' }
-        },
-        {
-          path: 'inspection',
-          name: 'Inspection',
-          component: () => import('@/views/ComingSoon.vue'),
-          meta: { title: '执法检查' }
-        },
-        {
-          path: 'complaint',
-          name: 'Complaint',
-          component: () => import('@/views/ComingSoon.vue'),
-          meta: { title: '投诉分析' }
-        },
-        {
           path: 'test-dialog',
           name: 'TestDialog',
           component: () => import('@/views/TestChatDataDialog.vue'),
           meta: { title: '弹窗测试' }
-        },
-        {
-          path: 'expert',
-          name: 'Expert',
-          component: () => import('@/views/ComingSoon.vue'),
-          meta: { title: '法律助手' }
-        },
-        {
-          path: 'expert/:conversationId',
-          name: 'ExpertConversation',
-          component: () => import('@/views/ComingSoon.vue'),
-          meta: { title: '法律助手' }
-        },
+        }
       ]
     },
   ],
