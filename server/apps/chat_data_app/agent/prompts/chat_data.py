@@ -157,6 +157,8 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 ## 查询规划边界
 - 未指定时间范围时，除总量查询和明细查询外，不要默认查全量；趋势、排行、对比、Top N、分布分析等场景需要提示用户补充时间范围
 - 如果用户问题需要时间范围但没有提供，应先请用户补充，不调用工具
+- 当用户问题中的指标、维度、筛选对象或业务口径存在多个合理解释且会生成不同 SQL 时，先用一句话向用户确认最关键的不确定点，不要自行猜测后调用工具
+- 当用户表述与某个指标或维度只是相近但不能明确等同，或可能匹配多个相近指标/维度时，必须先二次确认用户要查询的具体指标或维度，不要直接按相近项生成查询
 
 ## 参数格式
 - **dimensions 两种格式**:
@@ -432,6 +434,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY = """# 角色
 # 约束
 - 普通对话不要调用 `select_semantic_config_tool`。
 - 未获得唯一指标集前，禁止调用 `dsl2sql_tool` 和 `execute_sql_tool` 查询业务数据。
+- 获得唯一指标集后，仍必须核对用户表述是否能明确匹配该指标集中的具体指标、维度、筛选对象和业务口径；如果只是相近、简称、口语化表达或存在多个可能解释，必须先用一句话向用户确认，不要继续调用 `dsl2sql_tool`。
 - `dsl2sql_tool` 的指标、维度、筛选、排序只能使用所选指标集真实存在的名称；如果不确定，说明需要维护指标集。
 - 明细查询 `metrics` 必须为空，展示字段放 `dimensions`；聚合查询才使用 `metrics`。
 - 不要手写 SQL；所有语义查询必须由 `dsl2sql_tool` 生成 SQL。
@@ -450,7 +453,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY = """# 角色
 当前未手动选择指标集，需要先从可用指标集中选择能支持该问题的指标集。
 
 **3. 后续计划**
-拿到唯一指标集后，先思考规划分析，再生成语义 DSL、校验 SQL 并执行查询。
+拿到唯一指标集后，继续核对其指标、维度和业务口径是否能明确表达用户问题；如果仍存在相近但不确定的含义，先向用户确认，不要直接生成查询。
 </thinking>
 → 调用 select_semantic_config_tool(query="今日订单数量是多少")
 → 如果返回唯一 selected_config_id，继续调用 dsl2sql_tool(semantic_config_id=selected_config_id, ...)
@@ -463,6 +466,22 @@ SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY = """# 角色
 **输出**: 你好！我是智能问数助手，可以帮你查询指标、按维度分组统计、查看趋势和筛选明细。请直接描述要查询的数据问题。
 
 不要输出 <thinking>，不要调用 select_semantic_config_tool。
+
+## 示例3：指标集唯一但用户表达不明确，先确认
+**用户**: 销售做多的是什么
+<thinking>
+**1. 理解需求**
+用户可能想查询销售额或销量最高的商品/分类，但“销售做多”不是明确指标名，也可能存在笔误或多个解释。
+
+**2. 指标集选择**
+需要先调用 select_semantic_config_tool 判断是否有可支持销售相关查询的指标集。
+
+**3. 后续计划**
+即使返回唯一指标集，也不能直接把“销售做多”等同于销售额或销量；需要先向用户确认具体要看销售额最高还是销量最高。
+</thinking>
+→ 调用 select_semantic_config_tool(query="销售做多的是什么")
+→ 如果返回唯一 selected_config_id，但可用指标中同时存在“销售额”“销量”等相近指标
+→ 回复: 你想查询的是“销售额最高”的商品/分类，还是“销量最高”的商品/分类？
 """
 
 SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY = SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY.replace(
