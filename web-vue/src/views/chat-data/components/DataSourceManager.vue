@@ -1,0 +1,1934 @@
+<script setup lang="ts">
+/**
+ * 数据源管理组件
+ * 支持数据源列表展示、新建数据源组、删除、设为默认
+ */
+import { ref, computed, onMounted, h } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  getDatasources,
+  deleteDatasource,
+  getDbTables,
+  setDefaultDatasource,
+  unsetDefaultDatasource,
+  updateDatasource,
+  updateMappedModules,
+  createDatasourceGroup,
+  updateDatasourceGroup,
+  getDatasourceTableGroups,
+  updateDatasourceTableGroups,
+  updateDatasourceTableBusinessDesc,
+  getDatasourceColumnDict,
+  getDatasourceTableColumnDicts,
+  updateDatasourceColumnDict,
+  generateDatasourceColumnDict,
+  getDatasourceSemanticHealth,
+} from '../api'
+import type { ColumnInfo, DataSource, TableInfo } from '../types'
+import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
+
+const emit = defineEmits<{
+  (e: 'datasources-change', datasources: DataSource[]): void
+  (e: 'open-semantic-config', datasourceId: string): void
+}>()
+
+// 数据源列表
+const datasources = ref<DataSource[]>([])
+const datasourcesLoading = ref(false)
+const expandedDatasources = ref<Set<string>>(new Set())
+const expandedTables = ref<Set<string>>(new Set())
+const datasourceTableSearchKeywords = ref<Record<string, string>>({})
+
+// 数据源组
+const showGroupModal = ref(false)
+const creatingGroup = ref(false)
+const editingGroupId = ref<string | null>(null)
+const isEditingGroup = computed(() => !!editingGroupId.value)
+const loadingGroupTables = ref(false)
+const groupDbTables = ref<string[]>([])
+const selectedGroupTables = ref<Set<string>>(new Set())
+const groupTableSearchKeyword = ref('')
+const groupTableSnapshotKey = ref('')
+const groupSourceTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const groupSourceScrollTop = ref(0)
+const groupForm = ref({
+  group_name: '',
+  group_desc: '',
+  source_type: 'hive' as 'mysql' | 'hive',
+  datasource_sources_text: '',
+})
+
+// 设置默认
+const settingDefaultId = ref<string | null>(null)
+// 重命名
+const renamingDatasourceId = ref<string | null>(null)
+
+// 模块映射编辑
+const mappingDsId = ref<string | null>(null)
+const mappingModules = ref<string[]>([])
+const mappingInput = ref('')
+const savingMapping = ref(false)
+
+// 表分组管理
+const showTableGroupModal = ref(false)
+const tableGroupDs = ref<DataSource | null>(null)
+const tableGroupRows = ref<DatasourceTableGroupItem[]>([])
+const tableGroupNameInput = ref('')
+const tableGroupSearchKeyword = ref('')
+const activeTableGroupName = ref('')
+const editingTableGroupName = ref('')
+const editingTableGroupInput = ref('')
+const loadingTableGroups = ref(false)
+const savingTableGroups = ref(false)
+
+// 表业务说明编辑
+const editingTableBusinessDescKey = ref('')
+const tableBusinessDescInput = ref('')
+const savingTableBusinessDescKey = ref('')
+
+// 字段数据字典维护
+const showColumnDictModal = ref(false)
+const columnDictContext = ref<{ datasource: DataSource; table: TableInfo; column: ColumnInfo } | null>(null)
+const columnDictRows = ref<DatasourceColumnDictEnumItem[]>([])
+const columnDictSynonyms = ref<string[]>([])
+const columnDictStorageFormat = ref('')
+const columnDictUnit = ref('')
+const loadingColumnDict = ref(false)
+const savingColumnDict = ref(false)
+const generatingColumnDict = ref(false)
+const columnDictGenerateText = ref('')
+const columnDictStatusMap = ref<Record<string, boolean>>({})
+const columnDictStatusLoadedKeys = ref<Set<string>>(new Set())
+const columnDictStatusLoadingKeys = ref<Set<string>>(new Set())
+
+const emptyColumnDict = (): DatasourceColumnDictPayload => ({
+  enum_values: [],
+  synonyms: [],
+  storage_format: '',
+  unit: '',
+})
+
+const hasColumnDictContent = (dict?: Partial<DatasourceColumnDictPayload> | null) => {
+  if (!dict) return false
+  return Boolean(
+    (dict.enum_values || []).length > 0 ||
+    String(dict.storage_format || '').trim() ||
+    String(dict.unit || '').trim()
+  )
+}
+
+const isSameColumnDictContext = (dsId: string, tableName: string, columnName: string) => {
+  const context = columnDictContext.value
+  return Boolean(
+    showColumnDictModal.value &&
+    context &&
+    context.datasource.id === dsId &&
+    context.table.table_name === tableName &&
+    context.column.name === columnName
+  )
+}
+
+// 指标集健康校验
+const checkingHealthId = ref<string | null>(null)
+const showHealthModal = ref(false)
+const healthResult = ref<DatasourceSemanticHealthResult | null>(null)
+
+const openMappingPopover = (ds: DataSource) => {
+  mappingDsId.value = ds.id
+  mappingModules.value = [...(ds.mapped_modules || [])]
+  mappingInput.value = ''
+}
+
+const closeMappingPopover = () => {
+  mappingDsId.value = null
+  mappingModules.value = []
+  mappingInput.value = ''
+}
+
+const addMappingModule = () => {
+  const val = mappingInput.value.trim()
+  if (val && !mappingModules.value.includes(val)) {
+    mappingModules.value.push(val)
+  }
+  mappingInput.value = ''
+}
+
+const removeMappingModule = (index: number) => {
+  mappingModules.value.splice(index, 1)
+}
+
+const saveMappingModules = async () => {
+  if (!mappingDsId.value) return
+  savingMapping.value = true
+  try {
+    const res = await updateMappedModules(mappingDsId.value, mappingModules.value)
+    if (res.status === 'success') {
+      ElMessage.success('映射模块已保存')
+      closeMappingPopover()
+      fetchDatasources()
+    } else {
+      ElMessage.error(res.msg || '保存失败')
+    }
+  } catch {
+    ElMessage.error('保存失败')
+  } finally {
+    savingMapping.value = false
+  }
+}
+
+const tableGroupTables = computed(() => tableGroupDs.value?.ds_tables || [])
+const filteredTableGroupTables = computed(() => {
+  const keyword = tableGroupSearchKeyword.value.trim().toLowerCase()
+  if (!keyword) return tableGroupTables.value
+  return tableGroupTables.value.filter(table =>
+    table.table_name.toLowerCase().includes(keyword) ||
+    table.description?.toLowerCase().includes(keyword) ||
+    table.business_desc?.toLowerCase().includes(keyword)
+  )
+})
+const activeTableGroup = computed(() =>
+  tableGroupRows.value.find(item => item.table_group_name === activeTableGroupName.value) || null
+)
+const activeTableGroupTableNames = computed(() =>
+  new Set(activeTableGroup.value?.table_names || [])
+)
+const getDatasourceTableSearchKeyword = (datasourceId: string) => datasourceTableSearchKeywords.value[datasourceId] || ''
+
+const setDatasourceTableSearchKeyword = (datasourceId: string, keyword: string) => {
+  datasourceTableSearchKeywords.value = { ...datasourceTableSearchKeywords.value, [datasourceId]: keyword }
+}
+
+const getFilteredDatasourceTables = (ds: DataSource) => {
+  const tables = ds.ds_tables || []
+  const keyword = getDatasourceTableSearchKeyword(ds.id).trim().toLowerCase()
+  if (!keyword) return tables
+  return tables.filter(table =>
+    table.table_name.toLowerCase().includes(keyword) ||
+    (table.description || '').toLowerCase().includes(keyword) ||
+    (table.business_desc || '').toLowerCase().includes(keyword)
+  )
+}
+
+const normalizeTableGroupRows = (groups: DatasourceTableGroupItem[]) => {
+  const map = new Map<string, Set<string>>()
+  groups.forEach(group => {
+    const groupName = group.table_group_name.trim()
+    if (!groupName) return
+    if (!map.has(groupName)) map.set(groupName, new Set())
+    ;(group.table_names || []).forEach(tableName => {
+      const normalizedTableName = String(tableName || '').trim()
+      if (normalizedTableName) map.get(groupName)?.add(normalizedTableName)
+    })
+  })
+  return Array.from(map.entries())
+    .map(([table_group_name, tableNames]) => ({ table_group_name, table_names: Array.from(tableNames).sort((a, b) => a.localeCompare(b)) }))
+    .sort((a, b) => a.table_group_name.localeCompare(b.table_group_name))
+}
+
+const closeTableGroupModal = () => {
+  showTableGroupModal.value = false
+  tableGroupDs.value = null
+  tableGroupRows.value = []
+  tableGroupNameInput.value = ''
+  tableGroupSearchKeyword.value = ''
+  activeTableGroupName.value = ''
+  editingTableGroupName.value = ''
+  editingTableGroupInput.value = ''
+}
+
+const openTableGroupModal = async (ds: DataSource) => {
+  tableGroupDs.value = ds
+  showTableGroupModal.value = true
+  tableGroupRows.value = []
+  tableGroupNameInput.value = ''
+  tableGroupSearchKeyword.value = ''
+  activeTableGroupName.value = ''
+  editingTableGroupName.value = ''
+  editingTableGroupInput.value = ''
+  loadingTableGroups.value = true
+  try {
+    const res = await getDatasourceTableGroups(ds.id)
+    if (res.status === 'success') {
+      tableGroupRows.value = normalizeTableGroupRows(res.data?.groups || [])
+      activeTableGroupName.value = tableGroupRows.value[0]?.table_group_name || ''
+    } else {
+      ElMessage.error(res.msg || '获取表分组失败')
+    }
+  } catch {
+    ElMessage.error('获取表分组失败')
+  } finally {
+    loadingTableGroups.value = false
+  }
+}
+
+const addTableGroup = () => {
+  const groupName = tableGroupNameInput.value.trim()
+  if (!groupName) {
+    ElMessage.warning('请输入分组名称')
+    return
+  }
+  if (tableGroupRows.value.some(item => item.table_group_name === groupName)) {
+    ElMessage.warning('分组名称已存在')
+    return
+  }
+  tableGroupRows.value = [...tableGroupRows.value, { table_group_name: groupName, table_names: [] }]
+    .sort((a, b) => a.table_group_name.localeCompare(b.table_group_name))
+  activeTableGroupName.value = groupName
+  tableGroupNameInput.value = ''
+}
+
+const startRenameTableGroup = (groupName: string) => {
+  editingTableGroupName.value = groupName
+  editingTableGroupInput.value = groupName
+  activeTableGroupName.value = groupName
+}
+
+const cancelRenameTableGroup = () => {
+  editingTableGroupName.value = ''
+  editingTableGroupInput.value = ''
+}
+
+const confirmRenameTableGroup = (oldGroupName: string) => {
+  const nextGroupName = editingTableGroupInput.value.trim()
+  if (!nextGroupName) {
+    ElMessage.warning('请输入分组名称')
+    return
+  }
+  if (nextGroupName === oldGroupName) {
+    cancelRenameTableGroup()
+    return
+  }
+  if (tableGroupRows.value.some(item => item.table_group_name === nextGroupName)) {
+    ElMessage.warning('分组名称已存在')
+    return
+  }
+  tableGroupRows.value = tableGroupRows.value
+    .map(group => group.table_group_name === oldGroupName ? { ...group, table_group_name: nextGroupName } : group)
+    .sort((a, b) => a.table_group_name.localeCompare(b.table_group_name))
+  if (activeTableGroupName.value === oldGroupName) {
+    activeTableGroupName.value = nextGroupName
+  }
+  cancelRenameTableGroup()
+}
+
+const deleteTableGroup = async (groupName: string) => {
+  try {
+    await ElMessageBox.confirm(`确定删除分组"${groupName}"吗？`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  tableGroupRows.value = tableGroupRows.value.filter(item => item.table_group_name !== groupName)
+  if (activeTableGroupName.value === groupName) {
+    activeTableGroupName.value = tableGroupRows.value[0]?.table_group_name || ''
+  }
+}
+
+const toggleActiveTableGroupTable = (tableName: string) => {
+  if (!activeTableGroup.value) return
+  const nextRows = tableGroupRows.value.map(group => {
+    if (group.table_group_name !== activeTableGroupName.value) return group
+    const tableNames = new Set(group.table_names || [])
+    tableNames.has(tableName) ? tableNames.delete(tableName) : tableNames.add(tableName)
+    return { ...group, table_names: Array.from(tableNames).sort((a, b) => a.localeCompare(b)) }
+  })
+  tableGroupRows.value = nextRows
+}
+
+const saveTableGroups = async () => {
+  if (!tableGroupDs.value) return
+  savingTableGroups.value = true
+  try {
+    const payload = normalizeTableGroupRows(tableGroupRows.value)
+      .filter(group => group.table_group_name.trim() && group.table_names.length > 0)
+    const res = await updateDatasourceTableGroups(tableGroupDs.value.id, payload)
+    if (res.status === 'success') {
+      ElMessage.success('表分组已保存')
+      await fetchDatasources()
+      closeTableGroupModal()
+    } else {
+      ElMessage.error(res.msg || '保存表分组失败')
+    }
+  } catch {
+    ElMessage.error('保存表分组失败')
+  } finally {
+    savingTableGroups.value = false
+  }
+}
+
+const buildTableKey = (datasourceId: string, tableName: string) => `${datasourceId}-${tableName}`
+const buildColumnDictKey = (datasourceId: string, tableName: string, columnName: string) => `${datasourceId}::${tableName}::${columnName}`
+
+const isColumnDictMaintained = (datasourceId: string, tableName: string, columnName: string) =>
+  Boolean(columnDictStatusMap.value[buildColumnDictKey(datasourceId, tableName, columnName)])
+
+const setColumnDictMaintained = (datasourceId: string, tableName: string, columnName: string, maintained: boolean) => {
+  const key = buildColumnDictKey(datasourceId, tableName, columnName)
+  columnDictStatusMap.value = { ...columnDictStatusMap.value, [key]: maintained }
+}
+
+const isColumnDictStatusLoading = (datasourceId: string, tableName: string) =>
+  columnDictStatusLoadingKeys.value.has(buildTableKey(datasourceId, tableName))
+
+const loadColumnDictStatusForTable = async (ds: DataSource, table: TableInfo) => {
+  const tableKey = buildTableKey(ds.id, table.table_name)
+  if (columnDictStatusLoadedKeys.value.has(tableKey) || columnDictStatusLoadingKeys.value.has(tableKey)) return
+
+  columnDictStatusLoadingKeys.value = new Set([...columnDictStatusLoadingKeys.value, tableKey])
+  try {
+    let dicts: Record<string, DatasourceColumnDictPayload> = {}
+    try {
+      const res = await getDatasourceTableColumnDicts(ds.id, table.table_name)
+      dicts = res.status === 'success' ? (res.data?.dicts || {}) : {}
+    } catch {
+      dicts = {}
+    }
+    const entries = (table.columns || []).map(col => {
+      const key = buildColumnDictKey(ds.id, table.table_name, col.name)
+      return [key, hasColumnDictContent(dicts[col.name])] as const
+    })
+    columnDictStatusMap.value = { ...columnDictStatusMap.value, ...Object.fromEntries(entries) }
+    columnDictStatusLoadedKeys.value = new Set([...columnDictStatusLoadedKeys.value, tableKey])
+  } finally {
+    const loadingKeys = new Set(columnDictStatusLoadingKeys.value)
+    loadingKeys.delete(tableKey)
+    columnDictStatusLoadingKeys.value = loadingKeys
+  }
+}
+
+const startEditTableBusinessDesc = (ds: DataSource, table: TableInfo) => {
+  editingTableBusinessDescKey.value = buildTableKey(ds.id, table.table_name)
+  tableBusinessDescInput.value = table.business_desc || ''
+}
+
+const cancelEditTableBusinessDesc = () => {
+  editingTableBusinessDescKey.value = ''
+  tableBusinessDescInput.value = ''
+}
+
+const applyTableBusinessDesc = (datasourceId: string, tableName: string, businessDesc: string) => {
+  datasources.value = datasources.value.map(ds => {
+    if (ds.id !== datasourceId) return ds
+    return {
+      ...ds,
+      ds_tables: (ds.ds_tables || []).map(table =>
+        table.table_name === tableName ? { ...table, business_desc: businessDesc } : table
+      ),
+    }
+  })
+  emit('datasources-change', datasources.value)
+}
+
+const saveTableBusinessDesc = async (ds: DataSource, table: TableInfo) => {
+  const tableKey = buildTableKey(ds.id, table.table_name)
+  const businessDesc = tableBusinessDescInput.value.trim()
+  savingTableBusinessDescKey.value = tableKey
+  try {
+    const res = await updateDatasourceTableBusinessDesc(ds.id, table.table_name, businessDesc)
+    if (res.status === 'success') {
+      applyTableBusinessDesc(ds.id, table.table_name, res.data?.table?.business_desc || businessDesc)
+      ElMessage.success('表业务说明已保存')
+      cancelEditTableBusinessDesc()
+    } else {
+      ElMessage.error(res.msg || '保存表业务说明失败')
+    }
+  } catch {
+    ElMessage.error('保存表业务说明失败')
+  } finally {
+    savingTableBusinessDescKey.value = ''
+  }
+}
+
+const applyColumnDictForm = (dict?: Partial<DatasourceColumnDictPayload>) => {
+  const payload = { ...emptyColumnDict(), ...(dict || {}) }
+  columnDictRows.value = (payload.enum_values || []).map(item => ({
+    value: String(item.value || '').trim(),
+    label: String(item.label || '').trim(),
+  }))
+  columnDictSynonyms.value = (payload.synonyms || []).map(item => String(item || '').trim()).filter(Boolean)
+  columnDictStorageFormat.value = String(payload.storage_format || '').trim()
+  columnDictUnit.value = String(payload.unit || '').trim()
+}
+
+const openColumnDictModal = async (ds: DataSource, table: TableInfo, column: ColumnInfo) => {
+  columnDictContext.value = { datasource: ds, table, column }
+  applyColumnDictForm()
+  columnDictGenerateText.value = ''
+  showColumnDictModal.value = true
+  loadingColumnDict.value = true
+  const dsId = ds.id
+  const tableName = table.table_name
+  const columnName = column.name
+  try {
+    const res = await getDatasourceColumnDict(dsId, tableName, columnName)
+    if (!isSameColumnDictContext(dsId, tableName, columnName)) return
+    if (res.status === 'success') {
+      applyColumnDictForm(res.data?.dict)
+    } else {
+      ElMessage.error(res.msg || '获取字段字典失败')
+    }
+  } catch {
+    if (isSameColumnDictContext(dsId, tableName, columnName)) {
+      ElMessage.error('获取字段字典失败')
+    }
+  } finally {
+    if (isSameColumnDictContext(dsId, tableName, columnName)) {
+      loadingColumnDict.value = false
+    }
+  }
+}
+
+const closeColumnDictModal = () => {
+  if (savingColumnDict.value || generatingColumnDict.value) return
+  showColumnDictModal.value = false
+  columnDictContext.value = null
+  applyColumnDictForm()
+  columnDictGenerateText.value = ''
+}
+
+const addColumnDictEnumRow = () => {
+  if (loadingColumnDict.value) return
+  columnDictRows.value = [...columnDictRows.value, { value: '', label: '' }]
+}
+
+const removeColumnDictEnumRow = (index: number) => {
+  columnDictRows.value = columnDictRows.value.filter((_, itemIndex) => itemIndex !== index)
+}
+
+const normalizeColumnDictRows = () => {
+  const seen = new Set<string>()
+  const result: DatasourceColumnDictEnumItem[] = []
+  for (const row of columnDictRows.value) {
+    const enumValue = String(row.value || '').trim()
+    if (!enumValue || seen.has(enumValue)) continue
+    seen.add(enumValue)
+    result.push({
+      value: enumValue,
+      label: String(row.label || '').trim(),
+    })
+  }
+  return result
+}
+
+const mergeGeneratedColumnDict = (generatedDict: Partial<DatasourceColumnDictPayload>) => {
+  const nextRows = columnDictRows.value.map(row => ({
+    value: String(row.value || '').trim(),
+    label: String(row.label || '').trim(),
+  }))
+  const indexMap = new Map<string, number>()
+  nextRows.forEach((row, index) => {
+    if (row.value && !indexMap.has(row.value)) {
+      indexMap.set(row.value, index)
+    }
+  })
+  let addedCount = 0
+  let filledCount = 0
+  ;(generatedDict.enum_values || []).forEach(item => {
+    const enumValue = String(item.value || '').trim()
+    const enumLabel = String(item.label || '').trim()
+    if (!enumValue) return
+    const existingIndex = indexMap.get(enumValue)
+    if (existingIndex !== undefined) {
+      const existingRow = nextRows[existingIndex]
+      if (existingRow && !existingRow.label && enumLabel) {
+        existingRow.label = enumLabel
+        filledCount += 1
+      }
+      return
+    }
+    indexMap.set(enumValue, nextRows.length)
+    nextRows.push({ value: enumValue, label: enumLabel })
+    addedCount += 1
+  })
+  columnDictRows.value = nextRows
+
+  let unitFilledCount = 0
+  if (!columnDictUnit.value.trim() && generatedDict.unit) {
+    columnDictUnit.value = String(generatedDict.unit || '').trim()
+    unitFilledCount = 1
+  }
+  return { addedCount, filledCount, unitFilledCount }
+}
+
+const generateColumnDict = async () => {
+  const context = columnDictContext.value
+  const text = columnDictGenerateText.value.trim()
+  if (!context || !text) {
+    ElMessage.warning('请输入用于生成字段字典的文本')
+    return
+  }
+  generatingColumnDict.value = true
+  const dsId = context.datasource.id
+  const tableName = context.table.table_name
+  const columnName = context.column.name
+  try {
+    const res = await generateDatasourceColumnDict(
+      dsId,
+      tableName,
+      columnName,
+      text
+    )
+    if (!isSameColumnDictContext(dsId, tableName, columnName)) return
+    if (res.status === 'success') {
+      const generatedDict = res.data?.dict || emptyColumnDict()
+      if (
+        (generatedDict.enum_values || []).length === 0 &&
+        !generatedDict.unit
+      ) {
+        ElMessage.warning('未识别到明确的字段字典信息')
+        return
+      }
+      const { addedCount, filledCount, unitFilledCount } = mergeGeneratedColumnDict(generatedDict)
+      ElMessage.success(`已生成候选，新增枚举 ${addedCount} 个，补充枚举 ${filledCount} 个，补充单位 ${unitFilledCount} 个`)
+    } else {
+      ElMessage.error(res.msg || '生成字段字典失败')
+    }
+  } catch {
+    if (isSameColumnDictContext(dsId, tableName, columnName)) {
+      ElMessage.error('生成字段字典失败')
+    }
+  } finally {
+    if (isSameColumnDictContext(dsId, tableName, columnName)) {
+      generatingColumnDict.value = false
+    }
+  }
+}
+
+const saveColumnDict = async () => {
+  const context = columnDictContext.value
+  if (!context) return
+  const duplicateValues = columnDictRows.value
+    .map(row => String(row.value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) !== index)
+  if (duplicateValues.length > 0) {
+    ElMessage.warning('枚举值不能重复')
+    return
+  }
+  const payload: DatasourceColumnDictPayload = {
+    enum_values: normalizeColumnDictRows(),
+    synonyms: columnDictSynonyms.value,
+    storage_format: columnDictStorageFormat.value.trim(),
+    unit: columnDictUnit.value.trim(),
+  }
+  savingColumnDict.value = true
+  try {
+    const res = await updateDatasourceColumnDict(
+      context.datasource.id,
+      context.table.table_name,
+      context.column.name,
+      payload
+    )
+    if (res.status === 'success') {
+      setColumnDictMaintained(
+        context.datasource.id,
+        context.table.table_name,
+        context.column.name,
+        hasColumnDictContent(payload)
+      )
+      ElMessage.success('字段字典已保存')
+      showColumnDictModal.value = false
+      columnDictContext.value = null
+      applyColumnDictForm()
+      columnDictGenerateText.value = ''
+    } else {
+      ElMessage.error(res.msg || '保存字段字典失败')
+    }
+  } catch {
+    ElMessage.error('保存字段字典失败')
+  } finally {
+    savingColumnDict.value = false
+  }
+}
+
+const memberSourceLineCount = computed(() =>
+  groupForm.value.datasource_sources_text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean).length
+)
+const groupSourceLineNumbers = computed(() => {
+  const lines = groupForm.value.datasource_sources_text.split('\n').length
+  const total = Math.max(lines, 1)
+  return Array.from({ length: total }, (_, index) => index + 1)
+})
+const filteredGroupTables = computed(() =>
+  groupDbTables.value.filter(t => t.toLowerCase().includes(groupTableSearchKeyword.value.toLowerCase()))
+)
+const filteredSelectedGroupCount = computed(() =>
+  filteredGroupTables.value.filter(table => selectedGroupTables.value.has(table)).length
+)
+const hasGroupTableSearchKeyword = computed(() => groupTableSearchKeyword.value.trim().length > 0)
+const groupSelectionSummaryText = computed(() =>
+  hasGroupTableSearchKeyword.value
+    ? `${filteredSelectedGroupCount.value}/${filteredGroupTables.value.length}（筛选结果）`
+    : `${selectedGroupTables.value.size}/${groupDbTables.value.length}`
+)
+const groupSelectAllButtonText = computed(() => hasGroupTableSearchKeyword.value ? '全选筛选结果' : '全选')
+const groupDeselectAllButtonText = computed(() => hasGroupTableSearchKeyword.value ? '清空筛选结果' : '清空')
+const groupSourcePlaceholder = computed(() => {
+  if (groupForm.value.source_type === 'hive') {
+    return '每行一个数据源，格式：机构名称|机构编码|连接方式|ip:port:db_name\n连接方式填写 direct 或 http，机构编码用于权限匹配和 HTTP 执行标识\n第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|http|localhost:10000:default\n机构名称yy|机构编码yy|direct|10.0.0.10:10000:dw_prod'
+  }
+  return '每行一个数据源，格式：机构名称|机构编码|连接方式|ip:port:db_name\n连接方式填写 direct 或 http，机构编码用于权限匹配和 HTTP 执行标识\n第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|direct|db-host-1:3306:database_a\n机构名称yy|机构编码yy|http|db-host-2:3306:database_b'
+})
+
+const parseTemplateSourceForSnapshot = () => {
+  const firstLine = groupForm.value.datasource_sources_text
+    .split('\n')
+    .map(line => line.trim())
+    .find(Boolean)
+  if (!firstLine) return ''
+
+  const segments = firstLine.split('|').map(item => item.trim())
+  if (segments.length !== 4) {
+    return ''
+  }
+  const sourceText = segments[3] || ''
+
+  const parts = sourceText.split(':')
+  if (parts.length !== 3) return ''
+  const host = parts[0]?.trim() || ''
+  const port = parts[1]?.trim() || ''
+  const database = parts[2]?.trim() || ''
+  if (!host || !port || !database) return ''
+  return `${groupForm.value.source_type}|${host}:${port}:${database}`
+}
+
+const buildGroupSourceSnapshotKey = () => parseTemplateSourceForSnapshot()
+
+const hasGroupTemplateSourceChanged = computed(() => {
+  if (!showGroupModal.value || !groupTableSnapshotKey.value) return false
+  const currentTemplateSnapshotKey = buildGroupSourceSnapshotKey()
+  if (!currentTemplateSnapshotKey) return false
+  return currentTemplateSnapshotKey !== groupTableSnapshotKey.value
+})
+
+const resetGroupTableSelector = () => {
+  groupDbTables.value = []
+  selectedGroupTables.value = new Set()
+  groupTableSearchKeyword.value = ''
+  groupTableSnapshotKey.value = ''
+}
+
+// 加载数据源
+const fetchDatasources = async () => {
+  datasourcesLoading.value = true
+  try {
+    const res = await getDatasources()
+    if (res.status === 'success') {
+      datasources.value = (res.data.datasources || []).filter(
+        (ds: DataSource) => ds.group_name && ds.group_name.trim() !== ''
+      )
+      columnDictStatusMap.value = {}
+      columnDictStatusLoadedKeys.value = new Set()
+      columnDictStatusLoadingKeys.value = new Set()
+      emit('datasources-change', datasources.value)
+    }
+  } catch (err) {
+    console.error('获取数据源失败:', err)
+  } finally {
+    datasourcesLoading.value = false
+  }
+}
+
+// 展开/折叠
+const toggleDatasource = (dsId: string) => {
+  const s = new Set(expandedDatasources.value)
+  s.has(dsId) ? s.delete(dsId) : s.add(dsId)
+  expandedDatasources.value = s
+}
+
+const toggleTable = (ds: DataSource, table: TableInfo) => {
+  const tableKey = buildTableKey(ds.id, table.table_name)
+  const s = new Set(expandedTables.value)
+  const shouldExpand = !s.has(tableKey)
+  shouldExpand ? s.add(tableKey) : s.delete(tableKey)
+  expandedTables.value = s
+  if (shouldExpand) {
+    void loadColumnDictStatusForTable(ds, table)
+  }
+}
+
+const handleOpenSemanticConfig = (datasourceId: string) => {
+  emit('open-semantic-config', datasourceId)
+}
+
+const getHealthStatusLabel = (status?: string) => {
+  return status === 'ok' ? '正常' : '有问题'
+}
+
+const getHealthStatusBadgeClass = (status?: string) => {
+  return status === 'ok' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+}
+
+const handleCheckSemanticHealth = async (ds: DataSource) => {
+  checkingHealthId.value = ds.id
+  try {
+    const res = await getDatasourceSemanticHealth(ds.id)
+    if (res.status !== 'success' || !res.data) {
+      ElMessage.error(res.msg || '校验失败')
+      return
+    }
+    healthResult.value = res.data
+    showHealthModal.value = true
+  } catch {
+    ElMessage.error('校验失败')
+  } finally {
+    checkingHealthId.value = null
+  }
+}
+
+// 删除数据源
+const handleDelete = async (ds: DataSource) => {
+  try {
+    await ElMessageBox.confirm(`确定要删除数据源"${ds.group_name}"吗？`, '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    const res = await deleteDatasource(ds.id)
+    if (res.status === 'success') {
+      ElMessage.success('删除成功')
+      fetchDatasources()
+    } else {
+      ElMessage.error(res.msg || '删除失败')
+    }
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
+
+// 设置/取消默认
+const handleToggleDefault = async (ds: DataSource) => {
+  settingDefaultId.value = ds.id
+  try {
+    const isDefault = ds.is_default
+    const res = isDefault
+      ? await unsetDefaultDatasource(ds.id)
+      : await setDefaultDatasource(ds.id)
+    if (res.status === 'success') {
+      ElMessage.success(isDefault ? '已取消默认' : '已设为默认')
+      fetchDatasources()
+    } else {
+      ElMessage.error(res.msg || '操作失败')
+    }
+  } catch {
+    ElMessage.error('操作失败')
+  } finally {
+    settingDefaultId.value = null
+  }
+}
+
+const handleEditDatasource = (ds: DataSource) => {
+  openEditGroupModal(ds)
+}
+
+const openGroupModal = () => {
+  editingGroupId.value = null
+  groupForm.value = {
+    group_name: '',
+    group_desc: '',
+    source_type: 'hive',
+    datasource_sources_text: '',
+  }
+  resetGroupTableSelector()
+  showGroupModal.value = true
+}
+
+const openEditGroupModal = (ds: DataSource) => {
+  editingGroupId.value = ds.id
+  const sourceType = ((ds.source_type || 'mysql') as 'mysql' | 'hive')
+  groupForm.value = {
+    group_name: ds.group_name || '',
+    group_desc: ds.ds_description || '',
+    source_type: sourceType,
+    datasource_sources_text: String((ds as DataSource & { member_sources_text?: string }).member_sources_text || '').trim() || (ds.member_sources || [])
+      .map((item) => {
+        const executorType = item.query_executor_type || 'direct'
+        return `${item.org_name || ''}|${item.org_code || ''}|${executorType}|${item.host}:${item.port}:${item.database}`
+      })
+      .join('\n'),
+  }
+  groupDbTables.value = (ds.ds_tables || []).map(table => table.table_name).filter(Boolean)
+  selectedGroupTables.value = new Set(groupDbTables.value)
+  groupTableSearchKeyword.value = ''
+  groupTableSnapshotKey.value = buildGroupSourceSnapshotKey()
+  showGroupModal.value = true
+}
+
+const handleGroupSourceTypeChange = (sourceType: 'hive' | 'mysql') => {
+  groupForm.value.source_type = sourceType
+}
+
+const handleGroupSourceScroll = (event: Event) => {
+  groupSourceScrollTop.value = (event.target as HTMLTextAreaElement).scrollTop || 0
+}
+
+const parseMemberSources = () => {
+  const lines = groupForm.value.datasource_sources_text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  const members: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  const nameSet = new Set<string>()
+  const orgCodeSet = new Set<string>()
+  const identitySet = new Set<string>()
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] || ''
+    const segments = line.split('|').map(item => item.trim())
+    let orgName = ''
+    let orgCode = ''
+    let queryExecutorType: 'direct' | 'http' = 'direct'
+    let sourceText = ''
+
+    if (groupForm.value.source_type === 'hive' || groupForm.value.source_type === 'mysql') {
+      if (segments.length !== 4) {
+        throw new Error(`第 ${index + 1} 行格式错误，请使用固定格式：机构名称|机构编码|direct/http|ip:port:db_name`)
+      }
+      orgName = segments[0] || ''
+      orgCode = segments[1] || ''
+      queryExecutorType = segments[2] === 'http' ? 'http' : 'direct'
+      sourceText = segments[3] || ''
+      if (!orgName) {
+        throw new Error(`第 ${index + 1} 行缺少机构名称`)
+      }
+      if (!orgCode) {
+        throw new Error(`第 ${index + 1} 行缺少机构编码`)
+      }
+      if (!['direct', 'http'].includes(segments[2] || '')) {
+        throw new Error(`第 ${index + 1} 行查询方式错误，仅支持 direct 或 http`)
+      }
+    }
+
+    const parts = sourceText.split(':')
+    if (parts.length !== 3) {
+      throw new Error(`第 ${index + 1} 行格式错误，请检查连接串`)
+    }
+    const host = parts[0]?.trim() || ''
+    const port = Number(parts[1]?.trim() || '')
+    const database = parts[2]?.trim() || ''
+    if (!host || !port || !database) {
+      throw new Error(`第 ${index + 1} 行格式错误，请检查连接串`)
+    }
+    const sourceKey = `${host}:${port}:${database}`
+    if (orgName) {
+      if (nameSet.has(orgName)) {
+        throw new Error(`第 ${index + 1} 行名称重复：${orgName}`)
+      }
+      nameSet.add(orgName)
+    }
+    if (orgCodeSet.has(orgCode)) {
+      throw new Error(`第 ${index + 1} 行机构编码重复：${orgCode}`)
+    }
+    orgCodeSet.add(orgCode)
+    const identityKey = orgCode
+    if (identitySet.has(identityKey)) {
+      throw new Error(`第 ${index + 1} 行机构编码重复：${orgCode}`)
+    }
+    identitySet.add(identityKey)
+    members.push({
+      org_name: orgName,
+      org_code: orgCode,
+      query_executor_type: queryExecutorType,
+      host,
+      port,
+      database,
+    })
+  }
+  return members
+}
+
+const fetchGroupDbTables = async () => {
+  let datasourceSources: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  try {
+    datasourceSources = parseMemberSources()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '数据源格式错误')
+    return
+  }
+  if (datasourceSources.length === 0) {
+    ElMessage.error('请至少输入一个数据源，第一行作为模板数据源')
+    return
+  }
+
+  const templateSource = datasourceSources[0]
+  if (!templateSource) {
+    ElMessage.error('请至少输入一个数据源，第一行作为模板数据源')
+    return
+  }
+  loadingGroupTables.value = true
+  resetGroupTableSelector()
+  try {
+    const res = await getDbTables({
+      source_type: groupForm.value.source_type,
+      query_executor_type: templateSource.query_executor_type || 'direct',
+      org_code: templateSource.org_code || '',
+      org_name: templateSource.org_name || '',
+      host: templateSource.host,
+      port: templateSource.port,
+      database: templateSource.database,
+    })
+    if (res.status === 'success') {
+      const tables = res.data.tables || []
+      groupDbTables.value = tables
+      selectedGroupTables.value = new Set(tables)
+      groupTableSnapshotKey.value = buildGroupSourceSnapshotKey()
+      ElMessage.success(`获取成功，共 ${tables.length} 个表`)
+    } else {
+      ElMessage.error(res.msg || '获取表列表失败')
+    }
+  } catch {
+    ElMessage.error('连接失败')
+  } finally {
+    loadingGroupTables.value = false
+  }
+}
+
+const toggleGroupTableSelection = (tableName: string) => {
+  const nextSelected = new Set(selectedGroupTables.value)
+  if (nextSelected.has(tableName)) nextSelected.delete(tableName)
+  else nextSelected.add(tableName)
+  selectedGroupTables.value = nextSelected
+}
+
+const selectAllGroupTables = () => {
+  selectedGroupTables.value = new Set([...selectedGroupTables.value, ...filteredGroupTables.value])
+}
+
+const deselectAllGroupTables = () => {
+  const nextSelected = new Set(selectedGroupTables.value)
+  filteredGroupTables.value.forEach(table => nextSelected.delete(table))
+  selectedGroupTables.value = nextSelected
+}
+
+const handleCreateDatasourceGroup = async () => {
+  const groupName = groupForm.value.group_name.trim()
+  if (!groupName) {
+    ElMessage.error('请输入数据源组名称')
+    return
+  }
+
+  let datasourceSources: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  try {
+    datasourceSources = parseMemberSources()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '数据源格式错误')
+    return
+  }
+  if (datasourceSources.length === 0) {
+    ElMessage.error('请至少输入一个数据源，第一行作为模板数据源')
+    return
+  }
+
+  const currentTemplateSnapshotKey = buildGroupSourceSnapshotKey()
+  if (!currentTemplateSnapshotKey) {
+    ElMessage.error('模板数据源格式错误，请先按固定格式修正第一行')
+    return
+  }
+  if (groupDbTables.value.length === 0) {
+    ElMessage.error('请先拉取模板表结构')
+    return
+  }
+  if (groupDbTables.value.length > 0 && groupTableSnapshotKey.value && groupTableSnapshotKey.value !== currentTemplateSnapshotKey) {
+    ElMessage.warning('模板数据源已变化，当前仍使用上次拉取的表结构；如需更新可手动拉取表信息')
+  }
+
+  const [templateSource, ...memberSources] = datasourceSources
+  if (!templateSource) {
+    ElMessage.error('请至少输入一个数据源，第一行作为模板数据源')
+    return
+  }
+
+  creatingGroup.value = true
+  try {
+    const payload = {
+      group_name: groupName,
+      group_desc: groupForm.value.group_desc.trim(),
+      source_type: groupForm.value.source_type,
+      template_source: templateSource,
+      template_table_names: groupDbTables.value.length > 0 ? Array.from(selectedGroupTables.value) : undefined,
+      member_sources: memberSources,
+    }
+    const res = editingGroupId.value
+      ? await updateDatasourceGroup(editingGroupId.value, payload)
+      : await createDatasourceGroup(payload)
+    if (res.status === 'success') {
+      ElMessage.success(editingGroupId.value ? '数据源组更新成功' : '数据源组创建成功')
+      showGroupModal.value = false
+      editingGroupId.value = null
+      await fetchDatasources()
+    } else {
+      ElMessage.error(res.msg || (editingGroupId.value ? '数据源组更新失败' : '数据源组创建失败'))
+    }
+  } catch {
+    ElMessage.error(editingGroupId.value ? '数据源组更新失败' : '数据源组创建失败')
+  } finally {
+    creatingGroup.value = false
+  }
+}
+
+// 获取列图标
+const getColumnIcon = (col: any) => {
+  if (col.primary_key) return 'fa-key'
+  if (col.unique_key) return 'fa-fingerprint'
+  if (col.index_key) return 'fa-bolt'
+  if (col.is_partition) return 'fa-layer-group'
+  return 'fa-circle'
+}
+
+const getColumnIconColor = (col: any) => {
+  if (col.primary_key) return 'text-yellow-600'
+  if (col.unique_key) return 'text-blue-600'
+  if (col.index_key) return 'text-green-600'
+  if (col.is_partition) return 'text-blue-600'
+  return 'text-slate-400'
+}
+
+const getColumnIconTitle = (col: any) => {
+  if (col.primary_key) return '主键'
+  if (col.unique_key) return '唯一键'
+  if (col.index_key) return '索引'
+  if (col.is_partition) return '分区字段'
+  return ''
+}
+
+const getDatasourceConnectionTitle = (ds: DataSource) => {
+  const sourceType = (ds.source_type || '').toLowerCase()
+  const config = (ds.source_config || {}) as Record<string, unknown>
+  const host = String(config.host || '')
+  const port = String(config.port || '')
+  const database = String(config.database || '')
+
+  if (sourceType === 'mysql' || sourceType === 'hive') {
+    const protocol = sourceType.toUpperCase()
+    const endpoint = [host, port].filter(Boolean).join(':')
+    const databasePath = database ? `/${database}` : ''
+    if (endpoint) return `${protocol} ${endpoint}${databasePath}`
+    return `${protocol} 数据源`
+  }
+
+  return ds.ds_description || '数据源'
+}
+
+const getDatasourceEndpoint = (ds: DataSource) => {
+  const sourceType = (ds.source_type || '').toLowerCase()
+  if (sourceType !== 'mysql' && sourceType !== 'hive') return ''
+  const config = (ds.source_config || {}) as Record<string, unknown>
+  const host = String(config.host || '')
+  const port = String(config.port || '')
+  const database = String(config.database || '')
+  const endpoint = [host, port].filter(Boolean).join(':')
+  if (!endpoint && !database) return ''
+  return `${endpoint}${database ? `/${database}` : ''}`
+}
+
+const formatDatasourceOperator = (value?: string) => {
+  const text = String(value || '').trim()
+  return text || '未知'
+}
+
+const getDatasourceCreatorName = (ds: DataSource) => {
+  return formatDatasourceOperator(ds.create_by_name)
+}
+
+const getDatasourceUpdaterName = (ds: DataSource) => {
+  return formatDatasourceOperator(ds.update_by_name)
+}
+
+const buildDatasourceMaintainerTitle = (ds: DataSource) => {
+  const creator = getDatasourceCreatorName(ds)
+  const updater = getDatasourceUpdaterName(ds)
+  return `创建人：${creator}\n创建时间：${ds.create_time || '-'}\n修改人：${updater}\n修改时间：${ds.update_time || '-'}`
+}
+
+onMounted(() => {
+  fetchDatasources()
+})
+
+// 暴露方法给父组件调用
+defineExpose({
+  openGroupModal,
+  openEditGroupModal,
+})
+</script>
+
+<template>
+  <div class="chatdata-root flex h-full flex-col">
+    <!-- 数据源列表 -->
+    <div class="flex-1 overflow-y-auto">
+      <!-- 加载状态 -->
+      <div v-if="datasourcesLoading" class="flex flex-col items-center justify-center py-12 text-center">
+        <i class="fa-solid fa-spinner fa-spin mb-3 text-3xl text-slate-300"></i>
+        <p class="text-sm text-slate-500">数据源加载中...</p>
+      </div>
+
+      <!-- 空状态 -->
+      <div v-else-if="datasources.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
+        <i class="fa-solid fa-database mb-3 text-4xl text-slate-300"></i>
+        <p class="text-sm text-slate-500">暂无数据源</p>
+        <p class="mt-2 text-xs text-slate-400">点击上方"新建"按钮添加数据源</p>
+      </div>
+
+      <!-- 数据源树 -->
+      <div v-else class="p-2">
+        <div v-for="ds in datasources" :key="ds.id" class="mb-2">
+          <!-- 数据源节点 -->
+          <div class="group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-slate-100">
+            <button class="flex flex-1 items-center gap-2 min-w-0" @click="toggleDatasource(ds.id)">
+              <i :class="['fa-solid text-xs text-slate-500', expandedDatasources.has(ds.id) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+              <i class="fa-solid fa-folder text-sm text-amber-600"></i>
+              <span class="flex-1 text-left text-sm font-semibold text-slate-900 truncate" :title="getDatasourceConnectionTitle(ds)">{{ ds.group_name }}</span>
+              <span
+                class="flex max-w-[168px] shrink-0 items-center gap-1 truncate rounded border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-500"
+                :title="buildDatasourceMaintainerTitle(ds)"
+              >
+                <i class="fa-regular fa-user text-[11px] text-slate-400"></i>
+                <span class="shrink-0 text-slate-400">创建人</span>
+                <span class="truncate">{{ getDatasourceCreatorName(ds) }}</span>
+              </span>
+              <span class="text-xs text-slate-500">{{ ds.ds_tables?.length || 0 }}</span>
+            </button>
+
+            <!-- 操作按钮 -->
+            <div :class="['flex items-center gap-1 transition-opacity', ds.is_default ? 'opacity-100' : 'opacity-0 group-hover:opacity-100']">
+              <button
+                :disabled="settingDefaultId !== null || renamingDatasourceId !== null"
+                :class="['flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  ds.is_default ? 'text-yellow-500 hover:bg-yellow-50' : 'text-slate-400 hover:bg-slate-200 hover:text-yellow-500']"
+                :title="ds.is_default ? '取消默认' : '设为默认'"
+                @click.stop="handleToggleDefault(ds)"
+              >
+                <i :class="['text-xs', ds.is_default ? 'fa-solid fa-star' : 'fa-regular fa-star', settingDefaultId === ds.id ? 'fa-spin' : '']"></i>
+                <span>{{ ds.is_default ? '默认' : '设默' }}</span>
+              </button>
+              <!-- 重命名 -->
+              <button
+                :disabled="renamingDatasourceId !== null"
+                :class="['flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  renamingDatasourceId === ds.id ? 'text-blue-600' : 'text-slate-600 hover:bg-slate-200']"
+                title="修改数据源组"
+                @click.stop="handleEditDatasource(ds)"
+              >
+                <i :class="['fa-solid fa-pen text-xs', renamingDatasourceId === ds.id ? 'fa-spin' : '']"></i>
+                <span>编辑</span>
+              </button>
+              <button
+                :disabled="loadingTableGroups || savingTableGroups"
+                class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                title="表分组管理"
+                @click.stop="openTableGroupModal(ds)"
+              >
+                <i class="fa-solid fa-layer-group text-xs"></i>
+                <span>分组</span>
+              </button>
+              <button
+                :disabled="checkingHealthId !== null"
+                :class="['flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  checkingHealthId === ds.id ? 'text-blue-600' : 'text-slate-600 hover:bg-slate-200']"
+                title="校验指标集"
+                @click.stop="handleCheckSemanticHealth(ds)"
+              >
+                <i :class="['fa-solid text-xs', checkingHealthId === ds.id ? 'fa-spinner fa-spin' : 'fa-shield-halved']"></i>
+                <span>校验</span>
+              </button>
+              <!-- 模块映射 -->
+              <el-popover
+                :visible="mappingDsId === ds.id"
+                placement="bottom"
+                :width="260"
+                trigger="manual"
+                :popper-style="{ zIndex: 4001 }"
+              >
+                <template #reference>
+                  <button
+                    :style="{
+                      display: 'flex',
+                      minWidth: '52px',
+                      height: '28px',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      borderRadius: '4px',
+                      padding: '0 8px',
+                      fontSize: '12px',
+                      transition: 'all 0.2s',
+                      color: (ds.mapped_modules && ds.mapped_modules.length > 0) ? '#2563eb' : '#94a3b8',
+                    }"
+                    title="模块映射"
+                    @click.stop="mappingDsId === ds.id ? closeMappingPopover() : openMappingPopover(ds)"
+                  >
+                    <i class="fa-solid fa-tags" style="font-size: 12px;"></i>
+                    <span>映射</span>
+                  </button>
+                </template>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <div style="font-size: 12px; font-weight: 500; color: #475569;">模块映射</div>
+                  <div style="display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px;">
+                    <span
+                      v-for="(mod, idx) in mappingModules"
+                      :key="idx"
+                      style="display: inline-flex; align-items: center; gap: 4px; background: #eff6ff; color: #1d4ed8; font-size: 12px; padding: 2px 8px; border-radius: 10px;"
+                    >
+                      {{ mod }}
+                      <i class="fa-solid fa-xmark" style="font-size: 10px; cursor: pointer; color: #93c5fd;" @click="removeMappingModule(idx)"></i>
+                    </span>
+                    <span v-if="mappingModules.length === 0" style="font-size: 12px; color: #94a3b8;">暂无映射</span>
+                  </div>
+                  <div style="display: flex; gap: 6px;">
+                    <input
+                      v-model="mappingInput"
+                      type="text"
+                      placeholder="输入模块名，回车添加"
+                      style="flex: 1; border: 1px solid #e2e8f0; border-radius: 4px; padding: 4px 8px; font-size: 12px; outline: none;"
+                      @keydown.enter.prevent="addMappingModule"
+                      @focus="($event.target as HTMLInputElement).style.borderColor = '#3b82f6'"
+                      @blur="($event.target as HTMLInputElement).style.borderColor = '#e2e8f0'"
+                    />
+                    <button
+                      style="border-radius: 4px; background: #eff6ff; padding: 4px 10px; font-size: 12px; color: #2563eb; cursor: pointer; border: none;"
+                      @click="addMappingModule"
+                    >添加</button>
+                  </div>
+                  <div style="display: flex; justify-content: flex-end; gap: 6px; padding-top: 4px;">
+                    <button
+                      style="border-radius: 4px; padding: 4px 10px; font-size: 12px; color: #64748b; cursor: pointer; border: none; background: transparent;"
+                      @click="closeMappingPopover"
+                    >取消</button>
+                    <button
+                      :disabled="savingMapping"
+                      :style="{
+                        borderRadius: '4px', padding: '4px 10px', fontSize: '12px', color: '#fff', cursor: 'pointer',
+                        border: 'none', background: savingMapping ? '#93c5fd' : '#3b82f6',
+                      }"
+                      @click="saveMappingModules"
+                    >{{ savingMapping ? '保存中...' : '保存' }}</button>
+                  </div>
+                </div>
+              </el-popover>
+              <button
+                class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200"
+                title="数据集管理"
+                @click.stop="handleOpenSemanticConfig(ds.id)"
+              >
+                <i class="fa-solid fa-sitemap text-xs"></i>
+                <span>指标</span>
+              </button>
+              <!-- 删除 -->
+              <button
+                v-if="ds.id !== 'default'"
+                class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="删除数据源"
+                @click.stop="handleDelete(ds)"
+              >
+                <i class="fa-solid fa-trash text-xs"></i>
+                <span>删除</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 表列表 -->
+          <div v-if="expandedDatasources.has(ds.id)" class="ml-4 overflow-hidden">
+            <div v-if="ds.ds_tables && ds.ds_tables.length > 0" class="border-l border-slate-200 py-1 overflow-x-auto">
+              <div class="ml-2 mb-1 flex min-w-[360px] max-w-[520px] items-center gap-2 px-2 py-1">
+                <div class="relative min-w-0 flex-1">
+                  <i class="fa-solid fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-slate-400"></i>
+                  <input
+                    :value="getDatasourceTableSearchKeyword(ds.id)"
+                    type="text"
+                    placeholder="搜索表名、表备注或业务说明"
+                    class="h-7 w-full rounded border border-slate-200 bg-white pl-7 pr-2 text-xs text-slate-600 outline-none focus:border-blue-500"
+                    @input="setDatasourceTableSearchKeyword(ds.id, ($event.target as HTMLInputElement).value)"
+                  />
+                </div>
+                <span class="shrink-0 text-[11px] text-slate-400">{{ getFilteredDatasourceTables(ds).length }}/{{ ds.ds_tables.length }}</span>
+              </div>
+              <div v-for="table in getFilteredDatasourceTables(ds)" :key="`${ds.id}-${table.table_name}`" class="ml-2">
+                <!-- 表节点 -->
+                <div class="flex min-w-max items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors hover:bg-slate-100 whitespace-nowrap">
+                  <button
+                    type="button"
+                    class="flex min-w-0 items-center gap-2 text-left"
+                    @click="toggleTable(ds, table)"
+                  >
+                    <i :class="['fa-solid text-xs text-slate-500', expandedTables.has(buildTableKey(ds.id, table.table_name)) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+                    <i class="fa-solid fa-table text-xs text-blue-600"></i>
+                    <span class="shrink-0 font-medium text-slate-900">{{ table.table_name }}</span>
+                    <span v-if="table.description && table.description !== table.table_name" class="max-w-[240px] shrink-0 truncate text-xs text-slate-400">{{ table.description }}</span>
+                    <span
+                      v-if="table.business_desc"
+                      class="max-w-[280px] shrink-0 truncate rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700"
+                      :title="table.business_desc"
+                    >{{ table.business_desc }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-xs text-blue-600 hover:bg-white hover:text-blue-700"
+                    title="编辑表业务说明"
+                    @click.stop="startEditTableBusinessDesc(ds, table)"
+                  >
+                    <i class="fa-solid fa-pen text-[10px]"></i>
+                    <span>表描述</span>
+                  </button>
+                  <span class="text-xs text-slate-500">{{ table.columns?.length || 0 }}</span>
+                </div>
+
+                <div
+                  v-if="editingTableBusinessDescKey === buildTableKey(ds.id, table.table_name)"
+                  class="ml-8 mt-1 flex min-w-[520px] max-w-[760px] items-center gap-2 rounded border border-blue-100 bg-blue-50 px-2 py-1.5"
+                >
+                  <input
+                    v-model="tableBusinessDescInput"
+                    type="text"
+                    maxlength="255"
+                    placeholder="填写给业务人员看的表业务说明，不影响原表备注"
+                    class="min-w-0 flex-1 rounded border border-blue-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-500"
+                    @keydown.enter.prevent="saveTableBusinessDesc(ds, table)"
+                    @keydown.esc.prevent="cancelEditTableBusinessDesc"
+                  />
+                  <span class="shrink-0 text-[11px] text-slate-400">{{ tableBusinessDescInput.length }}/255</span>
+                  <button
+                    type="button"
+                    :disabled="savingTableBusinessDescKey === buildTableKey(ds.id, table.table_name)"
+                    class="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    @click="saveTableBusinessDesc(ds, table)"
+                  >
+                    {{ savingTableBusinessDescKey === buildTableKey(ds.id, table.table_name) ? '保存中' : '保存' }}
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="savingTableBusinessDescKey === buildTableKey(ds.id, table.table_name)"
+                    class="rounded px-2.5 py-1 text-xs text-slate-500 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                    @click="cancelEditTableBusinessDesc"
+                  >取消</button>
+                </div>
+
+                <!-- 列列表 -->
+                <div v-if="expandedTables.has(buildTableKey(ds.id, table.table_name))" class="ml-6 overflow-hidden">
+                  <div class="border-l border-slate-200 py-1">
+                    <div
+                      v-for="col in table.columns"
+                      :key="col.name"
+                      class="group ml-4 flex items-center gap-2 rounded px-2 py-1 text-xs transition-colors hover:bg-slate-50"
+                    >
+                      <i :class="['fa-solid text-[10px]', getColumnIcon(col), getColumnIconColor(col)]" :title="getColumnIconTitle(col)"></i>
+                      <span class="font-mono font-medium text-slate-900">{{ col.name }}</span>
+                      <span class="text-slate-500">{{ col.mysql_type || col.hive_type || col.type }}</span>
+                      <span v-if="col.description" class="max-w-[360px] shrink-0 truncate text-slate-400">- {{ col.description }}</span>
+                      <span
+                        v-if="isColumnDictStatusLoading(ds.id, table.table_name)"
+                        class="flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-slate-400"
+                        title="正在检查字段字典状态"
+                      >
+                        <i class="fa-solid fa-spinner fa-spin text-[10px]"></i>
+                      </span>
+                      <button
+                        type="button"
+                        :class="[
+                          'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] transition-all',
+                          isColumnDictMaintained(ds.id, table.table_name, col.name)
+                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            : 'text-blue-600 opacity-0 hover:bg-blue-50 hover:text-blue-700 group-hover:opacity-100'
+                        ]"
+                        :title="isColumnDictMaintained(ds.id, table.table_name, col.name) ? '已维护字段字典，点击编辑' : '维护字段字典'"
+                        @click.stop="openColumnDictModal(ds, table, col)"
+                      >
+                        <i class="fa-solid fa-book text-[10px]"></i>
+                        <span>{{ isColumnDictMaintained(ds.id, table.table_name, col.name) ? '已维护' : '字典' }}</span>
+                      </button>
+                      <span class="min-w-[160px] flex-1"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="getFilteredDatasourceTables(ds).length === 0" class="ml-4 py-2 text-xs text-slate-500">未找到匹配的数据表</div>
+            </div>
+            <div v-else class="ml-4 py-2 text-xs text-slate-500">该数据源暂无表</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据源组弹窗 -->
+    <el-dialog v-model="showGroupModal" width="min(920px, 92vw)" :close-on-click-modal="!creatingGroup" :show-close="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-layer-group text-blue-600"></i>
+          <h3 class="text-lg font-semibold text-slate-900 m-0">{{ isEditingGroup ? '修改数据源组' : '新建数据源组' }}</h3>
+        </div>
+      </template>
+      <div class="space-y-4">
+        <div class="space-y-2.5">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex min-w-0 items-center gap-2">
+              <label class="w-16 shrink-0 text-sm text-slate-600">组名称<span class="text-red-500">*</span></label>
+              <input v-model="groupForm.group_name" type="text" maxlength="128" placeholder="请输入数据源组名称" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            </div>
+            <div class="flex min-w-0 items-center gap-2">
+              <label class="w-12 shrink-0 text-sm text-slate-600">描述</label>
+              <input v-model="groupForm.group_desc" type="text" maxlength="128" placeholder="可选" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="w-20 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'mysql' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
+                @click="handleGroupSourceTypeChange('mysql')"
+              >MySQL</button>
+              <button
+                type="button"
+                :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'hive' ? 'border-amber-500 bg-amber-50 text-amber-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
+                @click="handleGroupSourceTypeChange('hive')"
+              >Hive</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div class="mb-2 flex items-center gap-2">
+            <i class="fa-solid fa-link text-sm text-blue-600"></i>
+            <span class="text-sm font-medium text-slate-700">组内数据源</span>
+            <span class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ memberSourceLineCount }}</span>
+          </div>
+          <div class="flex h-44 overflow-hidden rounded border border-slate-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
+            <div class="overflow-hidden select-none border-r border-slate-200 bg-slate-50 px-2 py-2 text-right text-xs leading-6 text-slate-400">
+              <div :style="{ transform: `translateY(-${groupSourceScrollTop}px)` }">
+                <div v-for="lineNumber in groupSourceLineNumbers" :key="lineNumber" class="h-6 min-w-6">
+                  {{ lineNumber }}
+                </div>
+              </div>
+            </div>
+            <textarea
+              ref="groupSourceTextareaRef"
+              v-model="groupForm.datasource_sources_text"
+              :placeholder="groupSourcePlaceholder"
+              wrap="off"
+              spellcheck="false"
+              class="h-full w-full overflow-x-auto overflow-y-auto whitespace-pre border-0 px-3 py-2 text-sm leading-6 font-mono resize-none focus:outline-none focus:ring-0"
+              @scroll="handleGroupSourceScroll"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-table-list text-sm text-blue-600"></i>
+              <span class="text-sm font-medium text-slate-700">模板表结构</span>
+              <span v-if="groupDbTables.length > 0" class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ groupSelectionSummaryText }}</span>
+            </div>
+            <button :disabled="loadingGroupTables" class="flex items-center gap-2 rounded bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" @click="fetchGroupDbTables">
+              <i :class="['fa-solid', loadingGroupTables ? 'fa-spinner fa-spin' : 'fa-arrows-rotate']"></i>
+              <span>{{ loadingGroupTables ? '拉取中...' : '拉取表信息' }}</span>
+            </button>
+          </div>
+
+          <div v-if="hasGroupTemplateSourceChanged && groupDbTables.length > 0" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            第一行模板数据源已变化，当前仍使用上次拉取的表结构；如需更新，请手动点击“拉取表信息”。
+          </div>
+
+          <div v-if="groupDbTables.length > 0" class="mt-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div class="mb-2 flex items-center gap-2">
+              <span class="text-sm font-medium text-slate-700">选择表</span>
+              <span class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ groupSelectionSummaryText }}</span>
+              <div class="relative flex-1">
+                <i class="fa-solid fa-search absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
+                <input v-model="groupTableSearchKeyword" type="text" placeholder="搜索表名..." class="w-full rounded border border-slate-200 bg-slate-50 py-1 pl-6 pr-2 text-xs focus:border-blue-500 focus:bg-white focus:outline-none" />
+              </div>
+              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-blue-600" @click="selectAllGroupTables">{{ groupSelectAllButtonText }}</button>
+              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-blue-600" @click="deselectAllGroupTables">{{ groupDeselectAllButtonText }}</button>
+            </div>
+            <div class="max-h-44 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50">
+              <label v-for="table in filteredGroupTables" :key="table" class="flex cursor-pointer items-center gap-2 px-3 py-1 transition-colors hover:bg-white">
+                <input type="checkbox" :checked="selectedGroupTables.has(table)" class="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500" @change="toggleGroupTableSelection(table)" />
+                <span class="truncate text-xs text-slate-600">{{ table }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex justify-between">
+          <button :disabled="creatingGroup" class="rounded px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" @click="showGroupModal = false">
+            取消
+          </button>
+          <button :disabled="creatingGroup || (groupDbTables.length > 0 && selectedGroupTables.size === 0)" class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" @click="handleCreateDatasourceGroup">
+            <i v-if="creatingGroup" class="fa-solid fa-spinner fa-spin"></i>
+            <i v-else class="fa-solid fa-plus"></i>
+            <span>{{ creatingGroup ? (isEditingGroup ? '更新中...' : '创建中...') : (isEditingGroup ? '保存数据源组' : '创建数据源组') }}</span>
+          </button>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 指标集校验结果 -->
+    <el-dialog v-model="showHealthModal" width="860px" :show-close="false">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-shield-halved text-blue-600"></i>
+            <h3 class="m-0 text-lg font-semibold text-slate-900">指标集校验<span v-if="healthResult"> - {{ healthResult.group_name }}</span></h3>
+          </div>
+          <button class="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" @click="showHealthModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </template>
+
+      <div v-if="healthResult" class="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
+        <div class="rounded-xl border border-slate-200 bg-white">
+          <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <div class="flex items-start gap-3">
+              <div class="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">1</div>
+              <div>
+                <div class="text-sm font-semibold text-slate-900">物理库 ↔ 缓存表</div>
+                <div class="mt-0.5 text-xs text-slate-400">检查数据源缓存中的表和字段，在真实物理库中是否仍存在、类型是否变化。</div>
+              </div>
+            </div>
+            <span
+              :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(healthResult.schema?.status)]"
+            >
+              {{ getHealthStatusLabel(healthResult.schema?.status) }}
+            </span>
+          </div>
+          <div class="border-b border-slate-100 px-4 py-3 text-xs text-slate-500">
+            已校验 {{ healthResult.schema?.summary.cached_table_count || 0 }} 张缓存表，发现 {{ healthResult.schema?.summary.issue_count || 0 }} 个问题
+          </div>
+          <div v-if="!healthResult.schema || healthResult.schema.issues.length === 0" class="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">
+            缓存表和字段在物理库中均存在，未发现表结构漂移。
+          </div>
+          <div v-else class="space-y-2 border-t border-slate-100 p-3">
+            <div
+              v-for="(issue, index) in healthResult.schema.issues"
+              :key="`schema-${index}`"
+              class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"
+            >
+              {{ issue.message }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="healthResult.configs.length === 0" class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+          当前数据源还没有指标集
+        </div>
+        <div v-else class="rounded-xl border border-slate-200 bg-white">
+          <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <div class="flex items-start gap-3">
+              <div class="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">2</div>
+              <div>
+                <div class="text-sm font-semibold text-slate-900">缓存表 ↔ 指标集</div>
+                <div class="mt-0.5 text-xs text-slate-400">检查指标、维度、关联关系引用的表字段，是否仍存在于当前缓存表结构。</div>
+              </div>
+            </div>
+            <span
+              :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(healthResult.semantic?.status || healthResult.status)]"
+            >
+              {{ getHealthStatusLabel(healthResult.semantic?.status || healthResult.status) }}
+            </span>
+          </div>
+          <div class="border-b border-slate-100 px-4 py-3 text-xs text-slate-500">
+            已校验 {{ healthResult.semantic?.summary.config_count ?? healthResult.summary.config_count }} 个指标集，发现 {{ healthResult.semantic?.summary.issue_count ?? healthResult.summary.issue_count }} 个问题
+          </div>
+          <div class="max-h-[360px] space-y-3 overflow-y-auto bg-slate-50/40 p-3">
+            <div v-for="config in healthResult.configs" :key="config.config_id" class="rounded-xl border border-slate-200 bg-white">
+              <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-semibold text-slate-900">{{ config.config_name || config.config_id }}</div>
+                  <div class="mt-0.5 text-xs text-slate-400">
+                    {{ config.issues.length === 0 ? '未发现异常' : `${config.issues.length} 项需处理` }}
+                  </div>
+                </div>
+                <span
+                  :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(config.status)]"
+                >
+                  {{ getHealthStatusLabel(config.status) }}
+                </span>
+              </div>
+              <div v-if="config.issues.length === 0" class="px-4 py-3 text-xs text-slate-400">
+                该指标集引用的指标、维度和关联关系均能匹配当前缓存表结构。
+              </div>
+              <div v-else class="space-y-2 p-3">
+                <div
+                  v-for="(issue, index) in config.issues"
+                  :key="`${config.config_id}-${index}`"
+                  class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"
+                >
+                  {{ issue.message }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 表分组管理弹窗 -->
+    <el-dialog v-model="showTableGroupModal" width="760px" :close-on-click-modal="!savingTableGroups" :show-close="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-layer-group text-blue-600"></i>
+          <h3 class="text-lg font-semibold text-slate-900 m-0">表分组管理<span v-if="tableGroupDs"> - {{ tableGroupDs.group_name }}</span></h3>
+        </div>
+      </template>
+
+      <div class="flex max-h-[70vh] min-h-0 flex-col">
+        <div v-if="loadingTableGroups" class="flex min-h-[320px] flex-col items-center justify-center text-slate-400">
+          <i class="fa-solid fa-spinner fa-spin mb-2 text-2xl"></i>
+          <span class="text-sm">正在加载表分组...</span>
+        </div>
+        <div v-else class="grid min-h-0 flex-1 grid-cols-[240px_1fr] gap-4">
+          <div class="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50">
+          <div class="border-b border-slate-200 p-3">
+            <div class="flex gap-2">
+              <input
+                v-model="tableGroupNameInput"
+                type="text"
+                maxlength="100"
+                placeholder="新增分组名称"
+                class="min-w-0 flex-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                @keydown.enter.prevent="addTableGroup"
+              />
+              <button class="rounded bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700" @click="addTableGroup">新增</button>
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto p-2">
+            <div v-if="tableGroupRows.length === 0" class="p-6 text-center text-xs text-slate-400">暂无分组</div>
+            <button
+              v-for="group in tableGroupRows"
+              :key="group.table_group_name"
+              :class="['group flex w-full items-center gap-2 rounded px-2 py-2 text-left transition-colors',
+                activeTableGroupName === group.table_group_name ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-700 hover:bg-white']"
+              @click="activeTableGroupName = group.table_group_name"
+            >
+              <template v-if="editingTableGroupName === group.table_group_name">
+                <input
+                  v-model="editingTableGroupInput"
+                  type="text"
+                  maxlength="100"
+                  class="min-w-0 flex-1 rounded border border-blue-300 bg-white px-2 py-1 text-xs text-slate-800 outline-none"
+                  @click.stop
+                  @keydown.enter.prevent.stop="confirmRenameTableGroup(group.table_group_name)"
+                  @keydown.esc.prevent.stop="cancelRenameTableGroup"
+                />
+                <i class="fa-solid fa-check text-xs text-blue-600 hover:text-blue-700" @click.stop="confirmRenameTableGroup(group.table_group_name)"></i>
+                <i class="fa-solid fa-xmark text-xs text-slate-400 hover:text-slate-600" @click.stop="cancelRenameTableGroup"></i>
+              </template>
+              <template v-else>
+                <i class="fa-solid fa-folder text-xs text-amber-600"></i>
+                <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ group.table_group_name }}</span>
+                <span class="text-xs text-slate-400">{{ group.table_names.length }}</span>
+                <i class="fa-solid fa-pen text-xs text-slate-300 opacity-0 hover:text-blue-600 group-hover:opacity-100" title="重命名" @click.stop="startRenameTableGroup(group.table_group_name)"></i>
+                <i class="fa-solid fa-trash text-xs text-slate-300 opacity-0 hover:text-red-600 group-hover:opacity-100" title="删除" @click.stop="deleteTableGroup(group.table_group_name)"></i>
+              </template>
+            </button>
+          </div>
+        </div>
+
+          <div class="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white">
+          <div class="flex items-center gap-2 border-b border-slate-200 p-3">
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-semibold text-slate-800">{{ activeTableGroupName || '请选择分组' }}</div>
+              <div class="mt-0.5 text-xs text-slate-400">同一张表可以加入多个分组</div>
+            </div>
+            <div class="relative w-56">
+              <i class="fa-solid fa-search absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
+              <input v-model="tableGroupSearchKeyword" type="text" placeholder="搜索表名/描述" class="w-full rounded border border-slate-200 bg-slate-50 py-1.5 pl-6 pr-2 text-xs focus:border-blue-500 focus:bg-white focus:outline-none" />
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto p-2">
+            <div v-if="!activeTableGroup" class="flex h-full items-center justify-center text-sm text-slate-400">先在左侧新增或选择一个分组</div>
+            <div v-else-if="filteredTableGroupTables.length === 0" class="p-8 text-center text-sm text-slate-400">未找到表</div>
+            <template v-else>
+              <label
+                v-for="table in filteredTableGroupTables"
+                :key="table.table_name"
+                class="flex cursor-pointer items-center gap-3 rounded px-3 py-2 transition-colors hover:bg-slate-50"
+              >
+                <input
+                  type="checkbox"
+                  :checked="activeTableGroupTableNames.has(table.table_name)"
+                  class="h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  @change="toggleActiveTableGroupTable(table.table_name)"
+                />
+                <i class="fa-solid fa-table text-xs text-blue-600"></i>
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{{ table.table_name }}</span>
+                <span v-if="table.description && table.description !== table.table_name" class="max-w-[180px] truncate text-xs text-slate-400">{{ table.description }}</span>
+              </label>
+            </template>
+          </div>
+        </div>
+        </div>
+
+        <div class="mt-4 flex shrink-0 justify-between">
+          <button :disabled="savingTableGroups" class="rounded px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" @click="closeTableGroupModal">取消</button>
+          <button :disabled="savingTableGroups" class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" @click="saveTableGroups">
+            <i v-if="savingTableGroups" class="fa-solid fa-spinner fa-spin"></i>
+            <i v-else class="fa-solid fa-floppy-disk"></i>
+            <span>{{ savingTableGroups ? '保存中...' : '保存表分组' }}</span>
+          </button>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 字段字典维护弹窗 -->
+    <el-dialog v-model="showColumnDictModal" width="760px" :close-on-click-modal="!savingColumnDict" :show-close="false">
+      <template #header>
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0 flex items-center gap-2">
+            <i class="fa-solid fa-book text-blue-600"></i>
+            <h3 class="m-0 truncate text-lg font-semibold text-slate-900">
+              字段数据字典<span v-if="columnDictContext"> - {{ columnDictContext.table.table_name }}.{{ columnDictContext.column.name }}</span>
+            </h3>
+          </div>
+          <button
+            type="button"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            @click="closeColumnDictModal"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </template>
+
+      <div class="space-y-3">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
+          字段字典用于维护物理字段的枚举值、数据存储格式和单位，供指标集展示和智能问数理解字段。
+        </div>
+
+        <div v-if="loadingColumnDict" class="flex min-h-[220px] flex-col items-center justify-center text-slate-400">
+          <i class="fa-solid fa-spinner fa-spin mb-2 text-xl"></i>
+          <span class="text-sm">正在加载字段字典...</span>
+        </div>
+        <template v-else>
+          <div class="rounded-xl border border-blue-100 bg-blue-50 p-3">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 text-xs font-medium text-blue-700">
+                <i class="fa-solid fa-wand-magic-sparkles text-[11px]"></i>
+                <span>AI 生成字段字典</span>
+              </div>
+              <button
+                type="button"
+                :disabled="generatingColumnDict || !columnDictGenerateText.trim()"
+                class="flex items-center gap-1.5 rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                @click="generateColumnDict"
+              >
+                <i :class="['fa-solid', generatingColumnDict ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles', 'text-[10px]']"></i>
+                <span>{{ generatingColumnDict ? '生成中' : '生成候选' }}</span>
+              </button>
+            </div>
+            <textarea
+              v-model="columnDictGenerateText"
+              maxlength="10000"
+              rows="3"
+              placeholder="粘贴字段说明，例如：is_active 逻辑状态，1 表示在线，0 表示下线；amount 单位为元"
+              class="w-full resize-none rounded border border-blue-100 bg-white px-2.5 py-2 text-xs leading-5 text-slate-700 outline-none focus:border-blue-500"
+            ></textarea>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 bg-white">
+            <div class="grid grid-cols-[1fr_1.5fr_56px] gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+              <span>枚举值</span>
+              <span>枚举含义</span>
+              <span class="text-right">操作</span>
+            </div>
+            <div class="max-h-[320px] overflow-y-auto p-2">
+              <div v-if="columnDictRows.length === 0" class="flex min-h-[120px] items-center justify-center text-sm text-slate-400">
+                暂无枚举值
+              </div>
+              <div
+                v-for="(row, index) in columnDictRows"
+                :key="index"
+                class="grid grid-cols-[1fr_1.5fr_56px] gap-2 rounded px-1 py-1.5 hover:bg-slate-50"
+              >
+                <input
+                  v-model="row.value"
+                  type="text"
+                  maxlength="128"
+                  placeholder="如 1"
+                  class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs font-mono text-slate-700 outline-none focus:border-blue-500"
+                />
+                <input
+                  v-model="row.label"
+                  type="text"
+                  maxlength="255"
+                  placeholder="如 在线"
+                  class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  class="justify-self-end rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50"
+                  @click="removeColumnDictEnumRow(index)"
+                >删除</button>
+              </div>
+              <button
+                type="button"
+                :disabled="loadingColumnDict"
+                class="mt-2 flex items-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                @click="addColumnDictEnumRow"
+              >
+                <i class="fa-solid fa-plus text-[10px]"></i>
+                <span>新增枚举</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-600">数据存储格式</span>
+              <input
+                v-model="columnDictStorageFormat"
+                type="text"
+                maxlength="255"
+                placeholder="如 yyyyMMdd、yyyy-MM-dd HH:mm:ss"
+                class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+              />
+            </label>
+            <label class="block">
+              <span class="mb-1 block text-xs font-medium text-slate-600">单位</span>
+              <input
+                v-model="columnDictUnit"
+                type="text"
+                maxlength="100"
+                placeholder="如 元、万元、秒"
+                class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+              />
+            </label>
+          </div>
+
+        </template>
+
+        <div class="flex items-center justify-end">
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              :disabled="savingColumnDict"
+              class="rounded px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              @click="closeColumnDictModal"
+            >取消</button>
+            <button
+              type="button"
+              :disabled="savingColumnDict || loadingColumnDict"
+              class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              @click="saveColumnDict"
+            >
+              <i v-if="savingColumnDict" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-floppy-disk"></i>
+              <span>{{ savingColumnDict ? '保存中...' : '保存字典' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
+
+  </div>
+</template>

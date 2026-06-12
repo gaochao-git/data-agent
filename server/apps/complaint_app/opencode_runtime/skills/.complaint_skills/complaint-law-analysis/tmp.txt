@@ -1,0 +1,68 @@
+
+# Complaint Law Analysis
+
+Use this skill when the user asks to analyze a complaint/report (举报/投诉/信访) using **only** the local `laws/` folder. Do **not** use web search or outside legal sources. The `LAWS_DIR` must come from `metadata.laws_dir`.
+
+## Scope and constraints
+
+- **Sources allowed**: Only files under `laws/` (exactly `metadata.laws_dir`).
+- **No web**: Do not browse or cite external sources.
+- **Time applicability**: Always check the incident date. Separate rules that were effective **at the incident time** vs those effective **after** the incident but relevant to ongoing handling.
+- **Citation format**: `- 《法规名》+条号（或条款编号）`.
+
+## Environment and command execution
+
+- Use the **shell tool** for read-only commands.
+- **LAWS_DIR (required)**: `LAWS_DIR=<metadata.laws_dir>` and **only** search under this directory. Do **not** search elsewhere.
+- Verify with `ls "$LAWS_DIR"` or `rg --files "$LAWS_DIR"`; if empty/missing, stop and report that `laws/` is unavailable.
+
+## Workflow
+
+1. **Extract case facts and date**
+   - Summarize key facts and the incident date/time.
+   - If dates are relative or unclear, ask for absolute dates.
+
+2. **Define obligation categories**
+   Typical buckets:
+   - Transaction authorization/verification
+   - Risk monitoring and suspicious transaction handling
+   - Consumer complaint/appeal handling
+   - Information disclosure and transaction traceability
+   - Merchant/acquirer management (if relevant)
+   - Anti-fraud coordination (if relevant)
+
+3. **Search laws locally (no guessing)**
+   - **Always list files first**: `rg --files "$LAWS_DIR"` (or `ls "$LAWS_DIR"`).
+   - **Only use filenames from that list**. Do **not** guess file names.
+   - If a specific file is needed but **not found**, do **not** retry the same missing path. Fall back to a directory-wide search:
+     - `rg -n '关键词' "$LAWS_DIR"/*.txt`
+   - After locating relevant files/lines, open only the needed sections with:
+     - `sed -n 'start,endp' "文件"`
+
+4. **Match facts to obligations**
+   - For each category, map the fact to specific clauses.
+   - Use cautious language: **可能涉及/需核实后定性**.
+
+5. **Produce evidence request list**
+   - For each obligation, list the minimum documents/logs needed to verify compliance.
+
+## Output structure
+
+1. **适用性判断**
+   - Incident date vs law effective dates.
+
+2. **可能涉及的违法违规点（需核实后定性）**
+   - Group by obligation category.
+   - Cite with `《法规名》+条号`.
+
+3. **需要被举报机构提供的材料清单**
+   - Tie each item to the obligation it verifies.
+
+4. **待核实关键问题（可选）**
+   - Ask clarifying questions only when truly needed.
+
+## Notes
+
+- Keep quotes short; summarize instead of reproducing long text.
+- If a needed law is missing from `laws/`, say so and proceed with what is available.
+- Do not make a legal conclusion without evidence; frame as hypotheses to be verified.

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="820" viewBox="0 0 1460 820">
+<style>
+    .title { font: 700 28px PingFang SC, Microsoft YaHei, Arial, sans-serif; fill: #152033; }
+    .subtitle { font: 600 18px PingFang SC, Microsoft YaHei, Arial, sans-serif; fill: #355070; }
+    .label { font: 500 16px PingFang SC, Microsoft YaHei, Arial, sans-serif; fill: #203040; }
+    .small { font: 400 13px PingFang SC, Microsoft YaHei, Arial, sans-serif; fill: #526072; }
+    .box { fill: #ffffff; stroke: #355070; stroke-width: 2; rx: 16; ry: 16; }
+    .zone-dmz { fill: #f7fbff; stroke: #5b8def; stroke-width: 2.5; rx: 22; ry: 22; }
+    .zone-app { fill: #f5fcf8; stroke: #3aa675; stroke-width: 2.5; rx: 22; ry: 22; }
+    .zone-local { fill: #fffaf0; stroke: #e6a23c; stroke-width: 2.5; rx: 22; ry: 22; }
+    .zone-uat { fill: #f7fbff; stroke: #5b8def; stroke-width: 2.5; rx: 22; ry: 22; }
+    .zone-prod { fill: #f5fcf8; stroke: #3aa675; stroke-width: 2.5; rx: 22; ry: 22; }
+    .arrow { stroke: #4a5568; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .arrow2 { stroke: #4a5568; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    .dash { stroke-dasharray: 8 6; }
+    .note { font: 500 14px PingFang SC, Microsoft YaHei, Arial, sans-serif; fill: #1f3a5f; }
+</style>
+<defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L9,3 z" fill="#4a5568" />
+    </marker>
+</defs>
+
+<rect x="40" y="30" width="1380" height="750" fill="#f8fafc" rx="28" ry="28" />
+<text class="title" x="60" y="75">部署图</text>
+<rect class="zone-local" x="80" y="120" width="620" height="560" />
+<text class="subtitle" x="110" y="160">本地开发</text>
+<rect class="box" x="130" y="240" width="150" height="90" rx="16" ry="16" />
+<text class="label" x="205.0" y="270" text-anchor="middle">psoss-fe</text>
+<text class="small" x="205.0" y="296" text-anchor="middle">npm run dev</text>
+<rect class="box" x="330" y="235" width="180" height="100" rx="16" ry="16" />
+<text class="label" x="420.0" y="265" text-anchor="middle">Java Web 接入层</text>
+<rect class="box" x="560" y="235" width="120" height="100" rx="16" ry="16" />
+<text class="label" x="620.0" y="265" text-anchor="middle">Java Service</text>
+<line class="arrow" x1="510" y1="285" x2="560" y2="285" />
+<text class="note" x="535.0" y="277.0" text-anchor="middle">Dubbo</text>
+<text class="small" x="130" y="390">本地开发维护 3 个应用：psoss-fe、Java Web 接入层、Java Service。</text>
+<text class="small" x="130" y="420">本地 Java Web 的 /agents 请求不会在本地处理，而是转发到 UAT 的 Python Agent。</text>
+<rect class="zone-uat" x="760" y="120" width="620" height="560" />
+<text class="subtitle" x="790" y="160">UAT</text>
+<rect class="box" x="820" y="235" width="180" height="100" rx="16" ry="16" />
+<text class="label" x="910.0" y="265" text-anchor="middle">Java Web</text>
+<rect class="box" x="1060" y="235" width="140" height="100" rx="16" ry="16" />
+<text class="label" x="1130.0" y="265" text-anchor="middle">Java Service</text>
+<rect class="box" x="940" y="430" width="180" height="110" rx="16" ry="16" />
+<text class="label" x="1030.0" y="460" text-anchor="middle">Python Agent</text>
+<text class="small" x="1030.0" y="486" text-anchor="middle">单节点</text>
+<line class="arrow" x1="1000" y1="285" x2="1060" y2="285" />
+<text class="note" x="1030.0" y="277.0" text-anchor="middle">Dubbo</text>
+<text class="small" x="820" y="380">UAT 自身也有完整链路：Java Web、Java Service、Python Agent。</text>
+<text class="small" x="820" y="405">但当前开发联调只复用其中的 Python Agent 服务。</text>
+<line class="arrow dash" x1="510" y1="320" x2="940" y2="465" />
+<text class="note" x="725.0" y="384.5" text-anchor="middle">/agents/ 转发验证</text>
+<text class="small" x="80" y="735">说明：此图只描述“本地开发 + UAT 验证”关系。UAT 存在自己的完整应用链路，但当前复用点仅为 UAT 的 Python Agent。</text>
+</svg>

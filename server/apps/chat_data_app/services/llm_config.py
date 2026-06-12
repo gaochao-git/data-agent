@@ -1,0 +1,102 @@
+"""智能问数 LLM 配置。"""
+
+import os
+from typing import Any
+
+from langchain_core.language_models import BaseChatModel
+
+from utils.lang_util.llm import get_llm
+
+
+DEFAULT_CHAT_DATA_MAX_TOKENS = 20000
+DEFAULT_CHAT_DATA_MODEL = "gpt-4o-mini"
+
+
+def _get_default_max_tokens() -> int:
+    """读取智能问数默认最大输出 token 数。"""
+    raw = str(os.getenv("CHAT_DATA_MAX_TOKENS") or "").strip()
+    if not raw:
+        return DEFAULT_CHAT_DATA_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CHAT_DATA_MAX_TOKENS
+    return value if value > 0 else DEFAULT_CHAT_DATA_MAX_TOKENS
+
+
+def _get_chat_data_enable_thinking() -> bool:
+    raw = str(os.getenv("CHAT_DATA_ENABLE_THINKING") or "false").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _split_model_names(raw_value: str | None) -> list[str]:
+    """按逗号拆分模型配置并去重。"""
+    models = []
+    seen = set()
+    for item in str(raw_value or "").split(","):
+        model = item.strip().strip("\"'")
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        models.append(model)
+    return models
+
+
+def get_chat_data_model_names() -> list[str]:
+    """读取智能问数模型列表。"""
+    default_models = _split_model_names(os.getenv("CHAT_DATA_MODEL"))
+    models = [*default_models]
+    for model in _split_model_names(os.getenv("CHAT_DATA_MODELS")):
+        if model not in models:
+            models.append(model)
+    return models or [DEFAULT_CHAT_DATA_MODEL]
+
+
+def get_default_chat_data_model() -> str:
+    """读取智能问数默认模型。"""
+    return get_chat_data_model_names()[0]
+
+
+def _get_chat_data_extra_body(model: str | None) -> dict[str, Any] | None:
+    normalized_model = str(model or get_default_chat_data_model()).strip().lower()
+    if "qwen" in normalized_model:
+        return {"enable_thinking": _get_chat_data_enable_thinking()}
+    return None
+
+
+def get_chat_data_model_options() -> dict[str, Any]:
+    """读取智能问数前端可选模型列表。"""
+    raw_models = get_chat_data_model_names()
+    default_model = raw_models[0]
+    models = []
+    for model in raw_models:
+        models.append({
+            "id": model,
+            "label": model,
+            "value": model,
+            "is_default": model == default_model,
+        })
+    return {"models": models, "default_model": default_model}
+
+
+def get_chat_data_llm(
+    model: str | None = None,
+    streaming: bool = False,
+    stream_usage: bool | None = None,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+) -> BaseChatModel:
+    """读取 CHAT_DATA_* 环境变量创建智能问数专用 LLM。"""
+    selected_model = model or get_default_chat_data_model()
+    return get_llm(
+        model=selected_model,
+        streaming=streaming,
+        stream_usage=stream_usage,
+        temperature=temperature,
+        max_tokens=max_tokens or _get_default_max_tokens(),
+        timeout=timeout,
+        api_key=os.getenv("CHAT_DATA_API_KEY"),
+        base_url=os.getenv("CHAT_DATA_BASE_URL"),
+        extra_body=_get_chat_data_extra_body(selected_model),
+    )

@@ -1,0 +1,550 @@
+import asyncio
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
+os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB", "fxcjg_test")
+os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
+os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
+
+from apps.chat_data_app.agent.tools import calculator_tool
+from apps.chat_data_app.agent.tools import sql as agent_tools
+
+
+def test_calculator_tool_calculates_decimal_expression_and_rounds():
+    result = asyncio.run(calculator_tool.ainvoke({
+        "calculations": [
+            {"name": "分转元", "expression": "123456789 / 100", "decimal_places": 2},
+            {"name": "占比", "expression": "25 / 200 * 100", "decimal_places": 1},
+        ],
+    }))
+
+    payload = json.loads(result)
+    assert payload == {
+        "success": True,
+        "results": [
+            {"expression": "123456789 / 100", "name": "分转元", "success": True, "result": "1234567.89"},
+            {"expression": "25 / 200 * 100", "name": "占比", "success": True, "result": "12.5"},
+        ],
+    }
+
+
+def test_calculator_tool_rejects_unsafe_expression():
+    result = asyncio.run(calculator_tool.ainvoke({
+        "calculations": [
+            {"name": "危险表达式", "expression": "__import__('os').system('echo bad')"},
+            {"name": "正常表达式", "expression": "10 + 1"},
+        ],
+    }))
+
+    payload = json.loads(result)
+    assert payload == {
+        "success": False,
+        "results": [
+            {
+                "expression": "__import__('os').system('echo bad')",
+                "name": "危险表达式",
+                "success": False,
+                "error": "expression 只能包含数字、括号和 + - * /",
+            },
+            {"expression": "10 + 1", "name": "正常表达式", "success": True, "result": "11"},
+        ],
+    }
+
+
+def test_build_semantic_prompt_includes_ontology_rules():
+    prompt = agent_tools.build_semantic_prompt({
+        "description": "订单数据集",
+        "ontology_rules": "有效订单仅统计已支付且未退款订单",
+        "metrics": [{"name": "订单金额", "expression": "SUM(pay_amount)", "description": "实付金额"}],
+        "dimensions": [{"name": "订单状态", "expression": "orders.status", "description": "状态枚举"}],
+        "relationships": [],
+    })
+
+    assert "**配置说明**: 订单数据集" in prompt
+    assert "**业务描述**: 有效订单仅统计已支付且未退款订单" in prompt
+    assert "订单金额" in prompt
+    assert "订单状态" in prompt
+
+
+def test_table_metadata_formatters_cover_empty_and_selected_tables():
+    tables = [
+        {
+            "table_name": "orders",
+            "description": "订单表",
+            "columns": [
+                {"name": "order_id", "type": "bigint", "primary_key": True, "description": "订单ID"},
+                {"name": "status", "description": "订单状态"},
+            ],
+        },
+        {"table_name": "users", "description": "用户表", "columns": []},
+    ]
+
+    assert agent_tools.get_tables_name_comment([]) == "暂无可用数据表"
+    assert agent_tools.get_tables_name_comment(tables) == "- orders: 订单表\n- users: 用户表"
+    assert agent_tools.get_tables_create_format([], ["orders"]) == ""
+    assert agent_tools.get_tables_create_format(tables, []) == ""
+    assert agent_tools.get_tables_create_format(tables, ["missing"]) == ""
+
+    ddl = agent_tools.get_tables_create_format(tables, ["orders"])
+
+    assert "CREATE TABLE orders" in ddl
+    assert "order_id bigint PRIMARY KEY  -- 订单ID" in ddl
+    assert "status TEXT  -- 订单状态" in ddl
+
+
+def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relationships():
+    prompt = agent_tools.build_semantic_prompt({
+        "source_type": "hive",
+        "metrics": [
+            {"name": "订单数", "label": "订单数量", "aggregation": "COUNT", "field": "order_id", "mysql_type": "bigint", "metadata_supplement": "同义词：订单量"},
+            {"name": "销售额", "expression": "SUM(amount)", "data_type": "decimal"},
+        ],
+        "dimensions": [
+            {"name": "订单状态", "table": "orders", "column": "status", "hive_type": "string", "allowed_values": ["paid", "cancelled"], "metadata_supplement": "枚举值：paid=已支付，cancelled=已取消"},
+            {"name": "用户ID", "field": "orders.user_id", "columnType": "bigint"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_type": "inner",
+                "relationship_type": "many_to_one",
+                "join_conditions": [
+                    {"left_column": "user_id", "right_column": "user_id"},
+                    {"left_column": "bad"},
+                ],
+            },
+            {"left_table": "orders", "right_table": "items", "join_conditions": []},
+        ],
+    })
+
+    assert "**SQL方言**: HIVE" in prompt
+    assert "COUNT(order_id)" in prompt
+    assert "类型: bigint" in prompt
+    assert "元数据补充: 同义词：订单量" in prompt
+    assert "元数据补充: 枚举值：paid=已支付，cancelled=已取消" in prompt
+    assert "可选值: [paid、cancelled]" in prompt
+    assert "**orders** → **users**: orders.user_id = users.user_id (INNER JOIN, many_to_one)" in prompt
+    assert "orders** → **items" not in prompt
+
+
+def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return {"ds_tables": [{"table_name": datasource_id}]} if datasource_id == "ds_a" else None
+
+        async def get_all_datasources_async(self):
+            return [
+                {"ds_tables": [{"table_name": "orders"}]},
+                {"ds_tables": [{"table_name": "users"}]},
+            ]
+
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: FakeManager())
+
+    assert asyncio.run(agent_tools.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
+    assert asyncio.run(agent_tools.get_all_tables_async("missing")) == []
+    assert asyncio.run(agent_tools.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
+
+
+def test_llm_select_tables_parses_json_code_block_filters_invalid_and_falls_back(monkeypatch):
+    tables = [{"table_name": "orders", "description": "订单表"}, {"table_name": "users", "description": "用户表"}]
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+    class FakeLLM:
+        def __init__(self, content):
+            self.content = content
+
+        async def ainvoke(self, messages):
+            captured["messages"] = messages
+            assert "orders" in messages[0].content
+            return FakeResponse(self.content)
+
+    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('```json\n{"tables":["orders","missing"]}\n```'))
+    assert asyncio.run(agent_tools.llm_select_tables("查订单", tables)) == ["orders"]
+    assert getattr(captured["messages"][0], "type", "") == "human"
+
+    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('{"tables":["users"]}'))
+    assert asyncio.run(agent_tools.llm_select_tables("查用户", tables)) == ["users"]
+
+    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM("not json"))
+    assert asyncio.run(agent_tools.llm_select_tables("查全部", tables)) == ["orders", "users"]
+    assert asyncio.run(agent_tools.llm_select_tables("查空", [])) == []
+
+
+class _FakeDatasourceManager:
+    async def get_datasource_async(self, datasource_id: str):
+        if datasource_id != "ds_group":
+            return None
+        return {
+            "id": datasource_id,
+            "source_type": "mysql",
+        }
+
+    async def get_execution_datasources_async(self, datasource_id: str, member_datasource_ids: list[str] | None = None):
+        member_ids = member_datasource_ids or ["member_a"]
+        all_targets = {
+            "member_a": {
+                "member_datasource_id": "member_a",
+                "member_name": "杭州库",
+                "source_type": "mysql",
+                "source_config": {"host": "127.0.0.1", "port": 3306, "database": "db_a", "user": "u", "password": "p"},
+            },
+            "member_b": {
+                "member_datasource_id": "member_b",
+                "member_name": "宁波库",
+                "source_type": "mysql",
+                "source_config": {"host": "127.0.0.2", "port": 3306, "database": "db_b", "user": "u", "password": "p"},
+            },
+        }
+        return [all_targets[item] for item in member_ids]
+
+
+async def _fake_execute_sql_on_target(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+    member_id = target_datasource.get("member_datasource_id")
+    return {
+        "success": True,
+        "columns": ["member_id", "sql_text"],
+        "data": [{"member_id": member_id, "sql_text": sql}],
+        "total_count": 1,
+        "execution_time_ms": 15,
+    }
+
+
+def test_execute_sql_real_returns_multi_member_results(monkeypatch):
+    fake_manager = _FakeDatasourceManager()
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: fake_manager)
+    monkeypatch.setattr(agent_tools, "_execute_sql_on_target", _fake_execute_sql_on_target)
+
+    result = asyncio.run(agent_tools._execute_sql_real(
+        sql="select 1",
+        datasource_id="ds_group",
+        member_datasource_ids=["member_a", "member_b"],
+    ))
+
+    assert result["success"] is True
+    assert result["sql"] == "select 1"
+    assert len(result["results"]) == 2
+    assert result["results"][0]["member_name"] == "杭州库"
+    assert result["results"][1]["member_name"] == "宁波库"
+    assert result["results"][1]["data"][0]["member_id"] == "member_b"
+
+
+async def _fake_execute_sql_on_target_with_failure(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+    member_id = target_datasource.get("member_datasource_id")
+    if member_id == "member_a":
+        return {
+            "success": False,
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+            "error": "杭州库执行失败",
+        }
+    return {
+        "success": True,
+        "columns": ["member_id", "sql_text"],
+        "data": [{"member_id": member_id, "sql_text": sql}],
+        "total_count": 1,
+        "execution_time_ms": 18,
+    }
+
+
+def test_execute_sql_real_uses_first_successful_member_as_primary(monkeypatch):
+    fake_manager = _FakeDatasourceManager()
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: fake_manager)
+    monkeypatch.setattr(agent_tools, "_execute_sql_on_target", _fake_execute_sql_on_target_with_failure)
+
+    result = asyncio.run(agent_tools._execute_sql_real(
+        sql="select 1",
+        datasource_id="ds_group",
+        member_datasource_ids=["member_a", "member_b"],
+    ))
+
+    assert result["success"] is True
+    assert result["member_name"] == "宁波库"
+    assert result["columns"] == ["member_id", "sql_text"]
+    assert result["data"][0]["member_id"] == "member_b"
+
+
+async def _fake_execute_sql_on_target_with_delay(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+    await asyncio.sleep(0.2)
+    member_id = target_datasource.get("member_datasource_id")
+    return {
+        "success": True,
+        "columns": ["member_id"],
+        "data": [{"member_id": member_id}],
+        "total_count": 1,
+        "execution_time_ms": 200,
+    }
+
+
+def test_execute_sql_real_runs_members_concurrently(monkeypatch):
+    fake_manager = _FakeDatasourceManager()
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: fake_manager)
+    monkeypatch.setattr(agent_tools, "_execute_sql_on_target", _fake_execute_sql_on_target_with_delay)
+
+    start = time.perf_counter()
+    result = asyncio.run(agent_tools._execute_sql_real(
+        sql="select 1",
+        datasource_id="ds_group",
+        member_datasource_ids=["member_a", "member_b"],
+    ))
+    elapsed = time.perf_counter() - start
+
+    assert result["success"] is True
+    assert len(result["results"]) == 2
+    assert result["results"][0]["member_datasource_id"] == "member_a"
+    assert result["results"][1]["member_datasource_id"] == "member_b"
+    assert elapsed < 0.35
+
+
+async def _fake_execute_sql_on_target_with_exception(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
+    member_id = target_datasource.get("member_datasource_id")
+    if member_id == "member_a":
+        raise RuntimeError("boom")
+    return {
+        "success": True,
+        "columns": ["member_id", "sql_text"],
+        "data": [{"member_id": member_id, "sql_text": sql}],
+        "total_count": 1,
+        "execution_time_ms": 18,
+    }
+
+
+def test_execute_sql_real_keeps_other_members_when_one_member_raises(monkeypatch):
+    fake_manager = _FakeDatasourceManager()
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: fake_manager)
+    monkeypatch.setattr(agent_tools, "_execute_sql_on_target", _fake_execute_sql_on_target_with_exception)
+
+    result = asyncio.run(agent_tools._execute_sql_real(
+        sql="select 1",
+        datasource_id="ds_group",
+        member_datasource_ids=["member_a", "member_b"],
+    ))
+
+    assert result["success"] is True
+    assert result["member_name"] == "宁波库"
+    assert result["results"][0]["success"] is False
+    assert result["results"][0]["error"] == "执行失败: boom"
+    assert result["results"][1]["success"] is True
+
+
+def test_execute_sql_on_target_uses_user_datasource_limiter(monkeypatch):
+    captured = {}
+
+    class FakeExecutor:
+        async def execute(self, sql: str, user_id: str | None = None):
+            return {"success": True, "columns": [], "data": [], "total_count": 0, "sql": sql, "user_id": user_id}
+
+        async def close(self):
+            captured["closed"] = True
+
+    async def fake_limiter(user_id, execution_target, operation):
+        captured["user_id"] = user_id
+        captured["execution_target"] = execution_target
+        return await operation()
+
+    target = {"member_datasource_id": "member_a", "source_type": "mysql"}
+    monkeypatch.setattr(agent_tools, "get_executor", lambda _target: FakeExecutor())
+    monkeypatch.setattr(agent_tools, "run_with_sql_user_datasource_limit", fake_limiter)
+
+    result = asyncio.run(agent_tools._execute_sql_on_target("select 1", target, "user_a"))
+
+    assert result["success"] is True
+    assert captured["user_id"] == "user_a"
+    assert captured["execution_target"] == target
+    assert captured["closed"] is True
+
+
+def test_execute_sql_for_member_uses_route_execution_when_execution_id(monkeypatch):
+    import apps.chat_data_app.routes as routes
+
+    captured = {}
+
+    async def fake_route_execute_sql_for_member(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    monkeypatch.setattr(routes, "_execute_sql_for_member", fake_route_execute_sql_for_member)
+
+    target = {"member_datasource_id": "member_a", "member_name": "杭州库"}
+    result = asyncio.run(agent_tools._execute_sql_for_member("select 1", target, user_id="user_a", execution_id="exec_1"))
+
+    assert result["success"] is True
+    assert captured["execution_target"] == target
+    assert captured["execution_id"] == "exec_1"
+
+
+def test_execute_sql_real_returns_errors_for_missing_datasource(monkeypatch):
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return None
+
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: FakeManager())
+
+    missing_id = asyncio.run(agent_tools._execute_sql_real("select 1", None))
+    missing_datasource = asyncio.run(agent_tools._execute_sql_real("select 1", "missing"))
+
+    assert missing_id["error"] == "未指定数据源ID，无法执行查询"
+    assert missing_datasource["error"] == "数据源不存在: missing"
+
+
+def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
+    import apps.chat_data_app.routes as routes
+
+    class FakeManager(_FakeDatasourceManager):
+        pass
+
+    updates = []
+
+    async def fake_create_task_for_execute_request(body, query_type=None, operator_name=None):
+        return {"task_id": "task_1"}
+
+    async def fake_create_query_executions_for_task(task_id, body, operator_name=None):
+        return {"member_a": "exec_a"}
+
+    def fake_get_execution_id_by_member(execution_map, target):
+        return execution_map.get(target.get("member_datasource_id"))
+
+    async def fake_update_query_task(task_id, **kwargs):
+        updates.append({"task_id": task_id, **kwargs})
+        return {"task_id": task_id}
+
+    async def fake_execute_sql_for_member_success(sql, target_datasource, user_id=None, operator_name=None, execution_id=None):
+        return {
+            "success": True,
+            "sql": sql,
+            "columns": ["id"],
+            "data": [{"id": 1}],
+            "total_count": 1,
+            "member_datasource_id": target_datasource["member_datasource_id"],
+        }
+
+    async def fake_execute_sql_for_member_error(sql, target_datasource, user_id=None, operator_name=None, execution_id=None):
+        raise ValueError("不支持的数据源类型")
+
+    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(routes, "_create_task_for_execute_request", fake_create_task_for_execute_request)
+    monkeypatch.setattr(routes, "_create_query_executions_for_task", fake_create_query_executions_for_task)
+    monkeypatch.setattr(routes, "_get_execution_id_by_member", fake_get_execution_id_by_member)
+    monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(agent_tools, "_execute_sql_for_member", fake_execute_sql_for_member_success)
+    success = asyncio.run(agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"], user_id="user_a", operator_name="测试用户"))
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_for_member", fake_execute_sql_for_member_error)
+    failed = asyncio.run(agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"]))
+
+    assert success["success"] is True
+    assert updates[0]["status"] == "running"
+    assert updates[1]["status"] == "succeeded"
+    assert failed["success"] is False
+    assert failed["error"] == "不支持的数据源类型"
+    assert updates[-1]["status"] == "failed"
+
+
+def test_execute_sql_tool_returns_query_result_or_error(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
+        assert sql == "select 1"
+        assert datasource_id == "ds_a"
+        assert member_datasource_ids == ["m1"]
+        assert user_id == "user_a"
+        assert semantic_config_id == "cfg_a"
+        assert query_text == "查订单"
+        assert conversation_id == "conv_a"
+        assert operator_name == "测试用户"
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    async def fake_execute_sql_real_failed(*_args, **_kwargs):
+        return {"success": False, "error": "表不存在"}
+
+    state = {
+        "datasource_id": "ds_a",
+        "user_id": "user_a",
+        "operator_name": "测试用户",
+        "member_datasource_ids": ["m1", "m1", ""],
+        "semantic_config_id": "cfg_a",
+        "conversation_id": "conv_a",
+        "messages": [HumanMessage(content="查订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    success = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
+    failed = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+
+    assert success.startswith("<query_result>")
+    assert '"data": [{"id": 1}]' in success
+    assert failed == "查询失败: 表不存在"
+
+
+def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    async def fake_execute_sql_real(*_args, **_kwargs):
+        return {
+            "success": True,
+            "columns": ["content"],
+            "data": [{"content": "x" * 200}],
+            "total_count": 1,
+            "execution_time_ms": 12,
+            "sql": "select content from big_table",
+        }
+
+    captured = {}
+
+    def fake_save_query_result(result, conversation_id=None):
+        captured["result"] = result
+        captured["conversation_id"] = conversation_id
+        return "artifact_large"
+
+    state = {
+        "datasource_id": "ds_a",
+        "user_id": "user_a",
+        "operator_name": "测试用户",
+        "member_datasource_ids": [],
+        "semantic_config_id": "cfg_a",
+        "conversation_id": "conv_a",
+        "messages": [HumanMessage(content="查大结果")],
+    }
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(agent_tools, "save_query_result", fake_save_query_result)
+    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
+
+    result = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+
+    assert result.startswith("<query_result>")
+    assert '"artifact_id": "artifact_large"' in result
+    assert '"llm_analysis_skipped": true' in result
+    assert "查询结果已超过限制，仅返回工具结果，不进行分析" in result
+    assert "x" * 120 not in result
+    assert captured["result"]["data"][0]["content"] == "x" * 200
+    assert captured["conversation_id"] == "conv_a"
+
+
+def test_execute_sql_direct_delegates_to_real_executor(monkeypatch):
+    captured = {}
+
+    async def fake_execute_sql_real(sql, datasource_id):
+        captured["sql"] = sql
+        captured["datasource_id"] = datasource_id
+        return {"success": True}
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.execute_sql_direct("select 1", "ds_a"))
+
+    assert result == {"success": True}
+    assert captured == {"sql": "select 1", "datasource_id": "ds_a"}

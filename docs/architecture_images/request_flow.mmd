@@ -1,0 +1,35 @@
+sequenceDiagram
+    autonumber
+    participant B as 浏览器
+    participant FE as psoss-fe
+    participant WEB as DMZ Java Web
+    participant AGW as App nginx
+    participant PY as Python Agent 服务
+    participant JS as Java Service
+    participant DB as 数据库
+
+    rect rgb(245, 247, 250)
+        Note over B,DB: 普通业务接口链路
+        B->>FE: 打开页面/触发操作
+        FE->>WEB: 调用普通接口
+        WEB->>JS: Dubbo 调用基础服务
+        JS->>DB: 查询/写入数据
+        DB-->>JS: 返回结果
+        JS-->>WEB: 返回业务结果
+        WEB-->>FE: 返回接口响应
+        FE-->>B: 页面展示
+    end
+
+    rect rgb(250, 245, 245)
+        Note over B,DB: /agents/ 接口链路
+        B->>FE: 发起 Agents 相关操作
+        FE->>WEB: 调用 /agents/* 接口
+        WEB->>AGW: HTTP 转发
+        AGW->>PY: 负载到 Python 实例
+        PY->>DB: 查询/写入数据
+        DB-->>PY: 返回结果
+        PY-->>AGW: 返回业务结果
+        AGW-->>WEB: 返回响应
+        WEB-->>FE: 返回接口响应
+        FE-->>B: 页面展示
+    end

@@ -1,0 +1,392 @@
+sequenceDiagram
+    autonumber
+
+    participant User as 👤 用户
+    participant CLI as 🖥️ CLI入口<br/>main.py
+    participant MainAgent as 🤖 MainAgent<br/>(主智能体)
+    participant Planner as 📋 任务规划器
+    participant SkillLoader as 🔧 技能加载器<br/>SkillLoader
+    participant ContextMgr as 📦 上下文管理器<br/>ContextManager
+    participant ReviewAgent as 🔍 CodeReviewAgent<br/>(子智能体1)
+    participant RefactorAgent as 🛠️ RefactorAgent<br/>(子智能体2)
+    participant TestAgent as 🧪 TestAgent<br/>(子智能体3)
+    participant ToolRegistry as 🗂️ 工具注册表<br/>ToolRegistry
+    participant FileTool as 📄 文件工具<br/>Read/Edit/Write
+    participant SearchTool as 🔍 搜索工具<br/>Grep/Glob
+    participant BashTool as ⚡ Shell工具<br/>Bash
+    participant MCP as 🔌 MCP服务器<br/>MCPClient
+    participant PermMgr as 🛡️ 权限管理器<br/>PermissionManager
+    participant LLM as 🧠 LLM客户端<br/>L LMClient
+    participant Compressor as 🗜️ 上下文压缩器<br/>Compressor
+
+    %% ============================================
+    %% 第一阶段：初始化与任务接收
+    %% ============================================
+    Note over User,MCP: 🚀 阶段1：初始化与任务接收
+
+    User->>CLI: ai-code-cli multi
+    CLI->>CLI: 加载配置 (config/settings.py)
+    CLI->>MainAgent: 创建 MainAgent 实例
+
+    MainAgent->>SkillLoader: 加载所有 Skills
+    activate SkillLoader
+
+    SkillLoader->>SkillLoader: 扫描 skills/ 目录
+    SkillLoader->>SkillLoader: 解析 SKILL.md 元数据
+
+    Note over SkillLoader: 发现以下 Skills:<br/>- code-review<br/>- refactor<br/>- test-generator<br/>- doc-writer
+
+    SkillLoader-->>MainAgent: 返回 Skills 注册表
+    deactivate SkillLoader
+
+    MainAgent->>ToolRegistry: 加载所有工具
+    activate ToolRegistry
+
+    ToolRegistry->>ToolRegistry: 注册内置工具
+    Note over ToolRegistry: File, Edit, Write,<br/>Grep, Glob, Bash
+
+    ToolRegistry->>MCP: 连接 MCP 服务器
+    MCP-->>ToolRegistry: 加载 MCP 工具
+
+    ToolRegistry-->>MainAgent: 返回工具注册表
+    deactivate ToolRegistry
+
+    MainAgent->>ContextMgr: 初始化上下文管理器
+    Note over ContextMgr: capacity: 200K tokens<br/>threshold: 92%
+
+    CLI-->>User: 显示就绪信息
+
+    %% ============================================
+    %% 第二阶段：任务分析与规划
+    %% ============================================
+    Note over User,MCP: 📊 阶段2：任务分析与规划
+
+    User->>CLI: "帮我审查 src/ 目录下的所有 Python 文件，<br/>找出性能问题并优化代码，然后生成测试用例"
+
+    CLI->>MainAgent: 转发用户请求
+
+    MainAgent->>ContextMgr: add_message(用户请求)
+    activate ContextMgr
+    ContextMgr->>ContextMgr: 计算当前 tokens
+    ContextMgr-->>MainAgent: 添加成功
+    deactivate ContextMgr
+
+    MainAgent->>Planner: 分析任务复杂度
+    activate Planner
+
+    Planner->>LLM: 请求任务分析
+    activate LLM
+    LLM-->>Planner: 返回任务类型和复杂度
+    deactivate LLM
+
+    Planner->>Planner: 判断：需要多 Agent 协作
+
+    Planner->>Planner: 分解任务
+    Note over Planner: 子任务1: 代码审查<br/>子任务2: 性能优化<br/>子任务3: 测试生成
+
+    Planner->>Planner: 分析任务依赖关系
+    Note over Planner: 任务2 依赖 任务1<br/>任务3 依赖 任务2<br/>策略: 串行执行
+
+    Planner-->>MainAgent: 返回执行计划
+    Note over MainAgent: 执行模式: SEQUENTIAL<br/>Agent 数量: 3
+    deactivate Planner
+
+    %% ============================================
+    %% 第三阶段：子智能体1 - 代码审查
+    %% ============================================
+    Note over User,MCP: 🔍 阶段3：子智能体1执行 - 代码审查
+
+    MainAgent->>ReviewAgent: 创建 CodeReviewAgent
+    activate ReviewAgent
+
+    ReviewAgent->>ContextMgr: 获取上下文
+    activate ContextMgr
+    ContextMgr-->>ReviewAgent: 返回消息列表
+    deactivate ContextMgr
+
+    ReviewAgent->>ReviewAgent: 构建 Code Review 提示
+
+    ReviewAgent->>SearchTool: glob("src/**/*.py")
+    activate SearchTool
+    SearchTool-->>ReviewAgent: 返回文件列表
+    Note over ReviewAgent: 找到 15 个 Python 文件
+    deactivate SearchTool
+
+    loop 遍历每个文件
+        ReviewAgent->>FileTool: read(file_path)
+        activate FileTool
+        FileTool->>PermMgr: 检查读取权限
+        activate PermMgr
+        PermMgr->>PermMgr: 评估风险: LOW
+        PermMgr-->>FileTool: 自动批准
+        deactivate PermMgr
+
+        FileTool-->>ReviewAgent: 返回文件内容
+        deactivate FileTool
+
+        ReviewAgent->>ContextMgr: add_message(文件内容)
+        activate ContextMgr
+
+        ContextMgr->>ContextMgr: 检查上下文大小
+        Note over ContextMgr: 当前: 185K / 200K<br/>使用率: 92.5%
+
+        ContextMgr->>Compressor: 触发上下文压缩
+        activate Compressor
+
+        Compressor->>Compressor: 选择压缩策略
+        Note over Compressor: 策略: SLIDING_WINDOW<br/>保留: 系统提示 + 最近消息
+
+        Compressor->>LLM: 请求摘要生成
+        activate LLM
+        LLM-->>Compressor: 返回摘要
+        deactivate LLM
+
+        Compressor->>Compressor: 创建压缩上下文
+        Compressor-->>ContextMgr: 返回压缩后的上下文
+        Note over ContextMgr: 新大小: 120K tokens
+        deactivate Compressor
+
+        ContextMgr-->>ReviewAgent: 上下文就绪
+        deactivate ContextMgr
+
+        ReviewAgent->>LLM: 请求代码审查
+        activate LLM
+        LLM-->>ReviewAgent: 返回审查结果
+        deactivate LLM
+    end
+
+    ReviewAgent->>ContextMgr: save_review_results()
+    activate ContextMgr
+    ContextMgr-->>ReviewAgent: 保存成功
+    deactivate ContextMgr
+
+    ReviewAgent-->>MainAgent: 返回审查报告
+    Note over MainAgent: 发现 8 个性能问题<br/>- 未优化的循环<br/>- 冗余的数据库查询<br/>- 缺少缓存机制
+    deactivate ReviewAgent
+
+    %% ============================================
+    %% 第四阶段：子智能体2 - 代码重构
+    %% ============================================
+    Note over User,MCP: 🛠️ 阶段4：子智能体2执行 - 代码重构
+
+    MainAgent->>RefactorAgent: 创建 RefactorAgent
+    activate RefactorAgent
+
+    MainAgent->>RefactorAgent: 传递审查结果
+    Note over RefactorAgent: 输入: 审查报告 + 问题列表
+
+    RefactorAgent->>ContextMgr: 获取上下文
+    activate ContextMgr
+    ContextMgr-->>RefactorAgent: 返回上下文（包含审查结果）
+    deactivate ContextMgr
+
+    RefactorAgent->>SkillLoader: 加载 refactor skill
+    activate SkillLoader
+    SkillLoader-->>RefactorAgent: 返回技能元数据
+    Note over RefactorAgent: Skill: /refactor<br/>描述: 性能优化最佳实践
+    deactivate SkillLoader
+
+    RefactorAgent->>RefactorAgent: 构建重构提示
+
+    RefactorAgent->>FileTool: read(问题文件1.py)
+    activate FileTool
+    FileTool-->>RefactorAgent: 返回代码
+    deactivate FileTool
+
+    RefactorAgent->>LLM: 生成重构建议
+    activate LLM
+    LLM-->>RefactorAgent: 返回优化后的代码
+    deactivate LLM
+
+    RefactorAgent->>FileTool: edit(问题文件1.py, 修改内容)
+    activate FileTool
+
+    FileTool->>PermMgr: 检查写入权限
+    activate PermMgr
+    PermMgr->>PermMgr: 评估风险: HIGH
+    PermMgr->>User: 请求确认<br/>"将修改 src/api.py 第45-60行"
+
+    User->>PermMgr: 确认修改
+
+    PermMgr-->>FileTool: 批准执行
+    deactivate PermMgr
+
+    FileTool->>FileTool: 执行编辑操作
+    FileTool-->>RefactorAgent: 返回编辑结果
+    Note over RefactorAgent: 成功修改 15 行代码
+    deactivate FileTool
+
+    RefactorAgent->>ContextMgr: add_message(修改记录)
+    activate ContextMgr
+    ContextMgr-->>RefactorAgent: 添加成功
+    deactivate ContextMgr
+
+    RefactorAgent->>RefactorAgent: 记录变更日志
+
+    loop 处理其他问题文件
+        RefactorAgent->>LLM: 生成优化代码
+        LLM-->>RefactorAgent: 返回结果
+
+        RefactorAgent->>FileTool: edit(文件, 修改)
+        FileTool-->>RefactorAgent: 返回结果
+    end
+
+    RefactorAgent-->>MainAgent: 返回重构报告
+    Note over MainAgent: 修改了 5 个文件<br/>优化点:<br/>- 添加缓存层<br/>- 优化 SQL 查询<br/>- 使用列表推导
+    deactivate RefactorAgent
+
+    %% ============================================
+    %% 第五阶段：子智能体3 - 测试生成
+    %% ============================================
+    Note over User,MCP: 🧪 阶段5：子智能体3执行 - 测试生成
+
+    MainAgent->>TestAgent: 创建 TestAgent
+    activate TestAgent
+
+    MainAgent->>TestAgent: 传递重构结果
+    Note over TestAgent: 输入: 重构报告 + 修改的文件列表
+
+    TestAgent->>ContextMgr: 获取上下文
+    activate ContextMgr
+
+    ContextMgr->>ContextMgr: 检查上下文大小
+    Note over ContextMgr: 当前: 195K / 200K<br/>接近上限
+
+    ContextMgr->>Compressor: 触发深度压缩
+    activate Compressor
+
+    Compressor->>Compressor: 选择智能压缩策略
+    Note over Compressor: 保留:<br/>- 关键工具结果<br/>- 代码变更<br/>- 用户意图
+
+    Compressor->>LLM: 生成结构化摘要
+    activate LLM
+    LLM-->>Compressor: 返回 JSON 格式摘要
+    deactivate LLM
+
+    Compressor-->>ContextMgr: 返回压缩上下文
+    Note over ContextMgr: 新大小: 130K tokens<br/>压缩率: 33%
+    deactivate Compressor
+
+    ContextMgr-->>TestAgent: 返回上下文
+    deactivate ContextMgr
+
+    TestAgent->>SkillLoader: 加载 test-generator skill
+    activate SkillLoader
+    SkillLoader-->>TestAgent: 返回技能元数据
+    Note over TestAgent: Skill: /test<br/>描述: 自动化测试生成
+    deactivate SkillLoader
+
+    TestAgent->>FileTool: read(修改后的文件)
+    FileTool-->>TestAgent: 返回代码
+
+    loop 为每个修改的文件生成测试
+        TestAgent->>LLM: 生成单元测试
+        activate LLM
+        LLM-->>TestAgent: 返回测试代码
+        deactivate LLM
+
+        TestAgent->>FileTool: write(test_文件名.py, 测试代码)
+        activate FileTool
+
+        FileTool->>PermMgr: 检查写入权限
+        activate PermMgr
+        PermMgr->>PermMgr: 评估风险: MEDIUM
+        PermMgr->>User: 请求确认<br/>"创建新文件 test_api.py"
+
+        User->>PermMgr: 确认
+
+        PermMgr-->>FileTool: 批准
+        deactivate PermMgr
+
+        FileTool-->>TestAgent: 创建成功
+        deactivate FileTool
+    end
+
+    TestAgent->>BashTool: 执行测试
+    activate BashTool
+
+    BashTool->>PermMgr: 检查执行权限
+    activate PermMgr
+    PermMgr->>PermMgr: 评估风险: LOW (只读测试)
+    PermMgr-->>BashTool: 自动批准
+    deactivate PermMgr
+
+    BashTool->>BashTool: python -m pytest tests/
+    BashTool-->>TestAgent: 返回测试结果
+    Note over TestAgent: ✅ 15 passed in 2.3s
+    deactivate BashTool
+
+    TestAgent-->>MainAgent: 返回测试报告
+    Note over MainAgent: 生成了 5 个测试文件<br/>覆盖率: 87%<br/>所有测试通过
+    deactivate TestAgent
+
+    %% ============================================
+    %% 第六阶段：结果合并与验证
+    %% ============================================
+    Note over User,MCP: ✅ 阶段6：结果合并与验证
+
+    MainAgent->>MainAgent: 合并所有子任务结果
+
+    MainAgent->>ContextMgr: 获取完整上下文
+    activate ContextMgr
+    ContextMgr-->>MainAgent: 返回所有消息和工具结果
+    deactivate ContextMgr
+
+    MainAgent->>LLM: 生成综合报告
+    activate LLM
+
+    LLM->>LLM: 分析所有子任务结果
+    LLM->>LLM: 验证一致性
+    LLM->>LLM: 生成结构化报告
+
+    LLM-->>MainAgent: 返回综合报告
+    deactivate LLM
+
+    MainAgent->>MainAgent: 验证报告质量
+
+    MainAgent->>FileTool: write(IMPROVEMENT_REPORT.md, 报告内容)
+    activate FileTool
+    FileTool->>PermMgr: 检查权限
+    activate PermMgr
+    PermMgr->>PermMgr: 评估风险: LOW
+    PermMgr-->>FileTool: 批准
+    deactivate PermMgr
+    FileTool-->>MainAgent: 保存成功
+    deactivate FileTool
+
+    %% ============================================
+    %% 第七阶段：展示结果
+    %% ============================================
+    Note over User,MCP: 📋 阶段7：展示最终结果
+
+    MainAgent-->>CLI: 返回最终结果
+    CLI-->>User: 显示综合报告
+
+    Note over User,CLI: ════════════════════════════════<br/>✅ 任务完成！<br/><br/>📊 审查结果:<br/>  - 分析了 15 个文件<br/>  - 发现 8 个性能问题<br/><br/>🛠️ 优化成果:<br/>  - 修改了 5 个文件<br/>  - 性能提升: ~40%<br/>  - 添加缓存层<br/><br/>🧪 测试覆盖:<br/>  - 新增 5 个测试文件<br/>  - 覆盖率: 87%<br/>  - 所有测试通过 ✅<br/><br/>📄 详细报告: IMPROVEMENT_REPORT.md<br/>═════════════════════════════════
+
+    User->>CLI: "查看详细报告"
+    CLI->>FileTool: read(IMPROVEMENT_REPORT.md)
+    FileTool-->>CLI: 返回报告内容
+    CLI-->>User: 显示报告
+
+    %% ============================================
+    %% 第八阶段：清理与保存
+    %% ============================================
+    Note over User,MCP: 💾 阶段8：清理与保存
+
+    User->>CLI: exit
+    CLI->>MainAgent: 请求清理
+
+    MainAgent->>ContextMgr: 保存对话历史（可选）
+    activate ContextMgr
+    ContextMgr->>ContextMgr: 序列化上下文
+    ContextMgr-->>MainAgent: 保存成功
+    deactivate ContextMgr
+
+    MainAgent->>MCP: 断开连接
+    MCP-->>MainAgent: 连接关闭
+
+    MainAgent-->>CLI: 清理完成
+    CLI-->>User: 再见！
+
+    Note over User,MCP: 🎉 整个流程完成！

@@ -1,0 +1,63 @@
+"""ChatData runtime configuration helpers."""
+
+from __future__ import annotations
+
+import os
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def read_positive_int_env(name: str, default: int) -> int:
+    """读取正整数环境变量，非法时回退默认值。"""
+    raw_value = str(os.getenv(name) or "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("环境变量 %s=%r 不是合法整数，回退默认值 %s", name, raw_value, default)
+        return default
+    if value < 1:
+        logger.warning("环境变量 %s=%s 小于 1，回退默认值 %s", name, value, default)
+        return default
+    return value
+
+
+def read_bool_env(name: str, default: bool = False) -> bool:
+    """读取布尔环境变量，非法或未配置时回退默认值。"""
+    raw_value = str(os.getenv(name) or "").strip().lower()
+    if not raw_value:
+        return default
+    return raw_value in {"1", "true", "yes", "y", "on"}
+
+
+DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)
+TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHATDATA_TOOL_RESULT_OFFLOAD_SIZE", 150_000)
+QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
+QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
+
+
+def get_chat_data_runtime_config() -> dict:
+    """读取智能问数前端运行时配置。"""
+    from .llm_config import get_chat_data_model_options
+
+    model_options = get_chat_data_model_options()
+    return {
+        "models": model_options["models"],
+        "data_analyze_enabled": read_bool_env("CHAT_DATA_ANALYZE_ENABLED", False),
+        "default_row_limit": DEFAULT_ROW_LIMIT,
+        "query_cache_enabled": QUERY_CACHE_ENABLED,
+    }
+
+
+def normalize_row_limit(limit: int | None) -> int:
+    """读取请求行数限制，未传时使用全局配置。"""
+    if limit is None:
+        return DEFAULT_ROW_LIMIT
+    if not isinstance(limit, int) or limit < 1:
+        raise ValueError(f"查询结果行数限制必须为正整数，当前值：{limit}")
+    if limit > DEFAULT_ROW_LIMIT:
+        raise ValueError(f"查询结果最多返回 {DEFAULT_ROW_LIMIT} 条，请调整查询条件")
+    return limit

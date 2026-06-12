@@ -1,0 +1,52 @@
+flowchart TB
+    subgraph LOCAL[本地开发]
+        LFE[psoss-fe\nnpm run dev]
+        LPY[fxcjg/server\n本地启动验证]
+    end
+
+    subgraph UAT[UAT环境]
+        subgraph UATDMZ[DMZ区]
+            UATN[nginx]
+            UATWEB[Java Web]
+            UATFE[前端页面]
+        end
+        subgraph UATAPP[App区]
+            UATAGW[nginx]
+            UATPY[Python Agent 服务\n一主两备]
+            UATJS[Java Service]
+            UATDB[(数据库)]
+        end
+    end
+
+    subgraph PROD[生产环境]
+        subgraph PRODDMZ[DMZ区]
+            PRON[nginx]
+            PROWEB[Java Web]
+            PROFE[前端页面]
+        end
+        subgraph PRODAPP[App区]
+            PROAGW[nginx]
+            PROPY[Python Agent 服务\n一主两备]
+            PROJS[Java Service]
+            PRODB[(数据库)]
+        end
+    end
+
+    LFE -.前端联调.-> UATWEB
+    LPY -.本地验证 / 对接UAT.-> UATAGW
+
+    UATN --> UATFE
+    UATFE --> UATWEB
+    UATWEB --> UATAGW
+    UATWEB --> UATJS
+    UATAGW --> UATPY
+    UATPY --> UATDB
+    UATJS --> UATDB
+
+    PRON --> PROFE
+    PROFE --> PROWEB
+    PROWEB --> PROAGW
+    PROWEB --> PROJS
+    PROAGW --> PROPY
+    PROPY --> PRODB
+    PROJS --> PRODB

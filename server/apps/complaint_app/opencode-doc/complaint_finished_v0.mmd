@@ -1,0 +1,147 @@
+sequenceDiagram
+    autonumber
+
+    participant User as 👤 用户
+    participant CLI as 🖥️ CLI入口<br/>main.py/chat_routes
+    participant MainAgent as 🤖 MainAgent<br/>(主智能体)
+    participant Planner as 📋 任务规划器
+    participant SkillLoader as 🔧 技能加载器<br/>SkillLoader
+    participant ContextMgr as 📦 上下文管理器<br/>ContextManager
+    participant SummaryAgent as 🧾 举报摘要Agent<br/>(子智能体1)
+    participant IssueAgent as 🧩 举报事项分析Agent<br/>(子智能体2)
+    participant VerifyAgent as ✅ 核实Agent<br/>(子智能体3)
+    participant ToolRegistry as 🗂️ 工具注册表<br/>ToolRegistry
+    participant FileTool as 📄 文件工具<br/>Read/Edit/Write
+    participant SearchTool as 🔍 搜索工具<br/>Grep/Glob
+    participant BashTool as ⚡ Shell工具<br/>Bash
+    participant MCP as 🔌 MCP服务器<br/>MCPClient
+    participant PermMgr as 🛡️ 权限管理器<br/>PermissionManager
+    participant LLM as 🧠 LLM客户端<br/>LLMClient
+    participant Compressor as 🗜️ 上下文压缩器<br/>Compressor
+
+    %% ============================================
+    %% 第一阶段：初始化与任务接收
+    %% ============================================
+    Note over User,MCP: 🚀 阶段1：初始化与任务接收（对标 v1）
+    Note over User,MCP: 对标结论：🟡 部分实现（有初始化，但 MCP 非远端连接）
+    User->>CLI: 启动服务 / 进入对话
+    CLI->>CLI: 加载 .env 与运行配置
+    CLI->>ToolRegistry: 启动期注册 builtin tools
+    ToolRegistry->>MCP: 读取 MCPToolRegistry 内存注册表
+    MCP-->>ToolRegistry: 返回已注册 MCP 工具（默认空）
+    ToolRegistry-->>CLI: 工具注册完成
+    CLI->>ContextMgr: 初始化阈值(THRESHOLD/TARGET_RATIO)
+    CLI->>CLI: 预热模型上限缓存(load_models_info)
+    CLI-->>User: 系统就绪
+    Note over MCP: 当前实现为占位注册表，无远端连接/握手
+    Note over SkillLoader,VerifyAgent: participant 与 complaint_v1.mmd 保持一致，便于逐阶段对照
+
+    %% ============================================
+    %% 第二阶段：任务分析与规划
+    %% ============================================
+    Note over User,MCP: 📊 阶段2：任务分析与规划（当前实现）
+    Note over User,MCP: 对标结论：✅ 已实现（规划 + 前置上下文检测/压缩）
+    User->>CLI: 提交举报件分析请求
+    CLI->>CLI: 读取历史会话并组装 Session.messages(M0)
+    CLI->>MainAgent: run(request{session,user_input,context})
+    MainAgent->>MainAgent: 组装 planner context（包含 messages 快照）
+    MainAgent->>Planner: plan(user_input, context)
+    Planner->>LLM: 生成 PlanResult
+    LLM-->>Planner: steps/mode
+    Planner-->>MainAgent: 执行计划
+    MainAgent->>ContextMgr: 前置上下文检测 + compact_if_needed()
+    ContextMgr->>Compressor: should_compact + compact_messages
+    Compressor-->>ContextMgr: M0 -> M1（可能不压缩）
+    ContextMgr-->>MainAgent: 前置上下文就绪
+
+    %% ============================================
+    %% 第三阶段：子智能体1 - 举报摘要
+    %% ============================================
+    Note over User,MCP: 🧾 阶段3：子智能体1执行 - 举报摘要（按计划可选）
+    Note over User,MCP: 对标结论：🟡 部分实现（有 complaint_summary，但依赖任务计划触发）
+    opt 计划步骤包含 task(subagent=complaint_summary)
+        MainAgent->>ToolRegistry: execute task
+        ToolRegistry->>SummaryAgent: 启动 complaint_summary 子智能体
+        SummaryAgent->>FileTool: 读取/复用举报件原文（必要时由提取工具产出）
+        FileTool->>PermMgr: 检查文件读权限
+        PermMgr-->>FileTool: 允许
+        FileTool-->>SummaryAgent: 返回原文/摘要输入
+        SummaryAgent->>LLM: 生成摘要
+        LLM-->>SummaryAgent: 摘要结果
+        SummaryAgent-->>MainAgent: step output
+        MainAgent->>ContextMgr: 追加 tool message
+    end
+
+    %% ============================================
+    %% 第四阶段：子智能体2 - 事项分析
+    %% ============================================
+    Note over User,MCP: 🧩 阶段4：子智能体2执行 - 举报事项分析（按计划可选）
+    Note over User,MCP: 对标结论：🟡 部分实现（以 complaint_analysis 工具实现，不是独立 IssueAgent 体系）
+    opt 计划步骤包含 complaint_analysis
+        MainAgent->>ToolRegistry: execute complaint_analysis
+        ToolRegistry->>IssueAgent: 进入 analysis_agent 业务链
+        IssueAgent->>SearchTool: 可选检索经验/法规索引
+        SearchTool-->>IssueAgent: 返回检索结果
+        IssueAgent->>LLM: 事项提取/经验匹配/结论生成
+        LLM-->>IssueAgent: 分析结果
+        IssueAgent-->>MainAgent: step output
+        MainAgent->>ContextMgr: 追加 tool message
+    end
+
+    %% ============================================
+    %% 第五阶段：子智能体3 - 核实验证
+    %% ============================================
+    Note over User,MCP: ✅ 阶段5：子智能体3执行 - 核实验证（当前默认未启用）
+    Note over User,MCP: 对标结论：❌ 未实现（无 verify 子智能体落地链路）
+    opt 计划步骤包含 verify 子任务
+        MainAgent->>ToolRegistry: execute task(subagent=verify)
+        ToolRegistry->>VerifyAgent: 启动 verify 子智能体
+        VerifyAgent->>SkillLoader: 按需加载 verify skill 指令
+        SkillLoader-->>VerifyAgent: 返回技能提示
+        VerifyAgent->>LLM: 核实推理
+        LLM-->>VerifyAgent: 核实结论
+        VerifyAgent-->>MainAgent: step output
+    end
+    opt 计划包含 skill 步骤（law-only 等）
+        MainAgent->>ToolRegistry: execute skill
+        ToolRegistry->>SkillLoader: 读取 SKILL.md/frontmatter
+        SkillLoader-->>MainAgent: 返回 skill prompt 与 allowed_tools
+    end
+
+    %% ============================================
+    %% 第六阶段：结果合并与验证
+    %% ============================================
+    Note over User,MCP: ✅ 阶段6：结果合并与验证（当前实现）
+    Note over User,MCP: 对标结论：🟡 部分实现（有合并与后置压缩，无独立质量校验/VERIFY_REPORT 写出）
+    alt plan 模式
+        MainAgent->>MainAgent: 取最后一步 output 作为最终答复
+        MainAgent->>ContextMgr: append_assistant_message(final_text)
+    else 直出模式
+        MainAgent->>LLM: SessionPrompt.chat/stream_chat
+        LLM-->>MainAgent: assistant answer
+    end
+    MainAgent->>ContextMgr: 后置上下文检测 + compact_if_needed()
+    ContextMgr->>Compressor: should_compact + compact_messages
+    Compressor-->>ContextMgr: M2 -> M3（最终会话）
+    ContextMgr-->>MainAgent: 返回压缩后的会话
+
+    %% ============================================
+    %% 第七阶段：展示结果
+    %% ============================================
+    Note over User,MCP: 📋 阶段7：展示最终结果（当前实现）
+    Note over User,MCP: 对标结论：✅ 已实现（返回 answer，支持 plan/step_outputs）
+    MainAgent-->>CLI: MainAgentResult(text, plan, metadata)
+    CLI->>CLI: 组装 answer + plan/step_outputs（可选）
+    CLI-->>User: 返回 answer
+
+    %% ============================================
+    %% 第八阶段：清理与保存
+    %% ============================================
+    Note over User,MCP: 💾 阶段8：清理与保存（当前实现）
+    Note over User,MCP: 对标结论：🟡 部分实现（本地持久化已实现，MCP 会话清理未涉及）
+    CLI->>FileTool: 持久化 conversation.jsonl / metadata
+    FileTool->>PermMgr: 文件写入权限（本地存储）
+    PermMgr-->>FileTool: 允许
+    CLI->>SearchTool: 可选读取历史（后续轮次）
+    CLI->>BashTool: 可选调试命令（trace/脚本）
+    Note over MCP: 无连接释放动作（当前无远端 MCP 会话）

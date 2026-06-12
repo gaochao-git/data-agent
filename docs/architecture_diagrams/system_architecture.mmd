@@ -1,0 +1,25 @@
+flowchart LR
+    U[用户浏览器]
+
+    subgraph DMZ[DMZ区]
+        N[nginx]
+        FE[psoss-fe 前端]
+        WEB[Java Web 接入层]
+    end
+
+    subgraph APP[App区]
+        AGW[nginx 负载\n一主两备]
+        PY[Python Agent服务\nfxcjg/server]
+        JS[Java Service 基础服务]
+        DB1[(Agents业务数据库)]
+        DB2[(基础服务数据库)]
+    end
+
+    U -->|HTTP/HTTPS| N
+    N --> FE
+    FE -->|HTTP/HTTPS API| WEB
+    WEB -->|/agents/ 转发| AGW
+    AGW --> PY
+    WEB -->|Dubbo| JS
+    PY -->|读写| DB1
+    JS -->|读写| DB2

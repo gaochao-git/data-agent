@@ -1,52 +1,41 @@
----
-frameworks:
-- other
-license: Apache License 2.0
-tags: []
-tasks:
-- other
+# fxcjg
 
-#model-type:
-##如 gpt、phi、llama、chatglm、baichuan 等
-#- gpt
+本项目为“投诉分析”相关的全栈系统，包含后端服务与前端界面，支持文档解析、OCR、事项抽取、法条分析与对话式交互等能力。
 
-#domain:
-##如 nlp、cv、audio、multi-modal
-#- nlp
+## 项目结构
 
-#language:
-##语言代码列表 https://help.aliyun.com/document_detail/215387.html?spm=a2c4g.11186623.0.0.9f8d7467kni6Aa
-#- cn 
+- 后端：`server/`（FastAPI）
+- 前端：`web/`（Vite + React）
 
-#metrics:
-##如 CIDEr、Blue、ROUGE 等
-#- CIDEr
+## 快速入口
 
-#tags:
-##各种自定义，包括 pretrained、fine-tuned、instruction-tuned、RL-tuned 等训练方法和其他
-#- pretrained
+- 后端说明与启动方式：`server/README.md`
+- 前端说明与启动方式：`web/README.md`
 
-#tools:
-##如 vllm、fastchat、llamacpp、AdaSeq 等
-#- vllm
----
-### 当前模型的贡献者未提供更加详细的模型介绍。模型文件和权重，可浏览“模型文件”页面获取。
-#### 您可以通过如下git clone命令，或者ModelScope SDK来下载模型
+## 模块索引（重点功能）
 
-SDK下载
-```bash
-#安装ModelScope
-pip install modelscope
-```
-```python
-#SDK模型下载
-from modelscope import snapshot_download
-model_dir = snapshot_download('dzkk666/data-agent')
-```
-Git下载
-```
-#Git模型下载
-git clone https://www.modelscope.cn/dzkk666/data-agent.git
-```
+- 投诉处理与分析：`server/apps/complaint_app/README.md`
+- 文件字段抽取：`server/apps/word_fit_app/README.md`
+- 对话助手：`server/apps/chat_assistant/README.md`
+- 投诉分析工具链：`server/apps/complaint_tools/README.md`
+- NL2SQL：`server/apps/chat_data_app/README.md`
 
-<p style="color: lightgrey;">如果您是本模型的贡献者，我们邀请您根据<a href="https://modelscope.cn/docs/ModelScope%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%85%A5%E6%B5%81%E7%A8%8B%E6%A6%82%E8%A7%88" style="color: lightgrey; text-decoration: underline;">模型贡献文档</a>，及时完善模型卡片内容。</p>
+## 文档参考
+
+- 对话消息结构：`complaint_chat_messages.md`
+- 业务与协议文档：`docs/`
+
+
+# sync to modelscope
+
+## add remote addr (first need only)
+git remote add modelscope https://oauth2:ms-c8cba5f1-d7e4-4e0d-9406-4fed4ecc10f5@www.modelscope.cn/eason5870/fxcjg.git
+git remote add modelscope
+https://oauth2:ms-c8cba5f1-d7e4-4e0d-9406-4fed4ecc10f5@www.modelscope.cn/eason5870/fxcjg_v2.git
+## first push
+git push --set-upstream modelscope main:github-main
+## normal push modelscope
+git push modelscope main:github-main
+git push origin release-20251211
+git push modelscope release-20251211:github-release-20251211
+git push modelscope_v2 main:github-main

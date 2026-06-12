@@ -1,0 +1,153 @@
+"""YAML frontmatter parsing for SKILL.md files."""
+
+from pathlib import Path
+from typing import Any, Optional
+
+import strictyaml
+
+from .errors import ParseError, ValidationError
+from .models import SkillProperties
+
+
+def find_skill_md(skill_dir: Path) -> Optional[Path]:
+    """Find the SKILL.md file in a skill directory.
+
+    Prefers SKILL.md (uppercase) but accepts skill.md (lowercase).
+
+    Args:
+        skill_dir: Path to the skill directory
+
+    Returns:
+        Path to the SKILL.md file, or None if not found
+    """
+    for name in ("SKILL.md", "skill.md"):
+        path = skill_dir / name
+        if path.exists():
+            return path
+    return None
+
+
+def parse_frontmatter(content: str) -> tuple[dict, str]:
+    """Parse YAML frontmatter from SKILL.md content.
+
+    Args:
+        content: Raw content of SKILL.md file
+
+    Returns:
+        Tuple of (metadata dict, markdown body)
+
+    Raises:
+        ParseError: If frontmatter is missing or invalid
+    """
+    if not content.startswith("---"):
+        raise ParseError("SKILL.md must start with YAML frontmatter (---)")
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        raise ParseError("SKILL.md frontmatter not properly closed with ---")
+
+    frontmatter_str = parts[1]
+    body = parts[2].strip()
+
+    try:
+        parsed = strictyaml.load(frontmatter_str)
+        metadata = parsed.data
+    except strictyaml.YAMLError as e:
+        raise ParseError(f"Invalid YAML in frontmatter: {e}")
+
+    if not isinstance(metadata, dict):
+        raise ParseError("SKILL.md frontmatter must be a YAML mapping")
+
+    if "metadata" in metadata and isinstance(metadata["metadata"], dict):
+        metadata["metadata"] = {str(k): str(v) for k, v in metadata["metadata"].items()}
+
+    return metadata, body
+
+
+def read_properties(skill_dir: Path) -> SkillProperties:
+    """Read skill properties from SKILL.md frontmatter.
+
+    This function parses the frontmatter and returns properties.
+    It does NOT perform full validation. Use validate() for that.
+
+    Args:
+        skill_dir: Path to the skill directory
+
+    Returns:
+        SkillProperties with parsed metadata
+
+    Raises:
+        ParseError: If SKILL.md is missing or has invalid YAML
+        ValidationError: If required fields (name, description) are missing
+    """
+    skill_dir = Path(skill_dir)
+    skill_md = find_skill_md(skill_dir)
+
+    if skill_md is None:
+        raise ParseError(f"SKILL.md not found in {skill_dir}")
+
+    content = skill_md.read_text()
+    metadata, _ = parse_frontmatter(content)
+
+    if "name" not in metadata:
+        raise ValidationError("Missing required field in frontmatter: name")
+    if "description" not in metadata:
+        raise ValidationError("Missing required field in frontmatter: description")
+
+    name = metadata["name"]
+    description = metadata["description"]
+
+    if not isinstance(name, str) or not name.strip():
+        raise ValidationError("Field 'name' must be a non-empty string")
+    if not isinstance(description, str) or not description.strip():
+        raise ValidationError("Field 'description' must be a non-empty string")
+
+    allowed_raw = metadata.get("allowed-tools")
+    if allowed_raw is None:
+        allowed_raw = metadata.get("allowed_tools")
+    allowed_tools = None
+    if isinstance(allowed_raw, list):
+        allowed_tools = [str(item).strip() for item in allowed_raw if str(item).strip()]
+    elif isinstance(allowed_raw, str):
+        allowed_tools = [part.strip() for part in allowed_raw.split(",") if part.strip()]
+
+    return SkillProperties(
+        name=name.strip(),
+        description=description.strip(),
+        license=metadata.get("license"),
+        compatibility=metadata.get("compatibility"),
+        allowed_tools=allowed_tools,
+        metadata=metadata.get("metadata"),
+    )
+
+
+def render_skill_body(
+    skill_path: Path,
+    *,
+    name: str | None = None,
+    metadata_overrides: dict[str, Any] | None = None,
+) -> str:
+    """Read a SKILL.md file, strip frontmatter, replace <metadata.X> placeholders, and prefix with ## Skill: {name}.
+
+    Args:
+        skill_path: Path to the SKILL.md file.
+        name: Override skill name for the prefix header; defaults to frontmatter `name` or directory name.
+        metadata_overrides: Extra key-value pairs to merge over frontmatter `metadata` for placeholder replacement.
+
+    Returns:
+        Rendered skill body string, prefixed with `## Skill: {name}`.
+    """
+    content = skill_path.read_text(encoding="utf-8")
+    metadata: dict[str, Any] = {}
+    body = content
+    try:
+        metadata, body = parse_frontmatter(content)
+    except Exception:
+        pass
+    rendered = str(body or "")
+    skill_metadata = metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
+    replacements = {**skill_metadata, **(metadata_overrides or {})}
+    for key, value in replacements.items():
+        rendered = rendered.replace(f"<metadata.{key}>", str(value))
+    skill_name = name or metadata.get("name") or skill_path.parent.name
+    return f"## Skill: {skill_name}\n\n{rendered.strip()}"
