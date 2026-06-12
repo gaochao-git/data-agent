@@ -1,0 +1,1 @@
+export { useGeneralAssistant } from "./useGeneralAssistant";

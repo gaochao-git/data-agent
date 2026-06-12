@@ -1,0 +1,162 @@
+# ===== 通用忽略规则 =====
+# 系统文件
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# IDE 配置
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# ===== Python 后端 (server/) =====
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+server/venv/
+server/env/
+server/.venv/
+
+docs/ai标记图/
+
+# Python 包管理
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Python 测试
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Python IDE
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# 上传文件 - 忽略所有上传内容
+server/upload/*
+server/uploads/*
+!server/uploads/.gitkeep
+server/uploads/complaint-analysis-uploaded/
+!server/uploads/images/
+!server/uploads/images/.gitkeep
+!server/uploads/texts/
+!server/uploads/texts/.gitkeep
+!server/uploads/original/
+server/uploads/images/*
+!server/uploads/images/.gitkeep
+server/uploads/texts/*
+!server/uploads/texts/.gitkeep
+server/uploads/original/*
+!server/uploads/original/.gitkeep
+server/legal_case_intelligence/data/*
+
+# Python 日志
+*.log
+*.pid
+
+# ===== Node.js 前端 (web/) =====
+# 依赖
+web/node_modules/
+vue-chat-web/node_modules/
+
+# 构建输出
+web/dist/
+web/dist-ssr/
+web/build/
+
+# 日志文件
+web/logs
+web/*.log
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+web/lerna-debug.log*
+
+# 环境变量
+web/*.local
+
+# ===== 其他 =====
+# 临时文件
+*.tmp
+*.temp
+tmp/
+temp/
+
+# 备份文件
+*.bak
+*.backup
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+
+server/.env
+web/.env
+web-vue/.env
+web-vue-demo/.env
+server/utils/lang_util/checkpoints.db*
+server/apps/sql_generator_app/data/artifacts/*
+web/.*
+
+server/apps/inspection_app/checkpoint/checkpoints.db
+web/--silent
+web/非现场离线标记图&效果图/*
+server/apps/chat_data_app/tests/reports/*
+server/apps/chat_data_app/tests/logs/*
+"web-vue/.claude/" 
+
+proxy/.mvn/*
+proxy/mvnw
+proxy/mvnw.cmd
+
+# demo环境
+server-demo/.env
+server-demo/utils/lang_util/checkpoints.db*
+server-demo/apps/sql_generator_app/data/artifacts/*
+server-demo/apps/chat_data_app/tests/reports/*
+server-demo/apps/chat_data_app/tests/logs/*
+server-demo/upload/*
+server-demo/apps/inspection_app/checkpoint/checkpoints.db
+server-demo/upload/*
+server-demo/uploads/*
+!server-demo/uploads/.gitkeep
+server-demo/uploads/complaint-analysis-uploaded/
+!server-demo/uploads/images/
+!server-demo/uploads/images/.gitkeep
+!server-demo/uploads/texts/
+!server-demo/uploads/texts/.gitkeep
+!server-demo/uploads/original/
+server-demo/uploads/images/*
+!server-demo/uploads/images/.gitkeep
+server-demo/uploads/texts/*
+!server-demo/uploads/texts/.gitkeep
+server-demo/uploads/original/*
+!server-demo/uploads/original/.gitkeep
+server-demo/legal_case_intelligence/data/*
+web-vue-demo/.claude/*
+
+logs/*
+server/start.sh

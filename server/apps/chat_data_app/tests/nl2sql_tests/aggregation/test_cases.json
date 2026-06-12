@@ -1,0 +1,102 @@
+[
+  {
+    "id": "nl2sql_agg_001",
+    "category": "aggregation",
+    "difficulty": "medium",
+    "question": "平均每个集群组有多少个集群",
+    "ground_truth": {
+      "sql": "SELECT AVG(cluster_count) FROM (SELECT COUNT(c.id) as cluster_count FROM db_cluster_group g LEFT JOIN db_cluster c ON g.cluster_group_id = c.cluster_group_id GROUP BY g.cluster_group_id) subquery",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "AVG", "SUBQUERY"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_002",
+    "category": "aggregation",
+    "difficulty": "medium",
+    "question": "实例数量最多的集群是哪个",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) as cnt FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name ORDER BY cnt DESC LIMIT 1",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "ORDER BY", "LIMIT"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_003",
+    "category": "aggregation",
+    "difficulty": "medium",
+    "question": "按数据库类型统计集群数量",
+    "ground_truth": {
+      "sql": "SELECT cluster_db_type, COUNT(*) FROM db_cluster GROUP BY cluster_db_type",
+      "components": ["SELECT", "FROM", "GROUP BY", "COUNT"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_004",
+    "category": "aggregation",
+    "difficulty": "medium",
+    "question": "查询实例数超过5的集群",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) as ins_cnt FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name HAVING COUNT(i.id) > 5",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_005",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "每种数据库类型的平均实例数",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_db_type, AVG(ins_count) FROM (SELECT c.cluster_id, c.cluster_db_type, COUNT(i.id) as ins_count FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_db_type) subquery GROUP BY cluster_db_type",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "AVG", "SUBQUERY"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_006",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "显示拥有集群数量排名前3的集群组",
+    "ground_truth": {
+      "sql": "SELECT g.cluster_group_name, COUNT(c.id) as cluster_cnt FROM db_cluster_group g LEFT JOIN db_cluster c ON g.cluster_group_id = c.cluster_group_id GROUP BY g.cluster_group_id, g.cluster_group_name ORDER BY cluster_cnt DESC LIMIT 3",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "ORDER BY", "LIMIT"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_007",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "统计每种实例角色的数量",
+    "ground_truth": {
+      "sql": "SELECT ins_role, COUNT(*) FROM db_cluster_instance GROUP BY ins_role ORDER BY COUNT(*) DESC",
+      "components": ["SELECT", "FROM", "GROUP BY", "COUNT", "ORDER BY"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_008",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "查询实例数量超过平均值的集群",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) as instance_count FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name HAVING COUNT(i.id) > (SELECT AVG(cnt) FROM (SELECT COUNT(i2.id) as cnt FROM db_cluster c2 LEFT JOIN db_cluster_instance i2 ON c2.cluster_id = i2.cluster_id GROUP BY c2.cluster_id) subquery)",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "HAVING", "COUNT", "AVG", "SUBQUERY"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_009",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "按HA类型统计集群数量，并按数量降序排列",
+    "ground_truth": {
+      "sql": "SELECT cluster_ha_type, COUNT(*) as cnt FROM db_cluster GROUP BY cluster_ha_type ORDER BY cnt DESC",
+      "components": ["SELECT", "FROM", "GROUP BY", "COUNT", "ORDER BY"]
+    }
+  },
+  {
+    "id": "nl2sql_agg_010",
+    "category": "aggregation",
+    "difficulty": "hard",
+    "question": "找出实例数最多的前5个集群",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) as ins_cnt FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name ORDER BY ins_cnt DESC LIMIT 5",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "ORDER BY", "LIMIT"]
+    }
+  }
+]

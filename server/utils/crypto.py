@@ -1,0 +1,131 @@
+"""
+加密工具模块
+
+提供对敏感数据（如密码）的加密和解密功能
+使用 SM4 国密算法（CBC 模式，PKCS7 填充由 gmssl 自动处理）
+"""
+
+import os
+import base64
+from typing import Optional
+
+from gmssl.sm4 import CryptSM4, SM4_ENCRYPT, SM4_DECRYPT
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _get_sm4_key() -> Optional[bytes]:
+    """
+    获取 SM4 密钥（16字节）
+
+    密钥格式：32字符的十六进制字符串，解码后为16字节
+    """
+    encrypt_key = os.getenv("ENCRYPT_KEY")
+    if not encrypt_key:
+        return None
+    try:
+        key = bytes.fromhex(encrypt_key)
+        if len(key) != 16:
+            logger.error(f"SM4 密钥长度错误：期望16字节，实际{len(key)}字节")
+            return None
+        return key
+    except ValueError as e:
+        logger.error(f"SM4 密钥格式错误（应为32字符十六进制）: {e}")
+        return None
+
+
+def encrypt_password(password: str) -> str:
+    """
+    使用 SM4-CBC 加密密码
+
+    Args:
+        password: 明文密码
+
+    Returns:
+        加密后的密码字符串（base64(iv):base64(ciphertext)），加密失败抛出异常
+    """
+    if not password:
+        raise ValueError("密码不能为空")
+
+    key = _get_sm4_key()
+    if key is None:
+        raise ValueError("ENCRYPT_KEY 未配置或格式错误")
+
+    # 生成随机 IV
+    iv = os.urandom(16)
+
+    # 加密（gmssl 默认使用 PKCS7 填充）
+    crypt_sm4 = CryptSM4()
+    crypt_sm4.set_key(key, SM4_ENCRYPT)
+    encrypted = crypt_sm4.crypt_cbc(iv, password.encode('utf-8'))
+
+    # 格式：base64(iv):base64(ciphertext)
+    iv_b64 = base64.b64encode(iv).decode('ascii')
+    cipher_b64 = base64.b64encode(encrypted).decode('ascii')
+    return f"{iv_b64}:{cipher_b64}"
+
+
+def decrypt_password(encrypted_password: str) -> str:
+    """
+    解密 SM4 加密的密码
+
+    Args:
+        encrypted_password: 加密的密码字符串
+
+    Returns:
+        解密后的明文密码，解密失败抛出异常
+    """
+    if not encrypted_password:
+        raise ValueError("密码未配置")
+
+    key = _get_sm4_key()
+    if key is None:
+        raise ValueError("ENCRYPT_KEY 未配置或格式错误")
+
+    # 解析格式：base64(iv):base64(ciphertext)
+    parts = encrypted_password.split(":")
+    if len(parts) != 2:
+        raise ValueError("密码格式错误，应为 base64(iv):base64(ciphertext)，请使用 python -m utils.crypto encrypt 加密")
+
+    try:
+        iv = base64.b64decode(parts[0], validate=True)
+        ciphertext = base64.b64decode(parts[1], validate=True)
+    except Exception:
+        raise ValueError("密码 base64 解码失败，请重新加密")
+
+    if len(iv) != 16:
+        raise ValueError(f"密码 IV 长度错误：期望16字节，实际{len(iv)}字节，请重新加密")
+
+    # 解密（gmssl 自动处理 PKCS7 去填充）
+    try:
+        crypt_sm4 = CryptSM4()
+        crypt_sm4.set_key(key, SM4_DECRYPT)
+        decrypted = crypt_sm4.crypt_cbc(iv, ciphertext)
+        return decrypted.decode('utf-8')
+    except Exception:
+        raise ValueError("密码解密失败，密钥或密文不匹配，请重新加密")
+
+
+# ============ 命令行工具 ============
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 3 or sys.argv[1].lower() not in ("encrypt", "decrypt"):
+        print("用法:")
+        print("  加密: python -m utils.crypto encrypt <密码>")
+        print("  解密: python -m utils.crypto decrypt <密文>")
+        print("注意: 需要设置环境变量 ENCRYPT_KEY")
+        sys.exit(1)
+
+    try:
+        cmd = sys.argv[1].lower()
+        if cmd == "encrypt":
+            print(encrypt_password(sys.argv[2]))
+        else:
+            print(decrypt_password(sys.argv[2]))
+    except ValueError as e:
+        print(f"错误: {e}")
+        sys.exit(1)

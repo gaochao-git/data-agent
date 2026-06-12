@@ -1,0 +1,162 @@
+[
+  {
+    "id": "nl2dsl_complex_001",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "查询MySQL类型且运行中的实例数量",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["instance_count"],
+        "dimensions": [],
+        "filters": [
+          {"dimension": "cluster_db_type", "operator": "=", "value": "MySQL"},
+          {"dimension": "ins_status", "operator": "=", "value": "running"}
+        ],
+        "having": []
+      },
+      "components": ["METRIC", "FILTER"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_002",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "按数据库类型统计集群数量，只显示数量大于5的",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["cluster_count"],
+        "dimensions": ["cluster_db_type"],
+        "filters": [],
+        "having": [{"metric": "cluster_count", "operator": ">", "value": 5}]
+      },
+      "components": ["METRIC", "DIMENSION", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_003",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "按HA类型和数据库类型统计集群数量",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["cluster_count"],
+        "dimensions": ["cluster_ha_type", "cluster_db_type"],
+        "filters": [],
+        "having": []
+      },
+      "components": ["METRIC", "DIMENSION"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_004",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "按实例角色统计实例数量，只显示数量超过10的",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["instance_count"],
+        "dimensions": ["ins_role"],
+        "filters": [],
+        "having": [{"metric": "instance_count", "operator": ">", "value": 10}]
+      },
+      "components": ["METRIC", "DIMENSION", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_005",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "查询MySQL和PostgreSQL类型的集群数量，按类型分组",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["cluster_count"],
+        "dimensions": ["cluster_db_type"],
+        "filters": [
+          {"dimension": "cluster_db_type", "operator": "in", "value": ["MySQL", "PostgreSQL"]}
+        ],
+        "having": []
+      },
+      "components": ["METRIC", "DIMENSION", "FILTER"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_006",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "按数据库类型统计集群和实例数量，排除集群数小于3的",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["cluster_count", "instance_count"],
+        "dimensions": ["cluster_db_type"],
+        "filters": [],
+        "having": [{"metric": "cluster_count", "operator": ">=", "value": 3}]
+      },
+      "components": ["METRIC", "DIMENSION", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_007",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "统计运行中的MySQL实例，按实例角色分组，数量要大于5",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["instance_count"],
+        "dimensions": ["ins_role"],
+        "filters": [
+          {"dimension": "cluster_db_type", "operator": "=", "value": "MySQL"},
+          {"dimension": "ins_status", "operator": "=", "value": "running"}
+        ],
+        "having": [{"metric": "instance_count", "operator": ">", "value": 5}]
+      },
+      "components": ["METRIC", "DIMENSION", "FILTER", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_008",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "查询非MySQL类型的集群和实例数量",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["cluster_count", "instance_count"],
+        "dimensions": [],
+        "filters": [{"dimension": "cluster_db_type", "operator": "!=", "value": "MySQL"}],
+        "having": []
+      },
+      "components": ["METRIC", "FILTER"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_009",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "按实例类型统计实例数量，只显示数量大于20的",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["instance_count"],
+        "dimensions": ["ins_type"],
+        "filters": [],
+        "having": [{"metric": "instance_count", "operator": ">", "value": 20}]
+      },
+      "components": ["METRIC", "DIMENSION", "HAVING"]
+    }
+  },
+  {
+    "id": "nl2dsl_complex_010",
+    "category": "complex",
+    "difficulty": "hard",
+    "question": "查询主节点实例数量，按数据库类型分组，数量大于等于2",
+    "ground_truth": {
+      "dsl": {
+        "metrics": ["instance_count"],
+        "dimensions": ["cluster_db_type"],
+        "filters": [
+          {"dimension": "ins_role", "operator": "=", "value": "master"}
+        ],
+        "having": [{"metric": "instance_count", "operator": ">=", "value": 2}]
+      },
+      "components": ["METRIC", "DIMENSION", "FILTER", "HAVING"]
+    }
+  }
+]

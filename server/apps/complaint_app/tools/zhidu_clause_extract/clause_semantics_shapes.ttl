@@ -1,0 +1,137 @@
+@prefix ex: <http://example.com/zhidu-clause-semantics/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:PolicyDocumentShape
+    a sh:NodeShape ;
+    sh:targetClass ex:PolicyDocument ;
+    sh:property [
+        sh:path ex:documentId ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "PolicyDocument 必须包含 documentId"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:title ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "PolicyDocument 必须包含 title"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasClause ;
+        sh:minCount 1 ;
+        sh:class ex:Clause ;
+        sh:message "PolicyDocument 必须通过 hasClause 指向 Clause"@zh ;
+    ] .
+
+ex:ClauseShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Clause ;
+    sh:property [
+        sh:path ex:clauseKey ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "Clause 必须包含 clauseKey"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:articleNo ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "Clause 必须包含 articleNo"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:articleText ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "Clause 必须包含 articleText"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:belongsToDocument ;
+        sh:minCount 1 ;
+        sh:class ex:PolicyDocument ;
+        sh:message "Clause 必须通过 belongsToDocument 回链到 PolicyDocument"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:expressesRule ;
+        sh:minCount 1 ;
+        sh:class ex:RuleExpression ;
+        sh:message "Clause 必须通过 expressesRule 指向 RuleExpression"@zh ;
+    ] .
+
+ex:RuleExpressionShape
+    a sh:NodeShape ;
+    sh:targetClass ex:RuleExpression ;
+    sh:property [
+        sh:path ex:supportedByClause ;
+        sh:minCount 1 ;
+        sh:class ex:Clause ;
+        sh:message "RuleExpression 必须通过 supportedByClause 回链到 Clause"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasSubject ;
+        sh:minCount 1 ;
+        sh:class ex:SubjectConcept ;
+        sh:message "RuleExpression 的 hasSubject 必须指向 SubjectConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasAction ;
+        sh:minCount 1 ;
+        sh:class ex:ActionConcept ;
+        sh:message "RuleExpression 的 hasAction 必须指向 ActionConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasObject ;
+        sh:class ex:ObjectConcept ;
+        sh:message "RuleExpression 的 hasObject 必须指向 ObjectConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasCondition ;
+        sh:class ex:ConditionConcept ;
+        sh:message "RuleExpression 的 hasCondition 必须指向 ConditionConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasConstraint ;
+        sh:class ex:ConstraintConcept ;
+        sh:message "RuleExpression 的 hasConstraint 必须指向 ConstraintConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasBusinessContext ;
+        sh:class ex:ContextConcept ;
+        sh:message "RuleExpression 的 hasBusinessContext 必须指向 ContextConcept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:evidenceText ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "RuleExpression 必须包含 evidenceText"@zh ;
+    ] .
+
+ex:ConceptShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Concept ;
+    sh:property [
+        sh:path ex:canonicalName ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "Concept 必须包含 canonicalName"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:definitionText ;
+        sh:datatype xsd:string ;
+        sh:message "Concept 的 definitionText 必须是字符串"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasBroaderConcept ;
+        sh:class ex:Concept ;
+        sh:message "Concept 的 hasBroaderConcept 必须指向 Concept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasNarrowerConcept ;
+        sh:class ex:Concept ;
+        sh:message "Concept 的 hasNarrowerConcept 必须指向 Concept"@zh ;
+    ] ;
+    sh:property [
+        sh:path ex:hasRelatedConcept ;
+        sh:class ex:Concept ;
+        sh:message "Concept 的 hasRelatedConcept 必须指向 Concept"@zh ;
+    ] .

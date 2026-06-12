@@ -1,0 +1,596 @@
+{
+  "two_table_config": {
+    "description": "两表配置：db_cluster -> db_instance",
+    "metrics": [
+      {
+        "name": "cluster_count",
+        "expression": "COUNT(DISTINCT cluster_id)",
+        "table": "db_cluster",
+        "description": "集群数量"
+      },
+      {
+        "name": "instance_count",
+        "expression": "COUNT(DISTINCT instance_id)",
+        "table": "db_instance",
+        "description": "实例数量"
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "cluster_db_type",
+        "column": "db_type",
+        "table": "db_cluster",
+        "type": "categorical",
+        "description": "数据库类型",
+        "allowed_values": [
+          "MySQL",
+          "PostgreSQL",
+          "MongoDB",
+          "Redis"
+        ]
+      },
+      {
+        "name": "cluster_status",
+        "column": "status",
+        "table": "db_cluster",
+        "type": "categorical",
+        "description": "集群状态",
+        "allowed_values": [
+          "running",
+          "stopped",
+          "pending"
+        ]
+      },
+      {
+        "name": "cluster_ha_type",
+        "column": "ha_type",
+        "table": "db_cluster",
+        "type": "categorical",
+        "description": "高可用类型"
+      },
+      {
+        "name": "ins_role",
+        "column": "role",
+        "table": "db_instance",
+        "type": "categorical",
+        "description": "实例角色"
+      }
+    ],
+    "joins": [
+      {
+        "left_table": "db_cluster",
+        "right_table": "db_instance",
+        "left_column": "cluster_id",
+        "right_column": "cluster_id",
+        "join_type": "left"
+      }
+    ]
+  },
+  "three_table_config": {
+    "description": "三表配置：db_cluster -> db_instance -> db_backup",
+    "metrics": [
+      {
+        "name": "cluster_count",
+        "expression": "COUNT(DISTINCT db_cluster.cluster_id)",
+        "table": "db_cluster",
+        "description": "集群数量"
+      },
+      {
+        "name": "instance_count",
+        "expression": "COUNT(DISTINCT db_instance.instance_id)",
+        "table": "db_instance",
+        "description": "实例数量"
+      },
+      {
+        "name": "backup_count",
+        "expression": "COUNT(DISTINCT db_backup.backup_id)",
+        "table": "db_backup",
+        "description": "备份数量"
+      },
+      {
+        "name": "total_backup_size",
+        "expression": "SUM(db_backup.size_mb)",
+        "table": "db_backup",
+        "description": "备份总大小(MB)"
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "cluster_db_type",
+        "column": "db_type",
+        "table": "db_cluster",
+        "type": "categorical",
+        "description": "数据库类型"
+      },
+      {
+        "name": "cluster_status",
+        "column": "status",
+        "table": "db_cluster",
+        "type": "categorical",
+        "description": "集群状态"
+      },
+      {
+        "name": "ins_role",
+        "column": "role",
+        "table": "db_instance",
+        "type": "categorical",
+        "description": "实例角色"
+      },
+      {
+        "name": "ins_status",
+        "column": "status",
+        "table": "db_instance",
+        "type": "categorical",
+        "description": "实例状态"
+      },
+      {
+        "name": "backup_type",
+        "column": "backup_type",
+        "table": "db_backup",
+        "type": "categorical",
+        "description": "备份类型"
+      },
+      {
+        "name": "backup_status",
+        "column": "status",
+        "table": "db_backup",
+        "type": "categorical",
+        "description": "备份状态"
+      }
+    ],
+    "joins": [
+      {
+        "left_table": "db_cluster",
+        "right_table": "db_instance",
+        "left_column": "cluster_id",
+        "right_column": "cluster_id",
+        "join_type": "left"
+      },
+      {
+        "left_table": "db_instance",
+        "right_table": "db_backup",
+        "left_column": "instance_id",
+        "right_column": "instance_id",
+        "join_type": "left"
+      }
+    ]
+  },
+  "detail_three_table_config": {
+    "description": "三表链式配置（用于明细查询测试）：db_cluster_instance -> db_cluster -> db_cluster_group",
+    "metrics": [
+      {
+        "name": "实例数量",
+        "expression": "COUNT(*)",
+        "table": "db_cluster_instance",
+        "description": "实例数量",
+        "drill_fields": [
+          "db_cluster_instance.instance_id",
+          "db_cluster_instance.instance_name",
+          "db_cluster.cluster_name",
+          "db_cluster_group.department_group"
+        ]
+      },
+      {
+        "name": "集群数量",
+        "expression": "COUNT(DISTINCT cluster_id)",
+        "table": "db_cluster",
+        "description": "集群数量",
+        "drill_fields": [
+          "cluster_id",
+          "cluster_name"
+        ]
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "数据库类型",
+        "column": "db_type",
+        "table": "db_cluster",
+        "type": "categorical",
+        "allowed_values": [
+          "MySQL",
+          "PostgreSQL",
+          "MongoDB"
+        ]
+      },
+      {
+        "name": "部门组",
+        "column": "department_group",
+        "table": "db_cluster_group",
+        "type": "categorical"
+      },
+      {
+        "name": "实例状态",
+        "column": "status",
+        "table": "db_cluster_instance",
+        "type": "categorical",
+        "allowed_values": [
+          "running",
+          "stopped"
+        ]
+      },
+      {
+        "name": "实例ID",
+        "column": "instance_id",
+        "table": "db_cluster_instance",
+        "type": "categorical"
+      },
+      {
+        "name": "实例名称",
+        "column": "instance_name",
+        "table": "db_cluster_instance",
+        "type": "categorical"
+      },
+      {
+        "name": "集群ID",
+        "column": "cluster_id",
+        "table": "db_cluster",
+        "type": "categorical"
+      },
+      {
+        "name": "集群名称",
+        "column": "cluster_name",
+        "table": "db_cluster",
+        "type": "categorical"
+      }
+    ],
+    "joins": [
+      {
+        "left_table": "db_cluster_instance",
+        "right_table": "db_cluster",
+        "left_column": "cluster_id",
+        "right_column": "cluster_id",
+        "join_type": "left"
+      },
+      {
+        "left_table": "db_cluster",
+        "right_table": "db_cluster_group",
+        "left_column": "cluster_group_id",
+        "right_column": "cluster_group_id",
+        "join_type": "left"
+      }
+    ],
+    "tables": [
+      {
+        "table_name": "db_cluster_instance",
+        "columns": [
+          {
+            "name": "instance_id",
+            "type": "INT"
+          },
+          {
+            "name": "instance_name",
+            "type": "VARCHAR"
+          },
+          {
+            "name": "cluster_id",
+            "type": "INT"
+          },
+          {
+            "name": "status",
+            "type": "VARCHAR"
+          }
+        ]
+      },
+      {
+        "table_name": "db_cluster",
+        "columns": [
+          {
+            "name": "cluster_id",
+            "type": "INT"
+          },
+          {
+            "name": "cluster_name",
+            "type": "VARCHAR"
+          },
+          {
+            "name": "db_type",
+            "type": "VARCHAR"
+          },
+          {
+            "name": "cluster_group_id",
+            "type": "INT"
+          }
+        ]
+      },
+      {
+        "table_name": "db_cluster_group",
+        "columns": [
+          {
+            "name": "cluster_group_id",
+            "type": "INT"
+          },
+          {
+            "name": "department_group",
+            "type": "VARCHAR"
+          },
+          {
+            "name": "group_name",
+            "type": "VARCHAR"
+          }
+        ]
+      }
+    ]
+  },
+  "advanced_config": {
+    "description": "高级功能测试配置：同义词映射、维度表达式、各种操作符",
+    "metrics": [
+      {
+        "name": "订单数",
+        "expression": "COUNT(*)",
+        "table": "orders",
+        "description": "订单数量"
+      },
+      {
+        "name": "订单金额",
+        "expression": "SUM(orders.amount)",
+        "table": "orders",
+        "description": "订单总金额"
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "支付方式",
+        "column": "payment_method",
+        "table": "orders",
+        "type": "categorical",
+        "description": "支付方式（支持同义词）",
+        "mapping": {
+          "微信": "wechat",
+          "wx": "wechat",
+          "支付宝": "alipay",
+          "zfb": "alipay"
+        },
+        "allowed_values": [
+          "wechat",
+          "alipay",
+          "cash"
+        ]
+      },
+      {
+        "name": "订单状态",
+        "column": "status",
+        "table": "orders",
+        "type": "categorical",
+        "description": "订单状态"
+      },
+      {
+        "name": "金额等级",
+        "column": "amount",
+        "table": "orders",
+        "type": "categorical",
+        "description": "根据金额划分等级（使用表达式）",
+        "expression": "CASE WHEN orders.amount < 100 THEN '小额' WHEN orders.amount < 1000 THEN '中额' ELSE '大额' END"
+      },
+      {
+        "name": "订单日期",
+        "column": "order_date",
+        "table": "orders",
+        "type": "time",
+        "description": "订单日期"
+      },
+      {
+        "name": "备注",
+        "column": "remark",
+        "table": "orders",
+        "type": "categorical",
+        "description": "订单备注"
+      }
+    ],
+    "joins": []
+  },
+  "hive_config": {
+    "description": "Hive 方言测试配置",
+    "source_type": "hive",
+    "metrics": [
+      {
+        "name": "用户数",
+        "expression": "COUNT(DISTINCT user_id)",
+        "table": "user_events",
+        "description": "用户数量"
+      },
+      {
+        "name": "事件数",
+        "expression": "COUNT(*)",
+        "table": "user_events",
+        "description": "事件数量"
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "事件类型",
+        "column": "event_type",
+        "table": "user_events",
+        "type": "categorical",
+        "description": "事件类型"
+      },
+      {
+        "name": "事件日期",
+        "column": "event_date",
+        "table": "user_events",
+        "type": "time",
+        "description": "事件日期"
+      },
+      {
+        "name": "平台",
+        "column": "platform",
+        "table": "user_events",
+        "type": "categorical",
+        "description": "平台"
+      }
+    ],
+    "joins": []
+  },
+  "ecommerce_config": {
+    "description": "电商五表配置：users -> orders -> order_items -> products -> categories",
+    "metrics": [
+      {
+        "name": "用户数",
+        "expression": "COUNT(DISTINCT users.user_id)",
+        "table": "users",
+        "description": "用户数量"
+      },
+      {
+        "name": "订单数",
+        "expression": "COUNT(DISTINCT orders.order_id)",
+        "table": "orders",
+        "description": "订单数量"
+      },
+      {
+        "name": "订单总金额",
+        "expression": "SUM(orders.total_amount)",
+        "table": "orders",
+        "description": "订单总金额"
+      },
+      {
+        "name": "商品销量",
+        "expression": "SUM(order_items.quantity)",
+        "table": "order_items",
+        "description": "商品销售数量"
+      },
+      {
+        "name": "销售额",
+        "expression": "SUM(order_items.quantity * order_items.unit_price)",
+        "table": "order_items",
+        "description": "销售金额"
+      },
+      {
+        "name": "商品数",
+        "expression": "COUNT(DISTINCT products.product_id)",
+        "table": "products",
+        "description": "商品数量"
+      },
+      {
+        "name": "平均订单金额",
+        "expression": "AVG(orders.total_amount)",
+        "table": "orders",
+        "description": "平均每单金额"
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "用户等级",
+        "column": "level",
+        "table": "users",
+        "type": "categorical",
+        "description": "用户会员等级",
+        "allowed_values": [
+          "普通",
+          "银卡",
+          "金卡",
+          "钻石"
+        ]
+      },
+      {
+        "name": "用户性别",
+        "column": "gender",
+        "table": "users",
+        "type": "categorical",
+        "description": "用户性别",
+        "allowed_values": [
+          "男",
+          "女"
+        ]
+      },
+      {
+        "name": "用户城市",
+        "column": "city",
+        "table": "users",
+        "type": "categorical",
+        "description": "用户所在城市"
+      },
+      {
+        "name": "订单状态",
+        "column": "status",
+        "table": "orders",
+        "type": "categorical",
+        "description": "订单状态",
+        "allowed_values": [
+          "待支付",
+          "已支付",
+          "已发货",
+          "已完成",
+          "已取消"
+        ]
+      },
+      {
+        "name": "支付方式",
+        "column": "payment_method",
+        "table": "orders",
+        "type": "categorical",
+        "description": "支付方式",
+        "allowed_values": [
+          "微信",
+          "支付宝",
+          "银行卡",
+          "货到付款"
+        ]
+      },
+      {
+        "name": "下单日期",
+        "column": "order_date",
+        "table": "orders",
+        "type": "time",
+        "description": "订单日期"
+      },
+      {
+        "name": "商品名称",
+        "column": "name",
+        "table": "products",
+        "type": "categorical",
+        "description": "商品名称"
+      },
+      {
+        "name": "商品品牌",
+        "column": "brand",
+        "table": "products",
+        "type": "categorical",
+        "description": "商品品牌"
+      },
+      {
+        "name": "商品分类",
+        "column": "name",
+        "table": "categories",
+        "type": "categorical",
+        "description": "商品分类名称"
+      },
+      {
+        "name": "一级分类",
+        "column": "parent_name",
+        "table": "categories",
+        "type": "categorical",
+        "description": "商品一级分类"
+      }
+    ],
+    "joins": [
+      {
+        "left_table": "users",
+        "right_table": "orders",
+        "left_column": "user_id",
+        "right_column": "user_id",
+        "join_type": "left"
+      },
+      {
+        "left_table": "orders",
+        "right_table": "order_items",
+        "left_column": "order_id",
+        "right_column": "order_id",
+        "join_type": "left"
+      },
+      {
+        "left_table": "order_items",
+        "right_table": "products",
+        "left_column": "product_id",
+        "right_column": "product_id",
+        "join_type": "left"
+      },
+      {
+        "left_table": "products",
+        "right_table": "categories",
+        "left_column": "category_id",
+        "right_column": "category_id",
+        "join_type": "left"
+      }
+    ]
+  }
+}

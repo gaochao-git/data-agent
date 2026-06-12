@@ -1,0 +1,70 @@
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant UI as CLI/TUI/Web<br/>(client)
+  participant SP as SessionPrompt<br/>(session/prompt.ts)
+  participant Sess as Session<br/>(session/index.ts)
+  participant Msg as MessageV2<br/>(session/message-v2.ts)
+  participant A as Agent Registry<br/>(agent/agent.ts)
+  participant Cfg as Config<br/>(config/config.ts)
+  participant Sys as SystemPrompt<br/>(session/system.ts)
+  participant Proc as SessionProcessor<br/>(session/processor.ts)
+  participant LLM as LLM.stream<br/>(session/llm.ts)
+  participant TR as ToolRegistry<br/>(tool/registry.ts)
+  participant Perm as PermissionNext<br/>(permission/next.ts)
+  participant Tool as Tools<br/>(tool/*)
+  participant Task as TaskTool<br/>(tool/task.ts)
+  participant Skill as SkillTool<br/>(tool/skill.ts)
+  participant Comp as SessionCompaction<br/>(session/compaction.ts)
+
+  U->>UI: 输入问题
+  UI->>SP: prompt(input)
+  SP->>Sess: Session.get/create
+  SP->>SP: createUserMessage()
+  SP->>SP: resolvePromptParts()
+  SP->>Msg: updateMessage/updatePart
+
+  SP->>A: Agent.get/list/defaultAgent
+  A->>Cfg: Config.get() 合并配置
+  Cfg-->>A: agent 配置
+  A-->>SP: Agent.Info
+
+  SP->>Sys: SystemPrompt 组装
+  Sys-->>SP: provider + agent + rules
+
+  loop SessionPrompt.loop
+    SP->>Msg: MessageV2.stream/filterCompacted
+
+    alt pending subtask
+      SP->>Task: TaskTool.execute
+      Task->>Sess: create child session
+      Task->>SP: SessionPrompt.prompt(child)
+      Task-->>SP: tool output(子会话结果)
+    else pending/overflow compaction
+      SP->>Comp: process/create
+      Comp-->>SP: compaction result
+    else normal
+      SP->>Proc: SessionProcessor.create/process
+      Proc->>LLM: LLM.stream
+      LLM->>Sys: system prompt 组合
+      LLM->>TR: ToolRegistry.tools
+      LLM-->>Proc: stream events
+
+      opt tool call
+        Proc->>Perm: PermissionNext.ask
+        Perm-->>Proc: allow/deny/ask
+        Proc->>Tool: Tool.execute
+        Tool-->>Proc: tool output
+      end
+
+      Proc-->>SP: update parts/finish
+    end
+
+    opt Skill tool
+      SP->>Skill: SkillTool.execute
+      Skill-->>SP: tool output
+    end
+  end
+
+  SP-->>UI: 回复
+  UI-->>U: 输出结果

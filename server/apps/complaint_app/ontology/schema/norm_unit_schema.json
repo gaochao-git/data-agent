@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Investment Policy NormUnit",
+  "description": "对外投资管理专题下的条款归一化结构。该结构用于查询和大模型推理，不用于图数据库内建推理。",
+  "type": "object",
+  "required": [
+    "unit_id",
+    "source_document_title",
+    "source_clause_locator",
+    "source_text",
+    "topic",
+    "subject_role",
+    "action",
+    "object",
+    "modality",
+    "applies_to_scope"
+  ],
+  "properties": {
+    "unit_id": {
+      "type": "string",
+      "description": "NormUnit 唯一标识。"
+    },
+    "source_document_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_document_title": {
+      "type": "string"
+    },
+    "source_file_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_clause_locator": {
+      "type": "object",
+      "required": [
+        "chapter_no",
+        "article_no",
+        "article_index_mode"
+      ],
+      "properties": {
+        "chapter_no": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chapter_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "article_no": {
+          "type": "string"
+        },
+        "item_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "article_index_mode": {
+          "type": "string",
+          "enum": [
+            "cn_article",
+            "decimal_article"
+          ]
+        }
+      }
+    },
+    "source_text": {
+      "type": "string"
+    },
+    "topic": {
+      "type": "string",
+      "enum": [
+        "适用范围",
+        "投资分类",
+        "审批权限",
+        "项目提出",
+        "可行性研究",
+        "风险评估",
+        "项目审核",
+        "实施控制",
+        "投后管理",
+        "处置退出",
+        "信息披露",
+        "监督检查",
+        "责任追究"
+      ]
+    },
+    "subtopic": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject_role": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "define_scope",
+        "classify",
+        "propose",
+        "approve",
+        "pre_review",
+        "review",
+        "assess",
+        "conduct_due_diligence",
+        "implement",
+        "sign_contract",
+        "pay_funds",
+        "report",
+        "disclose",
+        "appoint_representative",
+        "supervise",
+        "audit",
+        "dispose",
+        "transfer",
+        "recover",
+        "separate_incompatible_posts"
+      ]
+    },
+    "object": {
+      "type": "string"
+    },
+    "modality": {
+      "type": "string",
+      "enum": [
+        "must",
+        "may",
+        "must_not"
+      ]
+    },
+    "approval_body": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "threshold": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "amount",
+            "net_asset_ratio",
+            "asset_total_ratio",
+            "asset_net_ratio",
+            "revenue_ratio",
+            "profit_ratio",
+            "accumulated_12_months",
+            "mixed"
+          ]
+        },
+        "operator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "basis": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raw_expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "time_condition": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "precondition": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exception": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "applies_to_scope": {
+      "type": "string"
+    },
+    "lifecycle_stage": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "before_approval",
+        "approval",
+        "implementation",
+        "post_investment",
+        "disposal",
+        "supervision",
+        null
+      ]
+    },
+    "control_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "scope_definition",
+        "authority_control",
+        "process_control",
+        "threshold_control",
+        "role_control",
+        "reporting_control",
+        "accountability_control",
+        null
+      ]
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

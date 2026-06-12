@@ -1,0 +1,65 @@
+PREFIX ex: <http://example.com/zhidu-clause-semantics/>
+
+# Query1: 同主体+同动作+同对象，但约束不同（跨制度）
+# 说明：
+# - 保持旧版语义：按 canonicalName 相同匹配 subject/action/object
+# - 延迟取 title/article/evidence，降低展示字段导致的查询成本
+# - 先用 LIMIT 20 在 GraphDB Web 页面手动验证
+
+SELECT ?docId1 ?title1 ?articleNo1 ?docId2 ?title2 ?articleNo2
+       ?subject ?action ?object ?constraint1 ?constraint2 ?evidence1 ?evidence2
+WHERE {
+  {
+    SELECT ?doc1 ?c1 ?r1 ?docId1 ?doc2 ?c2 ?r2 ?docId2
+           ?s1 ?a1 ?o1 ?k1 ?s2 ?a2 ?o2 ?k2
+           ?subject ?action ?object ?constraint1 ?constraint2
+    WHERE {
+      ?r1 a ex:RuleExpression ;
+          ex:hasSubject ?s1 ;
+          ex:hasAction ?a1 ;
+          ex:hasObject ?o1 ;
+          ex:hasConstraint ?k1 .
+
+      ?r2 a ex:RuleExpression ;
+          ex:hasSubject ?s2 ;
+          ex:hasAction ?a2 ;
+          ex:hasObject ?o2 ;
+          ex:hasConstraint ?k2 .
+
+      ?s1 ex:canonicalName ?subject .
+      ?s2 ex:canonicalName ?subject .
+
+      ?a1 ex:canonicalName ?action .
+      ?a2 ex:canonicalName ?action .
+
+      ?o1 ex:canonicalName ?object .
+      ?o2 ex:canonicalName ?object .
+
+      ?k1 ex:canonicalName ?constraint1 .
+      ?k2 ex:canonicalName ?constraint2 .
+
+      ?doc1 ex:documentId ?docId1 ; ex:hasClause ?c1 .
+      ?c1 ex:expressesRule ?r1 .
+
+      ?doc2 ex:documentId ?docId2 ; ex:hasClause ?c2 .
+      ?c2 ex:expressesRule ?r2 .
+
+      FILTER(?docId1 < ?docId2)
+      FILTER(?constraint1 != ?constraint2)
+    }
+    LIMIT 20
+  }
+
+  ?doc1 ex:title ?title1 .
+  ?doc2 ex:title ?title2 .
+  ?c1 ex:articleNo ?articleNo1 .
+  ?c2 ex:articleNo ?articleNo2 .
+
+  OPTIONAL { ?r1 ex:evidenceText ?e1raw . }
+  OPTIONAL { ?c1 ex:articleText ?articleText1 . }
+  OPTIONAL { ?r2 ex:evidenceText ?e2raw . }
+  OPTIONAL { ?c2 ex:articleText ?articleText2 . }
+
+  BIND(IF(BOUND(?e1raw), ?e1raw, IF(BOUND(?articleText1), ?articleText1, "")) AS ?evidence1)
+  BIND(IF(BOUND(?e2raw), ?e2raw, IF(BOUND(?articleText2), ?articleText2, "")) AS ?evidence2)
+}

@@ -1,0 +1,102 @@
+[
+  {
+    "id": "nl2sql_joins_001",
+    "category": "joins",
+    "difficulty": "medium",
+    "question": "查询每个集群组下有多少个集群",
+    "ground_truth": {
+      "sql": "SELECT g.cluster_group_name, COUNT(c.id) FROM db_cluster_group g LEFT JOIN db_cluster c ON g.cluster_group_id = c.cluster_group_id GROUP BY g.cluster_group_id, g.cluster_group_name",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_002",
+    "category": "joins",
+    "difficulty": "medium",
+    "question": "显示每个集群的实例数量",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_003",
+    "category": "joins",
+    "difficulty": "medium",
+    "question": "查询MySQL集群的所有实例",
+    "ground_truth": {
+      "sql": "SELECT i.* FROM db_cluster_instance i JOIN db_cluster c ON i.cluster_id = c.cluster_id WHERE c.cluster_db_type = 'MySQL'",
+      "components": ["SELECT", "FROM", "JOIN", "WHERE"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_004",
+    "category": "joins",
+    "difficulty": "medium",
+    "question": "显示每个集群组的DBA负责人",
+    "ground_truth": {
+      "sql": "SELECT cluster_group_name, cluster_group_dba FROM db_cluster_group",
+      "components": ["SELECT", "FROM"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_005",
+    "category": "joins",
+    "difficulty": "medium",
+    "question": "查询包含主节点的集群",
+    "ground_truth": {
+      "sql": "SELECT DISTINCT c.cluster_name FROM db_cluster c JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id WHERE i.ins_role = 'master'",
+      "components": ["SELECT", "FROM", "JOIN", "WHERE", "DISTINCT"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_006",
+    "category": "joins",
+    "difficulty": "hard",
+    "question": "查询每种数据库类型的集群总数",
+    "ground_truth": {
+      "sql": "SELECT cluster_db_type, COUNT(*) FROM db_cluster GROUP BY cluster_db_type",
+      "components": ["SELECT", "FROM", "GROUP BY", "COUNT"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_007",
+    "category": "joins",
+    "difficulty": "hard",
+    "question": "显示每个集群组下MySQL类型的集群数量",
+    "ground_truth": {
+      "sql": "SELECT g.cluster_group_name, COUNT(c.id) FROM db_cluster_group g LEFT JOIN db_cluster c ON g.cluster_group_id = c.cluster_group_id WHERE c.cluster_db_type = 'MySQL' GROUP BY g.cluster_group_id, g.cluster_group_name",
+      "components": ["SELECT", "FROM", "JOIN", "WHERE", "GROUP BY", "COUNT"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_008",
+    "category": "joins",
+    "difficulty": "hard",
+    "question": "查询运行中的实例所属的集群名称",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name FROM db_cluster c JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id WHERE i.ins_status = 'running'",
+      "components": ["SELECT", "FROM", "JOIN", "WHERE"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_009",
+    "category": "joins",
+    "difficulty": "hard",
+    "question": "显示每个集群的实例总数和主节点数",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name, COUNT(i.id) as total, SUM(CASE WHEN i.ins_role = 'master' THEN 1 ELSE 0 END) as masters FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id GROUP BY c.cluster_id, c.cluster_name",
+      "components": ["SELECT", "FROM", "JOIN", "GROUP BY", "COUNT", "SUM"]
+    }
+  },
+  {
+    "id": "nl2sql_joins_010",
+    "category": "joins",
+    "difficulty": "hard",
+    "question": "查询没有实例的集群",
+    "ground_truth": {
+      "sql": "SELECT c.cluster_name FROM db_cluster c LEFT JOIN db_cluster_instance i ON c.cluster_id = i.cluster_id WHERE i.id IS NULL",
+      "components": ["SELECT", "FROM", "JOIN", "WHERE", "IS NULL"]
+    }
+  }
+]

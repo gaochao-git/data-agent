@@ -1,0 +1,472 @@
+<script setup lang="ts">
+/**
+ * 会话列表侧边栏
+ * 用于智能问数模式，包含指标和会话两个 tab
+ * 看板已提取为独立的 DashboardPanel 组件
+ */
+import { ref, computed, watch } from 'vue'
+import { getSemanticConfigs } from '../../api'
+import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
+
+interface ConversationItem {
+  id: string
+  title: string
+  created_at: string
+}
+
+interface ConversationGroup {
+  label: string
+  items: ConversationItem[]
+}
+
+const CONVERSATION_ICON_POOL = [
+  { icon: 'fa-comment-dots', color: '#B3DBD2' }, // 普通对话
+  { icon: 'fa-chart-line', color: '#B3DBD2' },   // 聚合查询
+  { icon: 'fa-table', color: '#B3DBD2' },        // 明细查询
+] as const
+
+const getConversationIconMeta = (conversationId: string | undefined) => {
+  const id = conversationId || ''
+  let hash = 0
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+  }
+  return CONVERSATION_ICON_POOL[hash % CONVERSATION_ICON_POOL.length] || CONVERSATION_ICON_POOL[0]
+}
+
+interface Props {
+  activeTab: 'metrics' | 'conversation'
+  groupedConversations?: ConversationGroup[]
+  currentConversationId?: string | null
+  isLoading?: boolean
+  isLoadingMore?: boolean
+  hasMore?: boolean
+  showNewConversationButton?: boolean
+  datasourceId?: string
+  semanticConfigs?: SemanticConfigItem[]
+  tables?: TableInfo[]
+  loadingConfigs?: boolean
+  bootstrapLoading?: boolean
+  selectedDatasetId?: string | null
+  hideManagement?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  groupedConversations: () => [],
+  currentConversationId: null,
+  isLoading: false,
+  isLoadingMore: false,
+  hasMore: false,
+  showNewConversationButton: true,
+  datasourceId: '',
+  semanticConfigs: undefined,
+  tables: () => [],
+  loadingConfigs: undefined,
+  bootstrapLoading: false,
+  selectedDatasetId: null,
+  hideManagement: false
+})
+
+const emit = defineEmits<{
+  selectConversation: [conversationId: string]
+  newConversation: []
+  loadMoreConversations: []
+  selectDataset: [configId: string | null]
+  refreshSemanticConfigs: []
+  fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
+}>()
+
+// 数据集列表
+const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
+const internalIsLoadingConfigs = ref(false)
+const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
+const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
+const configSearchKeyword = ref('')
+
+const filteredSemanticConfigs = computed(() => {
+  const keyword = configSearchKeyword.value.trim().toLowerCase()
+  if (!keyword) return semanticConfigs.value
+  return semanticConfigs.value.filter(config => {
+    const text = [
+      config.name,
+      ...(config.metrics || []).map(metric => metric.name),
+      ...(config.dimensions || []).map(dimension => dimension.name),
+    ].join(' ').toLowerCase()
+    return text.includes(keyword)
+  })
+})
+
+// 选中的数据集 ID
+const selectedConfigId = ref<string | null>(null)
+const expandedConfigIds = ref<Set<string>>(new Set())
+
+const handleConversationScroll = (event: Event) => {
+  if (!props.hasMore || props.isLoading || props.isLoadingMore) return
+  const target = event.currentTarget as HTMLElement
+  if (target.scrollHeight - target.scrollTop - target.clientHeight <= 80) {
+    emit('loadMoreConversations')
+  }
+}
+
+const syncSelectedConfig = () => {
+  const configs = semanticConfigs.value
+  if (configs.length === 0) {
+    if (selectedConfigId.value !== null) {
+      selectedConfigId.value = null
+      emit('selectDataset', null)
+    }
+    expandedConfigIds.value = new Set()
+    return
+  }
+  if (selectedConfigId.value && configs.find(c => c.id === selectedConfigId.value)) {
+    return
+  }
+  if (selectedConfigId.value !== null) {
+    selectedConfigId.value = null
+    emit('selectDataset', null)
+  }
+  expandedConfigIds.value = new Set([...expandedConfigIds.value].filter(id => configs.some(c => c.id === id)))
+}
+
+// 加载语义配置列表
+const loadSemanticConfigs = async () => {
+  if (props.semanticConfigs !== undefined) {
+    emit('refreshSemanticConfigs')
+    return
+  }
+  if (!props.datasourceId) return
+  internalIsLoadingConfigs.value = true
+  try {
+    const res = await getSemanticConfigs(props.datasourceId)
+    if (res.status === 'success') {
+      internalSemanticConfigs.value = res.data?.configs || []
+      syncSelectedConfig()
+    }
+  } catch (err) {
+    console.error('加载语义配置失败:', err)
+  } finally {
+    internalIsLoadingConfigs.value = false
+  }
+}
+
+// 选择数据集
+const handleSelectConfig = (configId: string | null) => {
+  selectedConfigId.value = configId
+  emit('selectDataset', configId)
+}
+
+const toggleConfig = (configId: string) => {
+  const next = new Set(expandedConfigIds.value)
+  if (next.has(configId)) {
+    next.delete(configId)
+  } else {
+    next.add(configId)
+  }
+  expandedConfigIds.value = next
+}
+
+const getDimensionIconType = (dimension: SemanticDimension): 'string' | 'number' | 'date' => {
+  if (dimension.type === 'number') return 'number'
+  if (dimension.type === 'time') return 'date'
+  return 'string'
+}
+
+const appendMetadataSupplementLines = (lines: string[], metadataSupplement?: string) => {
+  const content = String(metadataSupplement || '').trim()
+  if (!content) return
+  lines.push('元数据补充')
+  content
+    .split(/\n+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .forEach(item => lines.push(item))
+}
+
+const extractMetricFieldName = (expression?: string) => {
+  const expr = String(expression || '').trim()
+  if (!expr) return '-'
+  const inner = expr.match(/\((.*)\)/)?.[1] || expr
+  const cleaned = inner.replace(/DISTINCT/ig, '').replace(/`/g, '').trim()
+  if (!cleaned) return '-'
+  const first = cleaned.split(',')[0]?.trim() || ''
+  const parts = first.split('.')
+  return parts[parts.length - 1] || '-'
+}
+
+const buildDimensionTooltip = (dimension: SemanticDimension) => {
+  const expression = dimension.expression || `\`${dimension.column}\``
+  const lines = [
+    '基础信息',
+    `数据源表：${dimension.table || '-'}`,
+    `显示名称：${dimension.name || '-'}`,
+    `字段名称：${dimension.column || '-'}`,
+    `表达式：${expression}`,
+  ]
+  if (dimension.description) lines.push(`描述：${dimension.description}`)
+  appendMetadataSupplementLines(lines, dimension.metadata_supplement)
+  return lines.join('\n')
+}
+
+const buildMetricTooltip = (metric: SemanticMetric) => {
+  const expression = metric.expression || ''
+  const lines = [
+    '基础信息',
+    `数据源表：${metric.table || '-'}`,
+    `显示名称：${metric.name || '-'}`,
+    `字段名称：${extractMetricFieldName(expression)}`,
+    `表达式：${expression || '-'}`,
+  ]
+  if (metric.description) lines.push(`描述：${metric.description}`)
+  appendMetadataSupplementLines(lines, metric.metadata_supplement)
+  return lines.join('\n')
+}
+
+const handleFillMetric = (metric: SemanticMetric) => {
+  emit('fillQuestion', { fieldName: metric.name, fieldType: 'metric' })
+}
+
+const handleFillDimension = (dimension: SemanticDimension) => {
+  emit('fillQuestion', { fieldName: dimension.name, fieldType: 'dimension' })
+}
+
+// 监听数据源变化
+watch(() => props.datasourceId, () => {
+  selectedConfigId.value = null
+  expandedConfigIds.value = new Set()
+  if (props.semanticConfigs === undefined) {
+    loadSemanticConfigs()
+    return
+  }
+  syncSelectedConfig()
+}, { immediate: true })
+
+watch(() => props.semanticConfigs, () => {
+  if (props.semanticConfigs === undefined) return
+  syncSelectedConfig()
+}, { immediate: true, deep: true })
+
+// 父子同步：父层数据集变化时，同步当前选中数据集
+watch(() => props.selectedDatasetId, (newId) => {
+  if (newId === selectedConfigId.value) return
+  if (!newId) {
+    selectedConfigId.value = null
+    return
+  }
+  if (semanticConfigs.value.find(c => c.id === newId)) {
+    selectedConfigId.value = newId
+  }
+}, { immediate: true })
+
+</script>
+
+<template>
+  <div class="flex flex-col h-full overflow-hidden">
+    <!-- ==================== 会话 Tab ==================== -->
+    <template v-if="activeTab === 'conversation'">
+      <!-- 新建会话按钮 -->
+      <div v-if="showNewConversationButton" class="p-4">
+        <button
+          class="w-[82%] mx-auto flex items-center justify-center gap-2 px-5 py-3 border-none rounded-lg bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-sm font-medium cursor-pointer transition-all duration-200 shadow-[0_2px_8px_rgba(31,130,217,0.3)] hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(31,130,217,0.4)]"
+          @click="emit('newConversation')"
+        >
+          <i class="fa-solid fa-plus"></i>
+          <span>新建会话</span>
+        </button>
+      </div>
+
+      <!-- 会话列表 -->
+      <div class="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+        <div v-if="isLoading" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+          <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
+          <span>加载历史会话...</span>
+        </div>
+
+        <div v-else-if="groupedConversations.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+          <i class="fa-regular fa-message text-2xl opacity-50"></i>
+          <span>暂无会话</span>
+        </div>
+
+        <template v-else>
+          <template v-for="group in groupedConversations" :key="group.label">
+            <div class="mb-2">
+              <div class="py-2 text-xs text-gray-400 font-medium uppercase tracking-wide">{{ group.label }}</div>
+              <div
+                v-for="conv in group.items"
+                :key="conv.id"
+                class="flex items-center gap-2 py-3 cursor-pointer transition-all duration-150"
+                :class="currentConversationId === conv.id ? 'text-blue-500 font-medium' : 'text-gray-800 hover:text-blue-500'"
+                @click="emit('selectConversation', conv.id)"
+              >
+                <i
+                  :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
+                  :style="{ color: getConversationIconMeta(conv.id).color }"
+                ></i>
+                <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+              </div>
+            </div>
+          </template>
+          <div v-if="isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">
+            <i class="fa-solid fa-spinner fa-spin"></i>
+            <span>加载更多...</span>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ==================== 指标 Tab ==================== -->
+    <template v-else-if="activeTab === 'metrics'">
+      <!-- 加载状态 -->
+      <div v-if="bootstrapLoading || isLoadingConfigs" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+        <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
+        <span>加载中...</span>
+      </div>
+
+      <div v-else-if="semanticConfigs.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
+        <i class="fa-solid fa-database text-2xl opacity-50"></i>
+        <span>暂无数据集</span>
+      </div>
+
+      <div v-else class="flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">
+        <div class="mb-2 px-3">
+          <div class="flex h-8 items-center rounded-md border border-[#E5E6EB] bg-white px-2.5 text-[#86909C] transition-colors focus-within:border-[#165DFF]">
+            <i class="fa-solid fa-magnifying-glass mr-2 text-[11px]"></i>
+            <input
+              v-model="configSearchKeyword"
+              class="h-full min-w-0 flex-1 border-none bg-transparent p-0 text-[12px] text-[#1D2129] outline-none placeholder:text-[#A8ABB2]"
+              placeholder="搜索指标集、维度、指标"
+            />
+            <button
+              v-if="configSearchKeyword"
+              type="button"
+              class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#A8ABB2] transition-colors hover:bg-[#F2F3F5] hover:text-[#4E5969]"
+              title="清空搜索"
+              @click="configSearchKeyword = ''"
+            >
+              <i class="fa-solid fa-xmark text-[10px]"></i>
+            </button>
+          </div>
+        </div>
+
+        <div
+          :class="[
+            'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
+            selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
+          ]"
+          @click="handleSelectConfig(null)"
+        >
+          <span
+            :class="[
+              'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px]',
+              selectedConfigId === null ? 'border-[#165DFF] bg-[#165DFF] text-white' : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
+            ]"
+            title="使用智能选择指标集提问"
+          >
+            <i class="fa-solid fa-check"></i>
+          </span>
+          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
+          <button
+            type="button"
+            class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#5B5C60] transition-colors hover:bg-[#E8F3FF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="isLoadingConfigs"
+            title="刷新指标集"
+            @click.stop="loadSemanticConfigs"
+          >
+            <i :class="['fa-solid fa-rotate-right text-[10px]', isLoadingConfigs ? 'fa-spin' : '']"></i>
+          </button>
+        </div>
+
+        <div
+          v-if="filteredSemanticConfigs.length === 0"
+          class="px-4 py-5 text-center text-[12px] text-[#A8ABB2]"
+        >
+          未找到匹配的指标集
+        </div>
+
+        <div v-for="config in filteredSemanticConfigs" :key="config.id" class="mb-0.5">
+          <div
+            :class="[
+              'group flex h-[28px] cursor-pointer items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]',
+              selectedConfigId === config.id ? 'bg-[#E8F3FF]' : '',
+              expandedConfigIds.has(config.id) ? 'text-[#1D2129]' : ''
+            ]"
+            @click="toggleConfig(config.id)"
+          >
+            <button
+              type="button"
+              :class="[
+                'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px] transition-all duration-150',
+                selectedConfigId === config.id
+                  ? 'border-[#165DFF] bg-[#165DFF] text-white'
+                  : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
+              ]"
+              :title="selectedConfigId === config.id ? '当前提问使用该指标集' : '使用该指标集提问'"
+              @click.stop="handleSelectConfig(selectedConfigId === config.id ? null : config.id)"
+            >
+              <i class="fa-solid fa-check"></i>
+            </button>
+            <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-semibold leading-[28px] text-[#2E2F32]" :title="config.name">
+              {{ config.name }}
+            </span>
+            <span class="ml-2 shrink-0 text-[10px] text-[#939495]" title="维度/指标">{{ config.dimensions?.length || 0 }}维度/{{ config.metrics?.length || 0 }}指标</span>
+          </div>
+
+          <div v-if="expandedConfigIds.has(config.id)" class="ml-6 border-l border-[#E5E6EB] pl-1">
+            <div v-if="(config.dimensions?.length || 0) > 0" class="mt-0.5">
+              <div class="flex h-[24px] items-center rounded px-4 text-[11px] font-semibold text-[#86909C]">
+                <i class="fa-solid fa-layer-group mr-1.5 text-[10px] text-[#165DFF]"></i>
+                <span>维度</span>
+                <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.dimensions?.length || 0 }}</span>
+              </div>
+              <div
+                v-for="dimension in config.dimensions || []"
+                :key="`dimension-${config.id}-${dimension.name}`"
+                class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
+                :title="buildDimensionTooltip(dimension)"
+              >
+                <FieldTypeIcon :type="getDimensionIconType(dimension)" class="mr-1.5 text-[#165DFF]" />
+                <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ dimension.name }}</span>
+                <button
+                  type="button"
+                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
+                  title="填充到提问框"
+                  @click.stop="handleFillDimension(dimension)"
+                >
+                  <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                </button>
+              </div>
+            </div>
+            <div v-if="(config.metrics?.length || 0) > 0" class="mt-0.5">
+              <div class="flex h-[24px] items-center rounded px-4 text-[11px] font-semibold text-[#86909C]">
+                <i class="fa-solid fa-chart-simple mr-1.5 text-[10px] text-[#165DFF]"></i>
+                <span>指标</span>
+                <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.metrics?.length || 0 }}</span>
+              </div>
+              <div
+                v-for="metric in config.metrics || []"
+                :key="`metric-${config.id}-${metric.name}`"
+                class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
+                :title="buildMetricTooltip(metric)"
+              >
+                <FieldTypeIcon type="number" class="mr-1.5 text-[#165DFF]" />
+                <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
+                <button
+                  type="button"
+                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
+                  title="填充到提问框"
+                  @click.stop="handleFillMetric(metric)"
+                >
+                  <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                </button>
+              </div>
+            </div>
+            <div v-if="(config.dimensions?.length || 0) === 0 && (config.metrics?.length || 0) === 0" class="px-4 py-1 text-[12px] text-[#9CA3AF]">
+              暂无指标和维度
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </template>
+  </div>
+</template>

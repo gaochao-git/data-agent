@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>智能数据分析平台架构图</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #64748b;
+      --border: #d8e0ea;
+      --line: #94a3b8;
+      --blue: #2563eb;
+      --blue-bg: #eff6ff;
+      --green: #059669;
+      --green-bg: #ecfdf5;
+      --amber: #d97706;
+      --amber-bg: #fffbeb;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --violet: #7c3aed;
+      --violet-bg: #f5f3ff;
+      --indigo: #4f46e5;
+      --indigo-bg: #eef2ff;
+      --slate: #475569;
+      --slate-bg: #f8fafc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    .page {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      text-align: center;
+      font-size: 24px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .diagram {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background:
+        linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      padding: 12px;
+    }
+
+    .architecture-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 4.6fr) minmax(260px, 0.95fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .runtime-flow {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 100%;
+      min-width: 0;
+    }
+
+    .admin-domain {
+      display: flex;
+      flex-direction: column;
+      align-self: stretch;
+      height: 100%;
+      min-width: 0;
+      padding: 11px;
+      border: 1px solid rgba(71, 85, 105, 0.34);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.94));
+    }
+
+    .admin-domain-title {
+      margin-bottom: 9px;
+      color: #172033;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .admin-stack {
+      display: grid;
+      flex: 1;
+      gap: 7px;
+      align-content: space-between;
+    }
+
+    .admin-card {
+      position: relative;
+      padding: 8px 10px;
+      border: 1px solid #cfd9e6;
+      border-left: 5px solid var(--slate);
+      border-radius: 9px;
+      background: var(--slate-bg);
+    }
+
+    .admin-card h2 {
+      margin: 0 0 4px;
+      color: #172033;
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .admin-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .llm-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      padding: 2px 6px;
+      border: 1px solid rgba(124, 58, 237, 0.24);
+      border-radius: 999px;
+      background: var(--violet-bg);
+      color: var(--violet);
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .tech-tag {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 6px;
+      padding: 2px 6px;
+      border: 1px solid rgba(15, 23, 42, 0.14);
+      border-radius: 999px;
+      background: rgba(248, 250, 252, 0.94);
+      color: #475569;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+      vertical-align: 2px;
+      white-space: nowrap;
+    }
+
+    .section {
+      position: relative;
+      margin-bottom: 0;
+      padding: 11px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .section.entry {
+      border-color: rgba(37, 99, 235, 0.42);
+      background: linear-gradient(180deg, rgba(239, 246, 255, 0.72), rgba(255, 255, 255, 0.94));
+    }
+
+    .section.orchestration {
+      border-color: rgba(5, 150, 105, 0.42);
+      background: linear-gradient(180deg, rgba(236, 253, 245, 0.68), rgba(255, 255, 255, 0.94));
+    }
+
+    .section.semantic {
+      border-color: rgba(217, 119, 6, 0.42);
+      background: linear-gradient(180deg, rgba(255, 251, 235, 0.7), rgba(255, 255, 255, 0.94));
+    }
+
+    .section.execution {
+      border-color: rgba(79, 70, 229, 0.34);
+      background: linear-gradient(180deg, rgba(238, 242, 255, 0.64), rgba(255, 255, 255, 0.94));
+    }
+
+    .section.data {
+      border-color: rgba(71, 85, 105, 0.36);
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(255, 255, 255, 0.94));
+    }
+
+    .section:last-child {
+      margin-bottom: 0;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 9px;
+    }
+
+    .section-title strong {
+      font-size: 15px;
+    }
+
+    .entry-group {
+      position: relative;
+      padding: 10px;
+      border: 1px solid #d8e0ea;
+      border-radius: 10px;
+      background: rgba(248, 250, 252, 0.78);
+    }
+
+    .entry-group.runtime-entry {
+      border-color: rgba(37, 99, 235, 0.34);
+      background: rgba(239, 246, 255, 0.62);
+    }
+
+    .entry-group-title {
+      margin-bottom: 7px;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .entry-cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .route-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .common-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .exec-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .exec-step {
+      position: relative;
+    }
+
+    .exec-step::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -15px;
+      transform: translateY(-50%);
+      color: var(--line);
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .exec-step:last-child::after {
+      display: none;
+    }
+
+    .data-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .card {
+      position: relative;
+      min-height: 58px;
+      padding: 10px 12px;
+      border: 1px solid #cfd9e6;
+      border-radius: 9px;
+      background: #fff;
+    }
+
+    .card h2 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .card ul {
+      margin: 7px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .blue { border-color: rgba(37, 99, 235, 0.2); background: var(--blue-bg); }
+    .green { border-color: rgba(5, 150, 105, 0.24); background: var(--green-bg); }
+    .amber { border-color: rgba(217, 119, 6, 0.24); background: var(--amber-bg); }
+    .red { border-color: rgba(220, 38, 38, 0.22); background: var(--red-bg); }
+    .violet { border-color: rgba(124, 58, 237, 0.24); background: var(--violet-bg); }
+    .indigo { border-color: rgba(79, 70, 229, 0.24); background: var(--indigo-bg); }
+    .slate { border-color: rgba(71, 85, 105, 0.22); background: var(--slate-bg); }
+
+    .route {
+      position: relative;
+      min-height: 126px;
+      padding: 10px 12px;
+      border: 1px solid #cfd9e6;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+    }
+
+    .route h2 {
+      margin: 0 0 7px;
+      font-size: 15px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .route dl {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.24;
+    }
+
+    .route dt {
+      display: inline;
+      color: #334155;
+      font-weight: 700;
+    }
+
+    .route dd {
+      display: inline;
+      margin: 0;
+    }
+
+    .route dd::after {
+      content: "";
+      display: block;
+      height: 2px;
+    }
+
+    .agent-flow {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 3px;
+      margin: 7px 0 6px;
+    }
+
+    .agent-node {
+      display: flex;
+      flex: 1 1 0;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 3px 6px;
+      border: 1px solid rgba(5, 150, 105, 0.24);
+      border-radius: 7px;
+      background: rgba(236, 253, 245, 0.72);
+      color: #065f46;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.2;
+      text-align: center;
+    }
+
+    .agent-node.tool {
+    }
+
+    .agent-node.sandbox {
+    }
+
+    .agent-node.guard {
+    }
+
+    .route.green .agent-node {
+      padding-right: 5px;
+      padding-left: 5px;
+    }
+
+    .route.amber .agent-node {
+      border-color: rgba(217, 119, 6, 0.24);
+      background: rgba(255, 251, 235, 0.86);
+      color: #92400e;
+    }
+
+    .route.red .agent-node {
+      border-color: rgba(220, 38, 38, 0.18);
+      background: rgba(254, 242, 242, 0.82);
+      color: #991b1b;
+    }
+
+    .route.violet .agent-node {
+      border-color: rgba(124, 58, 237, 0.2);
+      background: rgba(245, 243, 255, 0.86);
+      color: #5b21b6;
+    }
+
+    .arrow-down {
+      display: flex;
+      justify-content: center;
+      margin: 0;
+      color: var(--line);
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #eef2f7;
+      color: #172033;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .architecture-grid,
+      .entry-cards,
+      .route-grid,
+      .common-grid,
+      .exec-flow,
+      .data-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .exec-step::after {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>智能数据分析平台架构图</h1>
+
+    <section class="diagram">
+      <div class="architecture-grid">
+        <div class="runtime-flow">
+          <section class="section entry">
+            <div class="section-title">
+              <strong>应用入口</strong>
+            </div>
+            <div class="entry-group runtime-entry">
+            <div class="entry-group-title">分析服务入口</div>
+            <div class="entry-cards">
+              <div class="card blue"><span class="llm-badge">LLM</span><h2>数据智能体 <span class="tech-tag">多轮上下文</span></h2><p>面向任何人，基于技能、指标体系实现自然语言深度分析，输出表格、图表和报告。</p></div>
+              <div class="card blue"><h2>可视化查询</h2><p>面向数据分析师，基于指标体系实现拖拽分析，输出表格和图表。</p></div>
+              <div class="card blue"><span class="llm-badge">LLM</span><h2>SQL 查询</h2><p>面向 SQL 专家，支持高自由度专业查询，输出表格和图表。</p></div>
+              <div class="card blue"><span class="llm-badge">LLM</span><h2>数据看板</h2><p>面向业务查看人员，支持自动生成与固化查看，输出图表。</p></div>
+            </div>
+          </div>
+          </section>
+
+          <div class="arrow-down">↓</div>
+
+          <section class="section orchestration">
+        <div class="section-title">
+          <strong>查询编排与 SQL 生成层</strong>
+        </div>
+        <div class="route-grid">
+          <div class="route green">
+            <span class="llm-badge">LLM</span>
+            <h2>数据智能体逻辑区 <span class="tech-tag">工具编排</span></h2>
+            <div class="agent-flow">
+              <div class="agent-node guard">围栏</div>
+              <div class="agent-node">规划</div>
+              <div class="agent-node">技能</div>
+              <div class="agent-node tool">工具</div>
+              <div class="agent-node sandbox">代码</div>
+              <div class="agent-node sandbox">沙箱</div>
+            </div>
+            <dl>
+              <dt>输入：</dt><dd>指标集 + 自然语言。</dd>
+              <dt>内核：</dt><dd>NL2DSL2SQL。</dd>
+              <dt>输出：</dt><dd>SQL。</dd>
+            </dl>
+          </div>
+          <div class="route amber">
+            <h2>可视化查询逻辑区</h2>
+            <div class="agent-flow">
+              <div class="agent-node">指标选择</div>
+              <div class="agent-node">维度配置</div>
+              <div class="agent-node">筛选条件</div>
+              <div class="agent-node">函数配置</div>
+            </div>
+            <dl>
+              <dt>输入：</dt><dd>指标集 + 拖拽配置。</dd>
+              <dt>内核：</dt><dd>可视化 DSL（拖拽配置生成）。</dd>
+              <dt>输出：</dt><dd>SQL。</dd>
+            </dl>
+          </div>
+          <div class="route red">
+            <span class="llm-badge">LLM</span>
+            <h2>SQL 查询逻辑区</h2>
+            <div class="agent-flow">
+              <div class="agent-node">SQL编辑</div>
+              <div class="agent-node">AI生成</div>
+              <div class="agent-node">方言辅助</div>
+              <div class="agent-node">语法解析</div>
+            </div>
+            <dl>
+              <dt>输入：</dt><dd>用户 SQL / 自然语言。</dd>
+              <dt>输出：</dt><dd>SQL。</dd>
+            </dl>
+          </div>
+          <div class="route violet">
+            <h2>看板运行逻辑区</h2>
+            <div class="agent-flow">
+              <div class="agent-node">卡片配置</div>
+              <div class="agent-node">面板SQL</div>
+              <div class="agent-node">布局配置</div>
+              <div class="agent-node">参数绑定</div>
+            </div>
+            <dl>
+              <dt>输入：</dt><dd>配置 SQL。</dd>
+              <dt>输出：</dt><dd>SQL。</dd>
+            </dl>
+          </div>
+        </div>
+          </section>
+
+          <div class="arrow-down">↓</div>
+
+          <section class="section execution">
+        <div class="section-title">
+          <strong>SQL 执行层</strong>
+        </div>
+        <div class="exec-flow">
+          <div class="card indigo exec-step">
+            <h2>1. 并发控制</h2>
+            <p>用户级限流、任务队列和执行记录。</p>
+          </div>
+          <div class="card indigo exec-step">
+            <h2>2. SQL 安全校验 <span class="tech-tag">只读拦截</span></h2>
+            <p>只读 SQL、危险语句、结果行数和超时策略。</p>
+          </div>
+          <div class="card indigo exec-step">
+            <h2>3. 查询缓存 <span class="tech-tag">重复加速</span></h2>
+            <p>命中缓存直接返回，未命中继续执行。</p>
+          </div>
+          <div class="card indigo exec-step">
+            <h2>4. SQL Executor</h2>
+            <p>统一执行四类查询并访问数据源。</p>
+          </div>
+        </div>
+          </section>
+
+          <div class="arrow-down">↓</div>
+
+          <section class="section data">
+        <div class="section-title">
+          <strong>数据源接入层</strong>
+        </div>
+        <div class="data-grid">
+          <div class="card slate"><h2>MySQL 数据源</h2><p>业务数据库。</p></div>
+          <div class="card slate"><h2>Hive 数据源</h2><p>ODS / DWD / DWS / ADS。</p></div>
+          <div class="card slate"><h2>HTTP 数据源</h2><p>机构接口。</p></div>
+        </div>
+          </section>
+        </div>
+
+        <aside class="admin-domain">
+          <div class="admin-domain-title">后台管理入口</div>
+          <div class="admin-stack">
+            <div class="admin-card">
+              <h2>数据源管理</h2>
+              <p>MySQL、Hive、HTTP 连接配置。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>表结构管理</h2>
+              <p>字段、类型、注释、表关系。</p>
+            </div>
+            <div class="admin-card">
+              <h2>表分组管理</h2>
+              <p>主题域、业务分组、表范围。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>语义模型管理 <span class="tech-tag">口径统一</span></h2>
+              <p>指标、维度、表达式、业务口径。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>模型与技能管理</h2>
+              <p>模型配置、专家技能、提示模板。</p>
+            </div>
+            <div class="admin-card">
+              <h2>指标集校验管理</h2>
+              <p>指标可用性、口径一致性。</p>
+            </div>
+            <div class="admin-card">
+              <h2>权限与安全口径</h2>
+              <p>查询范围、行数、敏感字段。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>看板配置管理</h2>
+              <p>面板 SQL、布局、展示配置。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>准确率评测</h2>
+              <p>NL2DSL2SQL 测试集、评测结果。</p>
+            </div>
+            <div class="admin-card">
+              <span class="llm-badge">LLM</span>
+              <h2>历史案例学习</h2>
+              <p>成功查询、失败样例、口径建议。</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+  </main>
+</body>
+</html>
