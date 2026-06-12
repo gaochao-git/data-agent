@@ -4,9 +4,9 @@ SQL Generator 主图定义
 标准 Agent ↔ Tools 循环
 Human-in-the-Loop 通过工具内部的 interrupt() 函数实现
 
-支持语义模式：
-- 当传入 semantic_config 时，添加 dsl2sql_tool 和 validate_sql_tool 工具
-- 否则使用默认的 NL2SQL 工具集
+支持语义查询模式：
+- query 模式统一添加指标集选择、DSL2SQL、SQL 验证和执行工具
+- 是否调用指标集选择工具由同一套提示词根据当前上下文决定
 """
 
 from langgraph.graph import StateGraph, START
@@ -15,7 +15,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from utils.logger import get_logger
 from .state import SqlGeneratorState
 from .nodes import create_agent_node
-from .tools import TOOLS, create_execute_semantic_tool, create_semantic_config_selection_tools
+from .tools import TOOLS, create_semantic_config_selection_tools
 
 logger = get_logger(__name__)
 
@@ -36,22 +36,15 @@ def get_chat_data_graph(checkpointer=None, semantic_config: dict | None = None, 
     Args:
         checkpointer: LangGraph checkpointer
         semantic_config: 语义配置（可选）
-            传入时会添加 dsl2sql_tool 和 validate_sql_tool 工具，并在 system prompt 中注入语义信息
+            传入时在 system prompt 中注入当前指标集信息；工具列表仍使用统一语义工具链
 
     Returns:
         编译后的 LangGraph 图
     """
-    # 根据是否有语义配置，构建工具列表
-    if semantic_config:
-        # 语义模式：添加语义层专用工具（生成SQL + 验证SQL）
-        semantic_tools = create_execute_semantic_tool(semantic_config)  # 返回 [dsl2sql_tool, validate_sql_tool]
-        # 保留 TOOLS 中的所有工具（包括 execute_sql_tool），因为 execute_sql_tool 是通用的
-        tools = semantic_tools + TOOLS
-    elif mode == "query":
-        tools = create_semantic_config_selection_tools(model_id=model_id) + TOOLS
-        semantic_config = None
+    effective_mode = mode or ("query" if semantic_config else None)
+    if effective_mode == "query":
+        tools = create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config) + TOOLS
     else:
-        # 普通模式：使用默认工具集
         tools = TOOLS
         semantic_config = None
 

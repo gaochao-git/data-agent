@@ -6,7 +6,7 @@ Agent 模式配置
 
 from dataclasses import dataclass
 
-from .prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY, SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+from .prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 
 
@@ -39,7 +39,7 @@ MODE_CONFIGS = {
     # 语义模式
     (False, "query"): ModeConfig(
         mode="query",
-        base_prompt=SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY,
+        base_prompt=SQL_GENERATOR_PROMPT_SEMANTIC_QUERY,
         uses_tools=True,
     ),
     (True, "generate"): ModeConfig(

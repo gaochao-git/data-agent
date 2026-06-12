@@ -16,8 +16,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from apps.chat_data_app.services.semantic_tools import (
     SemanticToolHandler,
     create_semantic_config_selection_tools,
-    create_semantic_tools,
     extract_datasource_id,
+    extract_semantic_config_id,
     extract_user_query,
 )
 
@@ -28,6 +28,8 @@ def test_extract_datasource_id_from_state():
     assert extract_datasource_id({"datasource_id": ""}) is None
     assert extract_datasource_id({}) is None
     assert extract_datasource_id(None) is None
+    assert extract_semantic_config_id({"semantic_config_id": " sc_001 "}) == "sc_001"
+    assert extract_semantic_config_id({"semantic_config_id": ""}) is None
 
 
 def test_extract_user_query_reads_last_human_message():
@@ -128,28 +130,29 @@ def test_generate_sql_returns_user_message_for_unsupported_query(monkeypatch):
     assert result == "当前指标集不支持该问题"
 
 
-def test_create_semantic_tools_generate_and_validate_sql():
-    tools = create_semantic_tools({
+def test_unified_semantic_tools_use_bound_config_without_selector():
+    tools = create_semantic_config_selection_tools(semantic_config={
+        "id": "sc_a",
         "source_type": "mysql",
         "metrics": [{"name": "订单数", "expression": "COUNT(orders.order_id)", "table": "orders"}],
         "dimensions": [{"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"}],
         "relationships": [],
     })
-    dsl_tool, validate_tool = tools
+    _, dsl_tool, validate_tool = tools
 
-    sql_text = dsl_tool.invoke({
+    sql_text = asyncio.run(dsl_tool.ainvoke({
         "metrics": ["订单数"],
         "dimensions": ["订单状态"],
         "filters": [],
         "having": [],
         "order_by": [{"field": "订单数", "direction": "DESC"}],
         "limit": 10,
-        "state": {"messages": [HumanMessage(content="按状态统计订单数")], "datasource_id": "ds_a"},
-    })
-    validate_text = validate_tool.invoke({
+        "state": {"messages": [HumanMessage(content="按状态统计订单数")], "datasource_id": "ds_a", "semantic_config_id": "sc_a"},
+    }))
+    validate_text = asyncio.run(validate_tool.ainvoke({
         "sql": "select 1",
-        "state": {"messages": [HumanMessage(content="查一下")], "datasource_id": "ds_a"},
-    })
+        "state": {"messages": [HumanMessage(content="查一下")], "datasource_id": "ds_a", "semantic_config_id": "sc_a"},
+    }))
 
     assert "COUNT(" in sql_text
     assert "ORDER BY COUNT(" in sql_text

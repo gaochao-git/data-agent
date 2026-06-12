@@ -25,6 +25,7 @@ def test_mode_config_and_prompt_formatters():
     assert query_config.uses_tools is True
     auto_query_config = config.get_mode_config(has_semantic=False, mode="query")
     assert auto_query_config.uses_tools is True
+    assert auto_query_config.base_prompt == query_config.base_prompt
     assert config.filter_tools_by_config(["tool"], generate_config) == []
     assert config.filter_tools_by_config(["tool"], query_config) == ["tool"]
     assert config.filter_tools_by_config(["tool"], auto_query_config) == ["tool"]
@@ -88,6 +89,8 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert fake_llm.bound_tools == ["dsl2sql_tool"]
     system_prompt = fake_llm.messages[0].content
     assert "语义配置内容" in system_prompt
+    assert "当前已选择指标集" in system_prompt
+    assert "semantic_config_id: sc_a" in system_prompt
     assert "当前机构A" in system_prompt
     assert "可用的查询结果" in system_prompt
 
@@ -156,13 +159,13 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(chat_data_graph, "ToolNode", FakeToolNode)
     monkeypatch.setattr(chat_data_graph, "START", "__start__")
     monkeypatch.setattr(chat_data_graph, "TOOLS", ["execute_sql_tool"])
-    monkeypatch.setattr(chat_data_graph, "create_execute_semantic_tool", lambda semantic_config: ["dsl2sql_tool"])
+    monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", lambda model_id=None, semantic_config=None: ["select_semantic_config_tool", "dsl2sql_tool"])
     monkeypatch.setattr(chat_data_graph, "create_agent_node", lambda tools, semantic_config=None, model_id=None: ("agent", tools, semantic_config, model_id))
 
     compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1")
 
     assert compiled["nodes"][0][0] == "agent"
-    assert compiled["nodes"][0][1][1] == ["dsl2sql_tool", "execute_sql_tool"]
+    assert compiled["nodes"][0][1][1] == ["select_semantic_config_tool", "dsl2sql_tool", "execute_sql_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]
     assert compiled["checkpointer"] == "ckpt"
 

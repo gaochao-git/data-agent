@@ -518,6 +518,10 @@ class SelectSemanticConfigInput(BaseModel):
 class ExecuteSemanticInput(BaseModel):
     """语义查询执行工具的输入参数（供 LangGraph Agent 工具使用）"""
     model_config = {"extra": "ignore"}
+    semantic_config_id: Optional[str] = Field(
+        default=None,
+        description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果",
+    )
     metrics: List[str] = Field(
         description="聚合查询使用的指标名称列表；明细查询必须为空，展示字段请放入 dimensions"
     )
@@ -564,16 +568,7 @@ class ValidateSQLInput(BaseModel):
     """验证SQL工具的输入参数"""
     sql: str = Field(..., description="要验证的SQL语句")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID，未传时默认使用当前会话数据源")
-
-
-class ExecuteSemanticByConfigInput(ExecuteSemanticInput):
-    """未手动选择指标集时的语义查询执行工具输入参数"""
-    semantic_config_id: str = Field(..., description="指标集 ID，必须来自 select_semantic_config_tool 返回结果")
-
-
-class ValidateSQLByConfigInput(ValidateSQLInput):
-    """未手动选择指标集时的 SQL 验证工具输入参数"""
-    semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID，必须来自 select_semantic_config_tool 返回结果")
+    semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果")
 
 
 # ============ Agent 工具输入模型 ============

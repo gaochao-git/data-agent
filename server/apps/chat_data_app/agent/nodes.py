@@ -41,6 +41,24 @@ def format_execution_target_info_for_llm(execution_target_info: str) -> str:
     return f"\n{text}\n"
 
 
+def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str:
+    """构建统一语义层上下文。"""
+    if mode != "query":
+        return ""
+    if not semantic_config:
+        return "## 当前指标集\n当前未选择指标集。业务数据查询必须先调用 `select_semantic_config_tool`。\n"
+    from .tools import build_semantic_prompt
+    config_id = str(semantic_config.get("id") or "").strip()
+    config_name = str(semantic_config.get("name") or semantic_config.get("config_name") or config_id or "").strip()
+    header = "## 当前指标集\n当前已选择指标集"
+    if config_name:
+        header += f"：{config_name}"
+    if config_id:
+        header += f"（semantic_config_id: {config_id}）"
+    header += "。业务数据查询不要调用 `select_semantic_config_tool`。\n\n"
+    return header + build_semantic_prompt(semantic_config, mode)
+
+
 def create_agent_node(tools: list, semantic_config: dict | None = None, model_id: str | None = None) -> Callable:
     """
     创建 agent 节点的工厂函数
@@ -79,10 +97,7 @@ def create_agent_node(tools: list, semantic_config: dict | None = None, model_id
             "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
         }
 
-        # 语义模式需要语义层配置
-        if semantic_config:
-            from .tools import build_semantic_prompt
-            prompt_params["semantic_layer_config"] = build_semantic_prompt(semantic_config, mode)
+        prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)
 
         # 格式化提示词
         system_prompt = config.base_prompt.format(**prompt_params)

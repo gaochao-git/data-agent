@@ -13,7 +13,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 from apps.chat_data_app.agent.data_analyze_graph import build_data_analyze_system_prompt
 from apps.chat_data_app.agent.data_analyze_graph import _build_stage_user_prompt
 from apps.chat_data_app.agent.prompts.analyze_data import DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE
-from apps.chat_data_app.agent.prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY, SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+from apps.chat_data_app.agent.prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 from apps.chat_data_app.agent.prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from apps.chat_data_app.chart_types import get_chart_type_prompt_text
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -39,13 +39,13 @@ def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
     assert "超过 5 位的数字" in prompt
 
 
-def test_auto_semantic_query_prompt_requires_real_thinking_before_selection():
-    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_AUTO_QUERY
+def test_semantic_query_prompt_requires_selection_when_missing_current_config():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "业务数据查询必须先输出完整的 `<thinking>...</thinking>`" in prompt
-    assert "再调用 `select_semantic_config_tool`" in prompt
-    assert "普通对话、功能说明、概念解释不要输出 `<thinking>`" in prompt
-    assert "业务数据查询，先思考再选择指标集" in prompt
+    assert "当前未选择指标集" in prompt
+    assert "业务数据查询必须先调用 `select_semantic_config_tool(query=用户原问题)`" in prompt
+    assert "已有当前指标集：直接使用当前指标集，不调用 select_semantic_config_tool" in prompt
+    assert "需要精确计算时必须调用 `calculator_tool`" in prompt
 
 
 def test_data_analyze_prompt_defines_sql_dialect_and_compare_boundaries():

@@ -559,13 +559,6 @@ class SemanticToolNames:
     VALIDATE = "validate_sql_tool"
 
 
-# 从独立模块导入
-from ...services.semantic_tools import create_semantic_tools
-
-# 保持向后兼容的别名
-create_execute_semantic_tool = create_semantic_tools
-
-
 def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
     """
     构建语义配置的提示词，告诉 LLM 有哪些指标和维度可用

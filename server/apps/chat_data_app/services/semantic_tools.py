@@ -14,7 +14,7 @@ from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
 from ..semantic.compiler import SemanticSQLGenerator
-from ..schema import ExecuteSemanticByConfigInput, ExecuteSemanticInput, SelectSemanticConfigInput, ValidateSQLByConfigInput, ValidateSQLInput
+from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput, ValidateSQLInput
 from .datasource_manager import get_datasource_manager
 from .semantic_config_selector import _summarize_semantic_config, select_semantic_config_for_query
 
@@ -126,6 +126,14 @@ def extract_datasource_id(state: Optional[Dict]) -> Optional[str]:
     return datasource_id or None
 
 
+def extract_semantic_config_id(state: Optional[Dict]) -> Optional[str]:
+    """从 state 中提取当前指标集ID。"""
+    if not state:
+        return None
+    semantic_config_id = str(state.get("semantic_config_id") or "").strip()
+    return semantic_config_id or None
+
+
 async def load_runtime_semantic_config(datasource_id: str | None, semantic_config_id: str | None) -> Dict[str, Any] | None:
     """读取运行时语义配置，并补齐方言和 joins。"""
     normalized_datasource_id = str(datasource_id or "").strip()
@@ -202,9 +210,20 @@ def create_semantic_config_selection_tools(
     model_id: str | None = None,
     include_query_tools: bool = True,
     datasource_id: str | None = None,
+    semantic_config: Dict[str, Any] | None = None,
 ):
-    """创建未绑定指标集时使用的选择和 DSL 工具。"""
+    """创建统一语义查询工具。"""
     bound_datasource_id = str(datasource_id or "").strip() or None
+    bound_semantic_config = dict(semantic_config or {}) if semantic_config else None
+    bound_semantic_config_id = str((bound_semantic_config or {}).get("id") or "").strip()
+
+    async def resolve_semantic_config(state: Optional[Dict], semantic_config_id: str | None) -> tuple[str | None, Dict[str, Any] | None]:
+        """解析本次工具调用使用的指标集配置。"""
+        effective_semantic_config_id = str(semantic_config_id or extract_semantic_config_id(state) or "").strip()
+        if bound_semantic_config and (not effective_semantic_config_id or effective_semantic_config_id == bound_semantic_config_id):
+            return bound_semantic_config_id or effective_semantic_config_id, dict(bound_semantic_config)
+        datasource_id = bound_datasource_id or extract_datasource_id(state)
+        return effective_semantic_config_id, await load_runtime_semantic_config(datasource_id, effective_semantic_config_id)
 
     @tool(args_schema=SelectSemanticConfigInput)
     async def select_semantic_config_tool(
@@ -214,7 +233,7 @@ def create_semantic_config_selection_tools(
         """
         从当前数据源组的指标集中选择最适合回答用户问题的指标集。
 
-        仅在用户提出业务数据查询、且当前会话没有手动选择指标集时调用。
+        仅在用户提出业务数据查询、且当前会话没有选择指标集时调用。
         普通对话、概念解释、使用帮助不要调用。
         """
         datasource_id = bound_datasource_id or extract_datasource_id(state)
@@ -236,9 +255,9 @@ def create_semantic_config_selection_tools(
             logger.error("select_semantic_config_tool 执行失败: %s", exc, exc_info=True)
             return f"select_semantic_config_tool 执行失败: {exc}"
 
-    @tool(args_schema=ExecuteSemanticByConfigInput)
+    @tool(args_schema=ExecuteSemanticInput)
     async def dsl2sql_tool(
-        semantic_config_id: str,
+        semantic_config_id: str = None,
         metrics: List[str] = [],
         dimensions: List[str] = [],
         filters: List[Dict] = [],
@@ -249,20 +268,19 @@ def create_semantic_config_selection_tools(
         state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """
-        使用指定指标集生成 SQL 查询语句（仅生成，不执行）。
+        使用当前或指定指标集生成 SQL 查询语句（仅生成，不执行）。
 
-        semantic_config_id 必须来自 select_semantic_config_tool 返回的 selected_config_id，或来自用户明确选择的候选指标集。
+        已手动选择指标集时可不传 semantic_config_id；否则必须来自 select_semantic_config_tool 返回的 selected_config_id，或来自用户明确选择的候选指标集。
         """
-        datasource_id = extract_datasource_id(state)
-        config = await load_runtime_semantic_config(datasource_id, semantic_config_id)
+        effective_semantic_config_id, config = await resolve_semantic_config(state, semantic_config_id)
         if not config:
-            return f"dsl2sql_tool 执行失败: 未找到可用指标集 {semantic_config_id}"
+            return f"dsl2sql_tool 执行失败: 未找到可用指标集 {effective_semantic_config_id or '-'}"
         user_query = extract_user_query(state)
         return SemanticToolHandler(config).generate_sql(
             metrics, dimensions, filters, having, order_by, limit, offset, user_query
         )
 
-    @tool(args_schema=ValidateSQLByConfigInput)
+    @tool(args_schema=ValidateSQLInput)
     async def validate_sql_tool(
         sql: str,
         datasource_id: str = None,
@@ -273,72 +291,10 @@ def create_semantic_config_selection_tools(
         验证 SQL（当前为 Mock，占位保留 SQL + 数据源 + 指标集入参）。
         """
         resolved_datasource_id = str(datasource_id or extract_datasource_id(state) or "").strip() or None
-        config = await load_runtime_semantic_config(resolved_datasource_id, semantic_config_id) if semantic_config_id else None
+        _, config = await resolve_semantic_config(state, semantic_config_id)
         handler = SemanticToolHandler(config or {"metrics": [], "dimensions": [], "relationships": []})
         return handler.validate_sql(sql, extract_user_query(state), resolved_datasource_id)
 
     if not include_query_tools:
         return [select_semantic_config_tool]
     return [select_semantic_config_tool, dsl2sql_tool, validate_sql_tool]
-
-
-# ============ 工具工厂函数 ============
-
-def create_semantic_tools(semantic_config: Dict[str, Any]):
-    """
-    创建语义查询工具
-
-    Args:
-        semantic_config: 语义配置
-
-    Returns:
-        [dsl2sql_tool, validate_sql_tool]
-    """
-    handler = SemanticToolHandler(semantic_config)
-
-    @tool(args_schema=ExecuteSemanticInput)
-    def dsl2sql_tool(
-        metrics: List[str] = [],
-        dimensions: List[str] = [],
-        filters: List[Dict] = [],
-        having: List[Dict] = [],
-        order_by: List[Dict] = [],
-        limit: int = None,
-        offset: int = None,
-        state: Annotated[dict, InjectedState] = None
-    ) -> str:
-        """
-        根据语义配置生成SQL查询语句（仅生成，不执行）。
-
-        **重要**：当用户查询统计分析类问题时，优先调用此工具。
-
-        **参数说明：**
-        - metrics: 聚合查询使用的指标名称列表；明细查询必须为空
-        - dimensions: 明细查询的展示字段，或聚合查询的分组维度
-        - filters: WHERE 筛选条件
-        - having: HAVING 筛选条件
-        - order_by: 排序条件
-        - limit: 限制返回条数
-        - offset: 跳过返回条数
-        """
-        user_query = extract_user_query(state)
-        return handler.generate_sql(
-            metrics, dimensions, filters, having, order_by, limit, offset, user_query
-        )
-
-    @tool(args_schema=ValidateSQLInput)
-    def validate_sql_tool(
-        sql: str,
-        datasource_id: str = None,
-        state: Annotated[dict, InjectedState] = None
-    ) -> str:
-        """
-        验证 SQL（当前为 Mock，占位保留 SQL + 数据源 入参，后续可扩展为 EXPLAIN）。
-
-        **使用场景：** 在生成SQL后调用，确认SQL可执行。
-        """
-        user_query = extract_user_query(state)
-        resolved_datasource_id = str(datasource_id or extract_datasource_id(state) or "").strip() or None
-        return handler.validate_sql(sql, user_query, resolved_datasource_id)
-
-    return [dsl2sql_tool, validate_sql_tool]

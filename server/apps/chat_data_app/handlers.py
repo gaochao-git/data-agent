@@ -457,8 +457,8 @@ async def _stream_sql_generation(
     elif mode == "query":
         logger.info("query 模式未手动选择指标集，将由模型按需调用选择工具")
 
-    if mode == "query" and not semantic_config:
-        logger.info("query 模式使用自动指标集工具链")
+    if mode == "query":
+        logger.info("query 模式使用统一语义工具链")
 
     config = {
         "configurable": {
