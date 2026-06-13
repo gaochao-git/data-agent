@@ -865,7 +865,7 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
     assert updates[1][1]["error_message"] == "执行失败，请稍后重试或联系管理员"
 
 
-def test_prepare_sql_request_and_create_query_task_endpoint_branches(monkeypatch):
+def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
     class Manager:
         def __init__(self, datasource):
             self.datasource = datasource
@@ -882,13 +882,24 @@ def test_prepare_sql_request_and_create_query_task_endpoint_branches(monkeypatch
     unchanged = asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
     assert unchanged is builder_request
 
-    prepared = asyncio.run(routes._prepare_sql_request_for_execution(QueryTaskCreateRequest(
+    sql_request = QueryTaskCreateRequest(
         task_type="sql",
         datasource_id="ds1",
-        sql="select * from orders -- 注释",
+        sql="select 1; drop table orders",
         query_type="sql",
-    ), {"source_type": "mysql"}))
-    assert prepared.sql == "SELECT * FROM orders"
+    )
+    prepared = asyncio.run(routes._prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
+    assert prepared is sql_request
+    assert prepared.sql == "select 1; drop table orders"
+
+
+def test_create_query_task_endpoint_branches(monkeypatch):
+    class Manager:
+        def __init__(self, datasource):
+            self.datasource = datasource
+
+        async def get_datasource_async(self, _datasource_id):
+            return self.datasource
 
     monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager(None))

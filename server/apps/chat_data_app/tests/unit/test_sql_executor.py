@@ -138,7 +138,37 @@ def test_validate_single_sql_statement_does_not_normalize_sql():
 
     assert result.success is True
     assert result.sql == "select * from orders limit 10,5"
-    assert sql_executor.validate_sql("/* leading */ select * from orders", source_type="mysql")[0] is False
+
+
+def test_validate_sql_analyzes_raw_sql_without_comment_cleanup():
+    assert sql_executor.validate_sql("select 1--1; drop table orders", source_type="mysql")[0] is False
+    assert sql_executor.validate_sql("select 1 limit 100 ; -- 1; limit 500;", source_type="mysql")[0] is False
+    assert sql_executor.validate_sql("/* leading */ select * from orders", source_type="mysql") == (True, "")
+
+
+@pytest.mark.parametrize("sql", [
+    "WITH t AS (select 1) select * from t",
+    "(select 1)",
+    "select 1 union select 2",
+])
+def test_validate_sql_allows_query_shapes_when_select_is_allowed(sql):
+    assert sql_executor.validate_sql(sql, source_type="mysql") == (True, "")
+
+
+@pytest.mark.parametrize("sql", [
+    "delete from orders",
+    "drop table orders",
+    "alter table orders add column x int",
+    "truncate table orders",
+    "create table t(id int)",
+    "update orders set amount = 1",
+    "insert into orders(id) values (1)",
+])
+def test_validate_sql_rejects_disallowed_operations(sql):
+    is_valid, error = sql_executor.validate_sql(sql, source_type="mysql")
+
+    assert is_valid is False
+    assert "只允许执行以下类型" in error
 
 
 def test_auto_add_limit_only_for_query_sql():

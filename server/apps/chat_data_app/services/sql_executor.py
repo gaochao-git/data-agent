@@ -17,7 +17,7 @@ from utils.logger import get_logger
 from .datasource_credentials import build_hive_connect_params, resolve_hive_credentials, resolve_mysql_credentials
 from .hive_sync import _apply_socket_timeout, SOCKET_TIMEOUT_SECONDS
 from .runtime_config import DEFAULT_ROW_LIMIT, normalize_row_limit
-from .sql_parser import extract_top_level_limit_count, validate_single_sql_statement
+from .sql_parser import extract_top_level_limit_count, validate_raw_single_sql_statement
 
 logger = get_logger(__name__)
 
@@ -72,21 +72,6 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
     if isinstance(tables, list):
         summary["table_count"] = len(tables)
     return {key: value for key, value in summary.items() if value is not None}
-
-
-def _build_sql_patterns() -> list:
-    """根据配置的 SQL 类型生成正则匹配模式"""
-    patterns = []
-    for sql_type in ALLOWED_SQL_TYPES:
-        if sql_type == "DESCRIBE":
-            # DESCRIBE 可以简写为 DESC
-            patterns.append(r'^\s*DESC(RIBE)?\s+')
-        else:
-            patterns.append(rf'^\s*{sql_type}\s+')
-    return patterns
-
-
-ALLOWED_SQL_PATTERNS = _build_sql_patterns()
 
 
 def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> int:
@@ -260,6 +245,32 @@ def _normalize_http_rows(raw_rows: Any, columns: list[str]) -> list[dict[str, An
     return result
 
 
+def _get_sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
+    """解析 SQL 类型，用于白名单校验，不改写 SQL。"""
+    try:
+        from sqlglot import exp
+        from .sql_parser import _parse_sql
+    except Exception:
+        return ""
+
+    try:
+        expressions = _parse_sql(sql, source_type)
+    except Exception:
+        return ""
+    if len(expressions) != 1:
+        return ""
+    expression = expressions[0]
+    if isinstance(expression, exp.Query):
+        return "SELECT"
+    if isinstance(expression, exp.Show):
+        return "SHOW"
+    if isinstance(expression, exp.Describe):
+        text = str(sql or "").lstrip().upper()
+        return "EXPLAIN" if text.startswith("EXPLAIN") else "DESCRIBE"
+    key = str(getattr(expression, "key", "") or "").strip().upper()
+    return key
+
+
 def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str]:
     """
     验证 SQL 是否安全
@@ -270,13 +281,13 @@ def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str
     Returns:
         (is_valid, error_message) - 如果验证通过返回 (True, "")，否则返回 (False, 错误信息)
     """
-    statement_result = validate_single_sql_statement(sql, source_type=source_type)
+    statement_result = validate_raw_single_sql_statement(sql, source_type=source_type)
     if not statement_result.success:
         return False, statement_result.error or "SQL 解析失败"
-    sql_stripped = str(sql or "").strip()
-    for pattern in ALLOWED_SQL_PATTERNS:
-        if re.match(pattern, sql_stripped, re.IGNORECASE):
-            return True, ""
+
+    sql_operation_type = _get_sql_operation_type(statement_result.sql or sql, source_type=source_type)
+    if sql_operation_type and sql_operation_type in ALLOWED_SQL_TYPES:
+        return True, ""
 
     allowed_str = ", ".join(ALLOWED_SQL_TYPES)
     return False, f"只允许执行以下类型的 SQL: {allowed_str}"
@@ -289,7 +300,7 @@ def _should_auto_add_limit(sql: str, source_type: Optional[str] = None) -> bool:
         return False
     if extract_top_level_limit_count(normalized_sql, source_type=source_type) is not None:
         return False
-    return bool(re.match(r'^(SELECT|WITH)\b', normalized_sql, re.IGNORECASE))
+    return _get_sql_operation_type(normalized_sql, source_type=source_type) == "SELECT"
 
 
 def _line_has_comment_marker(line: str) -> bool:

@@ -296,6 +296,34 @@ def validate_single_sql_statement(sql: str, source_type: str | None = None) -> S
     return SqlValidateResult(success=True, sql=single_sql)
 
 
+def validate_raw_single_sql_statement(sql: str, source_type: str | None = None) -> SqlValidateResult:
+    """按 SQL 原文校验仅包含一条语句，不移除注释或改写 SQL。"""
+    text = str(sql or "").strip()
+    if not text:
+        return SqlValidateResult(success=False, error="SQL 为空")
+
+    candidate = text.rstrip(";").strip()
+    if not candidate:
+        return SqlValidateResult(success=False, error="SQL 为空")
+
+    statements = _split_sql_statements(candidate)
+    if not statements:
+        return SqlValidateResult(success=False, error="SQL 为空")
+    if len(statements) != 1:
+        return SqlValidateResult(success=False, error="一次只能执行一条 SQL，请拆分后分别执行")
+    single_sql = statements[0]
+
+    try:
+        parsed_expressions = _parse_sql(single_sql, source_type)
+    except Exception as err:
+        return SqlValidateResult(success=False, error=str(err) or "SQL 解析失败")
+    if not parsed_expressions:
+        return SqlValidateResult(success=False, error="SQL 解析失败")
+    if len(parsed_expressions) != 1:
+        return SqlValidateResult(success=False, error="一次只能执行一条 SQL，请拆分后分别执行")
+    return SqlValidateResult(success=True, sql=single_sql)
+
+
 def extract_top_level_limit_count(sql: str, source_type: str | None = None) -> int | None:
     """解析最外层 LIMIT 返回行数，仅返回字面量整数。"""
     text = str(sql or "").strip()

@@ -49,7 +49,6 @@ from .services.sql_executor import get_executor, resolve_query_timeout, fetch_ht
 from .semantic.compiler import compile_builder_sql
 from .semantic.utils import parse_llm_json
 from .services.llm_config import get_chat_data_llm
-from .services.sql_parser import prepare_sql_for_execution
 from .handlers import _stream_sql_generation, _build_execution_target_info_async
 from .agent import get_all_tables_async, get_tables_create_format
 from .agent.sql_assist_graph import get_sql_assist_graph
@@ -2920,17 +2919,8 @@ async def _create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
 
 
 async def _prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None):
-    """按数据源方言预处理 SQL 查询请求。"""
-    if str(request.query_type or "sql").strip().lower() != "sql":
-        return request
-    if datasource is None:
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(request.datasource_id)
-    source_type = str((datasource or {}).get("source_type") or "").strip().lower()
-    prepared = prepare_sql_for_execution(request.sql, source_type=source_type)
-    if not prepared.success:
-        raise ValueError(prepared.error or "SQL 解析失败")
-    return request.model_copy(update={"sql": prepared.sql})
+    """保留 SQL 原文；安全校验统一在执行器边界完成。"""
+    return request
 
 
 async def _create_task_for_execute_request(
