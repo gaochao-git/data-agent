@@ -904,7 +904,7 @@ export function parseSemanticPrefillContextFile(file: File): Promise<ApiResponse
     method: 'post',
     data,
     headers: { repeatSubmit: false },
-    transformRequest: [(formData, headers) => {
+    transformRequest: [(formData: FormData, headers?: Record<string, unknown>) => {
       if (headers) {
         delete (headers as Record<string, unknown>)['Content-Type']
         delete (headers as Record<string, unknown>)['content-type']
@@ -990,6 +990,8 @@ export function learnSemanticConfigFromHistory(
 
 /** SQL 执行结果类型 */
 export interface SqlExecuteResult {
+  success?: boolean
+  error?: string | null
   sql?: string
   columns: string[]
   data: Record<string, unknown>[]

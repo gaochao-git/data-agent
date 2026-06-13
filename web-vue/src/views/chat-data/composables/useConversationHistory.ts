@@ -140,8 +140,9 @@ const normalizeSemanticConfigSelectionFromTool = (payload: Record<string, unknow
 const normalizeSemanticConfigSelectRequiredFromTool = (payload: Record<string, unknown>, query: string): SemanticConfigSelectRequiredInfo | null => {
   if (payload.selected) return null
   const rawCandidates = Array.isArray(payload.candidates) ? payload.candidates : []
+  type Candidate = SemanticConfigSelectRequiredInfo['candidates'][number]
   const candidates = rawCandidates
-    .map((item) => {
+    .map((item): Candidate | null => {
       if (!item || typeof item !== 'object') return null
       const data = item as Record<string, unknown>
       const id = String(data.id || '').trim()
@@ -154,7 +155,7 @@ const normalizeSemanticConfigSelectRequiredFromTool = (payload: Record<string, u
         reason: typeof data.reason === 'string' ? data.reason : '',
       }
     })
-    .filter((item): item is SemanticConfigSelectRequiredInfo['candidates'][number] => Boolean(item))
+    .filter((item): item is Candidate => item !== null)
   if (candidates.length === 0) return null
   const message = String(payload.message || '该问题可由多个指标集回答，请选择一个指标集后继续查询').trim()
   const reason = String(payload.reason || '').trim()

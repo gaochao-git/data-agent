@@ -66,7 +66,7 @@ const toggleExpand = (id: string) => {
       :active="activeToolCallId === tc.tool_call_id"
       :datasource-id="datasourceId"
       :on-view-analysis="tc.tool_name === 'execute_sql_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
-      :is-analysis-active="tc.tool_name === 'execute_sql_tool' && tc.renderId && isAnalysisActive"
+      :is-analysis-active="Boolean(tc.tool_name === 'execute_sql_tool' && tc.renderId && isAnalysisActive)"
       @toggle-expand="toggleExpand(tc.tool_call_id)"
       @select="emit('selectTool', tc)"
     />

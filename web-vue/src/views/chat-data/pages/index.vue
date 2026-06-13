@@ -16,6 +16,7 @@ import SqlConversation from '../components/SqlConversation.vue'
 import AnalysisConversation from '../components/AnalysisConversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
+import type { BuilderConfig } from '../components/QuickQueries.vue'
 import ExecutionTargetPicker from '../components/ExecutionTargetPicker.vue'
 import DashboardPanel from '../components/sidebars/DashboardPanel.vue'
 import ConversationSidebar from '../components/sidebars/ConversationSidebar.vue'
@@ -172,13 +173,33 @@ const openDatasourceGroupModal = () => {
   datasourceManagerRef.value?.openGroupModal()
 }
 
+const normalizeTableInfoList = (tables: unknown): TableInfo[] => {
+  if (!Array.isArray(tables)) return []
+  return tables.map((item) => {
+    const table = item as Partial<TableInfo>
+    const columns = Array.isArray(table.columns) ? table.columns : []
+    return {
+      table_name: String(table.table_name || ''),
+      description: String(table.description || ''),
+      business_desc: table.business_desc,
+      groups: table.groups,
+      columns: columns.map((column) => ({
+        ...column,
+        name: String(column.name || ''),
+        type: String(column.type || ''),
+        description: String(column.description || ''),
+      })),
+    }
+  }).filter(table => table.table_name)
+}
+
 // 数据源管理回调：更新本地数据源列表
 const handleDatasourcesChange = (newDatasources: DataSource[]) => {
   const nextSchemaCache = { ...datasourceSchemaCache.value }
   let schemaCacheChanged = false
   newDatasources.forEach(ds => {
     if (!ds.ds_tables) return
-    nextSchemaCache[ds.id] = ds.ds_tables
+    nextSchemaCache[ds.id] = normalizeTableInfoList(ds.ds_tables)
     schemaCacheChanged = true
   })
   if (schemaCacheChanged) {
@@ -631,7 +652,7 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
     if (res.status === 'success') {
       datasourceSchemaCache.value = {
         ...datasourceSchemaCache.value,
-        [normalizedDatasourceId]: res.data?.tables || [],
+        [normalizedDatasourceId]: normalizeTableInfoList(res.data?.tables),
       }
     }
   } catch (err) {
@@ -835,8 +856,9 @@ const handleFirstMessageComplete = async (convId: string) => {
       currentConversationTitle.value = newTitle
       // 更新会话列表中的标题
       const convIndex = conversations.value.findIndex(c => c.id === convId)
-      if (convIndex >= 0) {
-        conversations.value[convIndex].title = newTitle
+      const conversation = convIndex >= 0 ? conversations.value[convIndex] : undefined
+      if (conversation) {
+        conversation.title = newTitle
       }
     }
   } catch (error) {
@@ -1711,7 +1733,7 @@ onUnmounted(() => {
                 :datasources="datasources"
                 :semantic-config-id="selectedSemanticConfigId"
                 :semantic-config="currentSemanticConfig"
-                :initial-builder-config="options?.initialBuilderConfig"
+                :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
                 :execution-targets="executionTargets"
                 :execution-target-multiple="executionTargetMultiple"
                 :selected-member-datasource-ids="selectedMemberDatasourceIds"

@@ -27,7 +27,7 @@ export async function registerChinaMap(): Promise<void> {
       // 动态导入 GeoJSON
       const chinaGeoJson = await import('../assets/china.json')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      echarts.registerMap('china', chinaGeoJson.default || chinaGeoJson as any)
+      echarts.registerMap('china', (chinaGeoJson.default || chinaGeoJson) as any)
       isMapRegistered = true
       console.log('[MapRegistry] 中国地图注册成功')
     } catch (error) {

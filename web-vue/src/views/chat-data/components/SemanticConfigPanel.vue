@@ -28,11 +28,22 @@ import {
 import type { AccuracyEvaluationCaseItem, AccuracyEvaluationReport, AccuracyEvaluationRunHistoryItem, AccuracyEvaluationRunCaseHistoryItem, DatasourceColumnDictPayload, SemanticHistoryLearningResult, SemanticHistoryLearningSuggestion } from '../api'
 
 type EvaluationCaseRunStatus = 'idle' | 'queued' | 'running' | 'passed' | 'failed' | 'pending' | 'stopped'
+interface EvaluationResultDetail extends Record<string, unknown> {
+  id?: string
+  question?: string
+  gold_sql?: string
+  gold_dsl?: unknown
+  expected_dsl?: unknown
+  predicted_dsl?: unknown
+  generated_sql?: string
+  agent_tool_sql?: string
+  error?: string
+}
 interface EvaluationCaseRunRow extends AccuracyEvaluationCaseItem {
   selected: boolean
   runStatus: EvaluationCaseRunStatus
   runError: string
-  runResult: Record<string, unknown> | null
+  runResult: EvaluationResultDetail | null
 }
 import type {
   SemanticConfigItem,
@@ -165,7 +176,7 @@ const evaluationCaseMap = computed(() => {
   for (const item of evaluationCases.value) map.set(item.id, item)
   return map
 })
-const evaluationResultRows = computed(() => {
+const evaluationResultRows = computed<EvaluationResultDetail[]>(() => {
   const rows = evaluationReport.value?.results || []
   return rows.map(row => {
     const id = String(row.id || '')
@@ -184,7 +195,7 @@ const filteredEvaluationResultRows = computed(() => {
     return true
   })
 })
-const selectedEvaluationResult = computed(() => {
+const selectedEvaluationResult = computed<EvaluationResultDetail | null>(() => {
   const runRow = evaluationRunRows.value.find(row => row.id === selectedEvaluationResultId.value)
   if (runRow?.runResult) {
     return {
@@ -962,7 +973,7 @@ const syncEvaluationRunList = () => {
 
 const findEvaluationRunRow = (caseId: string) => evaluationRunRows.value.find(row => row.id === caseId)
 
-const applyEvaluationCaseResult = (caseId: string, result: Record<string, unknown>) => {
+const applyEvaluationCaseResult = (caseId: string, result: EvaluationResultDetail) => {
   const row = findEvaluationRunRow(caseId)
   if (!row) return
   row.runResult = result
@@ -1204,7 +1215,7 @@ watch(evaluateDrawerTab, (tab) => {
 
 const progressPercent = (current: number, target: number) => Math.min(100, Math.round((current / Math.max(target, 1)) * 100))
 
-const selectEvaluationResult = (row: Record<string, unknown>) => {
+const selectEvaluationResult = (row: EvaluationResultDetail) => {
   selectedEvaluationResultId.value = String(row.id || '')
 }
 
@@ -1217,7 +1228,7 @@ const formatJsonPreview = (value: unknown) => {
   }
 }
 
-const evaluationSlotScoreItems = (row: Record<string, unknown> | null) => {
+const evaluationSlotScoreItems = (row: EvaluationResultDetail | null) => {
   const slots = row?.slot_scores
   if (!slots || typeof slots !== 'object') return []
   const labels: Record<string, string> = {
@@ -1233,12 +1244,12 @@ const evaluationSlotScoreItems = (row: Record<string, unknown> | null) => {
   return Object.entries(slots as Record<string, number>).map(([key, score]) => ({ key: labels[key] || key, score }))
 }
 
-const evaluationToolTraceItems = (row: Record<string, unknown> | null) => {
+const evaluationToolTraceItems = (row: EvaluationResultDetail | null) => {
   const traces = row?.tool_traces
   return Array.isArray(traces) ? traces as Array<Record<string, unknown>> : []
 }
 
-const evaluationHistoryCaseResult = (row: AccuracyEvaluationRunCaseHistoryItem) => row.result || {}
+const evaluationHistoryCaseResult = (row: AccuracyEvaluationRunCaseHistoryItem): EvaluationResultDetail => row.result || {}
 
 // 删除配置
 const handleDeleteConfig = async (configId: string, configName: string) => {

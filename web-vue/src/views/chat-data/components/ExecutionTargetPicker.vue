@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, withDefaults } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption } from '../types'
 
@@ -151,7 +151,7 @@ const handleConfirm = () => {
       />
     </div>
 
-    <el-table :data="filteredTargets" border max-height="420" @row-click="(row) => toggleRowSelection(row.member_datasource_id)">
+    <el-table :data="filteredTargets" border max-height="420" @row-click="(row: ExecutionTargetOption) => toggleRowSelection(row.member_datasource_id)">
       <el-table-column label="选择" width="72" align="center">
         <template #default="{ row }">
           <input
@@ -218,7 +218,7 @@ const handleConfirm = () => {
         />
       </div>
 
-      <el-table :data="filteredTargets" border max-height="420" @row-click="(row) => toggleRowSelection(row.member_datasource_id)">
+      <el-table :data="filteredTargets" border max-height="420" @row-click="(row: ExecutionTargetOption) => toggleRowSelection(row.member_datasource_id)">
         <el-table-column label="选择" width="72" align="center">
           <template #default="{ row }">
             <input
