@@ -5,7 +5,7 @@ SQL Generator 主图定义
 Human-in-the-Loop 通过工具内部的 interrupt() 函数实现
 
 支持语义查询模式：
-- query 模式统一添加指标集选择、DSL2SQL、SQL 验证和执行工具
+- query 模式统一添加指标集选择、DSL2SQL 和执行工具
 - 是否调用指标集选择工具由同一套提示词根据当前上下文决定
 """
 

@@ -1,7 +1,7 @@
 """
 语义查询工具
 
-提供基于语义配置的 SQL 生成和验证工具，
+提供基于语义配置的 SQL 生成工具，
 供 LangGraph Agent 调用。
 """
 
@@ -14,7 +14,7 @@ from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
 from ..semantic.compiler import SemanticSQLGenerator
-from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput, ValidateSQLInput
+from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput
 from .datasource_manager import get_datasource_manager
 from .semantic_config_selector import _summarize_semantic_config, select_semantic_config_for_query
 
@@ -27,7 +27,7 @@ class SemanticToolHandler:
     """
     语义工具处理器
 
-    封装 SQL 生成和验证的核心逻辑，供工具函数调用。
+    封装 SQL 生成核心逻辑，供工具函数调用。
     """
 
     def __init__(self, semantic_config: Dict[str, Any]):
@@ -85,25 +85,6 @@ class SemanticToolHandler:
 ```"""
 
         return output
-
-    def validate_sql(self, sql: str, user_query: Optional[str], datasource_id: Optional[str] = None) -> str:
-        """
-        验证 SQL 是否符合用户意图
-
-        当前为 Mock 实现，仅保留 SQL + 数据源 入参形态，
-        后续可基于 datasource_id 扩展为 EXPLAIN / 执行计划校验。
-
-        Returns:
-            验证结果字符串
-        """
-        logger.debug("[验证SQL] Mock验证，直接通过: datasource_id=%s, sql=%s...", datasource_id or "-", sql[:100])
-
-        # Mock: 直接返回成功
-        # TODO: 后续基于 datasource_id 实现数据库连接验证
-        # - EXPLAIN 验证语法
-        # - 检查执行计划（全表扫描警告等）
-        return "✓ SQL验证通过"
-
 
 # ============ 工具辅助函数 ============
 
@@ -280,21 +261,6 @@ def create_semantic_config_selection_tools(
             metrics, dimensions, filters, having, order_by, limit, offset, user_query
         )
 
-    @tool(args_schema=ValidateSQLInput)
-    async def validate_sql_tool(
-        sql: str,
-        datasource_id: str = None,
-        semantic_config_id: str = None,
-        state: Annotated[dict, InjectedState] = None,
-    ) -> str:
-        """
-        验证 SQL（当前为 Mock，占位保留 SQL + 数据源 + 指标集入参）。
-        """
-        resolved_datasource_id = str(datasource_id or extract_datasource_id(state) or "").strip() or None
-        _, config = await resolve_semantic_config(state, semantic_config_id)
-        handler = SemanticToolHandler(config or {"metrics": [], "dimensions": [], "relationships": []})
-        return handler.validate_sql(sql, extract_user_query(state), resolved_datasource_id)
-
     if not include_query_tools:
         return [select_semantic_config_tool]
-    return [select_semantic_config_tool, dsl2sql_tool, validate_sql_tool]
+    return [select_semantic_config_tool, dsl2sql_tool]

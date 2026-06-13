@@ -2407,6 +2407,10 @@ def _build_query_task_runtime_data(task: ChatDataQueryTask) -> Dict[str, Any]:
         "finished_time": task.finished_time.isoformat() if task.finished_time else None,
         "create_time": task.create_time.isoformat() if task.create_time else None,
         "update_time": task.update_time.isoformat() if task.update_time else None,
+        "create_by": task.create_by,
+        "update_by": task.update_by,
+        "create_by_name": task.create_by_name,
+        "update_by_name": task.update_by_name,
     }
 
 
@@ -2735,7 +2739,23 @@ def _get_task_user_id(task_data: Dict[str, Any]) -> str:
         payload = json.loads(task_data.get("request_payload") or "{}")
     except Exception:
         payload = {}
-    return str((payload or {}).get("user_id") or "").strip()
+    return str((payload or {}).get("user_id") or task_data.get("create_by") or task_data.get("update_by") or "").strip()
+
+
+def _is_query_task_owned_by_user(task_data: Dict[str, Any], executions: List[Dict[str, Any]], user_id: str) -> bool:
+    """判断查询任务是否归属于当前用户。"""
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return False
+    owner_ids = {
+        str(item.get("user_id") or item.get("create_by") or item.get("update_by") or "").strip()
+        for item in executions or []
+        if str(item.get("user_id") or item.get("create_by") or item.get("update_by") or "").strip()
+    }
+    task_user_id = _get_task_user_id(task_data)
+    if task_user_id:
+        owner_ids.add(task_user_id)
+    return not owner_ids or normalized_user_id in owner_ids
 
 
 def _get_task_operator_name(task_data: Dict[str, Any]) -> str:
@@ -3196,9 +3216,11 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
 
 
 @router.get("/query-tasks/{task_id}")
-async def get_query_task(task_id: str):
+async def get_query_task(task_id: str, request: Request):
     """查询异步任务状态与结果。"""
     try:
+        current_user = _get_current_user(request)
+        current_user_id = str(current_user.user_id)
         task_data = await _get_query_task(task_id)
         if not task_data:
             return business_response(
@@ -3208,6 +3230,8 @@ async def get_query_task(task_id: str):
             )
         response_data = _build_query_task_response_data(task_data)
         executions = await _get_query_executions(response_data["task_id"])
+        if not _is_query_task_owned_by_user(task_data, executions, current_user_id):
+            return business_response(msg=f"任务不存在: {task_id}", code=40404, status="error")
         if response_data["task_type"] == "sql" and response_data["remote_tasks"]:
             live_remote_payload = await _build_live_remote_sql_result(response_data, executions)
             if live_remote_payload:
@@ -3240,6 +3264,14 @@ async def get_query_task(task_id: str):
             },
             msg="查询成功"
         )
+    except AuthenticationError as e:
+        return business_response(
+            msg=e.message,
+            code=40101,
+            status="error"
+        )
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=e.status_code * 100 + 1, status="error")
     except Exception as e:
         logger.error(f"查询异步任务失败: {str(e)}", exc_info=True)
         return business_response(

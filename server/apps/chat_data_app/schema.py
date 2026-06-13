@@ -564,13 +564,6 @@ class ExecuteSemanticInput(BaseModel):
         return data
 
 
-class ValidateSQLInput(BaseModel):
-    """验证SQL工具的输入参数"""
-    sql: str = Field(..., description="要验证的SQL语句")
-    datasource_id: Optional[str] = Field(default=None, description="数据源ID，未传时默认使用当前会话数据源")
-    semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果")
-
-
 # ============ Agent 工具输入模型 ============
 
 class ExecuteSqlInput(BaseModel):

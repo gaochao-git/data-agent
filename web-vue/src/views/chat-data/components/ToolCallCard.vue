@@ -55,7 +55,6 @@ const TOOL_META: Record<string, { label: string }> = {
   // SQL 阶段
   select_semantic_config_tool: { label: '选择指标集' },
   dsl2sql_tool: { label: '语义转SQL' },
-  validate_sql_tool: { label: 'SQL校验' },
   generate_chart_tool: { label: '聚合查询' },
   execute_sql_tool: { label: 'SQL执行' }
 }

@@ -73,14 +73,6 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     assert payload["selected"] is True
 
 
-def test_validate_sql_mock_accepts_datasource_id():
-    handler = SemanticToolHandler({"metrics": [], "dimensions": [], "relationships": []})
-
-    result = handler.validate_sql("select 1", user_query="查一下", datasource_id="ds_001")
-
-    assert result == "✓ SQL验证通过"
-
-
 def test_generate_sql_uses_semantic_params_only(monkeypatch):
     captured = {}
     handler = SemanticToolHandler({"metrics": [], "dimensions": [], "relationships": []})
@@ -138,7 +130,8 @@ def test_unified_semantic_tools_use_bound_config_without_selector():
         "dimensions": [{"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"}],
         "relationships": [],
     })
-    _, dsl_tool, validate_tool = tools
+    assert [item.name for item in tools] == ["select_semantic_config_tool", "dsl2sql_tool"]
+    _, dsl_tool = tools
 
     sql_text = asyncio.run(dsl_tool.ainvoke({
         "metrics": ["订单数"],
@@ -149,11 +142,6 @@ def test_unified_semantic_tools_use_bound_config_without_selector():
         "limit": 10,
         "state": {"messages": [HumanMessage(content="按状态统计订单数")], "datasource_id": "ds_a", "semantic_config_id": "sc_a"},
     }))
-    validate_text = asyncio.run(validate_tool.ainvoke({
-        "sql": "select 1",
-        "state": {"messages": [HumanMessage(content="查一下")], "datasource_id": "ds_a", "semantic_config_id": "sc_a"},
-    }))
 
     assert "COUNT(" in sql_text
     assert "ORDER BY COUNT(" in sql_text
-    assert validate_text == "✓ SQL验证通过"

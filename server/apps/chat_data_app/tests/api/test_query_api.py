@@ -155,7 +155,7 @@ def test_create_query_task_returns_sql_prepare_error(client, auth_headers, fake_
     assert "一次只能执行一条 SQL" in payload["msg"]
 
 
-def test_get_query_task_api_contract(client, sample_query_task, monkeypatch):
+def test_get_query_task_api_contract(client, auth_headers, sample_query_task, monkeypatch):
     async def fake_get_query_task(task_id):
         return sample_query_task if task_id == "task_a" else None
 
@@ -165,7 +165,7 @@ def test_get_query_task_api_contract(client, sample_query_task, monkeypatch):
     monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
     monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
 
-    response = client.get("/api/chatdata/query-tasks/task_a")
+    response = client.get("/api/chatdata/query-tasks/task_a", headers=auth_headers)
 
     assert response.status_code == 200
     payload = response.json()
@@ -177,13 +177,13 @@ def test_get_query_task_api_contract(client, sample_query_task, monkeypatch):
     assert payload["data"]["executions"] == []
 
 
-def test_get_query_task_returns_not_found(client, monkeypatch):
+def test_get_query_task_returns_not_found(client, auth_headers, monkeypatch):
     async def fake_get_query_task(task_id):
         return None
 
     monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
 
-    response = client.get("/api/chatdata/query-tasks/missing_task")
+    response = client.get("/api/chatdata/query-tasks/missing_task", headers=auth_headers)
 
     payload = response.json()
     assert payload["status"] == "error"
@@ -191,7 +191,53 @@ def test_get_query_task_returns_not_found(client, monkeypatch):
     assert "任务不存在" in payload["msg"]
 
 
-def test_get_query_task_merges_live_remote_sql_result(client, monkeypatch):
+def test_get_query_task_requires_auth(client, monkeypatch):
+    async def fake_get_query_task(_task_id):
+        raise AssertionError("未认证时不应查询任务")
+
+    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+
+    response = client.get("/api/chatdata/query-tasks/task_a")
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40101
+
+
+def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):
+    async def fake_get_query_task(task_id):
+        return {
+            "task_id": task_id,
+            "task_type": "sql",
+            "datasource_id": "ds_a",
+            "query_type": "sql",
+            "status": "succeeded",
+            "progress_text": "执行完成",
+            "request_payload": '{"sql":"select * from orders","user_id":"user_b"}',
+            "result_payload": '{"success":true,"results":[{"data":[{"id":1}]}]}',
+            "remote_task_payload": None,
+            "error_message": None,
+            "started_time": None,
+            "finished_time": None,
+            "create_time": None,
+            "update_time": None,
+        }
+
+    async def fake_get_query_executions(task_id):
+        return []
+
+    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
+
+    response = client.get("/api/chatdata/query-tasks/task_b", headers=auth_headers)
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40404
+    assert "任务不存在" in payload["msg"]
+
+
+def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monkeypatch):
     async def fake_get_query_task(task_id):
         return {
             "task_id": task_id,
@@ -200,7 +246,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, monkeypatch):
             "query_type": "sql",
             "status": "running",
             "progress_text": "SQL 执行中",
-            "request_payload": '{"sql":"select * from orders"}',
+            "request_payload": '{"sql":"select * from orders","user_id":"user_a"}',
             "result_payload": None,
             "remote_task_payload": '[{"member_datasource_id":"m1","member_name":"杭州库","remote_task_id":"remote_1","source_type":"hive"}]',
             "error_message": None,
@@ -232,7 +278,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, monkeypatch):
     monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
     monkeypatch.setattr(routes, "_build_live_remote_sql_result", fake_build_live_remote_sql_result)
 
-    response = client.get("/api/chatdata/query-tasks/task_remote")
+    response = client.get("/api/chatdata/query-tasks/task_remote", headers=auth_headers)
 
     payload = response.json()
     assert payload["status"] == "success"

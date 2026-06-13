@@ -1291,6 +1291,8 @@ def test_create_query_task_schedules_background_run(monkeypatch):
 
 
 def test_get_query_task_returns_task_status(monkeypatch):
+    _mock_authenticated_user(monkeypatch)
+
     async def fake_get_query_task(task_id: str):
         assert task_id == "task_001"
         return {
@@ -1300,7 +1302,7 @@ def test_get_query_task_returns_task_status(monkeypatch):
             "query_type": "builder",
             "status": "succeeded",
             "progress_text": "执行完成",
-            "request_payload": "{\"sql\": \"select 1\"}",
+            "request_payload": "{\"sql\": \"select 1\", \"user_id\": \"10001\"}",
             "result_payload": "{\"sql\": \"select 1\", \"columns\": [\"col_a\"], \"data\": [{\"col_a\": 1}], \"total_count\": 1, \"results\": []}",
             "remote_task_payload": "[{\"member_datasource_id\": \"phy_a\", \"member_name\": \"成员A\", \"remote_task_id\": \"remote_001\"}]",
             "error_message": None,
@@ -1335,7 +1337,7 @@ def test_get_query_task_returns_task_status(monkeypatch):
         },
     }))
 
-    resp = asyncio.run(get_query_task("task_001"))
+    resp = asyncio.run(get_query_task("task_001", SimpleNamespace()))
     data = _payload(resp)
     assert data["status"] == "success"
     assert data["data"]["task_id"] == "task_001"
@@ -1352,6 +1354,37 @@ def test_get_query_task_returns_task_status(monkeypatch):
         "execution_time_ms": 12,
         "error": None,
     }]
+
+
+def test_get_query_task_rejects_other_user(monkeypatch):
+    _mock_authenticated_user(monkeypatch, user_id="user_b")
+
+    async def fake_get_query_task(_task_id: str):
+        return {
+            "task_id": "task_001",
+            "task_type": "sql",
+            "datasource_id": "ds_a",
+            "query_type": "builder",
+            "status": "succeeded",
+            "progress_text": "执行完成",
+            "request_payload": "{\"sql\": \"select 1\", \"user_id\": \"user_a\"}",
+            "result_payload": "{\"success\": true, \"results\": []}",
+            "remote_task_payload": None,
+            "error_message": None,
+            "started_time": None,
+            "finished_time": None,
+            "create_time": None,
+            "update_time": None,
+        }
+
+    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(routes, "_get_query_executions", lambda _task_id: asyncio.sleep(0, result=[]))
+
+    resp = asyncio.run(get_query_task("task_001", SimpleNamespace()))
+    data = _payload(resp)
+    assert data["status"] == "error"
+    assert data["code"] == 40404
+    assert "任务不存在" in data["msg"]
 
 
 def test_live_remote_sql_result_keeps_local_cancelled_status(monkeypatch):

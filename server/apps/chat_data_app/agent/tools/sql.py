@@ -556,7 +556,6 @@ async def _execute_sql_real(
 class SemanticToolNames:
     """语义工具名称常量（避免硬编码字符串）"""
     GENERATE = "dsl2sql_tool"
-    VALIDATE = "validate_sql_tool"
 
 
 def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:

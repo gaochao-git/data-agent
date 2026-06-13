@@ -47,13 +47,6 @@ from .utils import (
     format_params_for_display,
 )
 
-# Prompt 模板
-from .prompts import (
-    build_intent_check_prompt,
-    build_sql_check_prompt,
-    ValidatePromptBuilder,
-)
-
 __all__ = [
     # 版本
     "__version__",
@@ -90,8 +83,4 @@ __all__ = [
     "TreeVisitor",
     "TreeDepthExceededError",
     "format_params_for_display",
-    # Prompt 模板
-    "build_intent_check_prompt",
-    "build_sql_check_prompt",
-    "ValidatePromptBuilder",
 ]

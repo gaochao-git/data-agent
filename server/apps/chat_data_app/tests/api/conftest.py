@@ -370,6 +370,7 @@ def sample_query_task():
             "sql": "select * from orders limit 10",
             "datasource_id": "ds_a",
             "query_type": "sql",
+            "user_id": "user_a",
         },
         "result_payload": None,
         "remote_tasks": [],
