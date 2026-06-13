@@ -47,6 +47,8 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "获得唯一语义配置后，仍必须核对用户表述是否能明确匹配" in prompt
     assert "相近、简称、口语化表达或存在多个可能解释" in prompt
     assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
+    assert "输出可见内容约束（最高优先级）" in prompt
+    assert "`<thinking>` 会展示给用户，必须只写业务判断，不写内部执行动作" in prompt
     assert "`<thinking>` 和最终回答都面向业务用户" in prompt
     assert "禁止输出工具名、配置名、配置 ID、工具调用计划" in prompt
     assert "不要写“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt
