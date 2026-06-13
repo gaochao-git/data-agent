@@ -42,9 +42,20 @@ def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
 def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "当前未选择指标集" in prompt
+    assert "上下文未提供可用语义配置" in prompt
     assert "业务数据查询必须先调用 `select_semantic_config_tool(query=用户原问题)`" in prompt
-    assert "已有当前指标集：直接使用当前指标集，不调用 select_semantic_config_tool" in prompt
+    assert "获得唯一语义配置后，仍必须核对用户表述是否能明确匹配" in prompt
+    assert "相近、简称、口语化表达或存在多个可能解释" in prompt
+    assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
+    assert "`<thinking>` 和最终回答都面向业务用户" in prompt
+    assert "禁止输出工具名、配置名、配置 ID、工具调用计划" in prompt
+    assert "不要写“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt
+    assert "“当前未选择指标集”“已选择指标集”“已选择配置”“指标集名称”“候选指标集”等内部选择过程" in prompt
+    assert "不要推荐示例中的指标，不要推荐与当前问题无关的具体指标" in prompt
+    assert "除非能确认同一语义配置里存在真实相近项，否则只给“请先维护口径后再查询”的通用建议" in prompt
+    assert "对复购率、转化率、留存率、占比、客单价、有效率等依赖业务定义的比例/率类问题" in prompt
+    assert "返回唯一指标集后，不要输出" not in prompt
+    assert "✅ 可覆盖: 使用已维护的真实指标、维度、枚举和口径" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
 
 

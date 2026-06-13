@@ -50,6 +50,28 @@ def test_parse_selection_response_keeps_only_valid_config_id():
     assert parsed["candidates"] == [{"id": "sc_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "包含交易金额"}]
 
 
+def test_selector_prompt_treats_compare_rate_as_basic_queries_when_metric_and_time_exist():
+    prompt = _build_selector_prompt("统计2025年1月销售额同比增长率", [{
+        "id": "sc_order",
+        "name": "订单分析",
+        "metrics": [{"name": "销售额"}],
+        "dimensions": [{"name": "下单时间"}],
+    }])
+
+    assert "同比、环比、增长率" in prompt
+    assert "基础指标和可用于周期筛选/分组的时间维度" in prompt
+    assert "coverage=full" in prompt
+
+
+def test_selector_prompt_prefers_warehouse_layer_order_for_multiple_full_matches():
+    prompt = _build_selector_prompt("查询销售额", [
+        {"id": "ads_order", "name": "ADS订单指标", "metrics": [{"name": "销售额"}], "dimensions": []},
+        {"id": "dwd_order", "name": "DWD订单明细", "metrics": [{"name": "销售额"}], "dimensions": []},
+    ])
+
+    assert "ads > dws > dwd > ods" in prompt
+
+
 def test_parse_selection_response_rejects_invalid_selected_id():
     parsed = _parse_selection_response('{"selected_config_id":"bad","confidence":"high"}', [{"id": "sc_a"}])
 
