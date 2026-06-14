@@ -60,6 +60,8 @@ def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
 
 def _ensure_skill_dirs(version_dir: Path) -> None:
     """确保技能版本固定目录存在。"""
+    if str(version_dir).strip() in {"", "."}:
+        raise ValueError("技能版本目录无效")
     for dir_name in SKILL_FIXED_DIRS:
         (version_dir / dir_name).mkdir(parents=True, exist_ok=True)
 

@@ -695,6 +695,9 @@ def test_skill_service_file_path_validation_and_listing(tmp_path):
         else:
             raise AssertionError("invalid skill file path should be rejected")
 
+    with pytest.raises(ValueError, match="技能版本目录无效"):
+        service._resolve_file_under_version_dir(Path(""), "references", "guide")
+
 
 def test_sync_builtin_skills_async_updates_existing_and_creates_new(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
@@ -833,10 +836,11 @@ def test_db_skill_metadata_async_and_system_path(tmp_path, monkeypatch):
     assert detail["source"] == "system"
 
 
-def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(monkeypatch):
+def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     calls = []
     skill = {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1}
+    version_dir = tmp_path / "demo-skill" / "versions" / "v1"
 
     class FakeStore:
         async def get_skill_async(self, skill_id, user_id=""):
@@ -852,7 +856,12 @@ def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(monkeypat
             return [{"skill_id": skill_id, "skill_version_no": 1, "version_publish_status": "published"}]
 
         async def get_version_async(self, skill_id, version_no):
-            return {"skill_id": skill_id, "skill_version_no": version_no, "version_publish_status": "published"}
+            return {
+                "skill_id": skill_id,
+                "skill_version_no": version_no,
+                "skill_version_dir": str(version_dir),
+                "version_publish_status": "published",
+            }
 
         async def activate_version_async(self, skill_id, version_no, update_by="", update_by_name=""):
             calls.append(("activate", skill_id, version_no, update_by))
