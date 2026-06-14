@@ -17,6 +17,10 @@ from apps.chat_data_app.services import sql_executor
 from apps.chat_data_app.services.sql_parser import prepare_sql_for_execution, validate_single_sql_statement
 
 
+def test_default_allowed_sql_types_only_select():
+    assert sql_executor.ALLOWED_SQL_TYPES == ["SELECT"]
+
+
 def test_serialize_value_formats_datetime_without_iso_t_separator():
     assert sql_executor.resolve_query_timeout("mysql", 12) == 12
     assert sql_executor.resolve_query_timeout("mysql", 0) == sql_executor.DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
@@ -153,6 +157,20 @@ def test_validate_sql_analyzes_raw_sql_without_comment_cleanup():
 ])
 def test_validate_sql_allows_query_shapes_when_select_is_allowed(sql):
     assert sql_executor.validate_sql(sql, source_type="mysql") == (True, "")
+
+
+@pytest.mark.parametrize("sql", [
+    "show tables",
+    "show create table orders",
+    "describe orders",
+    "desc orders",
+    "explain select * from orders",
+])
+def test_validate_sql_rejects_metadata_commands_by_default(sql):
+    is_valid, error = sql_executor.validate_sql(sql, source_type="mysql")
+
+    assert is_valid is False
+    assert error == "只允许执行以下类型的 SQL: SELECT"
 
 
 @pytest.mark.parametrize("sql", [

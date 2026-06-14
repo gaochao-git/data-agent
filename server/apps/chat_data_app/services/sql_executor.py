@@ -27,8 +27,12 @@ DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_MYSQL_QUERY_TIMEO
 DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS = int(os.getenv("CHAT_DATA_HIVE_QUERY_TIMEOUT_SECONDS", "600"))
 DEFAULT_HTTP_POLL_INTERVAL_MS = int(os.getenv("CHAT_DATA_HTTP_POLL_INTERVAL_MS", "1500"))
 
-# 允许的 SQL 操作类型（从环境变量读取，默认 SELECT,SHOW,EXPLAIN,DESCRIBE）
-_ALLOWED_SQL_TYPES = os.getenv("CHATDATA_ALLOWED_SQL", "SELECT,SHOW,EXPLAIN,DESCRIBE")
+# 允许的 SQL 操作类型（从环境变量读取，默认仅 SELECT）
+#
+# SHOW / EXPLAIN / DESCRIBE 属于元数据或执行计划类命令；Hive 方言下 sqlglot
+# 对部分语法会降级为 COMMAND，暂不复用通用 SQL 执行口放行。后续如需支持，
+# 应单独提供受控接口并做权限、审计和结果脱敏。
+_ALLOWED_SQL_TYPES = os.getenv("CHATDATA_ALLOWED_SQL", "SELECT")
 ALLOWED_SQL_TYPES = [s.strip().upper() for s in _ALLOWED_SQL_TYPES.split(",") if s.strip()]
 CONNECT_TIMEOUT_SECONDS = 3
 HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
