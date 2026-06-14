@@ -3366,3 +3366,395 @@ def test_delete_datasource_removes_only_current_group(monkeypatch):
     assert manager.deleted_ids == ["ds_b"]
     assert manager.last_delete_update_by == "delete_operator"
     assert "ds_b" not in manager.datasources
+
+
+def test_routes_helper_branches_for_user_params_and_source_config(monkeypatch):
+    from apps.chat_data_app import routes
+
+    monkeypatch.setattr(routes, "_optional_current_user", lambda _request: None)
+    assert routes._get_optional_request_user_http_params(SimpleNamespace()) == {}
+    assert routes._get_optional_request_user_http_params(None) == {}
+
+    monkeypatch.setattr(
+        routes,
+        "_optional_current_user",
+        lambda _request: SimpleNamespace(user_id=" user_1 ", username=" 测试用户 "),
+    )
+    assert routes._get_optional_request_user_http_params(SimpleNamespace()) == {
+        "user_id": "user_1",
+        "username": "测试用户",
+    }
+
+    monkeypatch.setattr(
+        routes,
+        "_optional_current_user",
+        lambda _request: SimpleNamespace(user_id="", username=""),
+    )
+    assert routes._get_optional_request_user_http_params(SimpleNamespace()) == {}
+
+    assert routes._get_query_history_source("dashboard") == "看板"
+    assert routes._is_http_query_executor({"query_executor_type": " HTTP "}) is True
+    assert routes._is_http_execution_target({"query_executor_type": " http "}) is True
+    assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" rt1 ")) is True
+    assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" ")) is False
+
+    normalized = routes._normalize_source_item(
+        "mysql",
+        " 127.0.0.1 ",
+        None,
+        " demo ",
+        " 机构A ",
+        " ORG_A ",
+        " HTTP ",
+    )
+    assert normalized == {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "database": "demo",
+        "query_executor_type": "http",
+        "org_name": "机构A",
+        "org_code": "ORG_A",
+    }
+
+    for kwargs, message in [
+        ({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构名称不能为空"),
+        ({"org_name": "机构A", "org_code": "", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构编码不能为空"),
+        ({"org_name": "机构A", "org_code": "ORG_A", "host": "", "database": "demo", "query_executor_type": "direct"}, "数据源连接信息不完整"),
+        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "", "query_executor_type": "direct"}, "数据源连接信息不完整"),
+        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "jdbc"}, "不支持的查询执行方式"),
+    ]:
+        try:
+            routes._normalize_source_item(
+                "mysql",
+                kwargs["host"],
+                3307,
+                kwargs["database"],
+                kwargs["org_name"],
+                kwargs["org_code"],
+                kwargs["query_executor_type"],
+            )
+        except ValueError as exc:
+            assert message in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
+def test_routes_schema_config_helpers_cover_template_and_identifier_edges():
+    from apps.chat_data_app import routes
+
+    datasource = {
+        "source_type": "hive",
+        "template_datasource_id": "missing_template",
+        "query_executor_type": "invalid",
+        "source_config": {
+            "host": "127.0.0.1",
+            "database": "default",
+            "namespace": "ns",
+            "orgCode": "old_code",
+            "orgName": "old_name",
+        },
+        "member_sources": [
+            {
+                "member_datasource_id": "member_1",
+                "org_code": "ORG_1",
+                "org_name": "机构1",
+                "query_executor_type": "bad_executor",
+            },
+            {
+                "member_datasource_id": "member_2",
+                "org_code": "ORG_2",
+                "org_name": "机构2",
+                "query_executor_type": "http",
+            },
+        ],
+    }
+
+    config = routes._get_datasource_meta_source_config(datasource)
+    assert config["org_code"] == "ORG_1"
+    assert config["org_name"] == "机构1"
+    assert config["query_executor_type"] == "direct"
+    assert "namespace" not in config
+    assert "orgCode" not in config
+    assert routes._get_datasource_physical_source_config(datasource)["org_code"] == "ORG_1"
+
+    datasource["template_datasource_id"] = "member_2"
+    config = routes._get_datasource_meta_source_config(datasource)
+    assert config["org_code"] == "ORG_2"
+    assert config["org_name"] == "机构2"
+    assert config["query_executor_type"] == "http"
+
+    mysql_config = routes._get_datasource_physical_source_config({
+        "source_type": "mysql",
+        "source_config": {"host": "127.0.0.2", "database": "demo"},
+    })
+    assert mysql_config == {"host": "127.0.0.2", "database": "demo"}
+
+    schema = routes._build_table_schema_map([
+        {"table_name": "", "columns": [{"name": "skip"}]},
+        {"table_name": "orders", "columns": [{"name": " id ", "mysql_type": "BIGINT"}, {"name": "", "type": "varchar"}]},
+    ])
+    assert schema == {"orders": {"id": "bigint"}}
+    assert routes._extract_expression_identifiers("") == set()
+    assert routes._extract_expression_identifiers("SUM(amount) + DATE_FORMAT(created_at, '%Y-%m') + `orders`.`city`") == {
+        "amount",
+        "created_at",
+        "city",
+    }
+    assert routes._semantic_health_issue("warning", "type", "message", "target") == {
+        "level": "warning",
+        "type": "type",
+        "message": "message",
+        "target": "target",
+    }
+
+
+def test_routes_load_tables_from_source_branches(monkeypatch):
+    from apps.chat_data_app import routes
+
+    hive_http_calls = []
+
+    async def fake_hive_meta_schema(source_item, table_names=None, **kwargs):
+        hive_http_calls.append((source_item, table_names, kwargs))
+        return [{"table_name": "hive_http"}]
+
+    class RecordingHiveSyncService(_FakeHiveSyncService):
+        async def get_full_schema_async(self, table_names=None):
+            return [{"table_name": name, "columns": []} for name in (table_names or ["hive_direct"])]
+
+    class RecordingMySQLSyncService(_FakeMySQLSyncService):
+        async def get_full_schema_async(self, table_names=None):
+            return [{"table_name": name, "columns": []} for name in (table_names or ["mysql_direct"])]
+
+    monkeypatch.setattr(routes, "get_hive_meta_schema_async", fake_hive_meta_schema)
+    monkeypatch.setattr(routes, "HiveSyncService", RecordingHiveSyncService)
+    monkeypatch.setattr(routes, "MySQLSyncService", RecordingMySQLSyncService)
+    monkeypatch.setattr(routes, "resolve_hive_credentials", lambda _cfg: {"username": "hive_u", "password": "hive_p"})
+    monkeypatch.setattr(routes, "resolve_mysql_credentials", lambda _cfg: {"user": "mysql_u", "password": "mysql_p"})
+
+    hive_http = asyncio.run(routes._load_tables_from_source(
+        "hive",
+        {"query_executor_type": "http", "host": "127.0.0.1", "database": "default"},
+        ["t_http"],
+        user_id="u1",
+        username="用户1",
+    ))
+    hive_direct = asyncio.run(routes._load_tables_from_source(
+        "hive",
+        {"query_executor_type": "direct", "host": "127.0.0.1", "database": "default"},
+        ["t_direct"],
+    ))
+    mysql_direct = asyncio.run(routes._load_tables_from_source(
+        "mysql",
+        {"host": "127.0.0.1", "database": "demo"},
+        ["t_mysql"],
+    ))
+
+    assert hive_http == [{"table_name": "hive_http"}]
+    assert hive_http_calls == [(
+        {"query_executor_type": "http", "host": "127.0.0.1", "database": "default"},
+        ["t_http"],
+        {"user_id": "u1", "username": "用户1"},
+    )]
+    assert hive_direct == [{"table_name": "t_direct", "columns": []}]
+    assert mysql_direct == [{"table_name": "t_mysql", "columns": []}]
+
+
+def test_routes_remote_history_helpers_cover_success_failure_and_default_source(monkeypatch):
+    from apps.chat_data_app import routes
+
+    task = SimpleNamespace(
+        remote_task_payload=json.dumps([
+            {"member_datasource_id": "m_other", "remote_task_id": "rt_other", "source_type": "mysql"},
+            {"member_datasource_id": "m_http", "remote_task_id": "rt_http", "source_type": ""},
+        ]),
+        request_payload=json.dumps({"operator_name": "任务用户"}),
+        task_id="task_1",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="succeeded",
+        progress_text="完成",
+        result_payload=None,
+        error_message=None,
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="u_task",
+        update_by="",
+        create_by_name="",
+        update_by_name="",
+    )
+    assert routes._resolve_remote_history_source_type(SimpleNamespace(member_datasource_id="m_http"), task) == "hive"
+    assert routes._resolve_remote_history_source_type(SimpleNamespace(member_datasource_id="missing"), task) == "hive"
+    assert asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(remote_task_id=""))) is None
+
+    calls = []
+
+    async def fake_fetch(remote_task_id, source_type, **kwargs):
+        calls.append((remote_task_id, source_type, kwargs))
+        if remote_task_id == "rt_failed":
+            return {"status": "failed", "error": "", "execution_time_ms": 11}
+        if remote_task_id == "rt_error":
+            raise RuntimeError("remote down")
+        return {"status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": "1", "execution_time_ms": 7}
+
+    monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
+
+    success = asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(
+        execution_id="ex_1",
+        remote_task_id="rt_ok",
+        member_datasource_id="m_http",
+        user_id="u1",
+        create_by_name="",
+        update_by_name="",
+        execution_time_ms=5,
+    ), task))
+    failed = asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(
+        execution_id="ex_2",
+        remote_task_id="rt_failed",
+        member_datasource_id="m_http",
+        user_id="u1",
+        create_by_name="执行人",
+        update_by_name="",
+        execution_time_ms=5,
+    ), task))
+    unavailable = asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(
+        execution_id="ex_3",
+        remote_task_id="rt_error",
+        member_datasource_id="m_http",
+        user_id="",
+        create_by_name="",
+        update_by_name="",
+        execution_time_ms=5,
+    ), task))
+
+    assert success["success"] is True
+    assert success["total_count"] == 1
+    assert failed["success"] is False
+    assert failed["remote_result_status"] == "failed"
+    assert "历史结果已不可用" in failed["error"]
+    assert unavailable["remote_result_status"] == "unavailable"
+    assert calls[0] == ("rt_ok", "hive", {"user_id": "u1", "username": "任务用户"})
+    assert calls[1][2]["username"] == "执行人"
+
+
+def test_routes_live_remote_sql_result_status_branches(monkeypatch):
+    from apps.chat_data_app import routes
+
+    async def fake_fetch(remote_task_id, _source_type, **_kwargs):
+        return {
+            "rt_running": {"success": False, "status": "running", "error": "", "execution_time_ms": None},
+            "rt_failed": {"success": False, "status": "failed", "error": "远端失败", "execution_time_ms": 20},
+            "rt_success": {"success": True, "status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": 10},
+        }[remote_task_id]
+
+    monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
+
+    no_remote = asyncio.run(routes._build_live_remote_sql_result({"remote_tasks": []}))
+    running = asyncio.run(routes._build_live_remote_sql_result({
+        "request_payload": {"sql": "select running", "user_id": "u1", "operator_name": "用户1"},
+        "remote_tasks": [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt_running", "source_type": "hive"}],
+    }))
+    failed = asyncio.run(routes._build_live_remote_sql_result({
+        "request_payload": {"sql": "select failed"},
+        "remote_tasks": [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt_failed", "source_type": "hive"}],
+        "result_payload": {"results": []},
+    }))
+    succeeded_with_direct = asyncio.run(routes._build_live_remote_sql_result({
+        "request_payload": {"sql": "select mix"},
+        "remote_tasks": [{"member_datasource_id": "m_http", "member_name": "HTTP", "remote_task_id": "rt_success", "source_type": "hive"}],
+        "result_payload": {
+            "results": [
+                {"member_datasource_id": "m_direct", "member_name": "直连", "success": False, "status": "failed", "error": "直连失败"}
+            ]
+        },
+    }))
+
+    assert no_remote is None
+    assert running["status"] == "running"
+    assert running["error_message"] is None
+    assert failed["status"] == "failed"
+    assert failed["error_message"] == "远端失败"
+    assert succeeded_with_direct["status"] == "succeeded"
+    assert succeeded_with_direct["error_message"] is None
+    assert [item["member_datasource_id"] for item in succeeded_with_direct["result_payload"]["results"]] == ["m_direct", "m_http"]
+
+
+def test_routes_task_owner_and_cancel_status_helpers():
+    from apps.chat_data_app import routes
+
+    assert routes._get_task_user_id({"request_payload": "{bad", "create_by": " creator "}) == "creator"
+    assert routes._get_task_user_id({"request_payload": json.dumps({"user_id": " payload_user "})}) == "payload_user"
+    assert routes._is_query_task_owned_by_user({}, [], "") is False
+    assert routes._is_query_task_owned_by_user({}, [], "u1") is True
+    assert routes._is_query_task_owned_by_user({"request_payload": json.dumps({"user_id": "u2"})}, [], "u1") is False
+    assert routes._is_query_task_owned_by_user({}, [{"user_id": "", "create_by": "u1"}], "u1") is True
+    assert routes._get_task_operator_name({"request_payload": "{bad"}) == ""
+    assert routes._get_task_operator_name({"request_payload": json.dumps({"operator_name": " 操作员 "})}) == "操作员"
+    assert routes._build_cancelled_execution_map([
+        {"member_datasource_id": "m1", "sql_status": "cancelled"},
+        {"member_datasource_id": "m2", "sql_status": "kill_failed"},
+        {"member_datasource_id": "m3", "sql_status": "running"},
+        {"member_datasource_id": "", "sql_status": "cancelled"},
+    ]) == {
+        "m1": {"member_datasource_id": "m1", "sql_status": "cancelled"},
+        "m2": {"member_datasource_id": "m2", "sql_status": "kill_failed"},
+    }
+    assert routes._build_cancel_task_status([]) == "cancelled"
+    assert routes._build_cancel_task_status([{"status": "cancelled"}]) == "cancelled"
+    assert routes._build_cancel_task_status([{"status": "kill_failed"}]) == "failed"
+    assert routes._build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}]) == "partial_success"
+    assert routes._build_cancel_task_status([{"status": "succeeded"}]) == "cancelled"
+
+
+def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
+    from apps.chat_data_app import routes
+
+    no_wait = SimpleNamespace(
+        execution_id="ex_done",
+        sql_status="succeeded",
+        remote_task_id="",
+        db_connection_id="",
+    )
+    assert asyncio.run(routes._wait_for_cancel_target(no_wait)) is no_wait
+
+    running = SimpleNamespace(
+        execution_id="ex_running",
+        sql_status="running",
+        remote_task_id="",
+        db_connection_id="",
+    )
+    monkeypatch.setattr(routes, "CANCEL_TARGET_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(routes, "CANCEL_TARGET_POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(routes, "_get_query_execution_model", lambda _execution_id: asyncio.sleep(0, result=None))
+    assert asyncio.run(routes._wait_for_cancel_target(running)) is running
+
+    done_result = asyncio.run(routes._cancel_query_execution(SimpleNamespace(
+        execution_id="ex_succeeded",
+        sql_status="succeeded",
+        remote_task_id="",
+        db_connection_id="",
+    )))
+    assert done_result == {
+        "execution_id": "ex_succeeded",
+        "status": "succeeded",
+        "success": True,
+        "message": "无需停止",
+    }
+
+    updates = []
+
+    async def fake_update_execution(execution_id, **kwargs):
+        updates.append((execution_id, kwargs))
+
+    monkeypatch.setattr(routes, "_update_query_execution", fake_update_execution)
+    pending_result = asyncio.run(routes._cancel_query_execution(SimpleNamespace(
+        execution_id="ex_pending",
+        sql_status="pending",
+        remote_task_id="",
+        db_connection_id="",
+    )))
+
+    assert pending_result["status"] == "cancelled"
+    assert updates[-1][1]["sql_status"] == "cancelled"

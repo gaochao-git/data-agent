@@ -61,15 +61,30 @@ def test_validate_semantic_fields_checks_dimensions_and_metrics():
         metrics=[{"name": "数量", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "数量", "table": "orders", "column": "city"}],
     )
+    assert "字段显示名称不能为空" in semantic_config._validate_semantic_fields(
+        datasource,
+        metrics=[{"name": " ", "table": "orders", "expression": "SUM(amount)"}],
+        dimensions=[],
+    )
+    assert "所属表不存在" in semantic_config._validate_semantic_fields(
+        datasource,
+        metrics=[{"name": "销售额", "table": "missing", "expression": "SUM(amount)"}],
+        dimensions=[],
+    )
     assert "缺少表结构" in semantic_config._validate_semantic_fields({"ds_tables": []}, [], [])
 
 
 def test_history_message_and_feedback_helpers():
     assert semantic_config._history_message_text("  hello  ") == "hello"
     assert semantic_config._history_message_text([{"text": "问题"}, {"content": "回答"}, "补充"]) == "问题\n回答\n补充"
+    assert semantic_config._history_message_text([{"text": ""}, {"content": None}]) == ""
+    assert semantic_config._history_message_text(None) == ""
     assert semantic_config._is_negative_feedback_text("这个结果不对") is True
+    assert semantic_config._is_negative_feedback_text("") is False
     assert semantic_config._is_negative_feedback_text("好的") is False
     assert semantic_config._is_history_tool_error_message('{"success": false, "error": "表不存在"}') is True
+    assert semantic_config._is_history_tool_error_message('{"success": true, "error": "仍然有错误"}') is True
+    assert semantic_config._is_history_tool_error_message("") is False
     assert semantic_config._is_history_tool_error_message("[execute_sql]\n{\"success\": true}") is False
     assert semantic_config._is_history_tool_error_message("Traceback exception") is True
 
@@ -104,6 +119,70 @@ def test_history_belongs_to_config_for_agent_builder_and_sql(monkeypatch):
     assert semantic_config._history_belongs_to_config("sql", {}, "select * from users", "cfg_a", config, "mysql")[:2] == (False, "table_scope_mismatch")
     monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=False, tables=set(), error="syntax"))
     assert semantic_config._history_belongs_to_config("sql", {}, "bad sql", "cfg_a", config, "mysql") == (False, "sql_parse_failed", [], "syntax")
+    assert semantic_config._history_belongs_to_config("agent", {}, "", "cfg_a", config, "mysql")[:2] == (False, "config_id_mismatch")
+    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg_a", {"metrics": [], "dimensions": [], "relationships": []}, "mysql")[:2] == (False, "empty_scope")
+    monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables=set(), error=""))
+    assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg_a", config, "mysql")[:2] == (False, "empty_history_tables")
+
+
+def test_history_learning_compact_sample_and_normalize_item_branches():
+    long_text = "x" * 2000
+    compact_agent = semantic_config._compact_history_sample_for_llm({
+        "execution_id": "exec_1",
+        "source": "agent",
+        "status": "failed",
+        "query_text": long_text,
+        "sql": long_text,
+        "error_message": long_text,
+        "executed_at": "2026-06-02",
+        "conversation_context": {"user_turns": [{"content": "查销售额"}]},
+    })
+    compact_builder = semantic_config._compact_history_sample_for_llm({
+        "execution_id": "exec_2",
+        "source": "builder",
+        "builder_config": {
+            "mainTable": "orders",
+            "joins": [{"id": i} for i in range(12)],
+            "dimensions": [{"id": i} for i in range(25)],
+            "aggregations": [{"id": i} for i in range(25)],
+            "filters": [{"id": i} for i in range(25)],
+            "orderBy": [{"id": i} for i in range(12)],
+        },
+    })
+
+    samples = [{"execution_id": "exec_1", "source": "sql"}]
+    sample_map = semantic_config._sample_map_by_execution_id(samples)
+    datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}]}
+
+    assert len(compact_agent["query_text"]) == 300
+    assert len(compact_agent["sql"]) == 1200
+    assert len(compact_agent["error_message"]) == 500
+    assert compact_agent["conversation_context"]["user_turns"][0]["content"] == "查销售额"
+    assert len(compact_builder["builder_config"]["joins"]) == 10
+    assert len(compact_builder["builder_config"]["dimensions"]) == 20
+    assert semantic_config._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({"source": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({
+        "source": "sql",
+        "confidence": "high",
+        "sample_execution_ids": ["exec_1"],
+        "support_count": 1,
+        "name": "",
+        "reason": "缺名称",
+    }, "metrics", sample_map, datasource) is None
+    assert semantic_config._normalize_history_suggestion_item({
+        "source": "sql",
+        "confidence": "high",
+        "sample_execution_ids": ["exec_1"],
+        "support_count": 1,
+        "title": "",
+        "content": "内容",
+        "reason": "缺标题",
+    }, "issues", sample_map, datasource) is None
 
 
 def test_history_learning_context_and_indexes():
@@ -126,6 +205,14 @@ def test_history_learning_context_and_indexes():
     assert "销售额" in indexes["metric_names"]
     assert "orders.sum(amount)" in indexes["metric_expressions"]
     assert "orders.city" in indexes["dimension_columns"]
+    assert semantic_config._normalize_semantic_text(" `City` ") == "city"
+    assert semantic_config._normalize_semantic_expression(" SUM( `Amount` ) ") == "sum(`amount`)"
+    assert semantic_config._extract_expression_columns("SUM(orders.amount) + COUNT(DISTINCT `order_id`) + CASE WHEN status = 'x' THEN 1 END") == {"amount", "order_id", "status"}
+    assert semantic_config._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
+    assert semantic_config._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
+    assert semantic_config._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
+    assert semantic_config._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
+    assert semantic_config._is_existing_history_suggestion({"name": "新字段"}, "unknown", indexes) is False
 
 
 def test_normalize_history_learning_result_filters_invalid_existing_and_flags_review():
@@ -163,6 +250,55 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
     assert [item["name"] for item in result["dimensions"]] == ["渠道"]
     assert result["dimensions"][0]["needs_review"] is True
     assert result["issues"][0]["title"] == "缺少枚举"
+
+
+def test_prefill_parse_and_alias_helpers_cover_edge_cases():
+    tables = [
+        {"table_name": "orders", "table_alias": "buyer_orders", "columns": [{"name": "amount", "mysql_type": "decimal"}, {"name": ""}]},
+        {"table_name": "orders", "table_alias": "seller_orders", "columns": [{"name": "amount"}]},
+        {"table_name": "", "columns": [{"name": "skip"}]},
+    ]
+    table_payload = semantic_config._build_prefill_table_payload(tables)
+    alias_map = semantic_config._build_prefill_alias_map(tables)
+    parsed = {
+        "fields": [
+            {"table": "orders", "column": "amount", "name": "金额，后续说明"},
+            {"table": "missing", "column": "amount", "name": "跳过"},
+            "skip",
+        ],
+        "metrics": [
+            {"table": "orders", "column": "amount", "agg": "SUM", "name": "金额"},
+            {"table": "orders", "source_column": "amount", "agg": "SUM", "name": "重复"},
+            {"table": "orders", "column": "missing", "agg": "SUM", "name": "跳过"},
+            {"table": "orders", "column": "amount", "agg": "UNSAFE", "name": "跳过"},
+            "skip",
+        ],
+        "knowledge": {"business_flow": "下单 -> 支付", "other": "drop"},
+    }
+
+    assert semantic_config._normalize_prefill_display_name("订单金额，越长越好", "amount") == "订单金额"
+    assert semantic_config._normalize_prefill_display_name("关联 orders.amount 的金额", "amount") == "关联ordersamount的"
+    assert semantic_config._normalize_prefill_display_name("", "amount") == "amount"
+    assert semantic_config._build_prefill_alias_map(tables) == {"orders": ["buyer_orders", "seller_orders"]}
+    assert table_payload == [{"table": "orders", "description": "", "columns": [{"name": "amount", "type": "decimal", "description": ""}]}]
+    assert semantic_config._parse_prefill_dimension_name_map({"fields": "bad"}, table_payload) == {}
+    assert semantic_config._parse_prefill_dimension_name_map(parsed, table_payload) == {"orders.amount": "金额"}
+    dimension_fields = semantic_config._build_prefill_dimension_fields(table_payload, alias_map, {"orders.amount": "金额"})
+    metrics = semantic_config._parse_metric_items(parsed, table_payload, max_metrics=5, table_alias_map=alias_map)
+    assert [item["table_alias"] for item in dimension_fields] == ["buyer_orders", "seller_orders"]
+    assert [item["table_alias"] for item in metrics] == ["buyer_orders", "seller_orders"]
+    assert len(metrics) == 2
+    assert semantic_config._parse_metric_items({"metrics": "bad"}, table_payload) == []
+    assert semantic_config._filter_prefill_knowledge(parsed["knowledge"], generate_business_flow=False) == {}
+    assert semantic_config._filter_prefill_knowledge(parsed["knowledge"], generate_business_flow=True) == {"business_flow": "下单 -> 支付"}
+    assert semantic_config._filter_prefill_knowledge("bad", True) == {}
+    assert semantic_config._normalize_prefill_knowledge(parsed, True) == {"business_flow": "下单 -> 支付"}
+    assert semantic_config._prefill_knowledge_missing({}, True) is True
+    assert semantic_config._prefill_knowledge_missing({"business_flow": "已生成"}, True) is False
+    assert semantic_config._normalize_prefill_item({"table": "", "column": "id", "role": "dimension"}) is None
+    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "role": "bad"}) is None
+    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_metric": True})["role"] == "metric"
+    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_dimension": True})["role"] == "dimension"
 
 
 def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
@@ -1124,3 +1260,222 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
 
     assert manager.datasource["id"] == "ds_a"
     assert auth_response["code"] == 40101
+
+
+def test_semantic_config_low_level_helper_branches(monkeypatch):
+    assert semantic_config._parse_json_object("") == {}
+    assert semantic_config._parse_json_object(None) == {}
+    assert semantic_config._parse_json_object("[1, 2]") == {}
+    assert semantic_config._parse_json_object('{"a": 1}') == {"a": 1}
+    assert semantic_config._history_message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"
+    assert semantic_config._is_history_tool_error_message('["not dict"]') is False
+    assert semantic_config._is_history_tool_error_message("[tool]\nnot json but 错误") is True
+
+    compact = semantic_config._compact_history_conversation_messages([
+        {"role": "user", "content": [{"text": ""}, {"content": "  "}], "timestamp": "skip"},
+        {"role": "assistant", "content": "带工具调用的回复", "tool_calls": [{"id": "tc"}], "timestamp": "skip"},
+        {"role": "assistant", "content": "正常回复", "timestamp": "t1"},
+        {"role": "tool", "tool_name": "execute_sql", "content": '{"success": true}', "timestamp": "t2"},
+        {"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "失败"}', "timestamp": "t3"},
+    ])
+    assert compact["assistant_turns"] == [{"content": "正常回复", "timestamp": "t1"}]
+    assert compact["tool_errors"][0]["content"] == '{"success": false, "error": "失败"}'
+
+    assert semantic_config._semantic_scope_tables({
+        "metrics": [{"table": ""}],
+        "dimensions": [{"table": "orders"}],
+        "relationships": [{"left_table": "", "right_table": "users"}],
+    }) == {"orders", "users"}
+
+    async def fake_get_agent_id(_db_path, conversation_id):
+        return {
+            "conv_agent": semantic_config.AGENT_ID,
+            "conv_data": semantic_config.DATA_ANALYZE_AGENT_ID,
+            "conv_unknown": "unknown_agent",
+        }.get(conversation_id)
+
+    async def fake_get_detail(_db_path, conversation_id, graph_getter, checkpointer_getter):
+        assert graph_getter in {semantic_config.get_chat_data_graph, semantic_config.get_data_analyze_graph}
+        return {"messages": [{"role": "user", "content": f"{conversation_id} 用户问题"}]}
+
+    monkeypatch.setattr(semantic_config.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(semantic_config.conversation, "get_detail", fake_get_detail)
+
+    agent_context = asyncio.run(semantic_config._load_history_conversation_context("conv_agent"))
+    data_context = asyncio.run(semantic_config._load_history_conversation_context("conv_data"))
+    unknown_context = asyncio.run(semantic_config._load_history_conversation_context("conv_unknown"))
+    empty_context = asyncio.run(semantic_config._load_history_conversation_context(""))
+
+    assert agent_context["user_turns"][0]["content"] == "conv_agent 用户问题"
+    assert data_context["user_turns"][0]["content"] == "conv_data 用户问题"
+    assert unknown_context is None
+    assert empty_context is None
+
+    async def raise_get_detail(*_args, **_kwargs):
+        raise RuntimeError("history down")
+
+    monkeypatch.setattr(semantic_config.conversation, "get_detail", raise_get_detail)
+    assert asyncio.run(semantic_config._load_history_conversation_context("conv_agent")) is None
+
+
+def test_prefill_dedupe_and_parse_response_extra_branches():
+    long_alias = "ods_marketing_channel_role_name"
+    items = [
+        {"name": "金额", "table_alias": long_alias, "table": "orders"},
+        {"name": "金额", "table_alias": "seller_orders", "table": "orders"},
+        {"name": "金额", "table_alias": "", "table": "orders"},
+        {"name": "", "table_alias": "orders", "table": "orders"},
+        {"name": "", "table_alias": "orders", "table": "orders"},
+    ]
+    deduped = semantic_config._dedupe_prefill_display_names(items)
+    names = [item["name"] for item in deduped]
+
+    assert names[0] == "name_金额"
+    assert names[1] == "orders_金额"
+    assert names[2] == "orders_金额2"
+    assert names[3] == ""
+    assert names[4] == "2"
+    assert semantic_config._normalize_prefill_table_model_type("aggregated") == "aggregated"
+    assert semantic_config._normalize_prefill_table_model_type("unknown") == "detail"
+
+    parsed = semantic_config._parse_prefill_response(json.dumps({
+        "fields": [
+            {"table": "orders", "column": "amount", "role": "metric"},
+            "bad",
+            {"table": "orders", "column": "", "role": "dimension"},
+        ],
+        "knowledge": {"business_flow": "下单-支付"},
+    }, ensure_ascii=False), generate_business_flow=True)
+    assert parsed["fields"]["orders.amount"]["expression"] == "`amount`"
+    assert parsed["knowledge"] == {"business_flow": "下单-支付"}
+
+    table_payload = [{"table": "orders", "columns": [{"name": "amount"}]}]
+    recommendation = semantic_config._parse_prefill_recommendation_response(json.dumps({
+        "fields": [{"table": "orders", "column": "amount", "name": "订单金额"}],
+        "metrics": [{"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"}],
+    }, ensure_ascii=False), table_payload, max_metrics=1)
+    metric_only = semantic_config._parse_metric_recommendation_response(json.dumps({
+        "metrics": [
+            {"table": "orders", "column": "amount", "agg": "SUM", "name": "销售额"},
+            {"table": "orders", "column": "amount", "agg": "AVG", "name": "均额"},
+        ],
+    }, ensure_ascii=False), table_payload, max_metrics=1)
+
+    assert recommendation["fields"][0]["name"] == "订单金额"
+    assert recommendation["metrics"][0]["name"] == "销售额"
+    assert len(metric_only) == 1
+
+
+def test_prefill_by_llm_handles_empty_recommendation_list_and_failure(monkeypatch):
+    tables = [{"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]}]
+
+    async def fake_list_recommendation(*_args, **_kwargs):
+        return [{"table": "orders", "table_alias": "orders", "column": "amount", "role": "metric", "name": "销售额", "expression": "SUM(`amount`)"}]
+
+    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_list_recommendation)
+    list_result = asyncio.run(semantic_config._prefill_by_llm(tables, "detail"))
+    assert [item["role"] for item in list_result["fields"]].count("metric") == 1
+
+    async def raise_recommendation(*_args, **_kwargs):
+        raise RuntimeError("llm failed")
+
+    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", raise_recommendation)
+    fallback = asyncio.run(semantic_config._prefill_by_llm(tables, "detail"))
+    assert fallback["fields"]
+    assert all(item["role"] == "dimension" for item in fallback["fields"])
+    assert asyncio.run(semantic_config._prefill_by_llm([], "detail")) == {"fields": [], "knowledge": {}}
+    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "", "columns": []}], "detail")) == {"fields": [], "knowledge": {}}
+
+
+def test_fill_missing_prefill_knowledge_branches(monkeypatch):
+    existing = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
+        table_payload=[],
+        knowledge={"business_flow": "已有"},
+        generate_business_flow=True,
+    ))
+    disabled = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
+        table_payload=[],
+        knowledge={"business_flow": "忽略"},
+        generate_business_flow=False,
+    ))
+
+    async def fake_call_prefill_llm(prompt, generate_business_flow=False):
+        assert generate_business_flow is True
+        assert "business_flow" in prompt
+        return {"knowledge": {"business_flow": "补充业务流"}}
+
+    monkeypatch.setattr(semantic_config, "_call_prefill_llm", fake_call_prefill_llm)
+    filled = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
+        table_payload=[{"table": "orders", "columns": []}],
+        knowledge={},
+        generate_business_flow=True,
+    ))
+
+    assert existing == {"business_flow": "已有"}
+    assert disabled == {}
+    assert filled == {"business_flow": "补充业务流"}
+
+
+def test_history_learning_normalization_duplicate_and_review_branches():
+    datasource = {
+        "ds_tables": [
+            {"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]},
+        ]
+    }
+    config = {"metrics": [], "dimensions": []}
+    samples = [{"execution_id": "exec_1", "source": "sql"}, {"execution_id": "exec_2", "source": "agent"}]
+    raw = {
+        "metrics": [
+            {"name": "新指标", "table": "missing_table", "expression": "SUM(amount)", "reason": "缺表", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
+            {"name": "新指标", "table": "missing_table", "expression": "SUM(amount)", "reason": "重复", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
+            {"name": "缺字段指标", "table": "orders", "expression": "SUM(pay_amount)", "reason": "缺字段", "source": "agent", "confidence": "medium", "sample_execution_ids": ["exec_2"], "support_count": 2},
+        ],
+        "dimensions": [
+            {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "type": "categorical", "reason": "缺字段", "source": "sql", "confidence": "low", "sample_execution_ids": ["exec_1"], "support_count": 1},
+        ],
+        "issues": "bad",
+    }
+
+    result = semantic_config._normalize_history_learning_result(raw, samples, datasource, config)
+
+    assert [item["name"] for item in result["metrics"]] == ["新指标", "缺字段指标"]
+    assert result["metrics"][0]["needs_review"] is True
+    assert "表不在当前数据源缓存中" in result["metrics"][0]["review_reason"]
+    assert "pay_amount" in result["metrics"][1]["review_reason"]
+    assert result["dimensions"][0]["needs_review"] is True
+    assert "orders.channel" in result["dimensions"][0]["review_reason"]
+    assert result["issues"] == []
+
+
+def test_generate_history_learning_suggestions_llm_branches(monkeypatch):
+    empty = asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm({}, {}, []))
+    assert empty == {"metrics": [], "dimensions": [], "issues": []}
+
+    class FakeLlm:
+        def __init__(self, content):
+            self.content = content
+
+        async def ainvoke(self, messages):
+            return SimpleNamespace(content=self.content)
+
+    samples = [{"execution_id": "exec_1", "source": "sql"}]
+    datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}]}
+    config = {"metrics": [], "dimensions": []}
+
+    monkeypatch.setattr(
+        semantic_config,
+        "get_chat_data_llm",
+        lambda **_kwargs: FakeLlm(json.dumps({
+            "suggestions": {
+                "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "reason": "常查", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1}],
+                "dimensions": [],
+                "issues": [],
+            }
+        }, ensure_ascii=False)),
+    )
+    success = asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples))
+    assert success["metrics"][0]["name"] == "销售额"
+
+    monkeypatch.setattr(semantic_config, "get_chat_data_llm", lambda **_kwargs: FakeLlm("[1, 2]"))
+    with pytest.raises(ValueError, match="合法 JSON"):
+        asyncio.run(semantic_config._generate_history_learning_suggestions_by_llm(datasource, config, samples))

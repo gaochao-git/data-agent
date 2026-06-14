@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from apps.chat_data_app.services import datasource_store as store_module
 from apps.chat_data_app.services.datasource_store import (
     _ORM_SESSION,
     _build_member_identity,
@@ -258,6 +259,20 @@ def test_parse_member_source_entries_keep_valid_members():
     assert [item["datasource_id"] for item in entries] == ["ORG_A", "ORG_B"]
     assert [item["source_line"] for item in entries] == ["127.0.0.1:10000:dw", "127.0.0.1:10000:dw"]
     assert _parse_member_source_entries("direct|127.0.0.1:3306:test_db", "direct|127.0.0.1:3306:test_db", "mysql", "direct") == []
+    duplicate_entries = _parse_member_source_entries(
+        "机构A|ORG_A|direct|127.0.0.1:3306:demo\n机构A|ORG_A|direct|127.0.0.1:3306:demo",
+        "",
+        "mysql",
+        "direct",
+    )
+    fallback_template_entries = _parse_member_source_entries(
+        "机构A|ORG_A|direct|127.0.0.1:3306:demo",
+        "机构B|ORG_B|http|127.0.0.2:3306:demo",
+        "mysql",
+        "direct",
+    )
+    assert [item["datasource_id"] for item in duplicate_entries] == ["ORG_A"]
+    assert [item["datasource_id"] for item in fallback_template_entries] == ["ORG_B", "ORG_A"]
 
 
 def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
@@ -268,10 +283,12 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _load_json(None, {"default": True}) == {"default": True}
     assert _load_json({"a": 1}, {}) == {"a": 1}
     assert _load_json("", ["default"]) == ["default"]
+    assert _load_json("{bad}", ["default"]) == ["default"]
     assert _load_json(123, ["default"]) == ["default"]
     assert _load_json(b'["a"]', []) == ["a"]
     assert _build_source_line("", 3306, "demo") is None
     assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "host": "", "port": 3306, "database": "demo"}) is None
+    assert _build_member_source_text_line({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"}) is None
     assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.1", "port": 10000, "database": "dw"}) == "机构A|ORG_A|http|127.0.0.1:10000:dw"
     assert _build_member_identity("mysql", "direct", " ORG_A ", "h:1:d") == "ORG_A"
     assert _build_member_identity("mysql", "direct", "", "h:1:d") is None
@@ -283,13 +300,15 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _parse_source_line("bad-source-line") is None
     assert _parse_source_line("127.0.0.1:abc:demo") is None
     assert _parse_source_line("127.0.0.1:abc:demo") is None
-    assert len(warnings) == 2
+    assert len(warnings) == 3
     assert _parse_member_source_entry("", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|bad|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A||direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|direct|bad", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "bad")["query_executor_type"] == "direct"
+    monkeypatch.setattr(store_module, "_build_member_identity", lambda *_args: None)
+    assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _unique_non_empty_texts([" a ", "", "a", "b"]) == ["a", "b"]
 
 
@@ -344,7 +363,9 @@ def test_datasource_store_group_and_table_queries_use_orm(monkeypatch):
             await store.has_datasource_async("missing"),
             await store.has_datasource_async(""),
             await store.get_all_datasources_async(),
+            await store.get_all_datasources_async(include_tables=False),
             await store.get_datasource_async("group_a"),
+            await store.get_datasource_by_group_name_async(""),
             await store.get_datasource_by_group_name_async("订单组"),
             await store.get_default_datasource_async(),
             await store.get_datasource_tables_by_group_id_async("group_a"),
@@ -352,14 +373,16 @@ def test_datasource_store_group_and_table_queries_use_orm(monkeypatch):
             await store.get_column_dict_async("group_a", "orders", "status"),
         )
 
-    exists, missing, empty, all_datasources, datasource, by_name, default, tables, member_ids, column_dict = asyncio.run(run_checks())
+    exists, missing, empty, all_datasources, all_without_tables, datasource, empty_name, by_name, default, tables, member_ids, column_dict = asyncio.run(run_checks())
 
     assert exists is True
     assert missing is False
     assert empty is False
     assert all_datasources[0]["ds_tables"][0]["business_desc"] == "业务订单主表"
     assert all_datasources[0]["ds_tables"][0]["groups"] == [{"table_group_name": "订单域"}]
+    assert all_without_tables[0]["ds_tables"] == []
     assert datasource["member_datasource_ids"] == ["ORG_A", "ORG_B"]
+    assert empty_name is None
     assert by_name["group_name"] == "订单组"
     assert default["is_default"] is True
     assert tables[0]["columns"] == [{"name": "id"}]
@@ -427,6 +450,32 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
     assert by_table == {
         "status": {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "", "unit": ""},
     }
+
+
+def test_datasource_store_empty_defaults_and_write_short_circuits(monkeypatch):
+    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_group": [], "datasource_column_dict": []}, executed=executed)
+
+    async def run_checks():
+        return (
+            await store.get_default_datasource_async(),
+            await store.get_semantic_configs_async("missing"),
+            await store.update_datasource_table_business_desc_async("", "orders", "desc"),
+            await store.update_datasource_table_business_desc_async("group_a", "", "desc"),
+            await store.replace_column_dict_async("", "orders", "status", {"unit": "元"}),
+            await store.replace_column_dict_async("group_a", "orders", "status", {}),
+        )
+
+    default_ds, semantic_configs, empty_group_update, empty_table_update, invalid_dict, empty_dict = asyncio.run(run_checks())
+
+    assert default_ds is None
+    assert semantic_configs == []
+    assert empty_group_update is None
+    assert empty_table_update is None
+    assert invalid_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
+    assert empty_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
+    assert any("UPDATE datasource_column_dict" in str(stmt) for stmt in executed)
 
 
 def test_datasource_store_table_group_queries_deduplicate(monkeypatch):

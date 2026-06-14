@@ -14,18 +14,24 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.handlers import (
     _build_execution_target_info_async,
+    _build_semantic_selection_error,
+    _build_semantic_select_required_event,
     _continue_execution,
+    _extract_select_semantic_config_payload,
     _format_sse,
     _format_tool_event,
     _get_interrupt_info,
     _get_semantic_config_async,
     _is_tool_result_error,
+    _normalize_semantic_selection_payload,
     _parse_tool_args_buffer,
     _prepare_data_analyze_workspace_sync,
     _stream_sql_generation,
     _finish_running_tool,
     _register_running_tool,
     _resolve_active_tool_call_id,
+    _semantic_selection_event_from_tool_payload,
+    _semantic_select_required_event_from_tool_payload,
     data_analyze_completion_handler,
     prepare_data_analyze_workspace,
     sql_completion_handler,
@@ -87,6 +93,97 @@ def test_format_tool_event_uses_result_as_content():
     assert '"tool_name": "execute_sql_tool"' in text
     assert '"content": "执行完成"' in text
     assert '"timestamp": "2026-06-02 10:00:00"' in text
+
+
+def test_semantic_selection_helper_branches():
+    assert _build_semantic_selection_error(None).startswith("当前数据源组没有")
+    assert "跨指标集" in _build_semantic_selection_error({
+        "cross_config_required": True,
+        "cross_config_reason": "订单和库存分别在不同指标集",
+    })
+    assert _build_semantic_selection_error({
+        "ambiguous": True,
+        "candidates": [{"id": "cfg_a", "name": "订单分析"}, {"id": "cfg_b"}],
+    }) == "该问题可由多个指标集回答，请明确选择：订单分析、cfg_b"
+    assert _build_semantic_selection_error({"ambiguous": True, "reason": "请明确指标集"}) == "请明确指标集"
+    assert "未能确定最适合" in _build_semantic_selection_error({
+        "candidates": [
+            {"id": "cfg_a", "name": "订单分析", "reason": "命中订单"},
+            {"id": "cfg_b", "confidence": "low"},
+            "skip",
+        ]
+    })
+    assert _build_semantic_selection_error({"reason": ""}).startswith("当前可用指标集")
+
+    required = _build_semantic_select_required_event(
+        {
+            "ambiguous": True,
+            "ambiguity_reason": "多个候选",
+            "candidates": [
+                {"id": "", "name": "无效"},
+                {"id": "cfg_a", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "命中"},
+                "skip",
+            ],
+        },
+        "查询金额",
+    )
+    assert required["query"] == "查询金额"
+    assert required["ambiguous"] is True
+    assert required["candidates"] == [{"id": "cfg_a", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "命中"}]
+
+
+def test_select_semantic_config_payload_helpers():
+    assert _extract_select_semantic_config_payload("plain") is None
+    assert _extract_select_semantic_config_payload("[select_semantic_config_tool]\n{bad") is None
+    assert _extract_select_semantic_config_payload("[select_semantic_config_tool]\n[]") is None
+    payload = _extract_select_semantic_config_payload('[select_semantic_config_tool]\n{"selected": true, "selected_config_id": "cfg_a"}')
+    assert payload == {"selected": True, "selected_config_id": "cfg_a"}
+
+    selected_event = _semantic_selection_event_from_tool_payload({
+        "selected_config_id": "cfg_a",
+        "selected_config_name": "",
+        "reason": "",
+        "message": "已选择",
+        "matched_metrics": ["订单数"],
+    })
+    required_event = _semantic_select_required_event_from_tool_payload({
+        "message": "需要选择",
+        "reason": "多个候选",
+        "ambiguous": True,
+        "candidates": [{"id": "cfg_a", "name": "订单分析"}],
+    }, "查订单")
+
+    assert selected_event["semantic_config_name"] == "cfg_a"
+    assert selected_event["reason"] == "已选择"
+    assert selected_event["matched_metrics"] == ["订单数"]
+    assert required_event["query"] == "查订单"
+    assert required_event["candidates"][0]["id"] == "cfg_a"
+
+
+def test_normalize_semantic_selection_payload_branches():
+    assert _normalize_semantic_selection_payload(None) is None
+    assert _normalize_semantic_selection_payload({"semantic_config_id": ""}) is None
+    normalized = _normalize_semantic_selection_payload({
+        "semantic_config_id": " cfg_a ",
+        "semantic_config_name": "",
+        "confidence": " high ",
+        "reason": " 命中 ",
+        "matched_metrics": [" 订单数 ", "", None],
+        "matched_dimensions": "bad",
+        "auto_selected": 1,
+        "user_selected": "",
+    })
+
+    assert normalized == {
+        "semantic_config_id": "cfg_a",
+        "semantic_config_name": "cfg_a",
+        "confidence": "high",
+        "reason": "命中",
+        "matched_metrics": ["订单数", "None"],
+        "matched_dimensions": [],
+        "auto_selected": True,
+        "user_selected": False,
+    }
 
 
 def test_parse_tool_args_buffer_falls_back_on_invalid_json():
@@ -156,6 +253,26 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     assert "1. 杭州库" in single
     assert "2 个执行对象" in multi
     assert "2. 宁波库" in multi
+
+
+def test_build_execution_target_info_async_empty_and_error(monkeypatch):
+    import asyncio
+
+    assert asyncio.run(_build_execution_target_info_async(None, None)) == ""
+
+    class EmptyManager:
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            return []
+
+    class ErrorManager:
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            raise RuntimeError("manager failed")
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: EmptyManager())
+    assert asyncio.run(_build_execution_target_info_async("ds_a", None)) == ""
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: ErrorManager())
+    assert asyncio.run(_build_execution_target_info_async("ds_a", None)) == ""
 
 
 def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):

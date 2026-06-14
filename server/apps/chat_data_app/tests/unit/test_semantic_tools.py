@@ -19,6 +19,8 @@ from apps.chat_data_app.services.semantic_tools import (
     extract_datasource_id,
     extract_semantic_config_id,
     extract_user_query,
+    load_runtime_semantic_config,
+    _selection_to_tool_payload,
 )
 
 
@@ -36,6 +38,93 @@ def test_extract_user_query_reads_last_human_message():
     assert extract_user_query(None) is None
     assert extract_user_query({}) is None
     assert extract_user_query({"messages": [HumanMessage(content="第一次"), AIMessage(content="回复"), HumanMessage(content="第二次")]}) == "第二次"
+    assert extract_user_query({"messages": [AIMessage(content="没有用户消息")]}) is None
+
+
+def test_selection_to_tool_payload_branches():
+    empty = _selection_to_tool_payload(None)
+    selected = _selection_to_tool_payload(
+        {
+            "selected_config_id": "cfg_a",
+            "selected_config_name": "订单分析",
+            "coverage": "full",
+            "confidence": "high",
+            "reason": "命中订单金额",
+            "matched_metrics": ["订单金额"],
+            "matched_dimensions": ["城市"],
+            "candidates": "bad",
+        },
+        {"id": "cfg_a", "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": [{"name": "城市"}]},
+    )
+    ambiguous = _selection_to_tool_payload({
+        "selected_config_id": "cfg_a",
+        "coverage": "full",
+        "ambiguous": True,
+        "ambiguity_reason": "多个指标集都命中",
+        "candidates": [{"id": "cfg_a", "name": "订单分析"}],
+    })
+    cross_config = _selection_to_tool_payload({
+        "selected_config_id": "cfg_a",
+        "coverage": "partial",
+        "cross_config_required": True,
+        "cross_config_reason": "需要跨指标集",
+    })
+    unsupported = _selection_to_tool_payload({"selected_config_id": "", "coverage": "none", "reason": "缺少退款指标"})
+
+    assert empty["selected"] is False
+    assert empty["message"].startswith("当前数据源组没有")
+    assert selected["selected"] is True
+    assert selected["semantic_config"]["id"] == "cfg_a"
+    assert selected["candidates"] == []
+    assert ambiguous["selected"] is False
+    assert ambiguous["ambiguous"] is True
+    assert "多个可用指标集" in ambiguous["message"]
+    assert cross_config["cross_config_required"] is True
+    assert "跨指标集" in cross_config["message"]
+    assert unsupported["message"] == "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
+
+
+def test_load_runtime_semantic_config_branches(monkeypatch):
+    class RuntimeManager:
+        async def get_datasource_async(self, datasource_id):
+            if datasource_id == "missing":
+                return None
+            return {"id": datasource_id, "source_type": "hive"}
+
+        async def get_runtime_semantic_config_async(self, datasource_id, semantic_config_id):
+            if semantic_config_id == "enabled":
+                return {"id": semantic_config_id, "enabled": True, "relationships": [{"left_table": "orders"}]}
+            if semantic_config_id == "disabled":
+                return {"id": semantic_config_id, "enabled": False}
+            if semantic_config_id == "no_id":
+                return {"enabled": True}
+            return None
+
+    class FallbackManager:
+        async def get_datasource_async(self, datasource_id):
+            return {"id": datasource_id, "source_type": "mysql"}
+
+        async def get_semantic_config_async(self, datasource_id, semantic_config_id):
+            return {"id": semantic_config_id, "enabled": True, "joins": [{"left_table": "kept"}]}
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: RuntimeManager())
+
+    assert asyncio.run(load_runtime_semantic_config(None, "cfg")) is None
+    assert asyncio.run(load_runtime_semantic_config("ds", None)) is None
+    assert asyncio.run(load_runtime_semantic_config("missing", "enabled")) is None
+    assert asyncio.run(load_runtime_semantic_config("ds", "missing")) is None
+    assert asyncio.run(load_runtime_semantic_config("ds", "disabled")) is None
+
+    enabled = asyncio.run(load_runtime_semantic_config("ds", "enabled"))
+    no_id = asyncio.run(load_runtime_semantic_config("ds", "no_id"))
+    assert enabled["joins"] == [{"left_table": "orders"}]
+    assert enabled["source_type"] == "hive"
+    assert no_id["id"] == "no_id"
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: FallbackManager())
+    fallback = asyncio.run(load_runtime_semantic_config("ds", "cfg_b"))
+    assert fallback["source_type"] == "mysql"
+    assert fallback["joins"] == [{"left_table": "kept"}]
 
 
 def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
@@ -71,6 +160,24 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     assert captured["model_id"] == "model_a"
     assert captured["load_args"] == ("ds_bound", "sc_a")
     assert payload["selected"] is True
+
+
+def test_select_semantic_config_tool_error_branches(monkeypatch):
+    tools = create_semantic_config_selection_tools(include_query_tools=False)
+    select_tool = tools[0]
+
+    missing_datasource = asyncio.run(select_tool.ainvoke({"query": "查询订单", "state": {}}))
+    missing_query = asyncio.run(select_tool.ainvoke({"query": "", "state": {"datasource_id": "ds_a", "messages": []}}))
+
+    async def boom_select_semantic_config_for_query(**_kwargs):
+        raise RuntimeError("selector failed")
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", boom_select_semantic_config_for_query)
+    failed = asyncio.run(select_tool.ainvoke({"query": "查询订单", "state": {"datasource_id": "ds_a"}}))
+
+    assert "未绑定数据源" in missing_datasource
+    assert "缺少用户问题" in missing_query
+    assert "selector failed" in failed
 
 
 def test_generate_sql_uses_semantic_params_only(monkeypatch):
@@ -145,3 +252,69 @@ def test_unified_semantic_tools_use_bound_config_without_selector():
 
     assert "COUNT(" in sql_text
     assert "ORDER BY COUNT(" in sql_text
+
+
+def test_dsl2sql_tool_loads_runtime_config_and_handles_missing(monkeypatch):
+    loaded = []
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        loaded.append((datasource_id, semantic_config_id))
+        if semantic_config_id == "cfg_missing":
+            return None
+        return {
+            "id": semantic_config_id,
+            "source_type": "mysql",
+            "metrics": [{"name": "订单数", "expression": "COUNT(orders.order_id)", "table": "orders"}],
+            "dimensions": [{"name": "城市", "column": "city", "table": "orders", "type": "categorical"}],
+            "relationships": [],
+        }
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+    _, dsl_tool = create_semantic_config_selection_tools(datasource_id="ds_bound")
+
+    missing = asyncio.run(dsl_tool.ainvoke({
+        "semantic_config_id": "cfg_missing",
+        "metrics": ["订单数"],
+        "dimensions": [],
+        "state": {"messages": [HumanMessage(content="查询订单数")]},
+    }))
+    sql_text = asyncio.run(dsl_tool.ainvoke({
+        "semantic_config_id": "cfg_ok",
+        "metrics": ["订单数"],
+        "dimensions": ["城市"],
+        "state": {"messages": [HumanMessage(content="按城市查询订单数")]},
+    }))
+
+    assert "未找到可用指标集 cfg_missing" in missing
+    assert "COUNT(" in sql_text
+    assert loaded == [("ds_bound", "cfg_missing"), ("ds_bound", "cfg_ok")]
+
+
+def test_dsl2sql_tool_uses_state_semantic_config_id_when_argument_missing(monkeypatch):
+    loaded = []
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        loaded.append((datasource_id, semantic_config_id))
+        return {
+            "id": semantic_config_id,
+            "source_type": "mysql",
+            "metrics": [{"name": "订单数", "expression": "COUNT(orders.order_id)", "table": "orders"}],
+            "dimensions": [],
+            "relationships": [],
+        }
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+    _, dsl_tool = create_semantic_config_selection_tools()
+
+    result = asyncio.run(dsl_tool.ainvoke({
+        "metrics": ["订单数"],
+        "dimensions": [],
+        "state": {
+            "datasource_id": "ds_state",
+            "semantic_config_id": "cfg_state",
+            "messages": [HumanMessage(content="查询订单数")],
+        },
+    }))
+
+    assert "COUNT(" in result
+    assert loaded == [("ds_state", "cfg_state")]

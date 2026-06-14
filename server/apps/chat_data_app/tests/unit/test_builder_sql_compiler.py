@@ -31,6 +31,8 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._is_sql_function("") is False
     assert compiler._is_sql_function("unsafe_fn()") is False
     assert compiler._is_sql_function("current_date(); drop table t") is False
+    assert compiler._is_sql_function("current_date() -- comment") is False
+    assert compiler._is_sql_function("current_date(") is False
     assert compiler._is_sql_function("date_add(current_date(), interval 1 day)") is True
     assert compiler._has_balanced_parentheses("concat('(', col)") is True
     assert compiler._has_balanced_parentheses("concat('x'") is False
@@ -41,8 +43,10 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._sql_literal("O'Reilly", "literal") == "'O''Reilly'"
     assert compiler._sql_literal("'current_date()'", "sql_function") == "current_date()"
     assert compiler._sql_literal("bad_fn()", "sql_function") == "'bad_fn()'"
+    assert compiler._sql_literal("current_date()", "literal") == "'current_date()'"
     assert compiler._sql_list_literal([], None) == "(NULL)"
     assert compiler._sql_list_literal("paid", None) == "('paid')"
+    assert compiler._sql_list_literal(["current_date()", "paid"], ["sql_function", "literal"]) == "(current_date(), 'paid')"
     assert compiler._get_filter_tree_scope({"and": []}) is None
     assert compiler._get_filter_tree_scope({"and": "bad"}) is None
     assert compiler._normalize_raw_expression("orders.amount", "orders", "amount", False) == "amount"
@@ -58,6 +62,26 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._get_filter_tree_scope("bad") is None
     assert compiler._normalize_raw_expression("`amount`", "orders", "amount", False) == "`amount`"
     assert compiler._get_column_expr("orders", "*", True) == "*"
+    assert compiler._build_from_ref("", "o") == ""
+    assert compiler._build_from_ref("orders", "") == "orders"
+    assert compiler._build_from_ref("orders", "orders") == "orders"
+    assert compiler._build_from_ref("orders", "o") == "orders o"
+    assert compiler._rewrite_expression_table_qualifier("orders.amount + `orders`.tax", "o", "orders", True) == "o.amount + o.tax"
+    assert compiler._rewrite_expression_table_qualifier("orders.amount", "orders", "orders", True) == "orders.amount"
+    assert compiler._normalize_raw_expression("", "orders", "amount", False) == "`amount`"
+    assert compiler._normalize_raw_expression("amount", "orders", "amount", True) == "orders.`amount`"
+    assert compiler._normalize_raw_expression("orders.amount", "o", "orders", True, physical_table="orders") == "o.amount"
+    assert compiler._normalize_aggregate_expression("SUM(orders.amount)", "o", "amount", True, physical_table="orders") == "SUM(o.amount)"
+    assert compiler._normalize_aggregate_expression("COUNT(DISTINCT orders.user_id)", "o", "user_id", True, physical_table="orders") == "COUNT(DISTINCT o.user_id)"
+    assert compiler._filter_has_real_aggregation("bad") is False
+    assert compiler._filter_has_real_aggregation({"and": "bad"}) is False
+    assert compiler._filter_has_real_aggregation({"and": [{"aggFunc": "SUM"}]}) is True
+    assert compiler._filter_has_real_aggregation({"expression": "SUM(orders.amount)"}) is True
+    assert compiler._filter_has_real_aggregation({"expression": "orders.amount"}) is False
+    assert compiler._order_by_has_real_aggregation("bad") is False
+    assert compiler._order_by_has_real_aggregation({"aggFunc": ""}) is False
+    assert compiler._order_by_has_real_aggregation({"aggFunc": "RAW", "expression": "SUM(orders.amount)"}) is True
+    assert compiler._order_by_has_real_aggregation({"aggFunc": "SUM"}) is True
 
 
 def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_table():
@@ -85,6 +109,18 @@ def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_t
     assert "LEFT JOIN users ON orders.user_id = users.id" in clauses
 
 
+def test_builder_join_clause_helper_allows_join_without_on():
+    clauses = compiler._build_join_clauses("orders", [
+        {"rightTable": "users", "joinConditions": [{"leftColumn": "", "rightColumn": "id"}]},
+        {"rightTable": "items", "leftColumn": "", "rightColumn": "order_id"},
+    ])
+
+    assert "LEFT JOIN users" in clauses
+    assert "LEFT JOIN users ON" not in clauses
+    assert "LEFT JOIN items" in clauses
+    assert "LEFT JOIN items ON" not in clauses
+
+
 def test_compile_builder_sql_validates_shape_and_required_fields():
     with pytest.raises(ValueError, match="格式错误"):
         compile_builder_sql([])
@@ -92,6 +128,18 @@ def test_compile_builder_sql_validates_shape_and_required_fields():
         compile_builder_sql({"dimensions": [{"table": "orders", "column": "id"}]})
     with pytest.raises(ValueError, match="至少选择"):
         compile_builder_sql({"mainTable": "orders", "dimensions": [], "aggregations": []})
+
+
+def test_compile_builder_sql_rejects_raw_and_aggregate_metric_mix():
+    with pytest.raises(ValueError, match="原始值与聚合函数混用"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [],
+            "aggregations": [
+                {"id": "a1", "func": "RAW", "table": "orders", "column": "amount", "alias": "原始金额"},
+                {"id": "a2", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"},
+            ],
+        })
 
 
 def test_sql_dialect_time_grain_exprs_are_isolated_from_compiler():
@@ -174,6 +222,80 @@ def test_compile_builder_sql_duplicate_alias_raw_metric_and_join_conditions():
     assert "orders.`status` IN (select status from valid_status)" in sql
     assert "orders.amount + orders.tax > 0" in sql
     assert "ORDER BY `重复名` ASC" in sql
+
+
+def test_compile_builder_sql_where_operator_branches_and_tree_empty_nodes():
+    assert compiler._build_filter_tree_clause(
+        {"and": []},
+        for_having=False,
+        is_multi_table=False,
+        main_table="orders",
+        dimension_expr_map={},
+        aggregations=[],
+        agg_by_id={},
+    ) == ""
+    assert compiler._build_filter_tree_clause(
+        {"or": []},
+        for_having=False,
+        is_multi_table=False,
+        main_table="orders",
+        dimension_expr_map={},
+        aggregations=[],
+        agg_by_id={},
+    ) == ""
+
+    builder_config = {
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "joins": [
+            {
+                "leftTable": "orders",
+                "leftAlias": "o",
+                "rightTable": "users",
+                "rightAlias": "u",
+                "leftColumn": "user_id",
+                "rightColumn": "user_id",
+            }
+        ],
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "aggregations": [],
+        "filters": [
+            {
+                "or": [
+                    {"id": "f1", "table": "orders", "tableAlias": "o", "column": "status", "operator": "=", "valueType": "field_ref", "rightTable": "users", "rightTableAlias": "u", "rightColumn": "level"},
+                    {"id": "f2", "table": "orders", "tableAlias": "o", "column": "status", "operator": "IN", "valueType": "expression", "rightExpression": "select status from valid_status"},
+                    {"id": "f3", "table": "orders", "tableAlias": "o", "column": "status", "operator": "NOT IN", "valueType": "expression", "rightExpression": "select status from blocked_status"},
+                    {"id": "f4", "table": "orders", "tableAlias": "o", "column": "created_at", "operator": "BETWEEN", "value": ["2024-01-01", "current_date()"], "value_type": ["literal", "sql_function"]},
+                ]
+            },
+        ],
+        "orderBy": [],
+    }
+
+    sql = compile_builder_sql(builder_config)
+
+    assert "WHERE" in sql
+    assert "o.`status` = u.`level`" in sql
+    assert "o.`status` IN (select status from valid_status)" in sql
+    assert "o.`status` NOT IN (select status from blocked_status)" in sql
+    assert "o.`created_at` BETWEEN '2024-01-01' AND current_date()" in sql
+
+
+def test_compile_builder_sql_rejects_mixed_filter_tree_scope():
+    with pytest.raises(ValueError, match="不能混用明细过滤和结果过滤"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+            "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+            "filters": [
+                {
+                    "and": [
+                        {"table": "orders", "column": "status", "operator": "=", "value": "paid"},
+                        {"table": "orders", "column": "amount", "operator": ">", "value": 100, "aggFunc": "SUM"},
+                    ]
+                }
+            ],
+        })
 
 
 def test_compile_builder_sql_supports_same_physical_table_with_aliases():
@@ -272,6 +394,22 @@ def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
     assert "GROUP BY" not in sql
 
 
+def test_compile_builder_sql_count_distinct_star_and_raw_star_branches():
+    count_distinct_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [],
+        "aggregations": [{"id": "a1", "func": "COUNT_DISTINCT", "table": "orders", "column": "*", "alias": "去重总数"}],
+    })
+    raw_star_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [],
+        "aggregations": [{"id": "a1", "func": "RAW", "table": "orders", "column": "*", "alias": "全部"}],
+    })
+
+    assert "COUNT(*) AS `去重总数`" in count_distinct_sql
+    assert raw_star_sql.startswith("SELECT *\nFROM orders")
+
+
 def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias():
     builder_config = {
         "mainTable": "orders",
@@ -359,6 +497,107 @@ def test_compile_builder_sql_groups_dimension_for_unselected_having_order_metric
     assert "GROUP BY u.`level`" in sql
     assert "HAVING SUM(o.amount) > 100" in sql
     assert "ORDER BY SUM(o.amount) DESC" in sql
+
+
+def test_compile_builder_sql_having_tree_and_leaf_operator_branches():
+    builder_config = {
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "joins": [
+            {"rightTable": "targets", "rightAlias": "t", "leftAlias": "o", "leftColumn": "status", "rightColumn": "status"}
+        ],
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "aggregations": [
+            {"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"},
+        ],
+        "filters": [
+            {
+                "and": [
+                    {"id": "h0", "table": "orders", "tableAlias": "o", "column": "score", "operator": "IS NOT NULL", "aggFunc": "RAW", "expression": "orders.score"},
+                    {"id": "h1", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "=", "aggFunc": "SUM", "valueType": "field_ref", "rightTable": "targets", "rightTableAlias": "t", "rightColumn": "target_amount"},
+                    {"id": "h2", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "IN", "aggFunc": "SUM", "rightExpression": "select amount from amount_whitelist"},
+                    {"id": "h3", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "NOT IN", "aggFunc": "SUM", "valueType": "expression", "rightExpression": "select amount from amount_blacklist"},
+                    {"id": "h4", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "EMPTY STRING", "aggFunc": "SUM"},
+                    {"id": "h5", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "STARTS WITH", "aggFunc": "SUM", "value": "1"},
+                    {"id": "h6", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "ENDS WITH", "aggFunc": "SUM", "value": "9"},
+                    {"id": "h7", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "NOT LIKE", "aggFunc": "SUM", "value": "bad"},
+                    {"id": "h8", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "IN", "aggFunc": "SUM", "value": [1, 2]},
+                    {"id": "h9", "table": "orders", "tableAlias": "o", "column": "amount", "operator": "BETWEEN", "aggFunc": "SUM", "value": [10, 20]},
+                ]
+            }
+        ],
+        "orderBy": [],
+    }
+
+    sql = compile_builder_sql(builder_config)
+
+    assert "HAVING" in sql
+    assert "o.score IS NOT NULL" in sql
+    assert "SUM(o.`amount`) = t.`target_amount`" in sql
+    assert "SUM(o.`amount`) IN (select amount from amount_whitelist)" in sql
+    assert "SUM(o.`amount`) NOT IN (select amount from amount_blacklist)" in sql
+    assert "SUM(o.`amount`) = ''" in sql
+    assert "SUM(o.`amount`) LIKE '1%'" in sql
+    assert "SUM(o.`amount`) LIKE '%9'" in sql
+    assert "SUM(o.`amount`) NOT LIKE '%bad%'" in sql
+    assert "SUM(o.`amount`) IN (1, 2)" in sql
+    assert "SUM(o.`amount`) BETWEEN 10 AND 20" in sql
+
+
+def test_compile_builder_sql_empty_having_tree_is_ignored():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "filters": [{"and": ["skip"]}],
+    })
+
+    assert "HAVING" not in sql
+
+
+def test_compile_builder_sql_single_child_filter_trees_are_unwrapped():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "filters": [
+            {"and": [{"table": "orders", "column": "status", "operator": "=", "value": "paid"}]},
+            {"or": [{"table": "orders", "column": "amount", "operator": ">", "value": 100, "aggFunc": "SUM"}]},
+        ],
+    })
+
+    assert "WHERE `status` = 'paid'" in sql
+    assert "HAVING SUM(`amount`) > 100" in sql
+    assert "(SUM(`amount`) > 100)" not in sql
+
+
+def test_compile_builder_sql_having_expression_branches_without_tree():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "aggregations": [
+            {"id": "raw_score", "func": "RAW", "table": "orders", "tableAlias": "o", "column": "score", "alias": "分数", "expression": "orders.score"},
+        ],
+        "filters": [
+            {"id": "h1", "table": "orders", "tableAlias": "o", "column": "score", "operator": ">", "valueType": "expression", "rightExpression": "10 + 1", "aggFunc": "RAW", "aggId": "raw_score"},
+            {"id": "h2", "table": "orders", "tableAlias": "o", "column": "score", "operator": "IN", "valueType": "expression", "rightExpression": "select score from whitelist", "aggFunc": "RAW", "aggId": "raw_score", "logic": "OR"},
+        ],
+    })
+
+    assert "HAVING o.score > 10 + 1 OR o.score IN (select score from whitelist)" in sql
+
+
+def test_compile_builder_sql_order_by_dimension_expression_fallback():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态", "expression": "orders.status"}],
+        "aggregations": [{"id": "a1", "func": "RAW", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "金额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "status", "direction": "ASC"}],
+    })
+
+    assert "ORDER BY `状态` ASC" in sql
 
 
 def test_compile_builder_sql_rejects_limit_over_global_max():
@@ -524,6 +763,26 @@ def test_compile_builder_sql_aggregate_query_repairs_metric_order_by_without_agg
 
     assert "ORDER BY COUNT(order_id) DESC" in sql
     assert "ORDER BY orders.order_id DESC" not in sql
+
+
+def test_compile_builder_sql_order_by_group_expression_and_detail_fallback():
+    aggregate_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [
+            {"id": "d1", "table": "orders", "column": "created_at", "alias": "创建时间", "transform": "month"},
+        ],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "orderBy": [{"table": "orders", "column": "created_at", "direction": "DESC"}],
+    })
+    detail_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [],
+        "orderBy": [{"table": "orders", "column": "created_at", "direction": "DESC"}],
+    })
+
+    assert "ORDER BY `创建时间_month` DESC" in aggregate_sql
+    assert "ORDER BY orders.created_at DESC" in detail_sql
 
 
 def test_compile_builder_sql_compare_query_is_rejected():
