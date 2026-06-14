@@ -1,4 +1,115 @@
 from apps.chat_data_app import routes
+from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services.sql_executor import build_effective_sql, validate_sql
+
+
+def _patch_execute_sql_runtime(monkeypatch):
+    captured = {
+        "created_tasks": [],
+        "execution_records": [],
+        "task_updates": [],
+        "executor_calls": [],
+        "closed_targets": [],
+    }
+
+    class FakeRuntimeDatasourceManager:
+        async def get_datasource_async(self, datasource_id: str):
+            if datasource_id != "ds_a":
+                return None
+            return {"id": datasource_id, "source_type": "mysql"}
+
+        async def get_execution_datasources_async(self, datasource_id: str, member_datasource_ids=None):
+            member_ids = member_datasource_ids or ["member_a"]
+            return [
+                {
+                    "id": datasource_id,
+                    "datasource_id": datasource_id,
+                    "member_datasource_id": member_id,
+                    "member_name": f"{member_id}库",
+                    "source_type": "mysql",
+                    "query_executor_type": "direct",
+                }
+                for member_id in member_ids
+            ]
+
+    class FakeExecutor:
+        def __init__(self, execution_target):
+            self.execution_target = execution_target
+
+        async def execute(
+            self,
+            sql: str,
+            limit: int = 100,
+            timeout=None,
+            user_id=None,
+            username=None,
+            remote_task_callback=None,
+            db_connection_callback=None,
+        ):
+            captured["executor_calls"].append(
+                {
+                    "sql": sql,
+                    "limit": limit,
+                    "timeout": timeout,
+                    "user_id": user_id,
+                    "username": username,
+                    "member_datasource_id": self.execution_target.get("member_datasource_id"),
+                }
+            )
+            is_valid, error_msg = validate_sql(sql, source_type=self.execution_target.get("source_type"))
+            if not is_valid:
+                return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
+            effective_sql = build_effective_sql(sql, limit, source_type=self.execution_target.get("source_type"))
+            return {
+                "success": True,
+                "columns": ["member_datasource_id", "sql_text", "operator"],
+                "data": [
+                    {
+                        "member_datasource_id": self.execution_target.get("member_datasource_id"),
+                        "sql_text": effective_sql,
+                        "operator": username,
+                    }
+                ],
+                "total_count": 1,
+                "execution_time_ms": 3,
+            }
+
+        async def close(self):
+            captured["closed_targets"].append(self.execution_target.get("member_datasource_id"))
+
+    async def fake_create_task_for_execute_request(body, query_type=None, operator_name=None):
+        task_id = f"task_{len(captured['created_tasks']) + 1}"
+        captured["created_tasks"].append(
+            {
+                "task_id": task_id,
+                "body": body,
+                "query_type": query_type,
+                "operator_name": operator_name,
+            }
+        )
+        return {"task_id": task_id}
+
+    async def fake_create_query_executions_for_task(task_id, body, operator_name=None):
+        captured["execution_records"].append(
+            {
+                "task_id": task_id,
+                "body": body,
+                "operator_name": operator_name,
+            }
+        )
+        return {}
+
+    async def fake_update_query_task(task_id, **kwargs):
+        captured["task_updates"].append({"task_id": task_id, **kwargs})
+        return {"task_id": task_id}
+
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", False)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: FakeRuntimeDatasourceManager())
+    monkeypatch.setattr(query_runtime, "get_executor", lambda execution_target: FakeExecutor(execution_target))
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_query_executions_for_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
+    return captured
 
 
 def test_compile_builder_sql_api_contract(client, fake_datasource_manager, monkeypatch):
@@ -311,16 +422,16 @@ def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monke
         return body
 
     monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
-    monkeypatch.setattr(routes, "_create_task_for_execute_request", fake_create_task_for_execute_request)
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
     async def fake_create_query_executions_for_task(task_id, body, operator_name=None):
         return {}
 
-    monkeypatch.setattr(routes, "_create_query_executions_for_task", fake_create_query_executions_for_task)
-    monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_query_executions_for_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
     async def fake_build_execute_sql_result_data(body, query_task_id=None, execution_map=None, username=None):
         return result_data
 
-    monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_execute_sql_result_data)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_execute_sql_result_data)
 
     response = client.post(
         "/api/chatdata/execute-sql",
@@ -342,6 +453,76 @@ def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monke
     assert captured["body"].skip_query_cache is True
     assert captured["operator_name"] == "测试用户"
     assert captured["updates"][-1]["status"] == "succeeded"
+
+
+def test_execute_sql_api_runs_sql_and_builder_through_query_runtime(client, auth_headers, monkeypatch):
+    captured = _patch_execute_sql_runtime(monkeypatch)
+
+    sql_response = client.post(
+        "/api/chatdata/execute-sql",
+        json={
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["member_a"],
+            "sql": "select * from orders",
+            "query_type": "sql",
+            "limit": 5,
+        },
+        headers=auth_headers,
+    )
+    builder_response = client.post(
+        "/api/chatdata/execute-sql",
+        json={
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["member_b"],
+            "sql": "select city, sum(amount) amount from orders group by city",
+            "query_type": "builder",
+            "builder_config": {"mainTable": "orders"},
+            "limit": 7,
+        },
+        headers=auth_headers,
+    )
+
+    sql_payload = sql_response.json()
+    builder_payload = builder_response.json()
+    assert sql_payload["status"] == "success"
+    assert builder_payload["status"] == "success"
+    assert captured["created_tasks"][0]["query_type"] == "sql"
+    assert captured["created_tasks"][1]["query_type"] == "builder"
+    assert captured["created_tasks"][0]["body"].user_id == "user_a"
+    assert captured["created_tasks"][1]["body"].builder_config == {"mainTable": "orders"}
+    assert [item["member_datasource_id"] for item in captured["executor_calls"]] == ["member_a", "member_b"]
+    assert captured["executor_calls"][0]["username"] == "测试用户"
+    assert captured["executor_calls"][1]["limit"] == 7
+    assert captured["closed_targets"] == ["member_a", "member_b"]
+    assert captured["task_updates"][0]["status"] == "running"
+    assert captured["task_updates"][1]["status"] == "succeeded"
+    assert captured["task_updates"][2]["status"] == "running"
+    assert captured["task_updates"][3]["status"] == "succeeded"
+    assert sql_payload["data"]["data"][0]["sql_text"] == "select * from orders LIMIT 5"
+    assert builder_payload["data"]["data"][0]["member_datasource_id"] == "member_b"
+
+
+def test_execute_sql_api_blocks_dangerous_sql_at_executor_boundary(client, auth_headers, monkeypatch):
+    captured = _patch_execute_sql_runtime(monkeypatch)
+
+    response = client.post(
+        "/api/chatdata/execute-sql",
+        json={
+            "datasource_id": "ds_a",
+            "sql": "select 1; drop table orders",
+            "query_type": "sql",
+            "limit": 5,
+        },
+        headers=auth_headers,
+    )
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 50010
+    assert "一次只能执行一条 SQL" in payload["msg"]
+    assert captured["executor_calls"][0]["sql"] == "select 1; drop table orders"
+    assert captured["task_updates"][0]["status"] == "running"
+    assert captured["task_updates"][1]["status"] == "failed"
 
 
 def test_execute_sql_returns_result_error_and_preserves_raw_message(client, auth_headers, sample_query_task, monkeypatch):
@@ -373,10 +554,10 @@ def test_execute_sql_returns_result_error_and_preserves_raw_message(client, auth
         return result_data
 
     monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
-    monkeypatch.setattr(routes, "_create_task_for_execute_request", fake_create_task_for_execute_request)
-    monkeypatch.setattr(routes, "_create_query_executions_for_task", fake_create_query_executions_for_task)
-    monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
-    monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_execute_sql_result_data)
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_query_executions_for_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_execute_sql_result_data)
 
     response = client.post(
         "/api/chatdata/execute-sql",

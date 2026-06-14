@@ -4,12 +4,9 @@ SQL Generator 工具函数
 提供表选择、DDL 生成等辅助功能，用于 Graph 执行前的预处理阶段
 """
 
-import asyncio
-import inspect
 import json
 import os
 import re
-from datetime import datetime
 from typing import Any, Annotated
 
 from langchain_core.messages import HumanMessage
@@ -21,9 +18,8 @@ from utils.logger import get_logger
 from ...schema import ExecuteSqlInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
-from ...services.runtime_config import DEFAULT_ROW_LIMIT, TOOL_RESULT_OFFLOAD_SIZE
-from ...services.sql_concurrency_limiter import run_with_sql_user_datasource_limit
-from ...services.sql_executor import get_executor
+from ...services import query_runtime
+from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
@@ -343,57 +339,6 @@ def _build_multi_member_query_result(sql: str, member_results: list[dict]) -> di
     }
 
 
-async def _execute_sql_on_target(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
-    """在单个执行对象上执行 SQL。"""
-    async def execute_query() -> dict:
-        executor = get_executor(target_datasource)
-        try:
-            execute_kwargs = {"user_id": user_id}
-            if "username" in inspect.signature(executor.execute).parameters:
-                execute_kwargs["username"] = operator_name
-            return await executor.execute(sql, **execute_kwargs)
-        finally:
-            await executor.close()
-
-    return await run_with_sql_user_datasource_limit(user_id, target_datasource, execute_query)
-
-
-async def _execute_sql_for_member(
-    sql: str,
-    target_datasource: dict,
-    user_id: str | None = None,
-    operator_name: str | None = None,
-    execution_id: str | None = None,
-) -> dict:
-    """执行单个成员查询，并将异常转换为成员级失败结果。"""
-    member_datasource_id = target_datasource.get("member_datasource_id")
-    member_name = target_datasource.get("member_name")
-    try:
-        if execution_id:
-            from ...routes import _execute_sql_for_member as _execute_route_sql_for_member
-            return await _execute_route_sql_for_member(
-                execution_target=target_datasource,
-                sql=sql,
-                limit=DEFAULT_ROW_LIMIT,
-                timeout=None,
-                user_id=user_id,
-                username=operator_name,
-                execution_id=execution_id,
-            )
-        target_result = await _execute_sql_on_target(sql, target_datasource, user_id, operator_name)
-    except Exception as e:
-        logger.exception("执行对象 SQL 查询异常: member=%s", member_datasource_id)
-        target_result = {
-            "success": False,
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-            "error": f"执行失败: {str(e) or type(e).__name__}",
-        }
-
-    return _build_member_query_result(target_result, sql, member_datasource_id, member_name)
-
-
 async def _execute_sql_real(
     sql: str,
     datasource_id: str | None,
@@ -415,139 +360,16 @@ async def _execute_sql_real(
     Returns:
         查询结果字典
     """
-    # 检查数据源
-    if not datasource_id:
-        logger.error("未指定数据源ID，无法执行真实查询")
-        return {
-            "success": False,
-            "sql": sql,
-            "error": "未指定数据源ID，无法执行查询",
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
-
-    ds_manager = get_datasource_manager()
-    datasource = await ds_manager.get_datasource_async(datasource_id)
-
-    if not datasource:
-        logger.error(f"数据源不存在: {datasource_id}")
-        return {
-            "success": False,
-            "error": f"数据源不存在: {datasource_id}",
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
-
-    task_info = None
-    update_query_task = None
-    try:
-        execution_map = {}
-        get_execution_id_by_member = None
-        try:
-            from ...routes import (
-                _create_task_for_execute_request,
-                _create_query_executions_for_task,
-                _get_execution_id_by_member,
-                _build_persistent_query_task_result_for_request,
-                _update_query_task,
-            )
-            from ...schema import ExecuteSqlRequest
-
-            execute_request = ExecuteSqlRequest(
-                sql=sql,
-                datasource_id=datasource_id,
-                member_datasource_ids=member_datasource_ids or [],
-                user_id=user_id,
-                conversation_id=conversation_id,
-                query_text=query_text,
-                semantic_config_id=semantic_config_id,
-                query_type="agent",
-            )
-            task_info = await _create_task_for_execute_request(execute_request, query_type="agent", operator_name=operator_name)
-            execution_map = await _create_query_executions_for_task(task_info["task_id"], execute_request, operator_name=operator_name)
-            update_query_task = _update_query_task
-            get_execution_id_by_member = _get_execution_id_by_member
-            await update_query_task(task_info["task_id"], status="running", progress_text="SQL 执行中", started_time=datetime.now(), error_message=None)
-        except Exception as task_err:
-            logger.warning("创建智能体 SQL 查询任务失败，将直接执行查询: %s", task_err, exc_info=True)
-
-        execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, member_datasource_ids)
-        member_results = await asyncio.gather(*[
-            _execute_sql_for_member(
-                sql,
-                target,
-                user_id,
-                operator_name,
-                get_execution_id_by_member(execution_map, target) if get_execution_id_by_member else None,
-            )
-            for target in execution_targets
-        ])
-        if len(member_results) == 1:
-            final_result = member_results[0]
-        else:
-            final_result = _build_multi_member_query_result(sql, member_results)
-
-        if task_info and update_query_task:
-            persistent_result_payload = final_result
-            try:
-                persistent_result_payload = await _build_persistent_query_task_result_for_request(execute_request, final_result)
-            except Exception as persist_err:
-                logger.warning("构建智能体 SQL 查询任务落库结果失败，跳过结果落库: %s", persist_err, exc_info=True)
-                persistent_result_payload = None
-            await update_query_task(
-                task_info["task_id"],
-                status="succeeded" if final_result.get("success") else "failed",
-                progress_text="执行完成" if final_result.get("success") else "执行失败",
-                result_payload=persistent_result_payload,
-                error_message=None if final_result.get("success") else final_result.get("error") or "SQL 执行失败",
-                finished_time=datetime.now(),
-            )
-        return final_result
-    except ValueError as e:
-        # 不支持的数据源类型
-        logger.error(f"不支持的数据源类型: {e}")
-        if task_info and update_query_task:
-            try:
-                await update_query_task(
-                    task_info["task_id"],
-                    status="failed",
-                    progress_text="执行失败",
-                    error_message=str(e) or "SQL 执行失败",
-                    finished_time=datetime.now(),
-                )
-            except Exception as update_err:
-                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
-        return {
-            "success": False,
-            "sql": sql,
-            "error": str(e),
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
-    except Exception as e:
-        logger.error(f"执行 SQL 异常: {e}", exc_info=True)
-        if task_info and update_query_task:
-            try:
-                await update_query_task(
-                    task_info["task_id"],
-                    status="failed",
-                    progress_text="执行失败",
-                    error_message=str(e) or "SQL 执行失败",
-                    finished_time=datetime.now(),
-                )
-            except Exception as update_err:
-                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
-        return {
-            "success": False,
-            "sql": sql,
-            "error": f"执行失败: {str(e)}",
-            "columns": [],
-            "data": [],
-            "total_count": 0,
-        }
+    return await query_runtime.execute_agent_sql(
+        sql=sql,
+        datasource_id=datasource_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        semantic_config_id=semantic_config_id,
+        query_text=query_text,
+        conversation_id=conversation_id,
+        operator_name=operator_name,
+    )
 
 
 # ============ 语义查询工具 ============

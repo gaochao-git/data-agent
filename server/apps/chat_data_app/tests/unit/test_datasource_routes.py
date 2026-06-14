@@ -20,6 +20,7 @@ from apps.chat_data_app.route_modules import dashboard as dashboard_routes
 from apps.chat_data_app.route_modules import common as common_routes
 from apps.chat_data_app.route_modules import semantic_config as semantic_config_routes
 from apps.chat_data_app.services import dashboard_spec_service
+from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.routes import (
     cancel_query_task,
     clear_default_datasource,
@@ -735,7 +736,13 @@ def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
     monkeypatch.setattr(routes, "_create_task_for_execute_request", fake_create_task)
     monkeypatch.setattr(routes, "_create_task_record", fake_create_task_record)
     monkeypatch.setattr(routes, "_create_query_executions_for_task", fake_create_executions)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_executions)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task)
+    monkeypatch.setattr(query_runtime, "create_task_record", fake_create_task_record)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_executions)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
     return updates
 
 
@@ -744,6 +751,7 @@ def test_get_datasources_returns_group_datasource_list(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     resp = asyncio.run(get_datasources(SimpleNamespace()))
     data = _payload(resp)
@@ -757,6 +765,7 @@ def test_get_datasources_supports_lightweight_mode(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     resp = asyncio.run(get_datasources(SimpleNamespace(), include_tables=False))
     data = _payload(resp)
@@ -770,6 +779,7 @@ def test_get_datasources_does_not_build_display_name_from_current_user(monkeypat
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="10001", username="测试用户"))
 
     resp = asyncio.run(get_datasources(request=SimpleNamespace()))
@@ -784,6 +794,7 @@ def test_get_datasources_does_not_build_display_name_from_current_user(monkeypat
 def test_quick_sql_endpoint_returns_errors_for_missing_tables_and_conversation(monkeypatch):
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[]))
 
     no_tables_response = asyncio.run(routes.quick_sql_endpoint(QuickSqlRequest(
@@ -834,6 +845,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["source_type"] = "hive"
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
@@ -880,6 +892,7 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
             return False
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: _FakeDatasourceManager())
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
@@ -962,6 +975,7 @@ def test_datasource_semantic_health_reports_missing_fields(monkeypatch):
         }],
     }]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     async def _fake_schema_health(datasource):
         return {
             "status": "ok",
@@ -998,6 +1012,7 @@ def test_datasource_semantic_health_allows_count_all_metric(monkeypatch):
         "relationships": [],
     }]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     async def _fake_schema_health(datasource):
         return {
             "status": "ok",
@@ -1043,6 +1058,7 @@ def test_datasource_semantic_health_allows_common_sql_expressions(monkeypatch):
         "relationships": [],
     }]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     async def _fake_schema_health(datasource):
         return {
             "status": "ok",
@@ -1073,6 +1089,7 @@ def test_datasource_semantic_health_reports_physical_schema_drift(monkeypatch):
     ]
     manager.datasources["ds_a"]["semantic_configs"] = []
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     async def _fake_load_tables(source_type, source_item, table_names=None):
         return [
@@ -1181,7 +1198,8 @@ def test_execute_sql_direct_returns_selected_member_results(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1207,7 +1225,8 @@ def test_execute_sql_direct_returns_multi_member_results(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1233,7 +1252,8 @@ def test_execute_sql_direct_does_not_persist_http_result_payload(monkeypatch):
         {"member_datasource_id": "phy_http", "org_name": "HTTP成员", "member_name": "HTTP成员", "source_type": "mysql", "query_executor_type": "http", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     updates = _mock_query_tracking(monkeypatch)
 
@@ -1252,6 +1272,7 @@ def test_execute_sql_direct_does_not_persist_http_result_payload(monkeypatch):
 def test_create_query_task_schedules_background_run(monkeypatch):
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     _mock_authenticated_user(monkeypatch)
 
     captured = {}
@@ -1472,6 +1493,7 @@ def test_cancel_query_task_stops_remote_execution(monkeypatch):
     monkeypatch.setattr(routes, "stop_http_query_task", fake_stop)
     monkeypatch.setattr(routes, "_update_query_execution", fake_update_execution)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
 
     resp = asyncio.run(cancel_query_task("task_001", SimpleNamespace()))
     data = _payload(resp)
@@ -1541,6 +1563,7 @@ def test_cancel_query_task_cleans_stale_running_execution_when_task_finished(mon
     monkeypatch.setattr(routes, "_get_query_execution_model", lambda _execution_id: asyncio.sleep(0, result=execution))
     monkeypatch.setattr(routes, "_update_query_execution", fake_update_execution)
     monkeypatch.setattr(routes, "_update_query_task", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应更新已结束任务主状态")))
+    monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应更新已结束任务主状态")))
 
     resp = asyncio.run(cancel_query_task("task_001", SimpleNamespace()))
     data = _payload(resp)
@@ -1585,6 +1608,7 @@ def test_cancel_query_task_kills_mysql_execution(monkeypatch):
     monkeypatch.setattr(routes, "kill_mysql_query", fake_kill)
     monkeypatch.setattr(routes, "_update_query_execution", lambda *_args, **_kwargs: asyncio.sleep(0))
     monkeypatch.setattr(routes, "_update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **_kwargs: asyncio.sleep(0))
 
     resp = asyncio.run(cancel_query_task("task_001", SimpleNamespace()))
     data = _payload(resp)
@@ -1672,8 +1696,11 @@ def test_run_sql_query_task_returns_when_already_cancelled(monkeypatch):
         return None
 
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=True))
     monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_result)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
 
     asyncio.run(routes._run_sql_query_task("task_001", {
         "request_payload": json.dumps({
@@ -1709,10 +1736,15 @@ def test_run_sql_query_task_does_not_finish_after_cancelled(monkeypatch):
         return next(cancel_checks)
 
     monkeypatch.setattr(routes, "_is_query_task_cancelled", fake_is_cancelled)
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", fake_is_cancelled)
     monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_result)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
     monkeypatch.setattr(routes, "_are_all_sql_execution_targets_http", lambda _request: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "are_all_sql_execution_targets_http", lambda _request: asyncio.sleep(0, result=False))
     monkeypatch.setattr(routes, "_create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
 
     asyncio.run(routes._run_sql_query_task("task_001", {
         "request_payload": json.dumps({
@@ -1735,6 +1767,7 @@ def test_run_sql_query_task_skips_result_payload_for_all_http_targets(monkeypatc
         {"member_datasource_id": "phy_http", "org_name": "HTTP成员", "source_type": "mysql", "query_executor_type": "http", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     async def fake_build_result(_request, query_task_id=None, execution_map=None, **_kwargs):
         assert query_task_id == "task_001"
@@ -1754,9 +1787,13 @@ def test_run_sql_query_task_skips_result_payload_for_all_http_targets(monkeypatc
         return None
 
     monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_result)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(routes, "_create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
 
     asyncio.run(routes._run_sql_query_task("task_001", {
         "request_payload": json.dumps({
@@ -1781,7 +1818,8 @@ def test_execute_sql_direct_keeps_failed_member_result(monkeypatch):
         {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1803,7 +1841,8 @@ def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1823,7 +1862,7 @@ def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
         raise AssertionError("cache hit should not execute datasource")
 
     monkeypatch.setattr(routes, "_get_sql_result_cache", fake_get_cache)
-    monkeypatch.setattr(routes, "get_executor", raise_get_executor)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", fake_get_cache)
 
     resp = asyncio.run(execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -1876,7 +1915,8 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
 
     perf_values = iter([100.0, 100.007])
     monkeypatch.setattr(routes, "get_session", fake_session)
-    monkeypatch.setattr(routes.time, "perf_counter", lambda: next(perf_values))
+    monkeypatch.setattr(query_runtime, "get_session", fake_session)
+    monkeypatch.setattr(query_runtime.time, "perf_counter", lambda: next(perf_values))
 
     result = asyncio.run(routes._get_sql_result_cache({"cache_key": "cache_a"}))
 
@@ -1893,8 +1933,9 @@ def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1905,7 +1946,9 @@ def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
         raise AssertionError("skip_query_cache should not write cache")
 
     monkeypatch.setattr(routes, "_get_sql_result_cache", raise_get_cache)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", raise_get_cache)
     monkeypatch.setattr(routes, "_save_sql_result_cache", raise_save_cache)
+    monkeypatch.setattr(query_runtime, "save_sql_result_cache", raise_save_cache)
 
     resp = asyncio.run(execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -1925,8 +1968,9 @@ def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypat
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1934,7 +1978,9 @@ def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypat
         raise RuntimeError("cache db down")
 
     monkeypatch.setattr(routes, "_get_sql_result_cache", raise_get_cache)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", raise_get_cache)
     monkeypatch.setattr(routes, "_save_sql_result_cache", lambda *_args, **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(query_runtime, "save_sql_result_cache", lambda *_args, **_kwargs: asyncio.sleep(0))
 
     resp = asyncio.run(execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -1954,8 +2000,9 @@ def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -1966,7 +2013,9 @@ def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
         raise RuntimeError("duplicate cache key")
 
     monkeypatch.setattr(routes, "_get_sql_result_cache", fake_get_cache)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", fake_get_cache)
     monkeypatch.setattr(routes, "_save_sql_result_cache", raise_save_cache)
+    monkeypatch.setattr(query_runtime, "save_sql_result_cache", raise_save_cache)
 
     resp = asyncio.run(execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -2015,7 +2064,8 @@ def test_execute_sql_direct_returns_error_when_all_members_fail(monkeypatch):
         {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -2060,9 +2110,13 @@ def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
         return None
 
     monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_result)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(routes, "_create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
 
     asyncio.run(routes._run_sql_query_task("task_001", {
         "request_payload": json.dumps({
@@ -2090,10 +2144,15 @@ def test_run_sql_query_task_marks_failed_on_unhandled_execute_error(monkeypatch)
         return None
 
     monkeypatch.setattr(routes, "_are_all_sql_execution_targets_http", lambda _request: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "are_all_sql_execution_targets_http", lambda _request: asyncio.sleep(0, result=False))
     monkeypatch.setattr(routes, "_build_execute_sql_result_data", fake_build_result)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", fake_build_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(routes, "_create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda _task_id, _request, operator_name=None: asyncio.sleep(0, result={}))
 
     asyncio.run(routes._run_sql_query_task("task_001", {
         "request_payload": json.dumps({
@@ -2117,8 +2176,9 @@ def test_execute_panel_uses_selected_member_datasource(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
@@ -2143,8 +2203,9 @@ def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
         {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
@@ -2163,6 +2224,7 @@ def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
 def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
     _mock_authenticated_user(monkeypatch)
 
@@ -2237,6 +2299,7 @@ def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monke
     monkeypatch.setattr(dashboard_routes, "_load_dashboard_panel_or_raise", fake_load_panel)
     monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", fake_build_panel_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
 
     asyncio.run(dashboard_routes._run_dashboard_panel_task("panel_task_001", {
         "request_payload": json.dumps({
@@ -2259,12 +2322,14 @@ def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
         {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
     response = asyncio.run(dashboard_routes.execute_panels_batch(
         "dash_a",
@@ -2290,12 +2355,14 @@ def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypat
         {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
     response = asyncio.run(dashboard_routes.execute_panels_batch(
         "dash_a",
@@ -2317,11 +2384,13 @@ def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch)
 
     updates = _mock_query_tracking(monkeypatch)
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: _FakeDatasourceManager())
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(routes, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
     async def fake_build_panel_result(*_args, **_kwargs):
         await asyncio.sleep(30)
@@ -2528,6 +2597,7 @@ def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: _FakeDatasourceManager())
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
 
@@ -2584,6 +2654,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         return "## 当前执行对象\n1. 成员B"
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "_build_execution_target_info_async", _fake_build_execution_target_info)
     monkeypatch.setattr(routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
@@ -2615,6 +2686,7 @@ def test_update_datasource_meta_rejects_duplicate_name(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     _mock_authenticated_user(monkeypatch)
 
     resp = asyncio.run(update_datasource_meta("ds_a", DatasourceUpdateRequest(name="数据源B"), SimpleNamespace()))
@@ -2629,6 +2701,7 @@ def test_update_mapped_modules_persists(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="mapper_1")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     resp = asyncio.run(update_mapped_modules("ds_b", {"mapped_modules": ["执法检查", "投诉举报"]}, SimpleNamespace()))
     data = _payload(resp)
@@ -2642,6 +2715,7 @@ def test_get_datasource_table_groups(monkeypatch):
 
     manager = _FakeDatasourceManager()
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     resp = asyncio.run(get_datasource_table_groups("ds_a"))
     data = _payload(resp)
@@ -2655,6 +2729,7 @@ def test_update_datasource_table_groups_persists(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="group_maintainer")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     body = DatasourceTableGroupsUpdateRequest(groups=[
         {"table_group_name": "交易域", "table_names": ["t_a", "t_b"]},
@@ -2676,6 +2751,7 @@ def test_update_datasource_table_business_desc_persists(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="table_maintainer", username="表维护人")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     body = DatasourceTableBusinessDescUpdateRequest(business_desc="统计数据源 A 时优先查看该表")
     resp = asyncio.run(update_datasource_table_business_desc("ds_a", "t_a", body, SimpleNamespace()))
@@ -2692,6 +2768,7 @@ def test_datasource_column_dict_get_and_save(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     get_resp = asyncio.run(get_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace()))
     get_data = _payload(get_resp)
@@ -2731,6 +2808,7 @@ def test_datasource_column_dict_not_found_branches(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     get_resp = asyncio.run(get_datasource_column_dict("ds_a", "t_a", "missing", SimpleNamespace()))
     save_resp = asyncio.run(update_datasource_column_dict("ds_a", "t_a", "missing", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace()))
@@ -2780,6 +2858,7 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_generator", username="字典生成人")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
 
     body = DatasourceColumnDictGenerateRequest(text="status 字段：1 表示有效，0 表示无效")
@@ -2805,6 +2884,7 @@ def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatc
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_generator", username="字典生成人")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "get_chat_data_llm", lambda **_kwargs: _FakeLlm())
 
     resp = asyncio.run(generate_datasource_column_dict("ds_a", "t_a", "status", DatasourceColumnDictGenerateRequest(text="1 有效"), SimpleNamespace()))
@@ -2825,6 +2905,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1", username="创建人1")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "MySQLSyncService", _FakeMySQLSyncService)
     monkeypatch.setattr(routes, "resolve_mysql_credentials", lambda _: {"user": "tester", "password": "secret"})
 
@@ -2866,6 +2947,7 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1", username="维护人1")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(routes, "MySQLSyncService", _FakeMySQLSyncService)
     monkeypatch.setattr(routes, "resolve_mysql_credentials", lambda _: {"user": "tester", "password": "secret"})
 
@@ -2908,6 +2990,7 @@ def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     blank_payload = DatasourceGroupCreateRequest(
         group_name=" ",
@@ -2946,6 +3029,7 @@ def test_update_datasource_group_config_errors_for_missing_duplicate_and_invalid
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     valid_source = {
         "org_name": "template_new",
@@ -2984,6 +3068,7 @@ def test_datasource_table_group_and_default_error_branches(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     missing_groups_resp = asyncio.run(get_datasource_table_groups("missing_ds"))
     assert _payload(missing_groups_resp)["code"] == 40404
@@ -3008,6 +3093,7 @@ def test_get_schema_uses_env_default_and_handles_errors(monkeypatch):
 
     manager.get_schema_async = fake_get_schema_async
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     monkeypatch.setenv("CHAT_DATA_SCHEMA_SOURCE", "live")
     _mock_authenticated_user(monkeypatch, user_id="user_a", username="测试用户")
 
@@ -3187,6 +3273,7 @@ def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypat
         }
     ]
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     async def fake_load_tables(source_type, source_item, table_names=None):
         return [
@@ -3227,6 +3314,7 @@ def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
         "semantic_configs": [],
     }
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
     unsupported_resp = asyncio.run(routes.get_datasource_semantic_health("unsupported"))
     unsupported_body = _payload(unsupported_resp)
     assert unsupported_body["data"]["status"] == "warning"
@@ -3248,6 +3336,7 @@ def test_set_and_clear_default_datasource(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="default_operator")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     set_resp = asyncio.run(set_default_datasource("ds_b", SimpleNamespace()))
     set_data = _payload(set_resp)
@@ -3269,6 +3358,7 @@ def test_delete_datasource_removes_only_current_group(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="delete_operator")
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
 
     resp = asyncio.run(delete_datasource("ds_b", SimpleNamespace()))
     data = _payload(resp)
