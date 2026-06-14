@@ -22,6 +22,7 @@ from .schema import (
     ExecuteSqlRequest,
     QueryTaskCreateRequest,
     CompileBuilderSqlRequest,
+    CompileSemanticBuilderSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
     TableListResponse,
@@ -44,6 +45,7 @@ from .services.hive_sync import HiveSyncService
 from .services.hive_meta_http import get_hive_meta_tables_async, get_hive_meta_schema_async
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
 from .services import query_runtime
+from .services.semantic_builder_compiler import compile_semantic_builder_sql
 from .semantic.compiler import compile_builder_sql
 from .semantic.utils import parse_llm_json
 from .services.llm_config import get_chat_data_llm
@@ -2765,6 +2767,25 @@ async def compile_builder_sql_endpoint(request: CompileBuilderSqlRequest):
     except Exception as err:
         logger.error(f"Builder DSL 编译失败: {err}", exc_info=True)
         return business_response(msg="Builder DSL 编译失败，请检查配置", code=50010, status="error")
+
+
+@router.post("/compile-semantic-builder-sql")
+async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderSqlRequest):
+    """编译语义可视化 DSL 为 SQL（仅预览，不执行）。"""
+    try:
+        result = await compile_semantic_builder_sql(
+            datasource_id=request.datasource_id,
+            semantic_config_id=request.semantic_config_id,
+            semantic_builder_config=request.semantic_builder_config,
+        )
+        return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
+    except LookupError as err:
+        return business_response(msg=str(err), code=40404, status="error")
+    except ValueError as err:
+        return business_response(msg=str(err), code=40001, status="error")
+    except Exception as err:
+        logger.error(f"Semantic Builder DSL 编译失败: {err}", exc_info=True)
+        return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=50010, status="error")
 
 
 # ============ 对话接口 ============

@@ -13,6 +13,7 @@ interface SubmitSqlTaskParams {
   timeout?: number
   query_type?: string
   builder_config?: Record<string, unknown>
+  semantic_builder_config?: Record<string, unknown>
   semantic_config_id?: string
   query_text?: string
   skip_query_cache?: boolean

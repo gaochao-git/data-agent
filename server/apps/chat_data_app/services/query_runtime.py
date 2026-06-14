@@ -23,6 +23,7 @@ from utils.logger import get_logger
 from ..schema import ExecuteSqlRequest, QueryTaskCreateRequest
 from .datasource_manager import get_datasource_manager
 from .runtime_config import DEFAULT_ROW_LIMIT, QUERY_CACHE_ENABLED, QUERY_CACHE_TTL_SECONDS
+from .semantic_builder_compiler import compile_semantic_builder_sql
 from .sql_concurrency_limiter import run_with_sql_user_datasource_limit
 from .sql_executor import build_effective_sql, get_executor
 
@@ -780,8 +781,19 @@ async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
 
 
 async def prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None):
-    """保留 SQL 原文；安全校验统一在执行器边界完成。"""
-    return request
+    """保留 SQL 原文；语义可视化查询在服务端重新编译，安全校验统一在执行器边界完成。"""
+    semantic_builder_config = getattr(request, "semantic_builder_config", None)
+    semantic_config_id = str(getattr(request, "semantic_config_id", "") or "").strip()
+    if not semantic_builder_config:
+        return request
+    if not semantic_config_id:
+        raise ValueError("语义可视化查询缺少 semantic_config_id")
+    compiled = await compile_semantic_builder_sql(
+        datasource_id=request.datasource_id,
+        semantic_config_id=semantic_config_id,
+        semantic_builder_config=semantic_builder_config,
+    )
+    return request.model_copy(update={"sql": compiled["sql"], "builder_config": None})
 
 
 async def create_task_for_execute_request(
@@ -805,6 +817,7 @@ async def create_task_for_execute_request(
         timeout=request.timeout,
         query_type=query_type or request.query_type or "sql",
         builder_config=request.builder_config,
+        semantic_builder_config=request.semantic_builder_config,
         skip_query_cache=request.skip_query_cache,
     )
     return await create_query_task(payload)

@@ -63,6 +63,7 @@ class ExecuteSqlRequest(BaseModel):
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
     query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
+    semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
 
@@ -81,6 +82,7 @@ class QueryTaskCreateRequest(BaseModel):
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
     query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
+    semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
 
@@ -88,6 +90,13 @@ class CompileBuilderSqlRequest(BaseModel):
     """编译 Builder DSL 请求（仅生成 SQL，不执行）"""
     builder_config: dict = Field(..., description="辅助查询模式的 DSL 配置")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID（用于选择 SQL 方言）")
+
+
+class CompileSemanticBuilderSqlRequest(BaseModel):
+    """编译语义可视化 DSL 请求（仅生成 SQL，不执行）。"""
+    datasource_id: str = Field(..., description="数据源ID")
+    semantic_config_id: str = Field(..., description="语义配置ID")
+    semantic_builder_config: dict = Field(..., description="语义可视化 DSL；不包含 mainTable/joins")
 
 
 class QueryFavoriteCreateRequest(BaseModel):

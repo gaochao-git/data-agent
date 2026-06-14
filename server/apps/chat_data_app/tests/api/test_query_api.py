@@ -192,6 +192,188 @@ def test_compile_builder_sql_returns_value_error(client, monkeypatch):
     assert payload["msg"] == "缺少主表"
 
 
+def _add_semantic_join_fixture(fake_datasource_manager):
+    datasource = fake_datasource_manager.datasources["ds_a"]
+    datasource["ds_tables"].append(
+        {
+            "table_name": "city_dim",
+            "description": "城市维表",
+            "columns": [
+                {"name": "city_id", "type": "int"},
+                {"name": "city_name", "type": "varchar"},
+            ],
+        }
+    )
+    config = datasource["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"}
+    ]
+    config["dimensions"] = [
+        {"name": "城市", "column": "city_name", "table": "city_dim", "type": "categorical"},
+    ]
+    config["relationships"] = [
+        {
+            "left_table": "orders",
+            "right_table": "city_dim",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "city_id", "right_column": "city_id"}],
+            "relationship_type": "many_to_one",
+        }
+    ]
+
+
+def test_compile_semantic_builder_sql_derives_join_from_backend_config(client, fake_datasource_manager, monkeypatch):
+    _add_semantic_join_fixture(fake_datasource_manager)
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "dimensions": [{"table": "city_dim", "column": "city_name", "alias": "城市"}],
+                "aggregations": [{"func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+                "orderBy": [{"table": "orders", "column": "amount", "aggFunc": "SUM", "direction": "DESC"}],
+                "limit": 10,
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    sql = payload["data"]["sql"]
+    assert "FROM city_dim" in sql
+    assert "LEFT JOIN orders ON city_dim.city_id = orders.city_id" in sql
+    assert "SUM(orders.amount)" in sql
+    assert "LIMIT 10" in sql
+    assert payload["data"]["builder_config"]["joins"][0]["leftAlias"] == "city_dim"
+
+
+def test_compile_semantic_builder_sql_rejects_frontend_join_payload(client, fake_datasource_manager, monkeypatch):
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "mainTable": "orders",
+                "joins": [{"rightTable": "danger"}],
+                "dimensions": [{"table": "orders", "column": "city", "alias": "城市"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40001
+    assert "不允许包含前端表关系字段" in payload["msg"]
+
+
+def test_compile_semantic_builder_sql_uses_semantic_metric_name_for_ambiguous_columns(client, fake_datasource_manager, monkeypatch):
+    config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"},
+        {"name": "退款额", "expression": "SUM(orders.refund_amount)", "table": "orders", "field_name": "amount"},
+    ]
+    config["dimensions"] = [
+        {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
+    ]
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "dimensions": [{"semanticName": "城市", "table": "orders", "column": "city"}],
+                "aggregations": [{"semanticName": "退款额", "func": "SUM", "table": "orders", "column": "amount"}],
+                "filters": [{"semanticName": "退款额", "aggFunc": "SUM", "table": "orders", "column": "amount", "operator": ">", "value": 0}],
+                "orderBy": [{"semanticName": "退款额", "aggFunc": "SUM", "table": "orders", "column": "amount", "direction": "DESC"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    sql = payload["data"]["sql"]
+    assert "SUM(refund_amount) AS `退款额`" in sql
+    assert "HAVING SUM(refund_amount) > 0" in sql
+    assert "ORDER BY SUM(refund_amount) DESC" in sql
+    assert "SUM(amount) AS `退款额`" not in sql
+
+
+def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_name(client, fake_datasource_manager, monkeypatch):
+    config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"},
+        {"name": "支付额", "expression": "SUM(orders.amount)", "table": "orders"},
+    ]
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "aggregations": [{"func": "SUM", "table": "orders", "column": "amount"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40001
+    assert "匹配到多个语义指标" in payload["msg"]
+
+
+def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers, fake_datasource_manager, sample_query_task, monkeypatch):
+    _add_semantic_join_fixture(fake_datasource_manager)
+    captured = {}
+
+    async def fake_create_query_task(body):
+        captured["body"] = body
+        return sample_query_task
+
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(routes, "_create_query_task", fake_create_query_task)
+    monkeypatch.setattr(routes, "_schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
+
+    response = client.post(
+        "/api/chatdata/query-tasks",
+        json={
+            "task_type": "sql",
+            "datasource_id": "ds_a",
+            "sql": "select * from tampered_table",
+            "query_type": "builder",
+            "semantic_config_id": "cfg_a",
+            "builder_config": {"dimensions": [{"table": "city_dim", "column": "city_name", "alias": "城市"}]},
+            "semantic_builder_config": {
+                "dimensions": [{"table": "city_dim", "column": "city_name", "alias": "城市"}],
+                "aggregations": [{"func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+            },
+        },
+        headers=auth_headers,
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert "tampered_table" not in captured["body"].sql
+    assert "LEFT JOIN orders ON city_dim.city_id = orders.city_id" in captured["body"].sql
+    assert captured["body"].builder_config is None
+    assert captured["body"].semantic_builder_config["aggregations"][0]["alias"] == "销售额"
+    assert captured["scheduled"] == "task_a"
+
+
 def test_create_query_task_api_contract(client, auth_headers, fake_datasource_manager, sample_query_task, monkeypatch):
     captured = {}
 

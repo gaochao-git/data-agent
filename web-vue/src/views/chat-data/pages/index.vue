@@ -1509,7 +1509,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 下方内容区（82px 头部 + 48px 工具栏 = 130px） -->
-    <div v-else-if="!noMatchedDatasource" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
+    <div v-if="!noMatchedDatasource && viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
       <!-- 左侧：公用侧边栏 -->
       <!-- 折叠态：窄条 -->
       <div v-if="!isSidebarVisible" class="flex flex-col items-center gap-1 pt-3 pb-3 bg-white border-r border-slate-200 shrink-0 w-12">

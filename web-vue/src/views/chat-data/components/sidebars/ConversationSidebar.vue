@@ -4,7 +4,7 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { getSemanticConfigs } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
@@ -83,6 +83,45 @@ const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
 const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
 const configSearchKeyword = ref('')
+const tooltipState = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  lines: [] as string[],
+})
+let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
+
+const clearTooltipHideTimer = () => {
+  if (!tooltipHideTimer) return
+  window.clearTimeout(tooltipHideTimer)
+  tooltipHideTimer = null
+}
+
+const showTooltip = (e: MouseEvent, lines: string[]) => {
+  clearTooltipHideTimer()
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  tooltipState.x = rect.right + 8
+  tooltipState.y = rect.top + rect.height / 2
+  tooltipState.lines = lines
+  tooltipState.visible = true
+}
+
+const hideTooltip = () => {
+  clearTooltipHideTimer()
+  tooltipHideTimer = window.setTimeout(() => {
+    tooltipState.visible = false
+    tooltipHideTimer = null
+  }, 160)
+}
+
+const keepTooltipVisible = () => {
+  clearTooltipHideTimer()
+}
+
+const hideTooltipNow = () => {
+  clearTooltipHideTimer()
+  tooltipState.visible = false
+}
 
 const filteredSemanticConfigs = computed(() => {
   const keyword = configSearchKeyword.value.trim().toLowerCase()
@@ -194,32 +233,61 @@ const extractMetricFieldName = (expression?: string) => {
   return parts[parts.length - 1] || '-'
 }
 
+const getTableDescription = (tableName?: string) => {
+  if (!tableName) return '-'
+  const table = props.tables.find(item => item.table_name === tableName)
+  return table?.description || '-'
+}
+
+const getTableBusinessDesc = (tableName?: string) => {
+  if (!tableName) return ''
+  const table = props.tables.find(item => item.table_name === tableName)
+  return table?.business_desc || ''
+}
+
+const buildTableBusinessDescLines = (tableName?: string) => {
+  const businessDesc = getTableBusinessDesc(tableName)
+  return businessDesc ? [`表业务说明：${businessDesc}`] : []
+}
+
+const getTableRoleLabel = (table?: string, alias?: string) => {
+  const tableName = String(table || '').trim()
+  const tableAlias = String(alias || tableName).trim()
+  if (!tableName) return tableAlias || '-'
+  if (!tableAlias || tableAlias === tableName) return tableName
+  return `${tableAlias}（${tableName}）`
+}
+
 const buildDimensionTooltip = (dimension: SemanticDimension) => {
   const expression = dimension.expression || `\`${dimension.column}\``
   const lines = [
     '基础信息',
-    `数据源表：${dimension.table || '-'}`,
+    `数据源表：${getTableRoleLabel(dimension.table, dimension.table_alias)}`,
+    `数据表备注：${getTableDescription(dimension.table)}`,
+    ...buildTableBusinessDescLines(dimension.table),
     `显示名称：${dimension.name || '-'}`,
     `字段名称：${dimension.column || '-'}`,
     `表达式：${expression}`,
   ]
   if (dimension.description) lines.push(`描述：${dimension.description}`)
   appendMetadataSupplementLines(lines, dimension.metadata_supplement)
-  return lines.join('\n')
+  return lines
 }
 
 const buildMetricTooltip = (metric: SemanticMetric) => {
   const expression = metric.expression || ''
   const lines = [
     '基础信息',
-    `数据源表：${metric.table || '-'}`,
+    `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
+    `数据表备注：${getTableDescription(metric.table)}`,
+    ...buildTableBusinessDescLines(metric.table),
     `显示名称：${metric.name || '-'}`,
     `字段名称：${extractMetricFieldName(expression)}`,
     `表达式：${expression || '-'}`,
   ]
   if (metric.description) lines.push(`描述：${metric.description}`)
   appendMetadataSupplementLines(lines, metric.metadata_supplement)
-  return lines.join('\n')
+  return lines
 }
 
 const handleFillMetric = (metric: SemanticMetric) => {
@@ -257,6 +325,10 @@ watch(() => props.selectedDatasetId, (newId) => {
     selectedConfigId.value = newId
   }
 }, { immediate: true })
+
+onUnmounted(() => {
+  clearTooltipHideTimer()
+})
 
 </script>
 
@@ -422,7 +494,8 @@ watch(() => props.selectedDatasetId, (newId) => {
                 v-for="dimension in config.dimensions || []"
                 :key="`dimension-${config.id}-${dimension.name}`"
                 class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
-                :title="buildDimensionTooltip(dimension)"
+                @mouseenter="showTooltip($event, buildDimensionTooltip(dimension))"
+                @mouseleave="hideTooltip"
               >
                 <FieldTypeIcon :type="getDimensionIconType(dimension)" class="mr-1.5 text-[#165DFF]" />
                 <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ dimension.name }}</span>
@@ -436,9 +509,16 @@ watch(() => props.selectedDatasetId, (newId) => {
                 </button>
               </div>
             </div>
+            <div
+              v-if="(config.dimensions?.length || 0) > 0 && (config.metrics?.length || 0) > 0"
+              class="relative mx-3 my-2 flex h-[14px] items-center justify-center"
+            >
+              <div class="h-px w-full bg-[#E5E7EB]"></div>
+              <div class="absolute h-[4px] w-10 rounded-full bg-[#D1D5DB]"></div>
+            </div>
             <div v-if="(config.metrics?.length || 0) > 0" class="mt-0.5">
               <div class="flex h-[24px] items-center rounded px-4 text-[11px] font-semibold text-[#86909C]">
-                <i class="fa-solid fa-chart-simple mr-1.5 text-[10px] text-[#165DFF]"></i>
+                <i class="fa-solid fa-chart-simple mr-1.5 text-[10px] text-[#7C3AED]"></i>
                 <span>指标</span>
                 <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.metrics?.length || 0 }}</span>
               </div>
@@ -446,13 +526,14 @@ watch(() => props.selectedDatasetId, (newId) => {
                 v-for="metric in config.metrics || []"
                 :key="`metric-${config.id}-${metric.name}`"
                 class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
-                :title="buildMetricTooltip(metric)"
+                @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
+                @mouseleave="hideTooltip"
               >
-                <FieldTypeIcon type="number" class="mr-1.5 text-[#165DFF]" />
+                <FieldTypeIcon type="number" class="mr-1.5 text-[#7C3AED]" />
                 <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
                 <button
                   type="button"
-                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
+                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#7C3AED] opacity-0 transition-all duration-150 hover:bg-[#F3E8FF] hover:text-[#5B21B6] group-hover:opacity-100"
                   title="填充到提问框"
                   @click.stop="handleFillMetric(metric)"
                 >
@@ -469,4 +550,17 @@ watch(() => props.selectedDatasetId, (newId) => {
 
     </template>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="tooltipState.visible"
+      class="fixed max-w-[420px] px-3 py-2 bg-[#373839] border border-white/15 rounded text-white text-[12px] z-[10000] whitespace-pre-wrap break-words -translate-y-1/2 shadow-[0_6px_16px_rgba(0,0,0,0.2)] select-text cursor-text"
+      :style="{ left: tooltipState.x + 'px', top: tooltipState.y + 'px' }"
+      @mouseenter="keepTooltipVisible"
+      @mouseleave="hideTooltipNow"
+    >
+      <div class="absolute top-1/2 -translate-y-1/2" style="left: -10px; width: 10px; height: 16px; background: rgba(255,255,255,0.15); clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
+      <div class="absolute top-1/2 -translate-y-1/2" style="left: -9px; width: 9px; height: 14px; background: #373839; clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
+      <div v-for="(line, idx) in tooltipState.lines" :key="idx" class="leading-relaxed">{{ line }}</div>
+    </div>
+  </Teleport>
 </template>

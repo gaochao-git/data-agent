@@ -6,7 +6,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, useAttrs } from 'vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileBuilderSql } from '../../api'
+import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileBuilderSql, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
 import AsyncQueryResult from '../AsyncQueryResult.vue'
 import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
@@ -52,6 +52,7 @@ interface DimensionField {
   table: string
   tableAlias?: string
   column: string
+  semanticName?: string
   expression?: string
   displayName?: string
   label: string
@@ -64,6 +65,7 @@ interface AggregationField {
   table: string
   tableAlias?: string
   column: string
+  semanticName?: string
   displayName?: string
   expression?: string
   label: string
@@ -76,6 +78,7 @@ interface FilterCondition {
   table: string
   tableAlias?: string
   column: string
+  semanticName?: string
   displayName?: string
   expression?: string
   operator: string
@@ -111,9 +114,22 @@ interface OrderByField {
   table: string
   tableAlias?: string
   column: string
+  semanticName?: string
   direction: 'ASC' | 'DESC'
   aggFunc?: string  // 如果设置，排序使用聚合表达式
   aggId?: string
+}
+
+interface FieldPickerOption {
+  value: string
+  label: string
+  semanticName?: string
+  expression?: string
+}
+
+interface FieldPickerGroup {
+  groupLabel: string
+  fields: FieldPickerOption[]
 }
 
 interface DataSource {
@@ -342,6 +358,9 @@ const activateResultTab = (index: number) => {
 
 const buildBuilderConfigSnapshot = () => JSON.stringify(buildBuilderConfigPayload())
 const isBuilderConfigured = computed(() => {
+  if (props.semanticConfigId) {
+    return dimensions.value.length > 0 || aggregations.value.length > 0
+  }
   const payload = buildBuilderConfigPayload()
   return Boolean(payload.mainTable) && (payload.dimensions.length > 0 || payload.aggregations.length > 0)
 })
@@ -966,6 +985,7 @@ const createDefaultDetailFilter = (): FilterCondition => {
       table: fromDimension.table,
       tableAlias: getTableAlias(fromDimension),
       column: fromDimension.column,
+      semanticName: fromDimension.semanticName,
       displayName: fromDimension.displayName || fromDimension.column,
       expression: fromDimension.expression,
       operator: '=',
@@ -1021,6 +1041,7 @@ const createDefaultAggregateFilter = (): FilterCondition => {
       table: fromAgg.table,
       tableAlias: getTableAlias(fromAgg),
       column: fromAgg.column,
+      semanticName: fromAgg.semanticName,
       displayName: fromAgg.displayName || fromAgg.column,
       expression: fromAgg.expression,
       operator: '=',
@@ -1188,6 +1209,7 @@ const handleAtSelect = (item: AtItem) => {
         table: item.table!,
         tableAlias,
         column: item.name,
+        semanticName: item.label,
         displayName: item.label,
         label: `${item.tableLabel}.${item.label}`,
         transform: 'raw'
@@ -1205,6 +1227,7 @@ const handleAtSelect = (item: AtItem) => {
         table: item.table!,
         tableAlias,
         column: item.name,
+        semanticName: item.label,
         displayName: item.label,
         label: `${item.tableLabel}.${item.label}`,
         func: 'RAW'
@@ -1216,6 +1239,7 @@ const handleAtSelect = (item: AtItem) => {
       table: item.table!,
       tableAlias,
       column: item.name,
+      semanticName: item.label,
       operator: '=',
       value: '',
       valueType: 'literal',
@@ -1230,6 +1254,7 @@ const handleAtSelect = (item: AtItem) => {
         table: item.table!,
         tableAlias,
         column: item.name,
+        semanticName: item.label,
         direction: 'ASC'
       })
     }
@@ -1395,7 +1420,7 @@ const canConnectTableInSemanticMode = (target: string | { table?: string; tableA
 }
 
 const addFieldToDimension = (field: any) => {
-  const { table, column, label, aggFunc, expression, displayName } = field || {}
+  const { table, column, label, aggFunc, expression, displayName, semanticName } = field || {}
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
@@ -1423,6 +1448,7 @@ const addFieldToDimension = (field: any) => {
       table,
       tableAlias,
       column,
+      semanticName,
       expression: dimensionExpression,
       displayName,
       label: dimensionLabel,
@@ -1435,7 +1461,7 @@ const addFieldToDimension = (field: any) => {
 }
 
 const addFieldToAggregation = (field: any) => {
-  const { table, column, label, aggFunc, displayName, expression } = field || {}
+  const { table, column, label, aggFunc, displayName, expression, semanticName } = field || {}
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
@@ -1453,6 +1479,7 @@ const addFieldToAggregation = (field: any) => {
       table,
       tableAlias,
       column,
+      semanticName,
       displayName,
       expression,
       label,
@@ -1664,6 +1691,7 @@ const addFilter = () => {
     table: firstField.table,
     tableAlias: getTableAlias(firstField),
     column: firstField.column,
+    semanticName: firstField.semanticName,
     displayName: 'displayName' in firstField ? firstField.displayName || firstField.column : firstField.column,
     operator: '=',
     value: '',
@@ -2042,7 +2070,7 @@ const advancedAllFieldGroups = computed(() => {
 })
 
 const appendCurrentEditingFilterOption = (
-  groups: Array<{ groupLabel: string; fields: Array<{ value: string; label: string }> }>
+  groups: FieldPickerGroup[]
 ) => {
   const f = editingFilter.value
   if (!f?.table || !f.column) return groups
@@ -2064,7 +2092,7 @@ const appendCurrentEditingFilterOption = (
 }
 
 const advancedEditingFieldGroups = computed(() => {
-  let baseGroups: Array<{ groupLabel: string; fields: Array<{ value: string; label: string }> }>
+  let baseGroups: FieldPickerGroup[]
   if (!editingFilterFromAdvanced.value) {
     baseGroups = advancedAllFieldGroups.value
   } else if (!advancedEffectiveScope.value) {
@@ -2129,6 +2157,7 @@ const handleAdvancedFieldPick = (value: string) => {
   pickingAdvancedFilter.value.table = parsed.table
   pickingAdvancedFilter.value.tableAlias = parsed.tableAlias || parsed.table
   pickingAdvancedFilter.value.column = parsed.column
+  pickingAdvancedFilter.value.semanticName = parsed.semanticName
   pickingAdvancedFilter.value.aggFunc = parsed.aggFunc
   pickingAdvancedFilter.value.aggId = parsed.aggId
   if (parsed.aggId) {
@@ -2303,6 +2332,7 @@ const addOrderBy = () => {
     table: firstField.table,
     tableAlias: getTableAlias(firstField),
     column: firstField.column,
+    semanticName: firstField.semanticName,
     direction: 'ASC',
     aggFunc: 'func' in firstField ? firstField.func : undefined,
     aggId: 'func' in firstField ? firstField.id : undefined
@@ -2319,7 +2349,7 @@ const handleDropToFilter = (e: DragEvent) => {
   e.preventDefault()
   dropTargetActive.value = null
   if (draggedItem.value?.type === 'field') {
-    const { table, column, aggFunc, expression, displayName } = draggedItem.value.data
+    const { table, column, aggFunc, expression, displayName, semanticName } = draggedItem.value.data
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
@@ -2335,6 +2365,7 @@ const handleDropToFilter = (e: DragEvent) => {
       table,
       tableAlias,
       column,
+      semanticName,
       displayName: displayName || column,
       operator: '=',
       value: '',
@@ -2354,7 +2385,7 @@ const handleDropToOrder = (e: DragEvent) => {
   e.preventDefault()
   dropTargetActive.value = null
   if (draggedItem.value?.type === 'field') {
-    const { table, column, aggFunc, expression } = draggedItem.value.data
+    const { table, column, aggFunc, expression, semanticName } = draggedItem.value.data
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
@@ -2370,6 +2401,7 @@ const handleDropToOrder = (e: DragEvent) => {
       table,
       tableAlias,
       column,
+      semanticName,
       direction: 'ASC',
       aggFunc: resolvedAggFunc,
       aggId: matchedAgg?.id
@@ -2503,6 +2535,7 @@ const serializeFilterCondition = (f: FilterCondition) => ({
   table: f.table,
   tableAlias: getTableAlias(f),
   column: f.column,
+  semanticName: f.semanticName,
   displayName: f.displayName,
   operator: f.operator,
   value: f.value,
@@ -2582,6 +2615,7 @@ const buildBuilderConfigPayload = () => {
       table: d.table,
       tableAlias: getTableAlias(d),
       column: d.column,
+      semanticName: d.semanticName,
       alias: d.displayName || d.column,
       expression: d.expression,
       transform: d.transform || 'raw'
@@ -2592,6 +2626,7 @@ const buildBuilderConfigPayload = () => {
       table: a.table,
       tableAlias: getTableAlias(a),
       column: a.column,
+      semanticName: a.semanticName,
       alias: a.displayName || a.column,
       expression: a.expression
     })),
@@ -2601,10 +2636,22 @@ const buildBuilderConfigPayload = () => {
       table: o.table,
       tableAlias: getTableAlias(o),
       column: o.column,
+      semanticName: o.semanticName,
       direction: o.direction,
       aggFunc: o.aggFunc,
       aggId: o.aggId
     })),
+    ...buildQueryPaginationPayload()
+  }
+}
+
+const buildSemanticBuilderConfigPayload = () => {
+  const fullPayload = buildBuilderConfigPayload()
+  return {
+    dimensions: fullPayload.dimensions,
+    aggregations: fullPayload.aggregations,
+    filters: fullPayload.filters,
+    orderBy: fullPayload.orderBy,
     ...buildQueryPaginationPayload()
   }
 }
@@ -2649,10 +2696,16 @@ const compileCurrentBuilderSql = async (force = false): Promise<string> => {
     return compiledSql.value
   }
   const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
-  const response = await compileBuilderSql({
-    builder_config: builderConfigPayload,
-    datasource_id: props.datasourceId || undefined
-  })
+  const response = props.semanticConfigId
+    ? await compileSemanticBuilderSql({
+      datasource_id: props.datasourceId,
+      semantic_config_id: props.semanticConfigId,
+      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
+    })
+    : await compileBuilderSql({
+      builder_config: builderConfigPayload,
+      datasource_id: props.datasourceId || undefined
+    })
   const sqlText = String(response.data?.sql || '').trim()
   compiledSql.value = sqlText
   compiledSqlSnapshot.value = snapshot
@@ -3331,7 +3384,9 @@ const executeQuery = async () => {
       member_datasource_ids: selectedMemberDatasourceIds.value,
       sql: sqlText,
       query_type: 'builder',
-      builder_config: buildBuilderConfigPayload() as Record<string, unknown>,
+      ...(props.semanticConfigId
+        ? { semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown> }
+        : { builder_config: buildBuilderConfigPayload() as Record<string, unknown> }),
       semantic_config_id: props.semanticConfigId || undefined,
       query_text: '可视化查询',
       skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
@@ -3500,6 +3555,7 @@ const parseAdvancedFilterFromConfig = (node: any): AdvancedFilterGroup | Advance
       table: node.table,
       tableAlias: node.tableAlias || node.table,
       column: node.column,
+      semanticName: node.semanticName,
       displayName: node.displayName,
       operator: node.operator || '=',
       value: node.value || '',
@@ -3566,6 +3622,7 @@ const loadBuilderConfig = (config: BuilderConfig) => {
         table: d.table,
         tableAlias: (d as any).tableAlias || d.table,
         column: d.column,
+        semanticName: (d as any).semanticName,
         expression: (d as any).expression,
         displayName: d.alias || d.column,
         label: `${tableLabel}.${colLabel}`,
@@ -3584,6 +3641,7 @@ const loadBuilderConfig = (config: BuilderConfig) => {
         table: a.table,
         tableAlias: (a as any).tableAlias || a.table,
         column: a.column,
+        semanticName: (a as any).semanticName,
         displayName: a.alias || a.column,
         expression: (a as any).expression,
         label: `${tableLabel}.${colLabel}`,
@@ -3620,6 +3678,7 @@ const loadBuilderConfig = (config: BuilderConfig) => {
       table: o.table,
       tableAlias: (o as any).tableAlias || o.table,
       column: o.column,
+      semanticName: (o as any).semanticName,
       direction: o.direction
     }))
   }
@@ -3635,7 +3694,7 @@ const loadBuilderConfig = (config: BuilderConfig) => {
 
 // 筛选和排序的可用字段（按表分组 + 聚合字段分组）
 const filterAndOrderFieldsGrouped = computed(() => {
-  const groups: Array<{ groupLabel: string; fields: Array<{ value: string; label: string }> }> = []
+  const groups: FieldPickerGroup[] = []
   // 按表分组的原始字段
   selectedTables.value.forEach(t => {
     const tableInfo = tables.value.find(tb => tb.table_name === t.name)
@@ -3667,7 +3726,7 @@ const filterAndOrderFieldsGrouped = computed(() => {
 })
 
 const allDetailFieldsGrouped = computed(() => {
-  const groups: Array<{ groupLabel: string; fields: Array<{ value: string; label: string }> }> = []
+  const groups: FieldPickerGroup[] = []
   tables.value.forEach(table => {
     if (!table.columns?.length) return
     const tableLabel = table.description || table.table_name
@@ -3691,22 +3750,27 @@ const aggregateFilterFieldsGrouped = computed(() => {
   return filterAndOrderFieldsGrouped.value.filter(group => group.groupLabel === '聚合过滤字段 (HAVING)')
 })
 
-const semanticDimensionFilterFields = computed(() => {
+const semanticDimensionFilterFields = computed<FieldPickerOption[]>(() => {
   const items = props.semanticConfig?.dimensions || []
-  const dedup = new Map<string, { value: string; label: string }>()
+  const dedup = new Map<string, FieldPickerOption>()
   items.forEach((dim) => {
     if (!dim?.table || !dim?.column) return
     const alias = getTableAlias({ table: dim.table, tableAlias: dim.table_alias })
     const key = buildFieldKey(alias, dim.table, dim.column)
     if (dedup.has(key)) return
-    dedup.set(key, { value: key, label: dim.name || dim.column })
+    dedup.set(key, {
+      value: key,
+      label: dim.name || dim.column,
+      semanticName: dim.name,
+      expression: dim.expression
+    })
   })
   return Array.from(dedup.values())
 })
 
-const semanticMetricFilterFields = computed(() => {
+const semanticMetricFilterFields = computed<FieldPickerOption[]>(() => {
   const items = props.semanticConfig?.metrics || []
-  const fields: Array<{ value: string; label: string }> = []
+  const fields: FieldPickerOption[] = []
   items.forEach((metric) => {
     const meta = parseMetricExpressionMeta(metric.expression || '')
     const qualified = parseFirstQualifiedFromExpression(metric.expression || '')
@@ -3717,14 +3781,16 @@ const semanticMetricFilterFields = computed(() => {
     if (!table || !column) return
     fields.push({
       value: `AGG:${func}:${tableAlias}.${column}`,
-      label: metric.name || `${func}(${column})`
+      label: metric.name || `${func}(${column})`,
+      semanticName: metric.name,
+      expression: metric.expression
     })
   })
   return fields
 })
 
 const advancedDimensionFieldsGrouped = computed(() => {
-  const dedup = new Map<string, { value: string; label: string }>()
+  const dedup = new Map<string, FieldPickerOption>()
   dimensions.value.forEach((d) => {
     const key = buildFieldKey(d.tableAlias, d.table, d.column)
     if (dedup.has(key)) return
@@ -3741,7 +3807,7 @@ const advancedDimensionFieldsGrouped = computed(() => {
 })
 
 const advancedMetricFieldsGrouped = computed(() => {
-  const merged = new Map<string, { value: string; label: string }>()
+  const merged = new Map<string, FieldPickerOption>()
   aggregations.value.forEach((a) => {
     const funcLabel = getAggFuncLabel(a.func)
     merged.set(`AGGID:${a.id}`, {
@@ -3766,22 +3832,22 @@ const advancedMetricFieldsGrouped = computed(() => {
 })
 
 // 解析筛选/排序字段值
-const parseFieldValue = (value: string): { table: string; tableAlias?: string; column: string; aggFunc?: string; aggId?: string } => {
+const parseFieldValue = (value: string): { table: string; tableAlias?: string; column: string; semanticName?: string; aggFunc?: string; aggId?: string } => {
   if (value.startsWith('AGGID:')) {
     const aggId = value.substring(6)
     const agg = aggregations.value.find(a => a.id === aggId)
     if (agg) {
-      return { table: agg.table, tableAlias: getTableAlias(agg), column: agg.column, aggFunc: agg.func, aggId }
+      return { table: agg.table, tableAlias: getTableAlias(agg), column: agg.column, semanticName: agg.semanticName, aggFunc: agg.func, aggId }
     }
     const fallbackDim = dimensions.value[0]
     if (fallbackDim) {
       ElMessage.warning('原聚合字段已失效，已回退到可用维度字段')
-      return { table: fallbackDim.table, tableAlias: getTableAlias(fallbackDim), column: fallbackDim.column }
+      return { table: fallbackDim.table, tableAlias: getTableAlias(fallbackDim), column: fallbackDim.column, semanticName: fallbackDim.semanticName }
     }
     const fallbackAgg = aggregations.value[0]
     if (fallbackAgg) {
       ElMessage.warning('原聚合字段已失效，已回退到可用聚合字段')
-      return { table: fallbackAgg.table, tableAlias: getTableAlias(fallbackAgg), column: fallbackAgg.column, aggFunc: fallbackAgg.func, aggId: fallbackAgg.id }
+      return { table: fallbackAgg.table, tableAlias: getTableAlias(fallbackAgg), column: fallbackAgg.column, semanticName: fallbackAgg.semanticName, aggFunc: fallbackAgg.func, aggId: fallbackAgg.id }
     }
     ElMessage.warning('当前无可用字段，请先添加维度或指标')
     return { table: '', column: '' }
@@ -3796,12 +3862,19 @@ const parseFieldValue = (value: string): { table: string; tableAlias?: string; c
     const tableAlias = rest.substring(colonIdx + 1, dotIdx)
     const column = rest.substring(dotIdx + 1)
     if (!tableAlias || !column) return { table: '', column: '' }
-    return { table: resolvePhysicalTableByAlias(tableAlias), tableAlias, column, aggFunc }
+    const table = resolvePhysicalTableByAlias(tableAlias)
+    const matchedAgg = aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, table, column) && a.func === aggFunc)
+    const semanticOption = semanticMetricFilterFields.value.find(field => field.value === value)
+    return { table, tableAlias, column, semanticName: matchedAgg?.semanticName || semanticOption?.semanticName, aggFunc }
   }
   const dotIdx = value.indexOf('.')
   if (dotIdx <= 0) return { table: '', column: '' }
   const tableAlias = value.substring(0, dotIdx)
-  return { table: resolvePhysicalTableByAlias(tableAlias), tableAlias, column: value.substring(dotIdx + 1) }
+  const table = resolvePhysicalTableByAlias(tableAlias)
+  const column = value.substring(dotIdx + 1)
+  const matchedDim = dimensions.value.find(d => buildFieldKey(d.tableAlias, d.table, d.column) === buildFieldKey(tableAlias, table, column))
+  const semanticOption = semanticDimensionFilterFields.value.find(field => field.value === value)
+  return { table, tableAlias, column, semanticName: matchedDim?.semanticName || semanticOption?.semanticName }
 }
 
 // 生成筛选字段组合值
@@ -3860,7 +3933,7 @@ const handleFilterFieldChange = (f: FilterCondition, value: string) => {
   if (treeScope && isInAdvancedTree && wasScope !== nextScope && nextScope !== treeScope) {
     removeFilterFromAdvancedTree(f.id)
   } else if (treeScope && isInAdvancedTree && wasScope !== nextScope && nextScope === treeScope) {
-    appendFilterToAdvancedTree({ ...f, table: parsed.table, tableAlias: parsed.tableAlias || parsed.table, column: parsed.column, aggFunc: parsed.aggFunc, aggId: parsed.aggId })
+    appendFilterToAdvancedTree({ ...f, table: parsed.table, tableAlias: parsed.tableAlias || parsed.table, column: parsed.column, semanticName: parsed.semanticName, aggFunc: parsed.aggFunc, aggId: parsed.aggId })
   }
   if (editingFilterFromAdvanced.value && nextScope === 'aggregate' && f.valueType === 'field_ref') {
     f.valueType = 'literal'
@@ -3872,6 +3945,7 @@ const handleFilterFieldChange = (f: FilterCondition, value: string) => {
   f.table = parsed.table
   f.tableAlias = parsed.tableAlias || parsed.table
   f.column = parsed.column
+  f.semanticName = parsed.semanticName
   f.aggFunc = parsed.aggFunc
   f.aggId = parsed.aggId
   if (parsed.aggId) {
@@ -3903,6 +3977,7 @@ const handleOrderFieldChange = (o: OrderByField, value: string) => {
   o.table = parsed.table
   o.tableAlias = parsed.tableAlias || parsed.table
   o.column = parsed.column
+  o.semanticName = parsed.semanticName
   o.aggFunc = parsed.aggFunc
   o.aggId = parsed.aggId
 }
