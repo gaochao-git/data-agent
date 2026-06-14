@@ -309,6 +309,102 @@ def test_compile_semantic_builder_sql_uses_semantic_metric_name_for_ambiguous_co
     assert "SUM(amount) AS `退款额`" not in sql
 
 
+def test_compile_semantic_builder_sql_does_not_reuse_selected_metric_for_named_having_order(client, fake_datasource_manager, monkeypatch):
+    config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"},
+        {"name": "销售额含税", "expression": "SUM(orders.amount * 1.06)", "table": "orders", "field_name": "amount"},
+    ]
+    config["dimensions"] = [
+        {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
+    ]
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "dimensions": [{"semanticName": "城市", "table": "orders", "column": "city"}],
+                "aggregations": [{"semanticName": "销售额", "func": "SUM", "table": "orders", "column": "amount"}],
+                "filters": [{"semanticName": "销售额含税", "aggFunc": "SUM", "table": "orders", "column": "amount", "operator": ">", "value": 100}],
+                "orderBy": [{"semanticName": "销售额含税", "aggFunc": "SUM", "table": "orders", "column": "amount", "direction": "DESC"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    sql = payload["data"]["sql"]
+    assert "SUM(amount) AS `销售额`" in sql
+    assert "HAVING SUM(orders.amount * 1.06) > 100" in sql
+    assert "ORDER BY SUM(orders.amount * 1.06) DESC" in sql
+    assert "HAVING SUM(amount) > 100" not in sql
+
+
+def test_compile_semantic_builder_sql_keeps_metric_expression_for_having_and_order_only(client, fake_datasource_manager, monkeypatch):
+    datasource = fake_datasource_manager.datasources["ds_a"]
+    datasource["ds_tables"].extend([
+        {
+            "table_name": "order_items",
+            "description": "订单明细",
+            "columns": [
+                {"name": "product_id", "type": "int"},
+                {"name": "quantity", "type": "int"},
+                {"name": "unit_price", "type": "decimal"},
+            ],
+        },
+        {
+            "table_name": "products",
+            "description": "商品",
+            "columns": [
+                {"name": "product_id", "type": "int"},
+                {"name": "product_name", "type": "varchar"},
+            ],
+        },
+    ])
+    config = datasource["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "明细销售额", "expression": "SUM(order_items.quantity * order_items.unit_price)", "table": "order_items"}
+    ]
+    config["dimensions"] = [
+        {"name": "商品名称", "column": "product_name", "table": "products", "type": "categorical"},
+    ]
+    config["relationships"] = [
+        {
+            "left_table": "order_items",
+            "right_table": "products",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "product_id", "right_column": "product_id"}],
+            "relationship_type": "many_to_one",
+        }
+    ]
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "dimensions": [{"semanticName": "商品名称", "table": "products", "column": "product_name"}],
+                "filters": [{"semanticName": "明细销售额", "aggFunc": "SUM", "table": "order_items", "column": "unit_price", "operator": ">", "value": 100}],
+                "orderBy": [{"semanticName": "明细销售额", "aggFunc": "SUM", "table": "order_items", "column": "unit_price", "direction": "DESC"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    sql = payload["data"]["sql"]
+    assert "HAVING SUM(order_items.quantity * order_items.unit_price) > 100" in sql
+    assert "ORDER BY SUM(order_items.quantity * order_items.unit_price) DESC" in sql
+    assert "SUM(order_items.`unit_price`)" not in sql
+
+
 def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_name(client, fake_datasource_manager, monkeypatch):
     config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
     config["metrics"] = [

@@ -118,6 +118,26 @@ def test_generate_aggregate_order_by_metric_uses_aggregate_expression_for_hive()
     assert "ORDER BY orders.order_id DESC" not in sql
 
 
+def test_generate_having_keeps_metric_expression_when_metric_not_selected():
+    config = build_config()
+    config["metrics"].append({
+        "name": "明细销售额",
+        "expression": "SUM(order_items.quantity * order_items.unit_price)",
+        "table": "order_items",
+    })
+    sql = generate(
+        config,
+        {
+            "metrics": [],
+            "dimensions": ["用户等级"],
+            "having": [{"metric": "明细销售额", "operator": ">", "value": 100}],
+        },
+    )
+
+    assert "HAVING SUM(order_items.quantity * order_items.unit_price) > 100" in sql
+    assert "SUM(order_items.`unit_price`)" not in sql
+
+
 def test_generate_order_by_rejects_field_outside_query_outputs():
     with pytest.raises(ValueError, match="不在当前查询输出字段中"):
         generate(

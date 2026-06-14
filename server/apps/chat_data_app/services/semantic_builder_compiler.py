@@ -283,6 +283,7 @@ class SemanticBuilderCompiler:
             "logic": node.get("logic", "AND"),
             "aggFunc": agg.get("func"),
             "aggId": agg.get("id"),
+            "expression": agg.get("expression"),
         }
         self._copy_filter_value_fields(node, mapped)
         return mapped
@@ -311,6 +312,7 @@ class SemanticBuilderCompiler:
                 "direction": direction,
                 "aggFunc": agg.get("func"),
                 "aggId": agg.get("id"),
+                "expression": agg.get("expression"),
             }
         dim = self._find_selected_dimension(item, dimensions) or self._map_dimension(item)
         return {
@@ -336,6 +338,24 @@ class SemanticBuilderCompiler:
             for agg in aggregations:
                 if _normalize_text(agg.get("id")) == agg_id:
                     return agg
+        item_expression = _normalize_text(item.get("expression"))
+        if item_expression:
+            for agg in aggregations:
+                if _normalize_text(agg.get("expression")) == item_expression:
+                    return agg
+            return None
+        name_candidates = [
+            _normalize_text(item.get("semanticName")),
+            _normalize_text(item.get("name")),
+            _normalize_text(item.get("alias")),
+            _normalize_text(item.get("displayName")),
+        ]
+        explicit_names = {name for name in name_candidates if name}
+        if explicit_names:
+            for agg in aggregations:
+                if _normalize_text(agg.get("alias")) in explicit_names:
+                    return agg
+            return None
         item_func = _normalize_text(item.get("aggFunc") or item.get("func")).upper()
         item_keys = _field_keys(item.get("table"), _normalize_alias(item), item.get("column"))
         for agg in aggregations:

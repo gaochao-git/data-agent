@@ -1206,16 +1206,6 @@ watch(selectedDatasourceId, () => {
 }, { immediate: true })
 
 watch(
-  [viewMode, activeSidebarTab],
-  ([mode, tab]) => {
-    if (mode === 'conversation' && tab === 'conversation') {
-      void ensureConversationsLoaded()
-    }
-  },
-  { immediate: true }
-)
-
-watch(
   [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|')],
   ensureStructuredViewSemanticConfig,
   { immediate: true }
@@ -1567,19 +1557,6 @@ onUnmounted(() => {
                 @fill-question="handleFillSemanticQuestion"
               />
             </div>
-            <ConversationSidebar
-              v-show="activeSidebarTab === 'conversation'"
-              active-tab="conversation"
-              :grouped-conversations="groupedConversations"
-              :current-conversation-id="currentConversationId"
-              :is-loading="isLoadingConversations"
-              :is-loading-more="isLoadingMoreConversations"
-              :has-more="hasMoreConversations"
-              :hide-management="!!parentComponentName"
-              @select-conversation="selectConversation"
-              @new-conversation="handleNewConversation"
-              @load-more-conversations="loadMoreConversations"
-            />
           </template>
 
           <!-- 辅助查询：数据表 -->

@@ -295,14 +295,14 @@ def _build_having_leaf_clause(
     agg_id = leaf.get("aggId")
 
     matched = agg_by_id.get(str(agg_id)) if agg_id else None
-    if not matched:
+    if not matched and not (leaf.get("expression") or "").strip():
         for agg in aggregations:
             if _effective_table_ref(agg, fallback=main_table) == table and agg.get("column") == column and (agg.get("func") or "").upper() == agg_func:
                 matched = agg
                 break
 
     matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table)
-    matched_expr = (matched or {}).get("expression")
+    matched_expr = (matched or {}).get("expression") or leaf.get("expression")
     if agg_func == "RAW" and (matched_expr or "").strip():
         agg_expr = _rewrite_expression_table_qualifier(matched_expr.strip(), table, matched_physical_table, is_multi_table)
     elif agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
@@ -687,16 +687,23 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
         group_fields = [group_expr_map[(_effective_table_ref(d, fallback=main_alias), d.get("column", ""))] for d in dimensions]
         parts.append(f"GROUP BY {', '.join(group_fields)}")
 
-    def get_agg_expr(agg_func: str, table: str, column: str, agg_id: Optional[str]) -> str:
+    def get_agg_expr(
+        agg_func: str,
+        table: str,
+        column: str,
+        agg_id: Optional[str],
+        expression: Optional[str] = None,
+        physical_table: Optional[str] = None,
+    ) -> str:
         matched = agg_by_id.get(str(agg_id)) if agg_id else None
-        if not matched:
+        if not matched and not (expression or "").strip():
             for a in aggregations:
                 if _effective_table_ref(a, fallback=main_alias) == table and a.get("column") == column and (a.get("func") or "").upper() == agg_func:
                     matched = a
                     break
 
-        matched_expr = (matched or {}).get("expression")
-        matched_physical_table = _physical_table_ref(matched or {}, fallback=table)
+        matched_expr = (matched or {}).get("expression") or expression
+        matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table or table)
         if agg_func == "RAW" and (matched_expr or "").strip():
             return _normalize_raw_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
         if agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
@@ -731,7 +738,8 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                 operator = str(f.get("operator", "=")).upper()
                 value_type = f.get("value_type")
                 logic = str(f.get("logic", "AND")).upper()
-                agg_expr = get_agg_expr(agg_func, table, column, f.get("aggId"))
+                physical_table = _physical_table_ref(f, fallback=table)
+                agg_expr = get_agg_expr(agg_func, table, column, f.get("aggId"), f.get("expression"), physical_table)
                 if operator in ("IS NULL", "IS NOT NULL"):
                     clause = f"{agg_expr} {operator}"
                 elif (
@@ -785,7 +793,8 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
             column = o.get("column", "")
             agg_func = o.get("aggFunc")
             if agg_func:
-                order_fields.append(f"{get_agg_expr(str(agg_func).upper(), table, column, o.get('aggId'))} {direction}")
+                physical_table = _physical_table_ref(o, fallback=table)
+                order_fields.append(f"{get_agg_expr(str(agg_func).upper(), table, column, o.get('aggId'), o.get('expression'), physical_table)} {direction}")
             elif (table, column) in dimension_alias_map:
                 order_fields.append(f"{_quote_identifier(dimension_alias_map[(table, column)])} {direction}")
             elif (table, column) in group_expr_map:

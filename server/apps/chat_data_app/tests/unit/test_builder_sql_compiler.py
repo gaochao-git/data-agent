@@ -271,6 +271,47 @@ def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
     assert "ORDER BY SUM(DISTINCT amount) DESC" in sql
 
 
+def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias():
+    builder_config = {
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "joins": [],
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "city", "alias": "城市"}],
+        "aggregations": [
+            {"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"},
+        ],
+        "filters": [
+            {
+                "id": "h1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "amount",
+                "operator": ">",
+                "value": 100,
+                "aggFunc": "SUM",
+                "expression": "SUM(orders.amount * 1.06)",
+            }
+        ],
+        "orderBy": [
+            {
+                "id": "o1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "amount",
+                "direction": "DESC",
+                "aggFunc": "SUM",
+                "expression": "SUM(orders.amount * 1.06)",
+            }
+        ],
+    }
+
+    sql = compile_builder_sql(builder_config)
+
+    assert "HAVING SUM(o.amount * 1.06) > 100" in sql
+    assert "ORDER BY SUM(o.amount * 1.06) DESC" in sql
+    assert "SUM(orders.amount * 1.06)" not in sql
+
+
 def test_compile_builder_sql_rejects_limit_over_global_max():
     builder_config = {
         "mainTable": "orders",
