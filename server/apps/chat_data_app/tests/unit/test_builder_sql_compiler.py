@@ -269,6 +269,7 @@ def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
     assert "SUM(DISTINCT amount) AS `销售额`" in sql
     assert "HAVING COUNT(DISTINCT `user_id`) > 3" in sql
     assert "ORDER BY SUM(DISTINCT amount) DESC" in sql
+    assert "GROUP BY" not in sql
 
 
 def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias():
@@ -310,6 +311,54 @@ def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias()
     assert "HAVING SUM(o.amount * 1.06) > 100" in sql
     assert "ORDER BY SUM(o.amount * 1.06) DESC" in sql
     assert "SUM(orders.amount * 1.06)" not in sql
+
+
+def test_compile_builder_sql_groups_dimension_for_unselected_having_order_metric():
+    builder_config = {
+        "mainTable": "users",
+        "mainAlias": "u",
+        "joins": [
+            {
+                "leftTable": "users",
+                "leftAlias": "u",
+                "rightTable": "orders",
+                "rightAlias": "o",
+                "joinType": "LEFT",
+                "joinConditions": [{"leftAlias": "u", "leftColumn": "user_id", "rightColumn": "user_id"}],
+            }
+        ],
+        "dimensions": [{"id": "d1", "table": "users", "tableAlias": "u", "column": "level", "alias": "用户等级"}],
+        "aggregations": [],
+        "filters": [
+            {
+                "id": "h1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "amount",
+                "operator": ">",
+                "value": 100,
+                "aggFunc": "SUM",
+                "expression": "SUM(orders.amount)",
+            }
+        ],
+        "orderBy": [
+            {
+                "id": "o1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "amount",
+                "direction": "DESC",
+                "aggFunc": "SUM",
+                "expression": "SUM(orders.amount)",
+            }
+        ],
+    }
+
+    sql = compile_builder_sql(builder_config)
+
+    assert "GROUP BY u.`level`" in sql
+    assert "HAVING SUM(o.amount) > 100" in sql
+    assert "ORDER BY SUM(o.amount) DESC" in sql
 
 
 def test_compile_builder_sql_rejects_limit_over_global_max():

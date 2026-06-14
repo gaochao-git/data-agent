@@ -135,6 +135,7 @@ def test_generate_having_keeps_metric_expression_when_metric_not_selected():
     )
 
     assert "HAVING SUM(order_items.quantity * order_items.unit_price) > 100" in sql
+    assert "GROUP BY users.`level`" in sql
     assert "SUM(order_items.`unit_price`)" not in sql
 
 

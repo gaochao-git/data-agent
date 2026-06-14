@@ -493,6 +493,8 @@ def test_hive_http_executor_polls_running_then_success_and_async_callback(monkey
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("select 1", remote_task_callback=fake_callback))
 
     assert result["success"] is True
+    assert result["remote_task_id"] == "task_001"
+    assert result["source_type"] == "hive"
     assert result["data"] == [{"a": 1}]
     assert captured_remote_tasks == [{"remote_task_id": "task_001", "namespace": "ns_a", "source_type": "hive"}]
 

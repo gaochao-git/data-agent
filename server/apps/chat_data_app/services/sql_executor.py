@@ -863,7 +863,10 @@ class HiveHttpExecutor(SQLExecutor):
                     }
                 normalized_status = _extract_remote_status(status_payload)
                 if normalized_status == "succeeded":
-                    return self._normalize_result(status_payload)
+                    result = self._normalize_result(status_payload)
+                    result["remote_task_id"] = task_id
+                    result["source_type"] = self.source_type
+                    return result
                 if normalized_status == "cancelled":
                     return {"success": False, "error": _extract_remote_message(status_payload, "查询已取消"), "columns": [], "data": [], "total_count": 0}
                 if normalized_status == "failed":

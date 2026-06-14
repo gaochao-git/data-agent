@@ -200,6 +200,34 @@ def _get_filter_tree_scope(node: Dict[str, Any]) -> Optional[str]:
     return "aggregate" if node.get("aggFunc") else "detail"
 
 
+def _is_real_aggregation_func(func: Any) -> bool:
+    return str(func or "RAW").upper() != "RAW"
+
+
+def _filter_has_real_aggregation(node: Dict[str, Any]) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if _is_filter_tree_node(node):
+        children = node.get("and") if "and" in node else node.get("or")
+        if not isinstance(children, list):
+            return False
+        return any(_filter_has_real_aggregation(child) for child in children if isinstance(child, dict))
+    if _is_real_aggregation_func(node.get("aggFunc")):
+        return True
+    return _is_aggregate_expression(node.get("expression"))
+
+
+def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    agg_func = item.get("aggFunc")
+    if not agg_func:
+        return False
+    if _is_real_aggregation_func(agg_func):
+        return True
+    return _is_aggregate_expression(item.get("expression"))
+
+
 def _effective_table_ref(item: Dict[str, Any], table_key: str = "table", alias_key: str = "tableAlias", fallback: str = "") -> str:
     return str(item.get(alias_key) or item.get(table_key) or fallback or "").strip()
 
@@ -682,7 +710,11 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                 where_clauses.append(clause if idx == 0 else f"{logic} {clause}")
             parts.append(f"WHERE {' '.join(where_clauses)}")
 
-    has_real_aggregation = any((a.get("func") or "RAW").upper() != "RAW" for a in aggregations)
+    has_real_aggregation = (
+        any(_is_real_aggregation_func(a.get("func")) for a in aggregations)
+        or any(_filter_has_real_aggregation(f) for f in having_filters)
+        or any(_order_by_has_real_aggregation(o) for o in order_by)
+    )
     if dimensions and has_real_aggregation:
         group_fields = [group_expr_map[(_effective_table_ref(d, fallback=main_alias), d.get("column", ""))] for d in dimensions]
         parts.append(f"GROUP BY {', '.join(group_fields)}")

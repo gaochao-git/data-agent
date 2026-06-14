@@ -25,14 +25,25 @@ from .datasource_manager import get_datasource_manager
 from .runtime_config import DEFAULT_ROW_LIMIT, QUERY_CACHE_ENABLED, QUERY_CACHE_TTL_SECONDS
 from .semantic_builder_compiler import compile_semantic_builder_sql
 from .sql_concurrency_limiter import run_with_sql_user_datasource_limit
-from .sql_executor import build_effective_sql, get_executor
+from .sql_executor import build_effective_sql, fetch_http_query_task_result, get_executor
 
 logger = get_logger(__name__)
+
+HTTP_REMOTE_REF_CACHE_TYPE = "http_remote_ref"
 
 
 def is_http_execution_target(execution_target: Dict[str, Any]) -> bool:
     """判断执行目标是否走 HTTP 查询。"""
     return str((execution_target or {}).get("query_executor_type") or "").strip().lower() == "http"
+
+
+def is_http_remote_ref_cache(payload: Optional[Dict[str, Any]]) -> bool:
+    """判断缓存负载是否为 HTTP 远端任务引用。"""
+    return (
+        isinstance(payload, dict)
+        and str(payload.get("cache_type") or "").strip().lower() == HTTP_REMOTE_REF_CACHE_TYPE
+        and bool(str(payload.get("remote_task_id") or "").strip())
+    )
 
 
 def normalize_sql_cache_text(sql: str) -> str:
@@ -110,22 +121,18 @@ async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[
     return payload
 
 
-async def save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str, Any], operator_id: Optional[str] = None, operator_name: Optional[str] = None) -> None:
-    """保存成功的 SQL 查询结果缓存。"""
-    if not result.get("success"):
-        return
+async def _upsert_sql_result_cache_payload(
+    cache_identity: Dict[str, Any],
+    payload: Dict[str, Any],
+    result_row_count: int,
+    operator_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+) -> None:
+    """写入 SQL 查询缓存负载。"""
     cache_key = str(cache_identity.get("cache_key") or "").strip()
     if not cache_key:
         return
     now = datetime.now()
-    payload = {
-        "success": True,
-        "columns": result.get("columns") or [],
-        "data": result.get("data") or [],
-        "total_count": int(result.get("total_count") or 0),
-        "execution_time_ms": result.get("execution_time_ms"),
-        "error": None,
-    }
     operator_user_id = str(operator_id or "").strip()
     operator_username = str(operator_name or "").strip()
     async with get_session() as db:
@@ -139,7 +146,7 @@ async def save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str
             cache_item.sql_hash = str(cache_identity.get("sql_hash") or "")
             cache_item.sql_text = str(cache_identity.get("sql_text") or "")
             cache_item.result_payload = json.dumps(payload, ensure_ascii=False)
-            cache_item.result_row_count = int(result.get("total_count") or 0)
+            cache_item.result_row_count = int(result_row_count or 0)
             cache_item.expire_time = now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS)
             cache_item.delete_flag = 0
             cache_item.update_time = now
@@ -155,7 +162,7 @@ async def save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str
                 sql_hash=str(cache_identity.get("sql_hash") or ""),
                 sql_text=str(cache_identity.get("sql_text") or ""),
                 result_payload=json.dumps(payload, ensure_ascii=False),
-                result_row_count=int(result.get("total_count") or 0),
+                result_row_count=int(result_row_count or 0),
                 expire_time=now + timedelta(seconds=QUERY_CACHE_TTL_SECONDS),
                 hit_count=0,
                 delete_flag=0,
@@ -167,6 +174,112 @@ async def save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str
                 update_by_name=operator_username,
             ))
         await db.commit()
+
+
+async def save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str, Any], operator_id: Optional[str] = None, operator_name: Optional[str] = None) -> None:
+    """保存成功的 SQL 查询结果缓存。"""
+    if not result.get("success"):
+        return
+    if str((cache_identity or {}).get("executor_type") or "").strip().lower() == "http":
+        await save_http_remote_ref_sql_result_cache(cache_identity, result, operator_id=operator_id, operator_name=operator_name)
+        return
+    payload = {
+        "success": True,
+        "columns": result.get("columns") or [],
+        "data": result.get("data") or [],
+        "total_count": int(result.get("total_count") or 0),
+        "execution_time_ms": result.get("execution_time_ms"),
+        "error": None,
+    }
+    await _upsert_sql_result_cache_payload(
+        cache_identity,
+        payload,
+        int(result.get("total_count") or 0),
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+
+
+async def save_http_remote_ref_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str, Any], operator_id: Optional[str] = None, operator_name: Optional[str] = None) -> None:
+    """保存 HTTP 查询远端任务引用缓存，不落本地结果行。"""
+    if not result.get("success"):
+        return
+    remote_task_id = str(result.get("remote_task_id") or "").strip()
+    if not remote_task_id:
+        return
+    source_type = str(result.get("source_type") or cache_identity.get("source_type") or "").strip().lower() or "hive"
+    payload = {
+        "success": True,
+        "cache_type": HTTP_REMOTE_REF_CACHE_TYPE,
+        "remote_task_id": remote_task_id,
+        "source_type": source_type,
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "execution_time_ms": result.get("execution_time_ms"),
+        "error": None,
+    }
+    await _upsert_sql_result_cache_payload(
+        cache_identity,
+        payload,
+        0,
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+
+
+async def fetch_http_remote_ref_cache_result(cached_result: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
+    """按 HTTP 远端任务引用读取结果，并保留本次缓存命中元信息。"""
+    remote_task_id = str((cached_result or {}).get("remote_task_id") or "").strip()
+    source_type = str((cached_result or {}).get("source_type") or "").strip().lower() or "hive"
+    if not remote_task_id:
+        return {
+            "_cache_ref_unavailable": True,
+            "success": False,
+            "error": "HTTP 缓存缺少远端任务 ID",
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
+    try:
+        remote_result = await fetch_http_query_task_result(
+            remote_task_id,
+            source_type=source_type,
+            user_id=user_id,
+            username=username,
+        )
+    except Exception as err:
+        logger.warning("读取 HTTP 远端缓存结果失败: remote_task_id=%s error=%s", remote_task_id, err, exc_info=True)
+        return {
+            "_cache_ref_unavailable": True,
+            "success": False,
+            "error": str(err) or "HTTP 远端缓存结果读取失败",
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
+    if not remote_result.get("success"):
+        return {
+            "_cache_ref_unavailable": True,
+            "success": False,
+            "error": remote_result.get("error") or "HTTP 远端缓存结果不可用",
+            "status": remote_result.get("status"),
+            "columns": remote_result.get("columns") or [],
+            "data": remote_result.get("data") or [],
+            "total_count": int(remote_result.get("total_count") or 0),
+        }
+    return {
+        "success": True,
+        "columns": remote_result.get("columns") or [],
+        "data": remote_result.get("data") or [],
+        "total_count": int(remote_result.get("total_count") or 0),
+        "execution_time_ms": remote_result.get("execution_time_ms"),
+        "remote_task_id": remote_task_id,
+        "error": None,
+        "cache_hit": True,
+        "cache_age_seconds": cached_result.get("cache_age_seconds"),
+        "cache_expires_in_seconds": cached_result.get("cache_expires_in_seconds"),
+    }
 
 
 def get_execution_id_by_member(execution_map: Dict[str, str], execution_target: Dict[str, Any]) -> Optional[str]:
@@ -348,6 +461,7 @@ async def execute_sql_for_member(
     member_name = execution_target.get("member_name") or execution_target.get("group_name") or ""
     effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
     cache_identity = build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
+    http_target = is_http_execution_target(execution_target)
 
     async def on_remote_task_created(payload: Dict[str, Any]) -> None:
         remote_task_id = str((payload or {}).get("remote_task_id") or "").strip()
@@ -424,20 +538,52 @@ async def execute_sql_for_member(
                 execute_kwargs["db_connection_callback"] = on_db_connection_created
             return await executor.execute(**execute_kwargs)
 
-        if is_sql_result_cache_enabled(skip_query_cache) and not is_http_execution_target(execution_target):
+        async def execute_query_and_update_cache() -> Dict[str, Any]:
+            query_result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
+            if not is_sql_result_cache_enabled(skip_query_cache):
+                return query_result
+            try:
+                if http_target:
+                    await save_http_remote_ref_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
+                else:
+                    await save_sql_result_cache(cache_identity, query_result, operator_id=user_id, operator_name=username)
+            except Exception as cache_err:
+                logger.warning("保存 SQL 结果缓存失败，忽略缓存写入: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
+            return query_result
+
+        if is_sql_result_cache_enabled(skip_query_cache):
             try:
                 cached_result = await get_sql_result_cache(cache_identity)
             except Exception as cache_err:
                 logger.warning("读取 SQL 结果缓存失败，降级查询数据源: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
                 cached_result = None
             if cached_result:
-                result = cached_result
+                if http_target:
+                    if is_http_remote_ref_cache(cached_result):
+                        result = await fetch_http_remote_ref_cache_result(cached_result, user_id=user_id, username=username)
+                        if result.get("_cache_ref_unavailable"):
+                            logger.info(
+                                "HTTP 远端缓存结果不可用，重新提交查询: cache_key=%s remote_task_id=%s status=%s error=%s",
+                                cache_identity.get("cache_key"),
+                                cached_result.get("remote_task_id"),
+                                result.get("status"),
+                                result.get("error"),
+                            )
+                            result = await execute_query_and_update_cache()
+                        else:
+                            await on_remote_task_created({
+                                "remote_task_id": result.get("remote_task_id"),
+                                "source_type": cached_result.get("source_type") or execution_target.get("source_type"),
+                            })
+                    else:
+                        result = await execute_query_and_update_cache()
+                else:
+                    if is_http_remote_ref_cache(cached_result):
+                        result = await execute_query_and_update_cache()
+                    else:
+                        result = cached_result
             else:
-                result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
-                try:
-                    await save_sql_result_cache(cache_identity, result, operator_id=user_id, operator_name=username)
-                except Exception as cache_err:
-                    logger.warning("保存 SQL 结果缓存失败，忽略缓存写入: cache_key=%s error=%s", cache_identity.get("cache_key"), cache_err, exc_info=True)
+                result = await execute_query_and_update_cache()
         else:
             result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
         if execution_id and await get_query_execution_status(execution_id) == "cancelled":
@@ -449,7 +595,7 @@ async def execute_sql_for_member(
         if executor is not None:
             await executor.close()
     if execution_id:
-        await update_query_execution_from_result(execution_id, result, store_result_payload=not is_http_execution_target(execution_target))
+        await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
     return {
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,

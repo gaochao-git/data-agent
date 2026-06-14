@@ -401,6 +401,7 @@ def test_compile_semantic_builder_sql_keeps_metric_expression_for_having_and_ord
     assert payload["status"] == "success"
     sql = payload["data"]["sql"]
     assert "HAVING SUM(order_items.quantity * order_items.unit_price) > 100" in sql
+    assert "GROUP BY products.`product_name`" in sql
     assert "ORDER BY SUM(order_items.quantity * order_items.unit_price) DESC" in sql
     assert "SUM(order_items.`unit_price`)" not in sql
 
