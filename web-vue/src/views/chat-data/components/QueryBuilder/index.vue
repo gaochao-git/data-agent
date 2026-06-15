@@ -1094,6 +1094,14 @@ const isDimensionDateField = (item: Pick<DimensionField, 'table' | 'column'>) =>
   return getFieldType(column) === 'date'
 }
 
+const getDefaultAggregationFunc = (field: { table?: string; column?: string; type?: string }): AggregationField['func'] => {
+  if (field.type) {
+    return /int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/i.test(field.type) ? 'SUM' : 'COUNT_DISTINCT'
+  }
+  const column = getTableColumns(field.table || '').find(col => col.name === field.column)
+  return column && getFieldType(column) === 'number' ? 'SUM' : 'COUNT_DISTINCT'
+}
+
 // ===== @mention 选择功能 =====
 type AtRowType = 'dimension' | 'aggregation' | 'filter' | 'order'
 interface AtItem {
@@ -1216,12 +1224,13 @@ const handleAtSelect = (item: AtItem) => {
       })
     }
   } else if (row === 'aggregation') {
-    if (!canUseAggregationFunc('RAW')) {
-      showAggregationModeConflictMessage('RAW')
+    const targetFunc = getDefaultAggregationFunc({ table: item.table, column: item.name, type: item.type })
+    if (!canUseAggregationFunc(targetFunc)) {
+      showAggregationModeConflictMessage(targetFunc)
       closeAtDropdown()
       return
     }
-    if (!aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, item.table, item.name) && a.func === 'RAW')) {
+    if (!aggregations.value.find(a => buildFieldKey(a.tableAlias, a.table, a.column) === buildFieldKey(tableAlias, item.table, item.name) && a.func === targetFunc)) {
       aggregations.value.push({
         id: `${Date.now()}`,
         table: item.table!,
@@ -1230,7 +1239,7 @@ const handleAtSelect = (item: AtItem) => {
         semanticName: item.label,
         displayName: item.label,
         label: `${item.tableLabel}.${item.label}`,
-        func: 'RAW'
+        func: targetFunc
       })
     }
   } else if (row === 'filter') {
@@ -1468,7 +1477,7 @@ const addFieldToAggregation = (field: any) => {
     ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
     return
   }
-  const targetFunc = aggFunc || 'RAW'
+  const targetFunc = aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })
   if (!canUseAggregationFunc(targetFunc)) {
     showAggregationModeConflictMessage(targetFunc)
     return

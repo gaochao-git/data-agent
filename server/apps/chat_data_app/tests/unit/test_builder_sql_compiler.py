@@ -1579,6 +1579,40 @@ def test_semantic_unified_engine_detail_intent_avoids_aggregate_card_sql():
     assert "order_id AS `订单数量`" in sql
 
 
+def test_semantic_unified_engine_dimensions_only_query_is_detail():
+    semantic_config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "订单数量", "table": "orders", "column": "order_id", "expression": "COUNT(orders.order_id)"}
+        ],
+        "dimensions": [
+            {"name": "订单编号", "table": "orders", "column": "order_id", "expression": "orders.order_id", "type": "categorical"},
+            {"name": "订单金额", "table": "orders", "column": "amount", "expression": "orders.amount", "type": "number"},
+        ],
+        "relationships": [],
+        "tables": [
+            {"table_name": "orders", "columns": [{"name": "order_id"}, {"name": "amount"}]}
+        ],
+    }
+
+    result = SemanticSQLGenerator(semantic_config).generate_sql(
+        metrics=[],
+        dimensions=["订单编号", "订单金额"],
+        filters=[],
+        having=[],
+        order_by=[],
+        limit=100,
+        user_query="查询订单数据",
+    )
+
+    assert result["success"] is True
+    sql = result["sql"]
+    assert "GROUP BY" not in sql.upper()
+    assert "COUNT(" not in sql.upper()
+    assert "order_id AS `订单编号`" in sql
+    assert "amount AS `订单金额`" in sql
+
+
 def test_semantic_unified_engine_uses_aliases_for_same_physical_table_roles():
     semantic_config = {
         "source_type": "mysql",

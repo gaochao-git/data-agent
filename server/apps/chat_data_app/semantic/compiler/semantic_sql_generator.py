@@ -114,13 +114,13 @@ class SemanticSQLGenerator:
 
         判定优先级：
         1. 用户明确表达明细意图 -> 明细
-        2. 出现分组 / HAVING -> 聚合
+        2. 出现 HAVING -> 聚合
         3. 选择了聚合指标 -> 聚合
-        4. 其余场景回落为明细（通常是原始字段列表查询）
+        4. 其余场景回落为明细（dimensions 是明细展示字段）
         """
         if self._has_detail_intent(user_query) and not self._detail_intent_only_from_metric_name(user_query, matched_metrics):
             return QueryIntentType.DETAIL
-        if dimensions or having:
+        if having:
             return QueryIntentType.AGGREGATE
         if metrics and self._has_aggregate_metric(matched_metrics):
             return QueryIntentType.AGGREGATE

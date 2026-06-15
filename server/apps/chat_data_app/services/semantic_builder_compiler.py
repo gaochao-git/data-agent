@@ -194,7 +194,7 @@ class SemanticBuilderCompiler:
         else:
             dim = self._resolve_dimension_config(item)
             func = _normalize_text(item.get("func") or "RAW").upper()
-            if func != "RAW":
+            if func not in {"RAW", "COUNT", "SUM", "AVG", "MAX", "MIN", "COUNT_DISTINCT"}:
                 raise ValueError(f"字段 '{item.get('alias') or item.get('displayName') or item.get('column')}' 未配置为指标，不能作为聚合指标使用")
             table = dim.get("table")
             table_alias = _semantic_alias(dim) or table

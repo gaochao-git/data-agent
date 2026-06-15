@@ -108,7 +108,7 @@ def test_semantic_builder_rejects_ambiguous_metric_field_match():
         compiler._resolve_metric_config({"func": "SUM", "table": "orders", "column": "amount"})
 
 
-def test_semantic_builder_maps_raw_dimension_metric_and_rejects_unconfigured_aggregate():
+def test_semantic_builder_maps_dimension_as_raw_or_temporary_aggregate():
     compiler = SemanticBuilderCompiler(build_semantic_config())
 
     raw = compiler._map_aggregation({"semanticName": "城市", "func": "RAW", "alias": "城市原始值"})
@@ -116,8 +116,10 @@ def test_semantic_builder_maps_raw_dimension_metric_and_rejects_unconfigured_agg
     assert raw["column"] == "city"
     assert raw["alias"] == "城市原始值"
 
-    with pytest.raises(ValueError, match="不能作为聚合指标使用"):
-        compiler._map_aggregation({"semanticName": "城市", "func": "SUM", "alias": "城市求和"})
+    temporary_aggregate = compiler._map_aggregation({"semanticName": "城市", "func": "COUNT_DISTINCT", "alias": "城市数"})
+    assert temporary_aggregate["func"] == "COUNT_DISTINCT"
+    assert temporary_aggregate["column"] == "city"
+    assert temporary_aggregate["alias"] == "城市数"
 
 
 def test_semantic_builder_filter_mapping_branches():
