@@ -616,3 +616,73 @@ def test_attach_table_groups_short_circuits():
 
     assert asyncio.run(store._attach_table_groups_async("", [{"table_name": "orders"}])) == [{"table_name": "orders"}]
     assert asyncio.run(store._attach_table_groups_async("group_a", [{"table_name": ""}])) == [{"table_name": ""}]
+
+
+def test_datasource_store_remaining_read_branch_edges(monkeypatch):
+    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    _patch_store_session(monkeypatch, {
+        "datasource_group": [_group_model()],
+        "datasource_table": [
+            _table_model("", "orphan"),
+            _table_model("group_a", "orders"),
+        ],
+        "semantic_config": [_semantic_model("sc_public", "public", "admin")],
+        "datasource_table_group_rel": [],
+    })
+
+    async def run_checks():
+        return (
+            await store._get_group_row_by_id_async(""),
+            await store.get_group_member_datasource_ids_async("missing"),
+            await store._get_group_tables_map_async(["group_a", ""]),
+            await store.get_semantic_config_async("missing", "sc_public"),
+            await store.get_semantic_config_async("group_a", "sc_public"),
+        )
+
+    empty_group, missing_members, tables_map, missing_config, existing_config = asyncio.run(run_checks())
+
+    assert empty_group is None
+    assert missing_members == []
+    assert [table["table_name"] for table in tables_map["group_a"]] == ["orders"]
+    assert missing_config is None
+    assert existing_config["id"] == "sc_public"
+
+
+def test_update_datasource_group_all_optional_fields_and_duplicate_relations(monkeypatch):
+    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_group": [_group_model()]}, executed=executed)
+
+    async def run_checks():
+        await store.update_datasource_group_async(
+            "group_a",
+            group_desc="只改描述",
+            update_by="u0",
+        )
+        await store.update_datasource_group_async(
+            "group_a",
+            group_name="新名称",
+            group_desc="新描述",
+            source_type="hive",
+            template_source="机构A|ORG_A|http|127.0.0.1:10000:dw",
+            member_sources_text="机构A|ORG_A|http|127.0.0.1:10000:dw",
+            mapped_modules=[],
+            is_default=False,
+            update_by="u1",
+            update_by_name="用户1",
+        )
+        await store.replace_table_group_relations_async(
+            "group_a",
+            [
+                {"table_group_name": "订单域", "table_names": ["orders"]},
+                {"table_group_name": "订单域", "table_names": ["orders"]},
+            ],
+            create_by="u2",
+            update_by="u3",
+        )
+
+    asyncio.run(run_checks())
+
+    sql_texts = [str(stmt) for stmt in executed]
+    assert any("group_desc" in sql and "source_type" in sql and "template_source" in sql and "member_sources_text" in sql for sql in sql_texts)
+    assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1

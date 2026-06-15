@@ -88,6 +88,8 @@ def test_semantic_builder_resolves_dimensions_and_metrics_by_names_fields_and_ex
     assert compiler._resolve_dimension_config({"displayName": "城市"})["name"] == "城市"
     assert compiler._resolve_dimension_config({"table": "orders", "column": "city", "expression": "orders.city"})["name"] == "城市"
     with pytest.raises(ValueError, match="语义维度不存在"):
+        compiler._resolve_dimension_config({"table": "orders", "column": "city", "expression": "users.city", "alias": "冲突城市"})
+    with pytest.raises(ValueError, match="语义维度不存在"):
         compiler._resolve_dimension_config({"table": "orders", "column": "missing", "alias": "缺失字段"})
 
     assert compiler._resolve_metric_config({"displayName": "销售额"})["name"] == "销售额"
@@ -120,6 +122,9 @@ def test_semantic_builder_maps_dimension_as_raw_or_temporary_aggregate():
     assert temporary_aggregate["func"] == "COUNT_DISTINCT"
     assert temporary_aggregate["column"] == "city"
     assert temporary_aggregate["alias"] == "城市数"
+
+    with pytest.raises(ValueError, match="未配置为指标"):
+        compiler._map_aggregation({"semanticName": "城市", "func": "MEDIAN", "alias": "城市中位数"})
 
 
 def test_semantic_builder_filter_mapping_branches():
@@ -171,7 +176,10 @@ def test_semantic_builder_filter_mapping_branches():
 def test_semantic_builder_order_and_selection_helpers():
     compiler = SemanticBuilderCompiler(build_semantic_config())
     dimensions = [compiler._map_dimension({"semanticName": "城市"})]
-    aggregations = [compiler._map_aggregation({"semanticName": "销售额", "id": "agg_sales"})]
+    aggregations = [
+        compiler._map_aggregation({"semanticName": "销售额", "id": "agg_sales"}),
+        compiler._map_aggregation({"semanticName": "订单数", "id": "agg_count"}),
+    ]
 
     with pytest.raises(ValueError, match="排序方向"):
         compiler._map_order_by({"semanticName": "城市", "direction": "sideways"}, aggregations, dimensions)
@@ -179,12 +187,14 @@ def test_semantic_builder_order_and_selection_helpers():
     assert compiler._find_selected_dimension({"table": "orders", "column": "city"}, dimensions)["alias"] == "城市"
     assert compiler._find_selected_dimension({"table": "orders", "column": "missing"}, dimensions) is None
     assert compiler._find_selected_aggregation({"aggId": "agg_sales"}, aggregations)["alias"] == "销售额"
+    assert compiler._find_selected_aggregation({"aggId": "missing_agg"}, aggregations) is None
     assert compiler._find_selected_aggregation({"expression": "SUM(orders.amount)"}, aggregations)["alias"] == "销售额"
     assert compiler._find_selected_aggregation({"expression": "SUM(orders.refund_amount)"}, aggregations) is None
     assert compiler._find_selected_aggregation({"displayName": "销售额"}, aggregations)["alias"] == "销售额"
     assert compiler._find_selected_aggregation({"displayName": "退款额"}, aggregations) is None
     assert compiler._find_selected_aggregation({"aggFunc": "SUM", "table": "orders", "column": "amount"}, aggregations)["alias"] == "销售额"
     assert compiler._find_selected_aggregation({"aggFunc": "COUNT", "table": "orders", "column": "amount"}, aggregations) is None
+    assert compiler._find_selected_aggregation({"table": "orders", "column": "amount"}, aggregations)["alias"] == "销售额"
 
     order_by_selected_agg = compiler._map_order_by({"aggId": "agg_sales", "aggFunc": "SUM", "direction": "DESC"}, aggregations, dimensions)
     order_by_mapped_dim = compiler._map_order_by({"semanticName": "状态", "direction": "ASC"}, aggregations, dimensions)
@@ -214,9 +224,27 @@ def test_semantic_builder_table_collection_and_main_table_resolution():
     assert compiler._resolve_main_table([], [], filters, [])[0] == "orders"
     assert compiler._resolve_main_table([], [], [], [compiler._map_order_by({"semanticName": "状态"}, [], [])]) == ("orders", "orders")
     assert compiler._first_filter_table({"or": ["skip", {"table": "users", "tableAlias": "u"}]}) == ("users", "u")
+    assert compiler._first_filter_table({"or": [{"table": ""}, {"table": "users", "tableAlias": "u"}]}) == ("users", "u")
     assert compiler._first_filter_table({"and": []}) == ("", "")
     with pytest.raises(ValueError, match="无法确定主表"):
         compiler._resolve_main_table([], [], [], [])
+
+
+def test_semantic_builder_collects_or_filter_tables_and_empty_alias_branch():
+    tables_needed = set()
+    SemanticBuilderCompiler._collect_filter_tables(
+        {
+            "or": [
+                {"table": "", "tableAlias": ""},
+                {"table": "orders", "tableAlias": "orders"},
+                {"table": "users", "tableAlias": "u", "valueType": "field_ref", "rightTable": "orders"},
+                "skip",
+            ]
+        },
+        tables_needed,
+    )
+
+    assert tables_needed == {"orders", "u"}
 
 
 def test_semantic_builder_compile_full_path_with_aliases_and_field_ref():
@@ -293,3 +321,75 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
     fallback = await compiler_module.load_runtime_semantic_config("ds_b", "cfg_b")
     assert fallback["source_type"] == "mysql"
     assert fallback["joins"] == [{"left_table": "x"}]
+
+
+@pytest.mark.asyncio
+async def test_compile_semantic_builder_sql_uses_runtime_config(monkeypatch):
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        assert datasource_id == "ds_runtime"
+        assert semantic_config_id == "cfg_runtime"
+        return build_semantic_config()
+
+    monkeypatch.setattr(compiler_module, "load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    result = await compiler_module.compile_semantic_builder_sql(
+        "ds_runtime",
+        "cfg_runtime",
+        {"dimensions": [{"semanticName": "城市"}], "limit": 10},
+    )
+
+    assert "SELECT" in result["sql"]
+    assert result["builder_config"]["dimensions"][0]["column"] == "city"
+
+
+def test_semantic_sql_generator_remaining_join_and_metric_branches(monkeypatch):
+    config = build_semantic_config()
+    config["metrics"].append({"name": "总行数", "expression": "COUNT(*)", "table": "orders"})
+    generator = compiler_module.SemanticSQLGenerator(config)
+
+    assert generator._normalize_metrics_allow_dimension_raw(["状态"])[0][0]["_from_dimension"] is True
+    assert generator._determine_query_intent_type(["明细指标"], [{"name": "明细指标", "expression": "SUM(orders.amount)"}], [], [], "查询明细指标") == "aggregate"
+    assert generator._collect_tables_from_filter_node("bad", set()) is None
+    assert generator._map_filter_node_for_builder("bad") == {}
+
+    config["relationships"][0]["right_alias"] = "u"
+    generator = compiler_module.SemanticSQLGenerator(config)
+    reverse_joins = generator._build_builder_joins("u", {"u", "orders"})
+    assert reverse_joins[0]["leftAlias"] == "u"
+    assert reverse_joins[0]["rightAlias"] == "orders"
+
+    no_path_config = build_semantic_config()
+    no_path_config["relationships"] = []
+    no_path_generator = compiler_module.SemanticSQLGenerator(no_path_config)
+    assert no_path_generator._build_builder_joins("orders", {"orders", "u"}) == []
+
+    result = generator.generate_sql(metrics=["总行数"], dimensions=[], filters=[], having=[], user_query="查询明细列表")
+    assert result["success"] is False
+    assert "未找到可用于查询的字段" in result["error"]
+
+    def fail_compile(*_args, **_kwargs):
+        raise RuntimeError("compile down")
+
+    monkeypatch.setattr(compiler_module, "compile_builder_sql", fail_compile)
+    # semantic_sql_generator imports compile_builder_sql directly, patch that symbol too.
+    monkeypatch.setattr("apps.chat_data_app.semantic.compiler.semantic_sql_generator.compile_builder_sql", fail_compile)
+    failed = generator.generate_sql(metrics=["销售额"], dimensions=["城市"], filters=[], having=[])
+    assert failed["success"] is False
+    assert "SQL 转换失败" in failed["error"]
+
+
+def test_semantic_sql_generator_table_validation_and_prompt_edges():
+    config = {
+        "source_type": "mysql",
+        "tables": [{"table_name": "orders", "columns": [{"name": f"c{i}"} for i in range(12)]}],
+        "metrics": [{"name": "销售额", "expression": "SUM(orders.c1)", "table": "orders"}],
+        "dimensions": [{"name": "城市", "table": "orders", "column": "c2"}],
+        "relationships": [],
+    }
+    generator = compiler_module.SemanticSQLGenerator(config)
+
+    assert generator._validate_table_column("missing", "c1").startswith("表 'missing' 不存在")
+    missing_column = generator._validate_table_column("orders", "missing")
+    assert "可用字段" in missing_column
+    assert "..." in missing_column
+    assert generator._has_aggregate_metric([{"expression": ""}, {"expression": "orders.c2"}]) is False

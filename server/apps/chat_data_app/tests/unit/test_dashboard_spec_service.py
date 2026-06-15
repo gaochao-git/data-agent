@@ -12,6 +12,13 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 import asyncio
 
 from apps.chat_data_app.services.dashboard_spec_service import (
+    _build_dashboard_panel_chart_config,
+    _build_panel_name_fallback,
+    _chart_type_label,
+    _coerce_int,
+    _normalize_filter_node,
+    _shorten_dashboard_panel_error,
+    _truncate_text,
     build_panel_sql_from_dashboard_card,
     build_dashboard_panel_plans,
     create_dashboard_from_spec_payload,
@@ -23,6 +30,7 @@ from apps.chat_data_app.services.dashboard_spec_service import (
     normalize_dashboard_spec_dimensions,
     normalize_dashboard_spec_filters,
     normalize_dashboard_spec_having,
+    normalize_dashboard_spec_metrics,
     normalize_dashboard_spec_order_by,
     normalize_semantic_dsl_payload,
     remove_mixed_raw_metrics_for_aggregate_dsl,
@@ -770,3 +778,187 @@ def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeyp
     assert unreadable["dashboard"] is None
     assert service.deleted == ["dash_1"]
     assert "看板写入后回读失败，未确认数据已持久化" in unreadable["warnings"]
+
+
+def test_dashboard_spec_small_helper_edges():
+    assert _truncate_text("   ", 10) == ""
+    assert _truncate_text(" abcdef ", 3) == "abc"
+    assert _chart_type_label("kpi")
+    assert _build_panel_name_fallback("kpi", max_length=8)
+    assert _coerce_int("bad", 7) == 7
+    assert _coerce_int("3", 7) == 3
+    assert _normalize_filter_node("raw") == "raw"
+    assert _normalize_filter_node({"and": [{"field": "城市", "op": "=", "value": "上海"}, "skip"]}) == {
+        "and": [{"dimension": "城市", "operator": "=", "value": "上海"}]
+    }
+    assert _normalize_filter_node({"or": [{"field": "城市", "op": "=", "value": "北京"}]}) == {
+        "or": [{"dimension": "城市", "operator": "=", "value": "北京"}]
+    }
+    assert _shorten_dashboard_panel_error("") == ""
+    long_error = _shorten_dashboard_panel_error(" line1\n" + "x" * 300, max_length=20)
+    assert "\n" not in long_error
+    assert long_error.endswith("...")
+    assert _build_dashboard_panel_chart_config({"chart_config": {}}, "")["purpose"] == ""
+    invalid_config = _build_dashboard_panel_chart_config({"chart_config": {}}, "字段不存在\n请检查")
+    assert invalid_config["creation_status"] == "invalid_sql"
+    assert invalid_config["creation_error"] == "字段不存在 请检查"
+
+
+def test_dashboard_spec_normalizers_cover_empty_and_tree_branches():
+    assert normalize_dashboard_spec_dimensions([{}, {"name": "下单时间", "grain": "month"}, " 城市 ", ""]) == [
+        {"name": "下单时间", "time_grain": "month"},
+        "城市",
+    ]
+    assert normalize_dashboard_spec_metrics([{}, {"field": "销售额"}, " 订单数 ", ""]) == ["销售额", "订单数"]
+    assert normalize_dashboard_spec_filters({"bad": True}) == []
+    assert normalize_dashboard_spec_filters([
+        {"and": [{"field": "城市", "op": "=", "value": "上海"}, "skip"]},
+        "skip",
+    ]) == [{"and": [{"dimension": "城市", "operator": "=", "value": "上海"}]}]
+    assert normalize_dashboard_spec_having({"bad": True}) == []
+    assert normalize_dashboard_spec_having([
+        "skip",
+        {"field": "销售额", "op": ">", "value": 10},
+        {"metric": "订单数", "operator": ">", "value": 1},
+    ]) == [
+        {"metric": "销售额", "operator": ">", "value": 10},
+        {"metric": "订单数", "operator": ">", "value": 1},
+    ]
+    assert normalize_dashboard_spec_order_by({"bad": True}) == []
+    assert normalize_dashboard_spec_order_by([
+        "skip",
+        {"field": "", "direction": "asc"},
+        {"metric": "销售额", "order": "asc"},
+        {"dimension": "城市"},
+    ]) == [
+        {"field": "销售额", "direction": "ASC"},
+        {"field": "城市", "direction": "DESC"},
+    ]
+
+
+def test_dashboard_spec_structure_invalid_layout_branches():
+    errors = validate_dashboard_card_structure(
+        {
+            "title": "坏布局",
+            "chart_type": "not-supported",
+            "dsl": {},
+            "layout": {"x": True, "y": 1.2, "w": 13, "h": 0},
+        },
+        0,
+    )
+
+    assert any("chart_type" in item for item in errors)
+    assert any("layout.x 必须是数字" in item for item in errors)
+    assert any("layout.y 必须是整数" in item for item in errors)
+    range_errors = validate_dashboard_card_structure(
+        {
+            "title": "范围越界",
+            "chart_type": "kpi",
+            "dsl": {},
+            "layout": {"x": 0, "y": 0, "w": 13, "h": 0},
+        },
+        1,
+    )
+    assert any("layout.w 必须在 1-12" in item for item in range_errors)
+    assert any("layout.h 必须大于等于 1" in item for item in range_errors)
+
+    missing_layout = validate_dashboard_card_structure({"title": "无布局", "chart_type": "kpi", "dsl": {}}, 1)
+    assert missing_layout == ["卡片「无布局」缺少 layout 对象"]
+
+    overflow = validate_dashboard_card_structure(
+        {"title": "越界", "chart_type": "kpi", "dsl": {}, "layout": {"x": 10, "y": -1, "w": 3, "h": 1}},
+        2,
+    )
+    assert any("layout.y 必须大于等于 0" in item for item in overflow)
+    assert any("layout.x + layout.w 不能超过 12" in item for item in overflow)
+
+    spec_errors = validate_dashboard_spec_structure({
+        "dashboard_name": "",
+        "semantic_config_id": "",
+        "cards": [{"title": "无 DSL", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}}],
+    })
+    assert "dashboard_name 必填" in spec_errors
+    assert "semantic_config_id 必填" in spec_errors
+    assert any("缺少 dsl 对象" in item for item in spec_errors)
+
+
+def test_build_dashboard_panel_plans_skips_non_dict_and_records_empty_sql():
+    class EmptySqlGenerator:
+        semantic_config = {}
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "   "}
+
+    plans, warnings = build_dashboard_panel_plans(
+        [
+            "skip",
+            {"title": "空 SQL", "chart_type": "kpi", "dsl": {"metrics": ["订单数"]}},
+        ],
+        EmptySqlGenerator(),
+    )
+
+    assert len(plans) == 1
+    assert plans[0]["error"] == "SQL 为空"
+    assert warnings == ["卡片「空 SQL」创建失败：SQL 为空"]
+
+
+def test_filter_executable_dashboard_panel_plans_keeps_existing_errors(monkeypatch):
+    calls = []
+
+    async def fake_preflight(*_args, **_kwargs):
+        calls.append(True)
+        return True, ""
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard_spec_service.execute_dashboard_panel_sql_preflight",
+        fake_preflight,
+    )
+
+    plans = [{"index": 0, "card": {"title": "已失败"}, "sql": "", "chart_type": "kpi", "error": "SQL 为空"}]
+    marked, warnings = asyncio.run(filter_executable_dashboard_panel_plans(plans, datasource_id="ds_a"))
+
+    assert marked == plans
+    assert warnings == []
+    assert calls == []
+
+
+def test_create_dashboard_from_spec_payload_skips_non_dict_cards(monkeypatch):
+    class FakeService:
+        def __init__(self):
+            self.added = []
+
+        async def create_dashboard(self, **_kwargs):
+            return {"id": "dash_1"}
+
+        async def add_panel(self, **kwargs):
+            self.added.append(kwargs)
+            return {"id": "panel_1", "name": kwargs["name"]}
+
+        async def get_dashboard(self, _dashboard_id):
+            return {"id": "dash_1", "panels": [{"id": "panel_1"}]}
+
+        async def delete_dashboard(self, _dashboard_id):
+            return None
+
+    async def fake_validate(**_kwargs):
+        return {
+            "valid": True,
+            "warnings": [],
+            "panels": [{"index": 1, "title": "有效卡片", "chart_type": "kpi", "sql": "select 1", "error": ""}],
+        }
+
+    service = FakeService()
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+
+    result = asyncio.run(create_dashboard_from_spec_payload(
+        dashboard_spec={"dashboard_name": "", "analysis_target": "  " + "x" * 300, "cards": ["skip", {"title": "", "chart_type": "kpi", "layout": {}}]},
+        datasource_id="ds_a",
+        semantic_config_id="sem_1",
+        username="测试用户",
+    ))
+
+    assert result["dashboard"]["id"] == "dash_1"
+    assert len(service.added) == 1
+    assert service.added[0]["name"]
+    assert service.added[0]["operator_name"] == "测试用户"

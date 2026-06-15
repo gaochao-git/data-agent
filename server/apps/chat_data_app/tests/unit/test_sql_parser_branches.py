@@ -35,6 +35,12 @@ def test_strip_comments_for_validation_respects_mysql_dash_comment_rules():
     assert "drop table orders" not in sql_parser._strip_comments_for_validation(hive_sql, "hive")
     assert sql_parser._strip_comments_for_validation("select 1 # comment", "mysql").strip() == "select 1"
     assert sql_parser._strip_comments_for_validation("select 1 # not-comment", "hive") == "select 1 # not-comment"
+    assert sql_parser._strip_comments_for_validation("select 'a\\'--b', \"#c\", `/*d*/`", "mysql") == "select 'a\\'--b', \"#c\", `/*d*/`"
+    assert sql_parser._strip_comments_for_validation("select 'it''s -- ok'", "mysql") == "select 'it''s -- ok'"
+    assert sql_parser._strip_comments_for_validation("select 1 -- comment\nfrom dual", "mysql") == "select 1 \nfrom dual"
+    assert sql_parser._strip_comments_for_validation("select 1 # comment\nfrom dual", "mysql") == "select 1 \nfrom dual"
+    assert sql_parser._strip_comments_for_validation("select 1 /* comment */ from dual", "mysql") == "select 1   from dual"
+    assert sql_parser._strip_comments_for_validation("select 1 /* unclosed", "mysql") == "select 1  "
 
 
 def test_validation_dash_comment_helper_branches():
@@ -113,6 +119,17 @@ def test_validate_single_sql_statement_error_and_non_query_branches(monkeypatch)
     empty = sql_parser.validate_single_sql_statement("select 1", "mysql")
     assert empty.success is False
     assert empty.error == "SQL 解析失败"
+
+    monkeypatch.setattr(sql_parser, "_split_sql_statements", lambda _sql: [])
+    split_empty = sql_parser.validate_single_sql_statement("select 1", "mysql")
+    assert split_empty.success is False
+    assert "注释移除后为空" in split_empty.error
+
+    monkeypatch.setattr(sql_parser, "_split_sql_statements", lambda sql: [sql])
+    monkeypatch.setattr(sql_parser, "_parse_sql", lambda *_args, **_kwargs: [object(), object()])
+    parsed_multi = sql_parser.validate_single_sql_statement("select 1", "mysql")
+    assert parsed_multi.success is False
+    assert "一次只能执行一条 SQL" in parsed_multi.error
 
 
 def test_validate_raw_single_sql_statement_branches(monkeypatch):

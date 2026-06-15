@@ -20,6 +20,7 @@ from apps.chat_data_app.services.semantic_config_selector import (
     _summarize_semantic_config,
     select_semantic_config_for_query,
 )
+from apps.chat_data_app.services import semantic_config_selector as selector
 
 
 def test_parse_selection_response_keeps_only_valid_config_id():
@@ -390,3 +391,157 @@ def test_select_semantic_config_for_query_blocks_multiple_full_matches_across_ch
     assert selection["ambiguous"] is True
     assert [item["id"] for item in selection["candidates"]] == ["sc_test", "sc_order"]
     assert len(fake_llm.prompts) == 2
+
+
+def test_selector_low_level_normalizers_and_candidate_edges(monkeypatch):
+    assert selector._truncate("abc", 5) == "abc"
+    assert selector._truncate("abcdef", 3) == "abc..."
+    assert selector._config_id({"semantic_config_id": "sc_a"}) == "sc_a"
+    assert selector._config_name({"semantic_config_name": "指标集A"}) == "指标集A"
+    assert selector._normalize_bool(True) is True
+    assert selector._normalize_bool(1) is True
+    assert selector._normalize_bool(0) is False
+    assert selector._normalize_bool("是") is True
+    assert selector._normalize_bool("否") is False
+    assert selector._normalize_bool("maybe") is None
+    assert selector._normalize_text_list("bad") == []
+    assert selector._normalize_text_list([" a ", "a", "", "b", "c"], max_items=2) == ["a", "b"]
+
+    config_names = {"sc_a": "指标集A", "sc_b": "指标集B"}
+    candidates = selector._normalize_candidates(
+        [
+            "skip",
+            {"id": "missing", "coverage": "full"},
+            {"id": "sc_a", "confidence": "HIGH", "reason": "x" * 400},
+            {"config_id": "sc_b", "coverage": "none", "confidence": "bad"},
+            {"id": "sc_a", "coverage": "full"},
+        ],
+        config_names,
+    )
+
+    assert [item["id"] for item in candidates] == ["sc_a", "sc_b"]
+    assert candidates[0]["coverage"] == "partial"
+    assert candidates[0]["confidence"] == "high"
+    assert len(candidates[0]["reason"]) == 300
+    assert candidates[1]["coverage"] == "none"
+    assert candidates[1]["confidence"] == "none"
+
+    monkeypatch.setattr(selector, "SELECTOR_MAX_REDUCER_CANDIDATES", 1)
+    limited = selector._normalize_candidates(
+        [{"id": "sc_a"}, {"id": "sc_b"}],
+        config_names,
+    )
+    assert [item["id"] for item in limited] == ["sc_a"]
+
+
+def test_selector_chunking_and_empty_parse_edges(monkeypatch):
+    assert selector._chunk_semantic_config_summaries([], "查指标") == []
+
+    summaries = [{"id": "sc_a"}, {"id": "sc_b"}]
+    monkeypatch.setattr(selector, "SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT", 10)
+    monkeypatch.setattr(selector, "_estimate_selector_prompt_tokens", lambda *_args, **_kwargs: 5)
+    assert selector._chunk_semantic_config_summaries(summaries, "查指标", token_budget=100) == [summaries]
+
+    estimates = iter([11, 5, 12])
+    monkeypatch.setattr(selector, "_estimate_selector_prompt_tokens", lambda *_args, **_kwargs: next(estimates))
+    assert selector._chunk_semantic_config_summaries(summaries, "查指标", token_budget=10) == [[summaries[0]], [summaries[1]]]
+
+    parsed = selector._parse_selection_response("[]", [{"id": "sc_a", "name": "指标集A"}])
+    assert parsed["selected_config_id"] == ""
+    assert parsed["coverage"] == "none"
+    assert parsed["confidence"] == "none"
+
+
+def test_selector_collect_candidates_skips_invalid_duplicates_and_scores():
+    configs = [{"id": "sc_a", "name": "A"}, {"id": "sc_b", "name": "B"}]
+    selections = [
+        {
+            "selected_config_id": "sc_a",
+            "coverage": "partial",
+            "confidence": "low",
+            "reason": "selected",
+            "candidates": [
+                "skip",
+                {"id": "missing", "coverage": "full"},
+                {"id": "sc_a", "coverage": "full", "confidence": "high"},
+                {"id": "sc_b", "coverage": "full", "confidence": "medium", "reason": "候选B"},
+            ],
+        }
+    ]
+
+    candidates = selector._collect_selection_candidates(selections, configs)
+
+    assert [item["id"] for item in candidates] == ["sc_b", "sc_a"]
+    assert candidates[0]["source"] == "chunk_1"
+    assert candidates[1]["reason"] == "selected"
+
+
+def test_selector_reducer_edge_paths(monkeypatch):
+    assert selector._build_ambiguous_selection_from_full_candidates([{"id": "sc_a", "coverage": "full"}]) is None
+    empty_chunk = selector._build_chunk_result_payload({"selected_config_id": "sc_a"})
+    assert empty_chunk["selected_config_id"] == "sc_a"
+    assert empty_chunk["candidates"] == []
+
+    async def run():
+        no_selection = await selector._reduce_semantic_config_selections(object(), "查指标", [], [])
+        no_candidate = await selector._reduce_semantic_config_selections(
+            object(),
+            "查指标",
+            [{"reason": "都不支持", "candidates": []}],
+            [{"id": "sc_a", "name": "A"}],
+        )
+
+        class FakeLLM:
+            async def ainvoke(self, messages):
+                payload = json.loads(messages[0].content.split("输入：\n", 1)[1])
+                assert payload["candidates"][0]["id"] == "sc_a"
+                return type("Resp", (), {"content": json.dumps({
+                    "selected_config_id": "sc_a",
+                    "coverage": "partial",
+                    "confidence": "medium",
+                    "reason": "reduced",
+                    "candidates": [{"id": "sc_a", "coverage": "partial", "confidence": "medium"}],
+                }, ensure_ascii=False)})()
+
+        reduced = await selector._reduce_semantic_config_selections(
+            FakeLLM(),
+            "查指标",
+            [{"selected_config_id": "sc_a", "coverage": "partial", "confidence": "medium", "reason": "chunk"}],
+            [{"id": "sc_a", "name": "A"}],
+        )
+        return no_selection, no_candidate, reduced
+
+    no_selection, no_candidate, reduced = asyncio.run(run())
+
+    assert "自动选择失败" in no_selection["reason"]
+    assert no_candidate["reason"] == "都不支持"
+    assert reduced["selected_config_id"] == "sc_a"
+
+
+def test_selector_chunk_execution_skips_exception_results(monkeypatch):
+    async def fake_select(_llm, _query, chunk):
+        if chunk[0]["id"] == "bad":
+            raise RuntimeError("chunk failed")
+        return {"selected_config_id": chunk[0]["id"], "coverage": "partial", "confidence": "low"}
+
+    monkeypatch.setattr(selector, "_select_semantic_config_chunk", fake_select)
+
+    results = asyncio.run(selector._select_semantic_config_chunks(
+        object(),
+        "查指标",
+        [[{"id": "bad"}], [{"id": "ok"}]],
+    ))
+
+    assert results == [{"selected_config_id": "ok", "coverage": "partial", "confidence": "low"}]
+
+
+def test_select_semantic_config_for_query_empty_and_disabled_configs(monkeypatch):
+    assert asyncio.run(select_semantic_config_for_query("", "查指标")) is None
+    assert asyncio.run(select_semantic_config_for_query("ds_a", "")) is None
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic_config_selector.get_datasource_manager",
+        lambda: _FakeDatasourceManager([{"id": "sc_disabled", "enabled": False}]),
+    )
+
+    assert asyncio.run(select_semantic_config_for_query("ds_a", "查指标")) is None

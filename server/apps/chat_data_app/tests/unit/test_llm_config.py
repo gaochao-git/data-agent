@@ -54,11 +54,29 @@ def test_chat_data_non_qwen_omits_extra_body(monkeypatch):
         return object()
 
     monkeypatch.setenv("CHAT_DATA_MODEL", "gpt-4o-mini")
+    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
 
     assert captured["extra_body"] is None
+    assert captured["api_key"] is None
+
+
+def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch):
+    captured = {}
+
+    def fake_get_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setenv("CHAT_DATA_API_KEY", "encrypted-api-key")
+    monkeypatch.setattr(llm_config, "decrypt_password", lambda value: f"plain:{value}")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
+    llm_config.get_chat_data_llm()
+
+    assert captured["api_key"] == "plain:encrypted-api-key"
 
 
 def test_chat_data_model_options_reads_comma_separated_models(monkeypatch):

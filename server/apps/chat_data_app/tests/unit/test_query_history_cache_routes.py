@@ -255,6 +255,15 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     assert cancelled_body["data"]["queries"][0]["source"] == "智能问数"
     assert cancelled_body["data"]["queries"][0]["success_flag"] == 0
 
+    all_response = asyncio.run(routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        source=None,
+        status=None,
+    ))
+    all_body = _payload(all_response)
+    assert all_body["data"]["total"] == 3
+
 
 def test_get_query_history_result_success_and_not_found(route_db):
     asyncio.run(_seed_query_history(route_db))
@@ -322,6 +331,22 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
     assert body["data"]["result_payload"]["error"] == "结果文件已清理"
 
 
+def test_query_history_routes_return_error_when_session_fails(monkeypatch):
+    @asynccontextmanager
+    async def broken_session():
+        raise RuntimeError("db down")
+        yield
+
+    monkeypatch.setattr(routes, "get_session", broken_session)
+    monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+
+    history = asyncio.run(routes.get_query_history(_make_request(), datasource_id="ds1"))
+    detail = asyncio.run(routes.get_query_history_result("ex1", _make_request()))
+
+    assert _payload(history)["code"] == 50016
+    assert _payload(detail)["code"] == 50016
+
+
 def test_query_favorite_builder_validation_and_delete(route_db):
     missing_builder = QueryFavoriteCreateRequest(
         datasource_id="ds1",
@@ -348,11 +373,20 @@ def test_query_favorite_builder_validation_and_delete(route_db):
     edit_raw_response = asyncio.run(routes.update_query_favorite(created["id"], edit_raw_payload, _make_request()))
     assert _payload(edit_raw_response)["code"] == 40013
 
+    rename_payload = QueryFavoriteUpdateRequest(favorite_title="可视化收藏2", semantic_config_id="sc_builder")
+    rename_response = asyncio.run(routes.update_query_favorite(created["id"], rename_payload, _make_request()))
+    renamed = _payload(rename_response)["data"]
+    assert renamed["favorite_title"] == "可视化收藏2"
+    assert renamed["semantic_config_id"] == "sc_builder"
+
     delete_response = asyncio.run(routes.delete_query_favorite(created["id"], _make_request()))
     assert _payload(delete_response)["status"] == "success"
 
     update_deleted_response = asyncio.run(routes.update_query_favorite(created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()))
     assert _payload(update_deleted_response)["code"] == 40412
+
+    delete_deleted_response = asyncio.run(routes.delete_query_favorite(created["id"], _make_request()))
+    assert _payload(delete_deleted_response)["code"] == 40412
 
 
 def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
@@ -379,6 +413,11 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
     assert updated["query_text"] == "select 2"
     assert updated["semantic_config_id"] == "sc2"
     assert updated["builder_config"] == {"sql": "select 2"}
+
+    list_response = asyncio.run(routes.get_query_favorites(_make_request(), datasource_id="ds1", query_type=None, limit=20))
+    listed = _payload(list_response)
+    assert listed["status"] == "success"
+    assert listed["data"]["total"] >= 1
 
 
 def test_sql_result_cache_insert_update_hit_and_invalid_payload(route_db, monkeypatch):

@@ -34,6 +34,7 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._is_sql_function("current_date() -- comment") is False
     assert compiler._is_sql_function("current_date(") is False
     assert compiler._is_sql_function("date_add(current_date(), interval 1 day)") is True
+    assert compiler._is_sql_function("current_date() /* comment */") is False
     assert compiler._has_balanced_parentheses("concat('(', col)") is True
     assert compiler._has_balanced_parentheses("concat('x'") is False
     assert compiler._normalize_filter_value_type(" SQL_FUNCTION ") == "sql_function"
@@ -82,6 +83,25 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._order_by_has_real_aggregation({"aggFunc": ""}) is False
     assert compiler._order_by_has_real_aggregation({"aggFunc": "RAW", "expression": "SUM(orders.amount)"}) is True
     assert compiler._order_by_has_real_aggregation({"aggFunc": "SUM"}) is True
+
+
+def test_builder_sql_compiler_remaining_helper_branch_edges():
+    assert compiler._is_sql_function("now()--comment") is False
+    assert compiler._has_balanced_parentheses(r"concat(\"x\", col)") is True
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "score", "operator": "IN", "valueType": "expression", "rightExpression": "select score from s", "aggFunc": "RAW", "expression": "orders.score"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "orders.score IN (select score from s)"
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "score", "operator": "NOT IN", "valueType": "expression", "rightExpression": "select score from s", "aggFunc": "RAW", "expression": "orders.score"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "orders.score NOT IN (select score from s)"
 
 
 def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_table():
@@ -586,6 +606,45 @@ def test_compile_builder_sql_having_expression_branches_without_tree():
     })
 
     assert "HAVING o.score > 10 + 1 OR o.score IN (select score from whitelist)" in sql
+
+
+def test_compile_builder_sql_having_and_order_remaining_branches():
+    raw_order_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "filters": [],
+        "orderBy": [{"table": "orders", "column": "status", "direction": "ASC", "aggFunc": "RAW"}],
+    })
+    assert "ORDER BY `status` ASC" in raw_order_sql
+
+    group_expr_order_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "city", "alias": "城市", "expression": "orders.city"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "filters": [],
+        "orderBy": [{"table": "orders", "column": "city", "direction": "DESC", "displayName": "missing"}],
+    })
+    assert "ORDER BY `城市` DESC" in group_expr_order_sql
+
+    raw_star_having_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [],
+        "filters": [{"table": "orders", "column": "*", "operator": "IS NOT NULL", "aggFunc": "RAW"}],
+    })
+    assert "HAVING * IS NOT NULL" in raw_star_having_sql
+
+    with pytest.raises(ValueError, match="聚合查询不能按未分组"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+            "aggregations": [
+                {"id": "sum_amount", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"},
+                {"id": "avg_amount", "func": "AVG", "table": "orders", "column": "amount", "alias": "均额"},
+            ],
+            "orderBy": [{"table": "orders", "column": "amount", "direction": "DESC"}],
+        })
 
 
 def test_compile_builder_sql_order_by_dimension_expression_fallback():
@@ -1665,3 +1724,137 @@ def test_semantic_unified_engine_uses_aliases_for_same_physical_table_roles():
     assert "LEFT JOIN users users_2 ON orders.seller_id = users_2.id" in sql
     assert "users.name AS `买家名称`" in sql
     assert "users_2.name AS `卖家名称`" in sql
+
+
+def test_builder_sql_compiler_remaining_helper_edges():
+    assert compiler._is_sql_function("current_date() /* unsafe */") is False
+    assert compiler._sql_literal({"bad": True}) == "'{''bad'': True}'"
+    assert compiler._sql_literal("current_timestamp()") == "current_timestamp()"
+    assert compiler._sql_literal('"current_timestamp()"') == "current_timestamp()"
+    assert compiler._sql_literal("'current_date(); drop table orders'", "sql_function") == "'''current_date(); drop table orders'''"
+    assert compiler._sql_list_literal(["a", "current_date()"], ["literal"]) == "('a', current_date())"
+
+    assert compiler._build_where_leaf_clause(
+        {"table": "orders", "column": "status", "operator": "IN", "value": ["paid", "cancelled"]},
+        is_multi_table=False,
+        dimension_expr_map={},
+        main_table="orders",
+    ) == "`status` IN ('paid', 'cancelled')"
+    assert compiler._build_where_leaf_clause(
+        {"table": "orders", "column": "status", "operator": "IN", "valueType": "expression", "rightExpression": "select status from t"},
+        is_multi_table=False,
+        dimension_expr_map={},
+        main_table="orders",
+    ) == "`status` IN (select status from t)"
+    assert compiler._build_where_leaf_clause(
+        {"table": "orders", "column": "status", "operator": "NOT IN", "valueType": "field_ref", "rightTable": "users", "rightColumn": "status"},
+        is_multi_table=True,
+        dimension_expr_map={},
+        main_table="orders",
+    ) == "orders.`status` NOT IN users.`status`"
+
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "amount", "operator": ">", "value": 10, "aggFunc": "RAW"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "`amount` > 10"
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "user_id", "operator": ">", "value": 1, "aggFunc": "COUNT_DISTINCT"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "COUNT(DISTINCT `user_id`) > 1"
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "amount", "operator": "IN", "valueType": "expression", "rightExpression": "select amount from t", "aggFunc": "SUM"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "SUM(`amount`) IN (select amount from t)"
+
+
+def test_compile_builder_sql_additional_branch_edges():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "joins": [
+            {"rightTable": "items", "rightAlias": "i", "leftAlias": "o", "leftColumn": "", "rightColumn": "order_id"},
+            {"rightTable": "users", "rightAlias": "u", "leftAlias": "o", "leftColumn": "user_id", "rightColumn": "id"},
+        ],
+        "dimensions": [
+            {"id": "d1", "table": "orders", "tableAlias": "o", "column": "created_at", "alias": "月份", "transform": "month"},
+        ],
+        "aggregations": [
+            {"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"},
+        ],
+        "filters": [
+            {"table": "orders", "tableAlias": "o", "column": "status", "operator": "=", "value": "paid"},
+            {"table": "orders", "tableAlias": "o", "column": "created_at", "operator": "<=", "value": "current_date()", "value_type": "sql_function", "logic": "AND"},
+        ],
+        "orderBy": [
+            {"table": "orders", "tableAlias": "o", "column": "created_at", "direction": "ASC"},
+        ],
+        "limit": 10,
+        "offset": 0,
+    })
+
+    assert "LEFT JOIN items" in sql
+    assert "LEFT JOIN items ON" not in sql
+    assert "DATE_FORMAT(o.`created_at`, '%Y-%m') AS `月份_month`" in sql
+    assert "WHERE o.`status` = 'paid' AND o.`created_at` <= current_date()" in sql
+    assert "ORDER BY `月份_month` ASC" in sql
+    assert "LIMIT 10" in sql
+
+    with pytest.raises(ValueError, match="compare"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [{"table": "orders", "column": "status"}],
+            "compare": {"type": "yoy"},
+        })
+
+    with pytest.raises(ValueError, match="OFFSET"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [{"table": "orders", "column": "status"}],
+            "offset": 1,
+        })
+
+    with pytest.raises(ValueError, match="OFFSET"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "dimensions": [{"table": "orders", "column": "status"}],
+            "limit": 10,
+            "offset": "bad",
+        })
+
+
+def test_compile_builder_sql_order_by_fallbacks_and_rejections():
+    detail_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [],
+        "aggregations": [{"id": "a1", "func": "RAW", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "金额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "missing", "direction": "DESC"}],
+    })
+    assert "ORDER BY o.missing DESC" in detail_sql
+
+    aggregate_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "amount", "direction": "DESC"}],
+    })
+    assert "ORDER BY SUM(`amount`) DESC" in aggregate_sql
+
+    with pytest.raises(ValueError, match="聚合查询不能按未分组"):
+        compile_builder_sql({
+            "mainTable": "orders",
+            "mainAlias": "o",
+            "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+            "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+            "orderBy": [{"table": "orders", "tableAlias": "o", "column": "unknown", "direction": "DESC"}],
+        })

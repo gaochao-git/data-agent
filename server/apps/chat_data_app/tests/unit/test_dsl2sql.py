@@ -633,6 +633,188 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
     assert missing_expression[0][0]["expression"] == ""
 
 
+def test_generator_additional_helper_and_join_edges(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        captured["dialect"] = dialect
+        return "SELECT joined"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "订单数", "expression": "COUNT(DISTINCT orders.order_id)", "table": "orders"},
+            {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items", "table_alias": "items"},
+            {"name": "原始订单号", "expression": "orders.order_no", "table": "orders", "column": "order_no"},
+        ],
+        "dimensions": [
+            {"name": "订单状态", "column": "status", "table": "orders"},
+            {"name": "商品类型", "column": "category", "table": "products", "table_alias": "p"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "order_items",
+                "right_alias": "items",
+                "join_type": "left",
+                "join_conditions": [
+                    {"left_column": "", "right_column": "ignored"},
+                    {"left_column": "order_id", "right_column": "order_id"},
+                ],
+            },
+            {
+                "left_table": "order_items",
+                "left_alias": "items",
+                "right_table": "products",
+                "right_alias": "p",
+                "join_type": "inner",
+                "left_column": "product_id",
+                "right_column": "id",
+            },
+            {"left_table": "", "right_table": "ignored"},
+        ],
+        "tables": [
+            {"table_name": "", "columns": [{"name": "ignored"}]},
+            {"table_name": "orders", "columns": [{"name": "order_id"}, {}, {"name": "status"}, {"name": "order_no"}]},
+        ],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    assert generator._parse_aggregate_expression("count(distinct orders.order_id)") == ("COUNT_DISTINCT", "orders.order_id")
+    assert generator._has_detail_intent("detail list") is True
+    assert generator._detail_intent_only_from_metric_name("", [{"name": "订单明细数量"}]) is False
+    assert generator._validate_table_column("orders", "status") is None
+    assert "不存在字段" in generator._validate_table_column("orders", "missing")
+    assert generator._determine_query_intent_type(
+        metrics=["原始订单号"],
+        matched_metrics=[config["metrics"][2]],
+        dimensions=[],
+        having=[{"metric": "订单数", "operator": ">", "value": 1}],
+        user_query="查看明细",
+    ) == "detail"
+    assert generator._determine_query_intent_type(
+        metrics=[],
+        matched_metrics=[],
+        dimensions=[],
+        having=[{"metric": "订单数", "operator": ">", "value": 1}],
+        user_query="订单明细数量",
+    ) == "detail"
+
+    result = generator.generate_sql(
+        metrics=["销售额"],
+        dimensions=["商品类型"],
+        filters=[{"dimension": "订单状态", "operator": "=", "value": "paid"}],
+        having=[],
+        order_by=[{"field": "商品类型", "direction": "ASC"}],
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert builder_config["mainAlias"] == "p"
+    assert builder_config["joins"][0]["rightAlias"] == "items"
+    assert builder_config["joins"][0]["joinConditions"] == [{"leftTable": "products", "leftAlias": "p", "leftColumn": "id", "rightColumn": "product_id"}]
+    assert builder_config["joins"][1]["rightAlias"] == "orders"
+    assert builder_config["joins"][1]["joinConditions"] == [{"leftTable": "order_items", "leftAlias": "items", "leftColumn": "order_id", "rightColumn": "order_id"}]
+    assert builder_config["orderBy"][0]["column"] == "category"
+
+
+def test_generator_builder_config_branches_for_metric_columns_and_table_sets(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT branches"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "订单数", "expression": "COUNT(*)", "table": "orders"},
+            {"name": "支付金额", "expression": "SUM(`pay_amount`)", "table": "orders"},
+            {"name": "最大金额", "expression": "MAX(pay_amount)", "table": "orders", "column": "pay_amount"},
+            {"name": "明细金额", "expression": "orders.pay_amount", "table": "orders", "column": "pay_amount"},
+        ],
+        "dimensions": [
+            {"name": "订单状态", "column": "status", "table": "orders"},
+        ],
+        "relationships": [],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    result = generator.generate_sql(
+        metrics=["支付金额", "最大金额"],
+        dimensions=["订单状态"],
+        filters=[],
+        having=[],
+        order_by=[
+            {"field": "最大金额", "direction": "DESC"},
+            {"field": "订单状态", "direction": "ASC"},
+        ],
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert builder_config["aggregations"][0]["column"] == "pay_amount"
+    assert builder_config["orderBy"][0]["column"] == "pay_amount"
+    assert builder_config["orderBy"][1]["column"] == "status"
+
+    mixed = generator.generate_sql(
+        metrics=["明细金额", "支付金额"],
+        dimensions=[],
+        filters=[],
+        having=[],
+        order_by=[],
+    )
+    assert mixed["success"] is True
+    assert captured["builder_config"]["dimensions"][0]["alias"] == "明细金额"
+    assert captured["builder_config"]["aggregations"][0]["alias"] == "支付金额"
+
+    result = generator.generate_sql(
+        metrics=["订单数"],
+        dimensions=[],
+        filters=[],
+        having=[],
+        order_by=[],
+    )
+    assert result["success"] is True
+    assert captured["builder_config"]["aggregations"][0]["column"] == "*"
+
+
+def test_generator_error_validation_edges():
+    config = build_config()
+    generator = SemanticSQLGenerator(config)
+
+    compare = generator.generate_sql(metrics=["订单数"], dimensions=[], filters=[], having=[], compare={"type": "yoy"})
+    assert compare["success"] is False
+    assert "compare" in compare["error"]
+
+    bad_filter = generator.generate_sql(
+        metrics=["订单数"],
+        dimensions=[],
+        filters=[{"dimension": "不存在维度", "operator": "=", "value": 1}],
+        having=[],
+    )
+    assert bad_filter["success"] is False
+    assert "过滤条件中的维度" in bad_filter["error"]
+
+    bad_having = generator.generate_sql(
+        metrics=["订单数"],
+        dimensions=[],
+        filters=[],
+        having=[{"metric": "不存在指标", "operator": ">", "value": 1}],
+    )
+    assert bad_having["success"] is False
+    assert "HAVING 条件中的指标" in bad_having["error"]
+
+
 class TestSemanticToolInput:
     """测试语义工具入参模型（mode 已废弃）。"""
 

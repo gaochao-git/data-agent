@@ -1479,8 +1479,103 @@ def test_datasource_manager_get_default_enriches_semantic_configs():
     assert default["id"] == "ds_a"
     assert default["semantic_configs"] == [{"id": "sc_a", "name": "订单分析"}]
 
+
+def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
+        lambda _config: {"username": "hive_user", "password": "hive_pwd"},
+    )
+    manager = DataSourceManager.__new__(DataSourceManager)
+    hive_direct = manager._build_execution_datasource_targets({
+        "source_type": "hive",
+        "query_executor_type": "direct",
+        "template_datasource_id": "hive_a",
+        "member_sources": [
+            {"member_datasource_id": "hive_a", "host": "hive-host", "port": 10000, "database": "dw", "source_type": "hive", "query_executor_type": "direct"},
+        ],
+    })[0]
+    fallback_default = manager._build_execution_datasource_targets({
+        "source_type": "mysql",
+        "query_executor_type": "http",
+        "template_datasource_id": "missing",
+        "member_sources": [
+            {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
+        ],
+    })[0]
+    dedup_selected = manager._build_execution_datasource_targets({
+        "source_type": "mysql",
+        "query_executor_type": "http",
+        "member_sources": [
+            {"member_datasource_id": "m1", "org_code": "ORG1", "host": "h", "port": 1, "database": "d"},
+        ],
+    }, ["", "m1", "m1"])[0]
+
+    assert hive_direct["source_config"]["username"] == "hive_user"
+    assert hive_direct["source_config"]["password"] == "hive_pwd"
+    assert fallback_default["member_datasource_id"] == "m1"
+    assert dedup_selected["member_datasource_id"] == "m1"
+
+    class DescStore:
+        def __init__(self):
+            self.calls = []
+            self.datasource = {
+                "group_id": "group_a",
+                "ds_tables": [
+                    {"table_name": "orders", "business_desc": "old"},
+                    {"table_name": "items", "business_desc": ""},
+                ],
+            }
+
+        async def get_datasource_async(self, datasource_id):
+            return self.datasource if datasource_id == "ds_a" else None
+
+        async def update_datasource_table_business_desc_async(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    store = DescStore()
+    manager.db_store = store
+
+    async def run_desc_checks():
+        return (
+            await manager.update_table_business_desc_async("ds_a", "", "x"),
+            await manager.update_table_business_desc_async("missing", "orders", "x"),
+            await manager.update_table_business_desc_async("ds_a", "missing", "x"),
+            await manager.update_table_business_desc_async("ds_a", "orders", "  " + "a" * 300, operator="u1", operator_name="用户1"),
+        )
+
+    blank_table, missing_ds, missing_table, updated = asyncio.run(run_desc_checks())
+
+    assert blank_table is None
+    assert missing_ds is None
+    assert missing_table is None
+    assert updated["business_desc"] == "a" * 255
+    assert store.calls[0][0][:3] == ("group_a", "orders", "a" * 255)
+    assert store.calls[0][1]["update_by"] == "u1"
+
+
+def test_datasource_manager_name_scope_and_column_finder_edges():
+    store = _FakeStore()
+    store.semantic_configs["group_ds_a"] = [
+        {"id": "public", "name": "公共", "scope_type": "public", "create_by": "admin"},
+        {"id": "private_other", "name": "私有", "scope_type": "private", "create_by": "u2"},
+    ]
+    manager = _build_manager(store)
+
+    async def run_checks():
+        return (
+            await manager._semantic_config_name_exists_async("ds_a", "私有", scope_type="public", create_by="u1"),
+            await manager._semantic_config_name_exists_async("ds_a", "新名称", scope_type="public", create_by="u1"),
+        )
+
+    public_scope_sees_private_name, missing_name = asyncio.run(run_checks())
+
+    assert public_scope_sees_private_name is True
+    assert missing_name is False
+    assert manager._find_table_column(None, "orders", "id") is None
+    assert manager._find_table_column({"ds_tables": [{"table_name": "orders", "columns": []}]}, "orders", "id") is None
+
     async_default = asyncio.run(manager.get_default_datasource_async())
-    assert async_default["semantic_configs"] == [{"id": "sc_a", "name": "订单分析"}]
+    assert [item["id"] for item in async_default["semantic_configs"]] == ["public", "private_other"]
 
     store.datasources["ds_a"]["is_default"] = False
     assert asyncio.run(manager.get_default_datasource_async()) is None

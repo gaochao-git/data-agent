@@ -84,6 +84,8 @@ def test_runner_case_validation_and_sql_helpers(tmp_path):
     legacy[0]["source"] = "model_generated"
     runner.validate_cases(legacy, tmp_path / "cases.json")
     assert legacy[0]["source"] == "llm"
+    legacy_case = [{"question": "旧格式问题", "expected_dsl": {"metrics": ["订单数"]}}]
+    runner.validate_cases(legacy_case, tmp_path / "legacy_cases.json")
 
     assert runner.case_id(cases[0]) == "case_1"
     assert runner.case_question({"question": "旧问题"}) == "旧问题"
@@ -99,6 +101,7 @@ def test_runner_case_validation_and_sql_helpers(tmp_path):
         ([1], "case 必须是对象"),
         ([{"nl": "", "gold_dsl": {"metrics": ["订单数"]}}], "缺少 nl/question"),
         ([{"nl": "查", "gold_dsl": {}}], "缺少 gold_dsl/expected_dsl"),
+        ([{"nl": "查", "gold_dsl": {"metrics": ["订单数"]}, "gold_sql": "select 1"}], "7 元组 case 字段不完整"),
         ([{**_case(), "query_type": "bad"}], "query_type 非法"),
         ([{**_case(), "difficulty": "bad"}], "difficulty 非法"),
         ([{**_case(), "source": "bad"}], "source 非法"),
@@ -112,8 +115,12 @@ def test_runner_case_validation_and_sql_helpers(tmp_path):
 def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert runner.parse_sse_data('{"ok": true}') == {"ok": True}
     assert runner.parse_sse_data("plain text") == "plain text"
+    assert runner.parse_tool_content("") == {}
+    assert runner.parse_tool_content("[dsl2sql_tool]") == {}
     assert runner.parse_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select 1"})) == {"sql": "select 1"}
     assert runner.parse_tool_content("[execute_sql_tool]\n[]") == {}
+    assert runner.extract_sql_from_tool_content("") == ""
+    assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select json"})) == "select json"
     assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n```sql\nselect * from orders\n```") == "select * from orders"
     assert runner.extract_sql_from_tool_content("with t as (select 1) select * from t") == "with t as (select 1) select * from t"
     assert runner.extract_sql_from_tool_content("执行失败") == ""
@@ -128,7 +135,9 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     runner.consume_sse_line(line="", state=state, tool_traces=traces)
     runner.consume_sse_line(line="event: error", state=state, tool_traces=traces)
     runner.consume_sse_line(line='data: {"error":"模型失败"}', state=state, tool_traces=traces)
+    runner.consume_sse_line(line="ignored: value", state=state, tool_traces=traces)
     runner.flush_sse_event(state=state, tool_traces=traces)
+    runner.flush_sse_event(state={"current_event": "", "data_lines": []}, tool_traces=traces)
 
     assert traces[0].name == "dsl2sql_tool"
     assert traces[0].args == {"metrics": ["订单数"]}
@@ -157,6 +166,13 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     payload = runner.build_dsl2sql_payload(trace_from_json)
     assert payload["dsl"] == {"metrics": ["订单数"], "limit": 5}
     assert payload["sql"] == "select count(*) from orders"
+    assert runner.build_dsl_from_tool_args("bad") == {}
+
+    empty_payload = runner.build_dsl2sql_payload(ToolTrace(name="dsl2sql_tool", status="done", args={}, content="not sql"))
+    assert empty_payload == {}
+
+    json_without_dsl = ToolTrace(name="dsl2sql_tool", status="done", args={}, content=json.dumps({"success": True}))
+    assert runner.build_dsl2sql_payload(json_without_dsl) == {"success": True}
 
     text_payload = runner.build_dsl2sql_payload(trace_from_text)
     assert text_payload["success"] is True
@@ -166,8 +182,26 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     selected_trace, selected_payload = runner.choose_final_dsl2sql_trace([trace_from_json, trace_from_text])
     assert selected_trace is trace_from_text
     assert selected_payload["dsl"] == {"metrics": ["销售额"]}
+    no_trace, no_payload = runner.choose_final_dsl2sql_trace([
+        ToolTrace(name="execute_sql_tool", status="done", content=json.dumps({"success": True})),
+        ToolTrace(name="dsl2sql_tool", status="done", content="bad"),
+    ])
+    assert no_trace is None
+    assert no_payload == {}
     assert runner.summarize_execution_success([trace_from_json]) is None
     assert runner.summarize_execution_success([other_trace]) is False
+
+
+def test_dsl2sql_payload_can_fill_sql_when_extractor_returns_value(monkeypatch):
+    monkeypatch.setattr(runner, "extract_sql_from_tool_content", lambda _content: "select patched")
+    payload = runner.build_dsl2sql_payload(ToolTrace(
+        name="dsl2sql_tool",
+        status="done",
+        args={},
+        content=json.dumps({"success": True}),
+    ))
+
+    assert payload["sql"] == "select patched"
 
 
 @pytest.mark.asyncio
@@ -187,6 +221,7 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
     import apps.chat_data_app.handlers as handlers
 
     monkeypatch.setattr(handlers, "sql_completion_handler", fake_sql_handler)
+    monkeypatch.setattr(handlers, "data_analyze_completion_handler", fake_sql_handler)
 
     traces, error = await runner.consume_internal_completion(
         conversation_id="conv_1",
@@ -198,6 +233,16 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
 
     assert traces[0].name == "dsl2sql_tool"
     assert error == ""
+
+    analyze_traces, analyze_error = await runner.consume_internal_completion(
+        conversation_id="conv_1",
+        agent_id="chat_data_data_analyze",
+        query="查订单",
+        options={"datasource_id": "ds_a"},
+        user_id="tester",
+    )
+    assert analyze_traces[0].name == "dsl2sql_tool"
+    assert analyze_error == ""
 
     with pytest.raises(ValueError, match="不支持的评测 Agent"):
         await runner.consume_internal_completion(
@@ -321,6 +366,56 @@ async def test_run_live_case_report_and_event_iteration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_live_case_compile_and_execute_failure_branches(monkeypatch):
+    async def fake_consume(**kwargs):
+        assert kwargs["options"]["model_id"] == "model_a"
+        payload = {"success": True, "dsl": _case()["gold_dsl"], "sql": "select from tool"}
+        return [ToolTrace(name="dsl2sql_tool", status="done", content=json.dumps(payload, ensure_ascii=False))], ""
+
+    async def compile_failed(**_kwargs):
+        return {"success": False, "sql": "", "error": "compile failed"}
+
+    async def compile_success(**_kwargs):
+        return {"success": True, "sql": _case()["gold_sql"], "error": ""}
+
+    async def execute_failed(**_kwargs):
+        return {"success": False, "error": "execute failed"}
+
+    monkeypatch.setattr(runner, "consume_internal_completion", fake_consume)
+    monkeypatch.setattr(runner, "compile_dsl_locally", compile_failed)
+
+    failed_compile = await runner.run_live_case(
+        args=AccuracyRunConfig(datasource_id="ds_a", semantic_config_id="sc_a", model_id="model_a", local_compile=True),
+        case=_case("compile_failed"),
+        datasource_id="ds_a",
+        semantic_config_id="sc_a",
+    )
+    assert failed_compile.status == "scored"
+    assert failed_compile.compile_success is False
+    assert failed_compile.error == "compile failed"
+
+    monkeypatch.setattr(runner, "compile_dsl_locally", compile_success)
+    skip_execution = await runner.run_live_case(
+        args=AccuracyRunConfig(datasource_id="ds_a", semantic_config_id="sc_a", model_id="model_a", local_compile=True, skip_execution=True),
+        case=_case("skip_exec"),
+        datasource_id="ds_a",
+        semantic_config_id="sc_a",
+    )
+    assert skip_execution.compile_success is True
+    assert skip_execution.execution_success is None
+
+    monkeypatch.setattr(runner, "execute_sql_locally", execute_failed)
+    failed_execution = await runner.run_live_case(
+        args=AccuracyRunConfig(datasource_id="ds_a", semantic_config_id="sc_a", model_id="model_a", local_compile=True, skip_execution=False),
+        case=_case("exec_failed"),
+        datasource_id="ds_a",
+        semantic_config_id="sc_a",
+    )
+    assert failed_execution.execution_success is False
+    assert failed_execution.error == "execute failed"
+
+
+@pytest.mark.asyncio
 async def test_run_live_case_failure_paths_and_case_selection(monkeypatch):
     async def fake_consume_without_tool(**_kwargs):
         return [], "上游错误"
@@ -350,8 +445,14 @@ async def test_run_live_case_failure_paths_and_case_selection(monkeypatch):
     with pytest.raises(ValueError, match="缺少 datasource_id"):
         await runner.run_live_score(AccuracyRunConfig(semantic_config_id="sc_a"), [_case()])
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
+        await runner.run_live_score(AccuracyRunConfig(datasource_id="ds_a"), [_case()])
+    with pytest.raises(ValueError, match="缺少 datasource_id"):
+        async for _event in runner.iter_accuracy_evaluation_events(AccuracyRunConfig(semantic_config_id="sc_a"), [_case()]):
+            pass
+    with pytest.raises(ValueError, match="缺少 semantic_config_id"):
         async for _event in runner.iter_accuracy_evaluation_events(AccuracyRunConfig(datasource_id="ds_a"), [_case()]):
             pass
+    assert runner.select_cases([_case("a")], AccuracyRunConfig()).pop()["id"] == "a"
 
 
 def test_live_report_handles_failed_and_unchecked_execution():

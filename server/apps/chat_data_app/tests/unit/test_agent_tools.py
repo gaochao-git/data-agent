@@ -546,6 +546,52 @@ def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
     assert captured["conversation_id"] == "conv_a"
 
 
+def test_execute_sql_tool_approval_reject_and_rewrite_branches(monkeypatch):
+    async def fake_execute_sql_real(sql, *_args, **_kwargs):
+        return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
+
+    monkeypatch.setattr(agent_tools, "SQL_APPROVAL_ENABLED", True)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "reject"})
+    rejected = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+    assert rejected == "用户取消了 SQL 执行"
+
+    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "approve", "sql": "select 2"})
+    rewritten = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+    assert '"sql": "select 2"' in rewritten
+
+    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: "approve")
+    default_approval = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 3", "state": {}}))
+    assert '"sql": "select 3"' in default_approval
+
+
+def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch():
+    assert agent_tools._build_multi_member_query_result("select 1", []) == {
+        "success": False,
+        "sql": "select 1",
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "execution_time_ms": None,
+        "error": "查询失败",
+        "member_datasource_id": None,
+        "member_name": None,
+        "results": [],
+    }
+
+    prompt = agent_tools.build_semantic_prompt({
+        "metrics": [],
+        "dimensions": [
+            {"name": "别名维度", "table": "", "table_alias": "alias_only", "column": "", "description": ""},
+            {"name": "空表达式", "table": "", "column": "", "description": ""},
+        ],
+        "relationships": [],
+    })
+
+    assert "表: alias_only" in prompt
+    assert "表达式: -" in prompt
+
+
 def test_execute_sql_direct_delegates_to_real_executor(monkeypatch):
     captured = {}
 

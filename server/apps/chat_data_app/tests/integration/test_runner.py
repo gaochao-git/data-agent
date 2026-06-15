@@ -42,8 +42,7 @@ if not env_loaded:
 if not os.getenv("CHAT_DATA_API_KEY"):
     print(f"警告: CHAT_DATA_API_KEY 未设置，LLM 评估将失败")
 else:
-    api_key = os.getenv("CHAT_DATA_API_KEY")
-    print(f"环境变量已加载，API KEY 前缀: {api_key[:10]}...")
+    print("CHAT_DATA_API_KEY 已配置")
 
 from apps.chat_data_app.tests.evaluator import NL2SQLEvaluator, NL2DSLEvaluator
 

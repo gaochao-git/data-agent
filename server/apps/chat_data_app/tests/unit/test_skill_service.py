@@ -1570,3 +1570,123 @@ def test_editable_version_dir_and_draft_creation_async_edge_branches(tmp_path, m
         assert store.inserted["skill_version_dir"].endswith("versions/v2")
 
     asyncio.run(run_checks())
+
+
+def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+
+    class EmptyStore:
+        async def get_skill_async(self, name, user_id=""):
+            return None
+
+    class DraftFallbackStore:
+        async def get_skill_async(self, name, user_id=""):
+            return {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_title": "Demo",
+                "skill_source": "user",
+                "skill_publish_status": "published",
+                "current_skill_version_no": 1,
+            }
+
+        async def get_latest_draft_version_async(self, skill_id):
+            return None
+
+        async def get_published_version_async(self, skill_id, version_no):
+            return None
+
+        async def get_latest_published_version_async(self, skill_id):
+            return {"skill_id": skill_id, "skill_version_no": 1, "skill_version_dir": str(published_dir)}
+
+    published_dir = tmp_path / "published"
+    published_dir.mkdir()
+    (published_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# Demo", encoding="utf-8")
+
+    async def run_checks():
+        monkeypatch.setattr(service, "_store", EmptyStore())
+        assert await service._get_db_skill_metadata_async("missing") is None
+
+        monkeypatch.setattr(service, "_store", DraftFallbackStore())
+        metadata = await service._get_db_skill_metadata_async("demo-skill", include_draft=True)
+        assert metadata["path"] == str(published_dir / "SKILL.md")
+
+        system_version_dir = tmp_path / "system-version"
+        system_version_dir.mkdir()
+        (system_version_dir / "SKILL.md").write_text("---\nname: sys\n---\n# Sys", encoding="utf-8")
+
+        class SystemStore:
+            async def get_version_async(self, skill_id, version_no):
+                return {"skill_version_dir": str(system_version_dir)}
+
+        monkeypatch.setattr(service, "_store", SystemStore())
+        assert await service._get_system_version_dir_async({"skill_id": "sys", "skill_root_dir": str(tmp_path / "missing")}, 2) == system_version_dir
+
+        async def missing_builtin(_skill_id):
+            return None
+
+        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", missing_builtin)
+        with pytest.raises(ValueError, match="技能不存在"):
+            await service._get_builtin_version_dir_async("missing")
+
+        missing_md = tmp_path / "missing-builtin" / "SKILL.md"
+
+        async def missing_path_builtin(_skill_id):
+            return {"path": str(missing_md)}
+
+        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", missing_path_builtin)
+        with pytest.raises(ValueError, match="技能版本目录无效"):
+            await service._get_builtin_version_dir_async("missing-path")
+
+    asyncio.run(run_checks())
+
+
+def test_skill_service_remaining_file_and_archive_branches(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+    draft_dir = tmp_path / "skill" / "versions" / "v2"
+    (draft_dir / "scripts").mkdir(parents=True)
+
+    class DraftStore:
+        async def get_skill_async(self, skill_id, user_id=""):
+            return {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+            }
+
+        async def get_latest_draft_version_async(self, skill_id):
+            return {"skill_id": skill_id, "skill_version_no": 2, "skill_version_dir": str(draft_dir)}
+
+    async def run_delete_missing():
+        monkeypatch.setattr(service, "_store", DraftStore())
+        result = await service.delete_skill_version_file_async("skill-1", 1, "scripts", "missing.py", "u1")
+        assert result["deleted"] is True
+        assert result["file_path"] == "scripts/missing.py"
+
+    asyncio.run(run_delete_missing())
+
+    root_dir = tmp_path / "root" / "demo-skill"
+    root_dir.mkdir(parents=True)
+    outside_version_dir = tmp_path / "outside" / "v1"
+    outside_version_dir.mkdir(parents=True)
+    updated = {}
+    deleted = {}
+
+    class ArchiveStore:
+        async def list_versions_async(self, skill_id):
+            return [{"skill_version_no": 3, "skill_version_dir": str(outside_version_dir)}]
+
+        async def update_version_dir_async(self, skill_id, version_no, version_dir, update_by="", update_by_name=""):
+            updated["version_dir"] = version_dir
+
+        async def delete_skill_async(self, skill_id, archive_name, archive_root_dir, update_by="", update_by_name=""):
+            deleted["archive_name"] = archive_name
+            deleted["archive_root_dir"] = archive_root_dir
+
+    monkeypatch.setattr(service, "_store", ArchiveStore())
+    monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "abcdefff0000"})())
+    asyncio.run(service._archive_user_skill_async({"skill_id": "skill-1", "skill_name": "demo-skill", "skill_root_dir": str(root_dir)}, "u1"))
+
+    assert updated["version_dir"].endswith("versions/v3")
+    assert deleted["archive_name"] == "demo-skill--deleted-abcdefff"

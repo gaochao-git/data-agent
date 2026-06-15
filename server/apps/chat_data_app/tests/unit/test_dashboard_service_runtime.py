@@ -277,3 +277,51 @@ def test_dashboard_service_dict_helpers_handle_invalid_chart_config():
 
     assert payload["chart_config"] is None
     assert payload["layout"] == {"i": "panel_a", "x": 0, "y": 0, "w": 6, "h": 4}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_service_optional_false_and_audit_branches(dashboard_db):
+    service = DashboardService()
+    dashboard = await service.create_dashboard(name="经营看板", user_id="user_a")
+    panel = await service.add_panel(
+        dashboard_id=dashboard["id"],
+        name="明细表",
+        sql="select 1",
+        user_id="user_a",
+    )
+
+    unchanged_dashboard = await service.update_dashboard(dashboard["id"])
+    unchanged_panel = await service.update_panel(dashboard["id"], panel["id"])
+    empty_layout_count = await service.update_panels_layout(dashboard["id"], layouts=[])
+    missing_dashboard_panel_update = await service.update_panel("missing", panel["id"], name="x", user_id="user_a")
+    wrong_owner_panel_update = await service.update_panel(dashboard["id"], panel["id"], name="x", user_id="user_b")
+    missing_dashboard_panel_delete = await service.delete_panel("missing", panel["id"], user_id="user_a")
+    deleted_panel = await service.delete_panel(dashboard["id"], panel["id"], user_id="user_a", operator_name="操作员")
+
+    dashboard_for_delete = await service.create_dashboard(name="待删看板", user_id="user_a")
+    await service.add_panel(dashboard_id=dashboard_for_delete["id"], name="面板", sql="select 1", user_id="user_a")
+    deleted_dashboard = await service.delete_dashboard(dashboard_for_delete["id"], user_id="user_a", operator_name="操作员")
+
+    assert unchanged_dashboard["id"] == dashboard["id"]
+    assert unchanged_panel["id"] == panel["id"]
+    assert empty_layout_count == 0
+    assert missing_dashboard_panel_update is None
+    assert wrong_owner_panel_update is None
+    assert missing_dashboard_panel_delete is False
+    assert deleted_panel is True
+    assert deleted_dashboard is True
+
+
+@pytest.mark.asyncio
+async def test_dashboard_service_public_panel_access_branch(dashboard_db):
+    service = DashboardService()
+    dashboard = await service.create_dashboard(name="公共看板", user_id="user_a")
+    panel = await service.add_panel(dashboard_id=dashboard["id"], name="公共面板", sql="select 1", user_id="user_a")
+
+    assert await service.get_panel(panel["id"], user_id="user_b", include_public=True) is None
+    await service.set_dashboard_public(dashboard["id"], user_id="user_a", is_public=True)
+    public_panel = await service.get_panel(panel["id"], user_id="user_b", include_public=True)
+    hidden_panel = await service.get_panel(panel["id"], user_id="user_b", include_public=False)
+
+    assert public_panel["id"] == panel["id"]
+    assert hidden_panel is None

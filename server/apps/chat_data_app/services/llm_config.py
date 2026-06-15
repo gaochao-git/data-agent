@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
+from utils.crypto import decrypt_password
 from utils.lang_util.llm import get_llm
 
 
@@ -64,6 +65,14 @@ def _get_chat_data_extra_body(model: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _get_chat_data_api_key() -> str | None:
+    """读取智能问数 API Key，CHAT_DATA_API_KEY 存储为 SM4 密文。"""
+    encrypted_api_key = str(os.getenv("CHAT_DATA_API_KEY") or "").strip()
+    if not encrypted_api_key:
+        return None
+    return decrypt_password(encrypted_api_key)
+
+
 def get_chat_data_model_options() -> dict[str, Any]:
     """读取智能问数前端可选模型列表。"""
     raw_models = get_chat_data_model_names()
@@ -96,7 +105,7 @@ def get_chat_data_llm(
         temperature=temperature,
         max_tokens=max_tokens or _get_default_max_tokens(),
         timeout=timeout,
-        api_key=os.getenv("CHAT_DATA_API_KEY"),
+        api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),
         extra_body=_get_chat_data_extra_body(selected_model),
     )

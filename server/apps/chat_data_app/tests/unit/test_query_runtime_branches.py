@@ -2,7 +2,8 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -730,3 +731,434 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     assert final_updates[0][0] == "ex_1"
     assert final_updates[0][1]["error"] == "executor failed"
     assert final_updates[0][2] is True
+
+
+class _ScalarResult:
+    def __init__(self, value=None, scalars=None):
+        self._value = value
+        self._scalars = list(scalars or [])
+
+    def scalar_one_or_none(self):
+        return self._value
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._scalars
+
+
+class _SessionQueue:
+    def __init__(self, *results):
+        self.results = list(results)
+        self.commits = 0
+        self.refreshes = []
+
+    async def execute(self, _stmt):
+        if self.results:
+            return self.results.pop(0)
+        return _ScalarResult()
+
+    def add(self, item):
+        self.added = item
+
+    async def flush(self):
+        return None
+
+    async def commit(self):
+        self.commits += 1
+
+    async def refresh(self, item):
+        self.refreshes.append(item)
+
+
+def _patch_query_runtime_session(monkeypatch, session):
+    @asynccontextmanager
+    async def fake_get_session():
+        yield session
+
+    monkeypatch.setattr(query_runtime, "get_session", fake_get_session)
+
+
+def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
+    no_cache_session = _SessionQueue(_ScalarResult(None))
+    _patch_query_runtime_session(monkeypatch, no_cache_session)
+    assert asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "missing"})) is None
+
+    bad_cache = SimpleNamespace(
+        result_payload="{bad",
+        delete_flag=0,
+        update_time=None,
+        hit_count=0,
+        last_hit_time=None,
+        create_time=None,
+        expire_time=datetime.now() + timedelta(seconds=60),
+    )
+    bad_session = _SessionQueue(_ScalarResult(bad_cache))
+    _patch_query_runtime_session(monkeypatch, bad_session)
+    assert asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "bad"})) is None
+    assert bad_cache.delete_flag == 1
+    assert bad_session.commits == 1
+
+    hit_cache = SimpleNamespace(
+        result_payload=json.dumps({"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}),
+        hit_count=2,
+        last_hit_time=None,
+        update_time=None,
+        create_time=datetime.now() - timedelta(seconds=5),
+        expire_time=datetime.now() + timedelta(seconds=60),
+    )
+    hit_session = _SessionQueue(_ScalarResult(hit_cache))
+    _patch_query_runtime_session(monkeypatch, hit_session)
+    payload = asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "hit"}))
+
+    assert payload["cache_hit"] is True
+    assert payload["cache_age_seconds"] >= 0
+    assert payload["cache_expires_in_seconds"] >= 0
+    assert hit_cache.hit_count == 3
+    assert hit_session.commits == 1
+
+
+def test_update_query_execution_and_task_db_branches(monkeypatch):
+    execution = SimpleNamespace(
+        sql_status="pending",
+        remote_task_id=None,
+        db_connection_id=None,
+        execution_time_ms=None,
+        result_row_count=None,
+        result_payload=None,
+        error_message="old",
+        started_time=None,
+        finished_time=None,
+        update_time=None,
+    )
+    execution_session = _SessionQueue(_ScalarResult(execution))
+    _patch_query_runtime_session(monkeypatch, execution_session)
+    started = datetime(2026, 6, 1, 10, 0, 0)
+    finished = datetime(2026, 6, 1, 10, 0, 1)
+
+    asyncio.run(query_runtime.update_query_execution(
+        "exec_1",
+        sql_status="succeeded",
+        remote_task_id="remote_1",
+        db_connection_id="conn_1",
+        execution_time_ms=12,
+        result_row_count=3,
+        result_payload={"ok": True},
+        error_message="",
+        started_time=started,
+        finished_time=finished,
+    ))
+
+    assert execution.sql_status == "succeeded"
+    assert execution.remote_task_id == "remote_1"
+    assert execution.db_connection_id == "conn_1"
+    assert execution.execution_time_ms == 12
+    assert execution.result_row_count == 3
+    assert json.loads(execution.result_payload) == {"ok": True}
+    assert execution.error_message is None
+    assert execution.started_time == started
+    assert execution.finished_time == finished
+    assert execution_session.commits == 1
+
+    cancelled = SimpleNamespace(sql_status="cancelled")
+    cancelled_session = _SessionQueue(_ScalarResult(cancelled))
+    _patch_query_runtime_session(monkeypatch, cancelled_session)
+    asyncio.run(query_runtime.update_query_execution("exec_2", sql_status="running"))
+    assert cancelled.sql_status == "cancelled"
+    assert cancelled_session.commits == 0
+
+    missing_session = _SessionQueue(_ScalarResult(None))
+    _patch_query_runtime_session(monkeypatch, missing_session)
+    asyncio.run(query_runtime.update_query_execution("missing", sql_status="running"))
+    assert missing_session.commits == 0
+
+    task = SimpleNamespace(
+        task_id="task_1",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="pending",
+        progress_text="old",
+        request_payload="{}",
+        result_payload=None,
+        remote_task_payload=None,
+        error_message="old",
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="u1",
+        update_by="u1",
+        create_by_name="张三",
+        update_by_name="张三",
+    )
+    task_session = _SessionQueue(_ScalarResult(task))
+    _patch_query_runtime_session(monkeypatch, task_session)
+    updated = asyncio.run(query_runtime.update_query_task(
+        "task_1",
+        status="running",
+        progress_text="执行中",
+        result_payload={"success": True},
+        error_message="",
+        started_time=started,
+        finished_time=finished,
+    ))
+
+    assert updated["status"] == "running"
+    assert task.progress_text == "执行中"
+    assert json.loads(task.result_payload) == {"success": True}
+    assert task.error_message == ""
+    assert task_session.commits == 1
+    assert task_session.refreshes == [task]
+
+    cancelled_task = SimpleNamespace(**{**task.__dict__, "task_status": "cancelled"})
+    cancelled_task_session = _SessionQueue(_ScalarResult(cancelled_task))
+    _patch_query_runtime_session(monkeypatch, cancelled_task_session)
+    cancelled_response = asyncio.run(query_runtime.update_query_task("task_cancel", status="failed"))
+    assert cancelled_response["status"] == "cancelled"
+    assert cancelled_task_session.commits == 0
+
+
+def test_get_query_executions_applies_operator_fallbacks(monkeypatch):
+    class Execution:
+        def __init__(self, create_by_name="", update_by_name=""):
+            self.create_by_name = create_by_name
+            self.update_by_name = update_by_name
+
+        def to_dict(self):
+            return {"execution_id": "exec_1", "create_by_name": self.create_by_name, "update_by_name": self.update_by_name}
+
+    task_with_name = SimpleNamespace(create_by_name="创建人", update_by_name="", request_payload="{}")
+    session_with_name = _SessionQueue(
+        _ScalarResult(scalars=[Execution()]),
+        _ScalarResult(task_with_name),
+    )
+    _patch_query_runtime_session(monkeypatch, session_with_name)
+    named = asyncio.run(query_runtime.get_query_executions("task_1"))
+
+    task_with_payload = SimpleNamespace(
+        create_by_name="",
+        update_by_name="",
+        request_payload=json.dumps({"operator_name": "负载用户"}),
+        task_id="task_2",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="succeeded",
+        progress_text="done",
+        result_payload=None,
+        remote_task_payload=None,
+        error_message=None,
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="",
+        update_by="",
+    )
+    session_with_payload = _SessionQueue(
+        _ScalarResult(scalars=[Execution(update_by_name="明细用户")]),
+        _ScalarResult(task_with_payload),
+    )
+    _patch_query_runtime_session(monkeypatch, session_with_payload)
+    payload_named = asyncio.run(query_runtime.get_query_executions("task_2"))
+
+    empty_session = _SessionQueue(_ScalarResult(scalars=[]))
+    _patch_query_runtime_session(monkeypatch, empty_session)
+
+    assert named[0]["operator_name"] == "创建人"
+    assert payload_named[0]["operator_name"] == "明细用户"
+    assert asyncio.run(query_runtime.get_query_executions("empty")) == []
+
+
+def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monkeypatch):
+    execute_calls = []
+    final_updates = []
+
+    class CallbackExecutor:
+        async def execute(self, sql, limit, timeout, user_id, remote_task_callback=None, db_connection_callback=None):
+            execute_calls.append(sql)
+            await remote_task_callback({"remote_task_id": "remote_no_targets"})
+            await db_connection_callback({"db_connection_id": "conn_no_exec"})
+            return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+        async def close(self):
+            return None
+
+    async def run_with_limit(_user_id, _execution_target, query_fn):
+        return await query_fn()
+
+    async def non_ref_cache(_cache_identity):
+        return {"success": True, "columns": ["cached"], "data": [{"cached": 1}], "total_count": 1}
+
+    async def update_query_execution_from_result(execution_id, result, store_result_payload=True):
+        final_updates.append((execution_id, result, store_result_payload))
+
+    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", non_ref_cache)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
+    monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
+    monkeypatch.setattr(query_runtime, "update_query_execution_from_result", update_query_execution_from_result)
+
+    result = asyncio.run(query_runtime.execute_sql_for_member(
+        execution_target={"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "hive", "query_executor_type": "http"},
+        sql="select 1",
+        limit=10,
+        timeout=None,
+        user_id="u1",
+        username="张三",
+        datasource_id="ds_a",
+    ))
+
+    assert result["success"] is True
+    assert execute_calls == ["select 1"]
+    assert final_updates == []
+
+
+def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
+    class FakeExecutor:
+        async def execute(self, sql, limit, timeout, user_id):
+            return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+        async def close(self):
+            return None
+
+    enabled_values = iter([True, False])
+
+    def cache_enabled(_skip_query_cache):
+        return next(enabled_values)
+
+    async def run_with_limit(_user_id, _execution_target, query_fn):
+        return await query_fn()
+
+    async def cache_miss(_identity):
+        return None
+
+    monkeypatch.setattr(query_runtime, "is_sql_result_cache_enabled", cache_enabled)
+    monkeypatch.setattr(query_runtime, "get_sql_result_cache", cache_miss)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
+    monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
+
+    result = asyncio.run(query_runtime.execute_sql_for_member(
+        execution_target={"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
+        sql="select 1",
+        limit=10,
+        timeout=None,
+    ))
+
+    assert result["success"] is True
+
+
+def test_run_sql_query_task_cancel_after_running(monkeypatch):
+    cancelled_values = iter([False, True])
+    updates = []
+
+    async def is_cancelled(_task_id):
+        return next(cancelled_values)
+
+    async def update_query_task(task_id, **kwargs):
+        updates.append((task_id, kwargs))
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", is_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_query_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not execute")))
+
+    asyncio.run(query_runtime.run_sql_query_task("task_1", {"request_payload": "{}"}))
+
+    assert updates[0][0] == "task_1"
+    assert updates[0][1]["status"] == "running"
+
+
+def test_execute_sql_request_with_task_marks_failed_before_reraising(monkeypatch):
+    updates = []
+    request = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
+
+    async def create_task_for_execute_request(_request, query_type=None, operator_name=None):
+        return {"task_id": "task_1"}
+
+    async def create_query_executions_for_task(*_args, **_kwargs):
+        raise RuntimeError("create executions failed")
+
+    async def update_query_task(task_id, **kwargs):
+        updates.append((task_id, kwargs))
+
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_for_execute_request)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_query_executions_for_task)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_query_task)
+
+    with pytest.raises(RuntimeError, match="create executions failed"):
+        asyncio.run(query_runtime.execute_sql_request_with_task(request, operator_name="张三"))
+
+    assert len(updates) == 1
+    assert updates[0][0] == "task_1"
+    assert updates[0][1]["status"] == "failed"
+    assert updates[0][1]["error_message"] == "create executions failed"
+
+
+def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch):
+    class Manager:
+        async def get_datasource_async(self, datasource_id):
+            return {"id": datasource_id}
+
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+            return [{"member_datasource_id": "m1", "member_name": "成员1"}]
+
+    async def execute_sql_for_member(**_kwargs):
+        return {"success": True, "sql": "select 1", "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    async def create_task_raises(*_args, **_kwargs):
+        raise RuntimeError("task unavailable")
+
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: Manager())
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
+    monkeypatch.setattr(query_runtime, "execute_sql_for_member", execute_sql_for_member)
+
+    fallback = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
+    assert fallback["success"] is True
+
+    updates = []
+
+    async def create_task_ok(*_args, **_kwargs):
+        return {"task_id": "task_1"}
+
+    async def create_executions_ok(*_args, **_kwargs):
+        return {"m1": "exec_1"}
+
+    async def update_ok(task_id, **kwargs):
+        updates.append((task_id, kwargs))
+
+    async def persist_raises(*_args, **_kwargs):
+        raise RuntimeError("persist failed")
+
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_ok)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions_ok)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_ok)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", persist_raises)
+
+    persisted = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
+    assert persisted["success"] is True
+    assert updates[-1][1]["status"] == "succeeded"
+    assert updates[-1][1]["result_payload"] is None
+
+    class ValueErrorManager(Manager):
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+            raise ValueError("unsupported")
+
+    async def update_raises(*_args, **_kwargs):
+        raise RuntimeError("update failed")
+
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
+    monkeypatch.setattr(query_runtime, "update_query_task", update_raises)
+    value_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
+    assert value_error_result["success"] is False
+    assert value_error_result["error"] == "unsupported"
+
+    class RuntimeErrorManager(Manager):
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
+    generic_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
+    assert generic_error_result["success"] is False
+    assert generic_error_result["error"] == "执行失败: boom"

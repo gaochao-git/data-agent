@@ -1074,3 +1074,310 @@ def test_truncate_output_marks_long_text():
     assert text == "abc\n...[truncated]"
     assert truncated is True
     assert workspace_execution.truncate_output("abc", limit=3) == ("abc", False)
+
+
+def test_workspace_execution_remaining_config_and_sdk_branches(tmp_path, monkeypatch):
+    import types
+
+    opensandbox_module = types.ModuleType("opensandbox")
+    config_module = types.ModuleType("opensandbox.config")
+    execd_module = types.ModuleType("opensandbox.models.execd")
+    sandboxes_module = types.ModuleType("opensandbox.models.sandboxes")
+    opensandbox_module.Sandbox = type("FakeSandbox", (), {})
+    config_module.ConnectionConfig = type("FakeConnectionConfig", (), {})
+    execd_module.RunCommandOpts = type("FakeRunCommandOpts", (), {})
+    sandboxes_module.Host = type("FakeHost", (), {})
+    sandboxes_module.NetworkPolicy = type("FakeNetworkPolicy", (), {})
+    sandboxes_module.NetworkRule = type("FakeNetworkRule", (), {})
+    sandboxes_module.Volume = type("FakeVolume", (), {})
+    monkeypatch.setitem(sys.modules, "opensandbox", opensandbox_module)
+    monkeypatch.setitem(sys.modules, "opensandbox.config", config_module)
+    monkeypatch.setitem(sys.modules, "opensandbox.models.execd", execd_module)
+    monkeypatch.setitem(sys.modules, "opensandbox.models.sandboxes", sandboxes_module)
+
+    Sandbox, ConnectionConfig, RunCommandOpts, models = workspace_execution._import_opensandbox_sdk()
+
+    assert Sandbox is opensandbox_module.Sandbox
+    assert ConnectionConfig is config_module.ConnectionConfig
+    assert RunCommandOpts is execd_module.RunCommandOpts
+    assert models[0] is sandboxes_module.Host
+
+    missing_root = tmp_path / "missing-thread"
+    date_part = workspace_execution._workspace_date_part(str(missing_root))
+    assert len(date_part) == 8
+
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_LOCKS.clear()
+    first = workspace_execution._workspace_session_lock("cache-a")
+    second = workspace_execution._workspace_session_lock("cache-a")
+    assert first is second
+
+    monkeypatch.setenv("OPENSANDBOX_PYTHON_BIN", "   ")
+    assert workspace_execution._sandbox_python_bin() == "python3"
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_LOCKS.clear()
+
+
+def test_workspace_tar_builders_skip_excluded_nested_paths(tmp_path):
+    thread_root = tmp_path / "thread"
+    (thread_root / "workspace" / "node_modules").mkdir(parents=True)
+    (thread_root / "workspace" / "node_modules" / "skip.js").write_text("skip", encoding="utf-8")
+    (thread_root / "workspace" / "keep").mkdir()
+    (thread_root / "workspace" / "keep" / ".cache").mkdir()
+    (thread_root / "workspace" / "keep" / ".cache" / "skip.txt").write_text("skip", encoding="utf-8")
+    (thread_root / "workspace" / "keep" / "ok.txt").write_text("ok", encoding="utf-8")
+
+    seed_data = workspace_execution._build_seed_tar_bytes(thread_root)
+    directory_data = workspace_execution._build_directory_tar_bytes(thread_root / "workspace")
+
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(seed_data), mode="r:gz") as tar:
+        seed_names = sorted(member.name for member in tar.getmembers())
+    with tarfile.open(fileobj=io.BytesIO(directory_data), mode="r:gz") as tar:
+        directory_names = sorted(member.name for member in tar.getmembers())
+
+    assert "workspace/keep/ok.txt" in seed_names
+    assert "keep/ok.txt" in directory_names
+    assert all("node_modules" not in name for name in seed_names + directory_names)
+    assert all(".cache" not in name for name in seed_names + directory_names)
+
+
+def test_workspace_prepare_and_command_edge_branches(tmp_path, monkeypatch):
+    captured = {}
+
+    class FakeSandbox:
+        id = "sbx-deny"
+
+        @staticmethod
+        async def create(**kwargs):
+            captured.update(kwargs)
+            return FakeSandbox()
+
+    class FakeConnectionConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeHost:
+        def __init__(self, *, path):
+            self.path = path
+
+    class FakeVolume:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeNetworkPolicy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeNetworkRule:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    async def fake_ensure_workspace_dirs(*, session):
+        return None
+
+    async def fake_seed_workspace_if_needed(*, session):
+        return None
+
+    monkeypatch.setenv("WORKSPACE_EXECUTION_BACKEND", "opensandbox")
+    monkeypatch.setenv("OPENSANDBOX_WORKSPACE_SYNC_MODE", "remote-host-volume")
+    monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
+    monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "deny")
+    monkeypatch.setattr(workspace_execution, "_import_opensandbox_sdk", lambda: (FakeSandbox, FakeConnectionConfig, None, (FakeHost, FakeNetworkPolicy, FakeNetworkRule, FakeVolume)))
+    monkeypatch.setattr(workspace_execution, "_ensure_workspace_dirs", fake_ensure_workspace_dirs)
+    monkeypatch.setattr(workspace_execution, "_seed_workspace_if_needed", fake_seed_workspace_if_needed)
+
+    workspace_root = tmp_path / "thread"
+    workspace_root.mkdir()
+    session = asyncio.run(workspace_execution.prepare_workspace_execution_session(str(workspace_root), user_id="u1"))
+
+    assert session.sandbox_id == "sbx-deny"
+    assert isinstance(captured["network_policy"], FakeNetworkPolicy)
+
+    class FakeRunCommandOpts:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+    class FakeCommandsNoId:
+        async def run(self, command, opts):
+            return SimpleNamespace(id="", logs=SimpleNamespace(stdout=[SimpleNamespace(text="ok")], stderr=[]), error=None)
+
+    class FakeSandboxNoId:
+        commands = FakeCommandsNoId()
+
+    monkeypatch.setattr(workspace_execution, "_import_opensandbox_sdk", lambda: (None, None, FakeRunCommandOpts, None))
+    no_id_session = SandboxExecutionSession(sandbox=FakeSandboxNoId(), sandbox_id="sbx", workspace_root=str(workspace_root), host_workspace_path="/host/thread")
+    assert asyncio.run(workspace_execution.run_command_in_sandbox(session=no_id_session, command="echo ok", timeout_seconds=5)) == (0, "ok", "")
+
+    empty_error_execution = SimpleNamespace(
+        logs=SimpleNamespace(stdout=[], stderr=[]),
+        error=SimpleNamespace(name=" ", value=""),
+    )
+    assert workspace_execution._extract_command_output(empty_error_execution, command_status=None) == (1, "", "")
+
+
+def test_seed_workspace_failure_and_path_normalization(tmp_path, monkeypatch):
+    commands = []
+
+    class FakeFiles:
+        async def write_file(self, path, data, mode=0o644):
+            return None
+
+    class FakeSandbox:
+        files = FakeFiles()
+
+    session = SandboxExecutionSession(sandbox=FakeSandbox(), sandbox_id="sbx", workspace_root=str(tmp_path), host_workspace_path="/host/thread")
+
+    async def fake_run_command_seed_failure(*, session, command, timeout_seconds):
+        commands.append(command)
+        if "test -f" in command:
+            return 1, "", ""
+        if "tar --no-same-owner" not in command:
+            return 0, "", ""
+        return 1, "stdout failed", ""
+
+    monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run_command_seed_failure)
+
+    try:
+        asyncio.run(workspace_execution._seed_workspace_if_needed(session=session))
+    except ValueError as exc:
+        assert "初始化 OpenSandbox host 工作区失败" in str(exc)
+        assert "stdout failed" in str(exc)
+    else:
+        raise AssertionError("seed command failure should raise")
+
+    assert any("test -f" in command for command in commands)
+    assert workspace_execution.sandbox_visible_path("././workspace/a.txt") == f"{workspace_execution.sandbox_workspace_dir()}/a.txt"
+    assert workspace_execution.sandbox_path_to_visible(f"{workspace_execution.sandbox_outputs_dir()}/chart.json") == f"{workspace_execution.sandbox_thread_root()}/outputs/chart.json"
+    asyncio.run(workspace_execution.cleanup_workspace_execution_session(None))
+    asyncio.run(workspace_execution.release_workspace_execution_session(None))
+
+
+def test_chart_spec_parser_covers_required_x_y_and_row_field_edges():
+    assert workspace_execution._parse_chart_spec_payload({
+        "version": "1.0",
+        "chart_type": "line",
+        "data": [{"y": 1}],
+        "encoding": {"y": ["y"]},
+    }) is None
+
+    assert workspace_execution._parse_chart_spec_payload({
+        "version": "1.0",
+        "chart_type": "line",
+        "data": ["not-a-row"],
+        "encoding": {"x": "x", "y": ["y"]},
+    }) is None
+
+    valid_without_data_rows = {
+        "version": "1.0",
+        "chart_type": "bar",
+        "data": [{"x": "A", "y": 1}, "ignored-row"],
+        "encoding": {"x": "x", "y": ["y"]},
+    }
+    parsed = workspace_execution._parse_chart_spec_payload(valid_without_data_rows)
+
+    assert parsed is valid_without_data_rows
+    assert parsed["chart_type"] == "bar"
+
+
+def test_workspace_execution_remaining_cache_path_and_chart_branches(tmp_path, monkeypatch):
+    workspace_root = tmp_path / "thread"
+    workspace_root.mkdir()
+    marker = workspace_root / ".sandbox_workspace_meta.json"
+    marker.write_text('{"date": "not-a-date"}', encoding="utf-8")
+
+    assert len(workspace_execution._workspace_date_part(str(workspace_root))) == 8
+    assert workspace_execution.sandbox_path_to_visible("/outside/session.txt") == "/outside/session.txt"
+
+    table_without_rows = {
+        "version": "1.0",
+        "chart_type": "table",
+        "data": [],
+        "encoding": {},
+    }
+    table_without_y_list = {
+        "version": "1.0",
+        "chart_type": "table",
+        "data": [{"name": "A"}],
+        "encoding": {"x": "missing"},
+    }
+
+    assert workspace_execution._parse_chart_spec_payload(table_without_rows) is table_without_rows
+    assert workspace_execution._parse_chart_spec_payload(table_without_y_list) is table_without_y_list
+
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE.clear()
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_LOCKS.clear()
+
+    class FakeSandbox:
+        async def close(self):
+            return None
+
+        async def kill(self):
+            return None
+
+    session = SandboxExecutionSession(sandbox=FakeSandbox(), sandbox_id="cached", workspace_root=str(workspace_root), host_workspace_path="/host/thread")
+    cache_key = workspace_execution._workspace_session_cache_key(str(workspace_root), "u1")
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = workspace_execution.CachedSandboxExecutionSession(session, expires_at=50)
+
+    monotonic_calls = []
+
+    def fake_monotonic():
+        monotonic_calls.append(None)
+        return 100 if len(monotonic_calls) == 1 else 1
+
+    monkeypatch.setattr(workspace_execution, "time", SimpleNamespace(monotonic=fake_monotonic))
+
+    async def fail_prepare(*_args, **_kwargs):
+        raise AssertionError("lock-inner cache hit should not prepare a new session")
+
+    monkeypatch.setattr(workspace_execution, "prepare_workspace_execution_session", fail_prepare)
+
+    assert asyncio.run(workspace_execution.get_workspace_execution_session(str(workspace_root), user_id="u1")) is session
+    asyncio.run(workspace_execution.attach_workspace_execution_session(session, user_id="u1"))
+
+    other_session = SandboxExecutionSession(sandbox=FakeSandbox(), sandbox_id="other", workspace_root=str(workspace_root), host_workspace_path="/host/other")
+    other_key = workspace_execution._workspace_session_cache_key(str(workspace_root), "other-user")
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE[other_key] = workspace_execution.CachedSandboxExecutionSession(other_session, expires_at=50)
+    asyncio.run(workspace_execution.invalidate_workspace_execution_session(session, user_id="missing-user"))
+
+    assert other_key in workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_CACHE.clear()
+    workspace_execution._WORKSPACE_EXECUTION_SESSION_LOCKS.clear()
+
+
+def test_workspace_tar_builders_continue_on_excluded_walk_entries(tmp_path, monkeypatch):
+    root = tmp_path / "thread"
+    workspace_dir = root / "workspace"
+    workspace_dir.mkdir(parents=True)
+    excluded_dir = workspace_dir / ".cache"
+    excluded_dir.mkdir()
+    excluded_file = workspace_dir / ".git"
+    excluded_file.write_text("skip", encoding="utf-8")
+    keep_file = workspace_dir / "keep.txt"
+    keep_file.write_text("keep", encoding="utf-8")
+
+    real_walk = workspace_execution.os.walk
+
+    def fake_seed_walk(source):
+        if Path(source) == workspace_dir:
+            yield str(workspace_dir), [".cache"], [".git", "keep.txt"]
+            yield str(excluded_dir), [], ["nested.txt"]
+        else:
+            yield from real_walk(source)
+
+    monkeypatch.setattr(workspace_execution.os, "walk", fake_seed_walk)
+    seed_data = workspace_execution._build_seed_tar_bytes(root)
+    directory_data = workspace_execution._build_directory_tar_bytes(workspace_dir)
+
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(seed_data), mode="r:gz") as tar:
+        seed_names = sorted(member.name for member in tar.getmembers())
+    with tarfile.open(fileobj=io.BytesIO(directory_data), mode="r:gz") as tar:
+        directory_names = sorted(member.name for member in tar.getmembers())
+
+    assert "workspace/keep.txt" in seed_names
+    assert "keep.txt" in directory_names
+    assert all(".cache" not in name for name in seed_names + directory_names)
+    assert all(".git" not in name for name in seed_names + directory_names)

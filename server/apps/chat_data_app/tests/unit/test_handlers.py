@@ -1306,3 +1306,95 @@ def test_data_analyze_completion_handler_emits_error_stage(monkeypatch):
     assert "任务执行失败：context failed" in joined
     assert 'event: error\ndata: {"error": "context failed"}' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
+
+
+def test_data_analyze_completion_handler_falls_back_when_skill_list_fails(monkeypatch):
+    import asyncio
+    from apps.chat_data_app import handlers as handlers_module
+
+    captured = {}
+
+    class FakeDataAnalyzeGraph:
+        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+            captured["initial_state"] = initial_state
+            yield ("custom", {"type": "ignored", "usage": {"total_tokens": 0}})
+            yield ("messages", (_FakeMessageChunk(content="fallback ok"), {"langgraph_node": "data_analyze_agent"}))
+
+    class BrokenSkillService:
+        async def list_skills_async(self, **_kwargs):
+            raise RuntimeError("skill down")
+
+    def fake_build_system_prompt(**kwargs):
+        captured["available_skills_xml"] = kwargs["available_skills_xml"]
+        return "system prompt"
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.build_builtin_skills_prompt", lambda: "<builtin-skills />")
+    monkeypatch.setattr("apps.chat_data_app.handlers.skill_service", BrokenSkillService())
+    monkeypatch.setattr("apps.chat_data_app.agent.data_analyze_graph.build_data_analyze_system_prompt", fake_build_system_prompt)
+    monkeypatch.setattr("apps.chat_data_app.agent.data_analyze_graph.create_data_analyze_flow_graph", lambda **_kwargs: FakeDataAnalyzeGraph())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+
+    response = asyncio.run(data_analyze_completion_handler(
+        conversation_id="conv_da_skill_fallback",
+        query="分析",
+        options={
+            "datasource_id": "ds_a",
+            "semantic_config_selection": {
+                "semantic_config_id": "cfg_a",
+                "matched_metrics": ["销售额"],
+                "user_selected": True,
+            },
+        },
+        user_id="u1",
+    ))
+    events = asyncio.run(_collect_async_iter(response.body_iterator))
+    joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
+
+    assert captured["available_skills_xml"] == "<builtin-skills />"
+    human_message = captured["initial_state"]["messages"][0]
+    assert human_message.additional_kwargs["semantic_config_selection"]["semantic_config_id"] == "cfg_a"
+    assert "fallback ok" in joined
+    assert "message_end" not in joined
+
+
+def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monkeypatch):
+    import asyncio
+
+    class FakeDataAnalyzeGraph:
+        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+            yield ("messages", (_FakeMessageChunk(
+                content="",
+                tool_calls=[
+                    {"id": "", "name": "skip_missing_id", "index": 99},
+                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0, "args": {"fallback": True}},
+                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0},
+                ],
+            ), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(
+                content="",
+                tool_call_chunks=[{"args": "", "index": 0}],
+            ), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(
+                content="完成",
+                type_="tool",
+                tool_call_id="call_indexed",
+            ), {"langgraph_node": "tools"}))
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.skill_service.list_skills_async", lambda **_kwargs: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr("apps.chat_data_app.agent.data_analyze_graph.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr("apps.chat_data_app.agent.data_analyze_graph.create_data_analyze_flow_graph", lambda **_kwargs: FakeDataAnalyzeGraph())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+
+    response = asyncio.run(data_analyze_completion_handler("conv_da_index", "分析", user_id="u1"))
+    events = asyncio.run(_collect_async_iter(response.body_iterator))
+    joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
+
+    assert joined.count('"tool_call_id": "call_indexed"') >= 2
+    assert '"accumulated_args": {"fallback": true}' in joined
+    assert '"status": "completed"' in joined
