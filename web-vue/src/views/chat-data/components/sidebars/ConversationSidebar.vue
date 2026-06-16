@@ -4,7 +4,7 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, reactive, computed, watch, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { getSemanticConfigs } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
@@ -83,6 +83,21 @@ const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
 const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
 const configSearchKeyword = ref('')
+const dimensionSearchKeywords = reactive<Record<string, string>>({})
+const metricSearchKeywords = reactive<Record<string, string>>({})
+const sectionHeightsByConfig = reactive<Record<string, [number, number]>>({})
+const sectionPanelRefs = new Map<string, HTMLElement>()
+const sectionResizeState = ref<{
+  active: boolean
+  configId: string
+  startY: number
+  startHeights: [number, number]
+}>({
+  active: false,
+  configId: '',
+  startY: 0,
+  startHeights: [50, 50]
+})
 const tooltipState = reactive({
   visible: false,
   x: 0,
@@ -135,6 +150,102 @@ const filteredSemanticConfigs = computed(() => {
     return text.includes(keyword)
   })
 })
+
+const getFilteredDimensions = (config: SemanticConfigItem) => {
+  const dimensions = config.dimensions || []
+  const keyword = (dimensionSearchKeywords[config.id] || '').trim().toLowerCase()
+  if (!keyword) return dimensions
+  return dimensions.filter(dimension => {
+    const text = [
+      dimension.name,
+      dimension.column,
+      dimension.field_name,
+      dimension.expression,
+      dimension.description,
+      dimension.metadata_supplement
+    ].join(' ').toLowerCase()
+    return text.includes(keyword)
+  })
+}
+
+const getFilteredMetrics = (config: SemanticConfigItem) => {
+  const metrics = config.metrics || []
+  const keyword = (metricSearchKeywords[config.id] || '').trim().toLowerCase()
+  if (!keyword) return metrics
+  return metrics.filter(metric => {
+    const text = [
+      metric.name,
+      metric.field_name,
+      metric.expression,
+      metric.description,
+      metric.metadata_supplement
+    ].join(' ').toLowerCase()
+    return text.includes(keyword)
+  })
+}
+
+const getSectionHeights = (configId: string): [number, number] => {
+  return sectionHeightsByConfig[configId] || [50, 50]
+}
+
+const ensureSectionHeights = (configId: string): [number, number] => {
+  if (!sectionHeightsByConfig[configId]) {
+    sectionHeightsByConfig[configId] = [50, 50]
+  }
+  return sectionHeightsByConfig[configId]
+}
+
+const getSectionPanelStyle = (config: SemanticConfigItem) => {
+  const dimensionCount = config.dimensions?.length || 0
+  const metricCount = config.metrics?.length || 0
+  if (!dimensionCount || !metricCount) return {}
+  const visibleRows = Math.min(dimensionCount, 10) + Math.min(metricCount, 8)
+  const height = Math.min(560, Math.max(280, visibleRows * 28 + 96))
+  return { height: `${height}px` }
+}
+
+const setSectionPanelRef = (configId: string, el: Element | ComponentPublicInstance | null) => {
+  if (el instanceof HTMLElement) {
+    sectionPanelRefs.set(configId, el)
+    return
+  }
+  sectionPanelRefs.delete(configId)
+}
+
+const startSectionResize = (configId: string, e: MouseEvent) => {
+  e.preventDefault()
+  stopSectionResize()
+  sectionResizeState.value = {
+    active: true,
+    configId,
+    startY: e.clientY,
+    startHeights: [...ensureSectionHeights(configId)]
+  }
+  document.addEventListener('mousemove', onSectionResize)
+  document.addEventListener('mouseup', stopSectionResize)
+}
+
+const onSectionResize = (e: MouseEvent) => {
+  if (!sectionResizeState.value.active) return
+  const { configId, startY, startHeights } = sectionResizeState.value
+  const panel = sectionPanelRefs.get(configId)
+  if (!panel) return
+  const deltaPercent = ((e.clientY - startY) / Math.max(panel.clientHeight, 1)) * 100
+  const minPercent = 16
+  const first = Math.min(100 - minPercent, Math.max(minPercent, startHeights[0] + deltaPercent))
+  sectionHeightsByConfig[configId] = [first, 100 - first]
+}
+
+const stopSectionResize = () => {
+  sectionResizeState.value = {
+    active: false,
+    configId: '',
+    startY: 0,
+    startHeights: [50, 50]
+  }
+  document.removeEventListener('mousemove', onSectionResize)
+  document.removeEventListener('mouseup', stopSectionResize)
+}
 
 // 选中的数据集 ID
 const selectedConfigId = ref<string | null>(null)
@@ -328,6 +439,8 @@ watch(() => props.selectedDatasetId, (newId) => {
 
 onUnmounted(() => {
   clearTooltipHideTimer()
+  document.removeEventListener('mousemove', onSectionResize)
+  document.removeEventListener('mouseup', stopSectionResize)
 })
 
 </script>
@@ -484,61 +597,106 @@ onUnmounted(() => {
           </div>
 
           <div v-if="expandedConfigIds.has(config.id)" class="ml-6 border-l border-[#E5E6EB] pl-1">
-            <div v-if="(config.dimensions?.length || 0) > 0" class="mt-0.5">
-              <div class="flex h-[24px] items-center rounded px-4 text-[11px] font-semibold text-[#86909C]">
-                <i class="fa-solid fa-layer-group mr-1.5 text-[10px] text-[#165DFF]"></i>
-                <span>维度</span>
-                <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.dimensions?.length || 0 }}</span>
-              </div>
-              <div
-                v-for="dimension in config.dimensions || []"
-                :key="`dimension-${config.id}-${dimension.name}`"
-                class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
-                @mouseenter="showTooltip($event, buildDimensionTooltip(dimension))"
-                @mouseleave="hideTooltip"
-              >
-                <FieldTypeIcon :type="getDimensionIconType(dimension)" class="mr-1.5 text-[#165DFF]" />
-                <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ dimension.name }}</span>
-                <button
-                  type="button"
-                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
-                  title="填充到提问框"
-                  @click.stop="handleFillDimension(dimension)"
-                >
-                  <i class="fa-solid fa-arrow-right text-[10px]"></i>
-                </button>
-              </div>
-            </div>
             <div
-              v-if="(config.dimensions?.length || 0) > 0 && (config.metrics?.length || 0) > 0"
-              class="relative mx-3 my-2 flex h-[14px] items-center justify-center"
+              v-if="(config.dimensions?.length || 0) > 0 || (config.metrics?.length || 0) > 0"
+              :ref="(el) => setSectionPanelRef(config.id, el)"
+              class="flex min-h-[180px] flex-col overflow-hidden"
+              :style="getSectionPanelStyle(config)"
             >
-              <div class="h-px w-full bg-[#E5E7EB]"></div>
-              <div class="absolute h-[4px] w-10 rounded-full bg-[#D1D5DB]"></div>
-            </div>
-            <div v-if="(config.metrics?.length || 0) > 0" class="mt-0.5">
-              <div class="flex h-[24px] items-center rounded px-4 text-[11px] font-semibold text-[#86909C]">
-                <i class="fa-solid fa-chart-simple mr-1.5 text-[10px] text-[#7C3AED]"></i>
-                <span>指标</span>
-                <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.metrics?.length || 0 }}</span>
-              </div>
               <div
-                v-for="metric in config.metrics || []"
-                :key="`metric-${config.id}-${metric.name}`"
-                class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
-                @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
-                @mouseleave="hideTooltip"
+                v-if="(config.dimensions?.length || 0) > 0"
+                class="mt-0.5 flex min-h-0 flex-col overflow-hidden"
+                :style="(config.metrics?.length || 0) > 0 ? { height: `${getSectionHeights(config.id)[0]}%` } : { flex: 1 }"
               >
-                <FieldTypeIcon type="number" class="mr-1.5 text-[#7C3AED]" />
-                <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
-                <button
-                  type="button"
-                  class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#7C3AED] opacity-0 transition-all duration-150 hover:bg-[#F3E8FF] hover:text-[#5B21B6] group-hover:opacity-100"
-                  title="填充到提问框"
-                  @click.stop="handleFillMetric(metric)"
-                >
-                  <i class="fa-solid fa-arrow-right text-[10px]"></i>
-                </button>
+                <div class="mb-1 flex h-[30px] shrink-0 items-center gap-2 px-4">
+                  <div class="flex shrink-0 items-center text-[13px] font-semibold text-[#1D2129]">
+                    <span>维度</span>
+                    <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.dimensions?.length || 0 }}</span>
+                  </div>
+                  <div class="flex h-[26px] min-w-0 flex-1 items-center rounded border border-[#DDE1E8] bg-white px-2.5 text-[#A8ABB2] focus-within:border-[#165DFF]">
+                    <input
+                      v-model="dimensionSearchKeywords[config.id]"
+                      class="h-full min-w-0 flex-1 border-none bg-transparent p-0 text-[12px] text-[#1D2129] outline-none placeholder:text-[#A8ABB2]"
+                      placeholder="搜索维度"
+                      @click.stop
+                    />
+                  </div>
+                </div>
+                <div class="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-black/10">
+                  <div
+                    v-for="dimension in getFilteredDimensions(config)"
+                    :key="`dimension-${config.id}-${dimension.name}`"
+                    class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
+                    @mouseenter="showTooltip($event, buildDimensionTooltip(dimension))"
+                    @mouseleave="hideTooltip"
+                  >
+                    <FieldTypeIcon :type="getDimensionIconType(dimension)" class="mr-1.5 text-[#165DFF]" />
+                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ dimension.name }}</span>
+                    <button
+                      type="button"
+                      class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#165DFF] opacity-0 transition-all duration-150 hover:bg-[#E8F3FF] hover:text-[#0E42D2] group-hover:opacity-100"
+                      title="填充到提问框"
+                      @click.stop="handleFillDimension(dimension)"
+                    >
+                      <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </button>
+                  </div>
+                  <div v-if="getFilteredDimensions(config).length === 0" class="px-4 py-2 text-[12px] text-[#9CA3AF]">暂无匹配维度</div>
+                </div>
+              </div>
+
+              <div
+                v-if="(config.dimensions?.length || 0) > 0 && (config.metrics?.length || 0) > 0"
+                class="relative mx-3 my-1 flex h-[16px] shrink-0 cursor-row-resize select-none items-center justify-center group"
+                @mousedown="startSectionResize(config.id, $event)"
+              >
+                <div class="h-px w-full bg-[#E5E7EB]"></div>
+                <div
+                  class="absolute h-[4px] w-10 rounded-full bg-[#D1D5DB] transition-colors group-hover:bg-[#9CA3AF]"
+                  :class="{ '!bg-[#165DFF]': sectionResizeState.active && sectionResizeState.configId === config.id }"
+                ></div>
+              </div>
+
+              <div
+                v-if="(config.metrics?.length || 0) > 0"
+                class="mt-0.5 flex min-h-0 flex-col overflow-hidden"
+                :style="(config.dimensions?.length || 0) > 0 ? { height: `${getSectionHeights(config.id)[1]}%` } : { flex: 1 }"
+              >
+                <div class="mb-1 flex h-[30px] shrink-0 items-center gap-2 px-4">
+                  <div class="flex shrink-0 items-center text-[13px] font-semibold text-[#1D2129]">
+                    <span>指标</span>
+                    <span class="ml-1 text-[10px] font-normal text-[#C0C4CC]">{{ config.metrics?.length || 0 }}</span>
+                  </div>
+                  <div class="flex h-[26px] min-w-0 flex-1 items-center rounded border border-[#DDE1E8] bg-white px-2.5 text-[#A8ABB2] focus-within:border-[#7C3AED]">
+                    <input
+                      v-model="metricSearchKeywords[config.id]"
+                      class="h-full min-w-0 flex-1 border-none bg-transparent p-0 text-[12px] text-[#1D2129] outline-none placeholder:text-[#A8ABB2]"
+                      placeholder="搜索指标"
+                      @click.stop
+                    />
+                  </div>
+                </div>
+                <div class="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-black/10">
+                  <div
+                    v-for="metric in getFilteredMetrics(config)"
+                    :key="`metric-${config.id}-${metric.name}`"
+                    class="group flex h-[28px] items-center rounded px-4 transition-colors duration-100 hover:bg-[#f0f1f3]"
+                    @mouseenter="showTooltip($event, buildMetricTooltip(metric))"
+                    @mouseleave="hideTooltip"
+                  >
+                    <FieldTypeIcon type="number" class="mr-1.5 text-[#7C3AED]" />
+                    <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[#21252C]">{{ metric.name }}</span>
+                    <button
+                      type="button"
+                      class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#7C3AED] opacity-0 transition-all duration-150 hover:bg-[#F3E8FF] hover:text-[#5B21B6] group-hover:opacity-100"
+                      title="填充到提问框"
+                      @click.stop="handleFillMetric(metric)"
+                    >
+                      <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </button>
+                  </div>
+                  <div v-if="getFilteredMetrics(config).length === 0" class="px-4 py-2 text-[12px] text-[#9CA3AF]">暂无匹配指标</div>
+                </div>
               </div>
             </div>
             <div v-if="(config.dimensions?.length || 0) === 0 && (config.metrics?.length || 0) === 0" class="px-4 py-1 text-[12px] text-[#9CA3AF]">
