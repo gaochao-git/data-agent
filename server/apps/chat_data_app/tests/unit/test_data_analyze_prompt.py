@@ -29,6 +29,15 @@ def test_chat_data_prompts_include_common_security_guardrails():
         assert "{safety_guardrails}" not in prompt
 
 
+def test_nl2sql_prompt_does_not_require_visible_fake_thinking():
+    prompt = SQL_GENERATOR_PROMPT_GENERATE
+
+    assert "内部完成需求、数据来源和查询逻辑判断" in prompt
+    assert "不要把判断过程作为正文输出" in prompt
+    assert "先输出思考分析过程" not in prompt
+    assert "# 思考格式" not in prompt
+
+
 def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
@@ -48,16 +57,16 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "相近、简称、口语化表达或存在多个可能解释" in prompt
     assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
     assert "输出可见内容约束（最高优先级）" in prompt
-    assert "`<thinking>` 会展示给用户，必须只写业务判断，不写内部执行动作" in prompt
-    assert "`<thinking>` 和最终回答都面向业务用户" in prompt
+    assert "不要在正文中输出 `<thinking>` 标签或人工编写的思考块" in prompt
+    assert "思考过程由模型原生推理流展示" in prompt
     assert "禁止输出工具名、配置名、配置 ID、工具调用计划" in prompt
-    assert "不要写“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt
+    assert "不要在正文中说明“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt
     assert "“当前未选择指标集”“已选择指标集”“已选择配置”“指标集名称”“候选指标集”等内部选择过程" in prompt
     assert "不要推荐示例中的指标，不要推荐与当前问题无关的具体指标" in prompt
     assert "除非能确认同一语义配置里存在真实相近项，否则只给“请先维护口径后再查询”的通用建议" in prompt
     assert "对复购率、转化率、留存率、占比、客单价、有效率等依赖业务定义的比例/率类问题" in prompt
     assert "返回唯一指标集后，不要输出" not in prompt
-    assert "✅ 可覆盖: 使用已维护的真实指标、维度、枚举和口径" in prompt
+    assert "只能使用已维护的真实指标、维度、枚举和口径" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
 
 

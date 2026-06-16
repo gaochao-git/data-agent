@@ -156,6 +156,27 @@ def test_score_dsl_compares_offset_when_expected_has_value():
     assert result["slot_scores"]["offset"] == 0.0
 
 
+def test_score_dsl_treats_numeric_pagination_strings_as_ints():
+    predicted = {
+        "metrics": ["订单数量"],
+        "dimensions": ["用户名称"],
+        "limit": "4",
+        "offset": "4",
+    }
+    expected = {
+        "metrics": ["订单数量"],
+        "dimensions": ["用户名称"],
+        "limit": 4,
+        "offset": 4,
+    }
+
+    result = score_dsl(predicted, expected)
+
+    assert result["dsl_exact_match"] is True
+    assert result["predicted_dsl"]["limit"] == 4
+    assert result["predicted_dsl"]["offset"] == 4
+
+
 def test_score_dsl_keeps_missing_limit_and_offset_as_null_in_display_dsl():
     dsl = {
         "metrics": ["订单数量"],

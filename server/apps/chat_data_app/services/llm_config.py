@@ -25,11 +25,6 @@ def _get_default_max_tokens() -> int:
     return value if value > 0 else DEFAULT_CHAT_DATA_MAX_TOKENS
 
 
-def _get_chat_data_enable_thinking() -> bool:
-    raw = str(os.getenv("CHAT_DATA_ENABLE_THINKING") or "false").strip().lower()
-    return raw in {"1", "true", "yes", "y", "on"}
-
-
 def _split_model_names(raw_value: str | None) -> list[str]:
     """按逗号拆分模型配置并去重。"""
     models = []
@@ -58,11 +53,8 @@ def get_default_chat_data_model() -> str:
     return get_chat_data_model_names()[0]
 
 
-def _get_chat_data_extra_body(model: str | None) -> dict[str, Any] | None:
-    normalized_model = str(model or get_default_chat_data_model()).strip().lower()
-    if "qwen" in normalized_model:
-        return {"enable_thinking": _get_chat_data_enable_thinking()}
-    return None
+def _get_chat_data_extra_body(enable_thinking: bool | None = None) -> dict[str, Any]:
+    return {"enable_thinking": bool(enable_thinking)}
 
 
 def _get_chat_data_api_key() -> str | None:
@@ -95,6 +87,7 @@ def get_chat_data_llm(
     temperature: float = 0.7,
     max_tokens: int | None = None,
     timeout: int | None = None,
+    enable_thinking: bool | None = None,
 ) -> BaseChatModel:
     """读取 CHAT_DATA_* 环境变量创建智能问数专用 LLM。"""
     selected_model = model or get_default_chat_data_model()
@@ -107,5 +100,5 @@ def get_chat_data_llm(
         timeout=timeout,
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),
-        extra_body=_get_chat_data_extra_body(selected_model),
+        extra_body=_get_chat_data_extra_body(enable_thinking=enable_thinking),
     )

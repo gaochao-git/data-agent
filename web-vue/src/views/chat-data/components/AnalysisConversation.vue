@@ -9,6 +9,7 @@ import MarkdownIt from 'markdown-it'
 import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
+import { useDeepThinking } from '../composables/useDeepThinking'
 import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFileContent, getDataAnalyzeWorkspaceFiles, getSkills, importDataAnalyzeWorkspaceSkill } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { DataAnalyzeWorkspaceFile } from '../api'
@@ -67,6 +68,7 @@ const recommendationContentType = computed<'skills' | 'queries'>(() =>
 )
 const modelOptions = ref<ChatDataModelOption[]>([])
 const selectedModel = ref('')
+const { enableDeepThinking } = useDeepThinking()
 
 const messages = ref<Message[]>([])
 const input = ref('')
@@ -76,6 +78,7 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelOpen = ref(false)
 const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
 const expandedTokenMessageKeys = ref<Set<string>>(new Set())
+const collapsedReasoningStageKeys = ref<Set<string>>(new Set())
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -187,6 +190,28 @@ const resetTokenUsagePanel = () => {
   tokenUsage.value = null
   tokenUsagePanelOpen.value = false
   expandedTokenMessageKeys.value = new Set()
+}
+
+const getReasoningStageKey = (messageId: string, stageIndex: number) => `${messageId}:${stageIndex}`
+
+const isReasoningStageCollapsed = (message: Message, stageIndex: number): boolean => {
+  const stage = message.taskStages?.[stageIndex]
+  if (stage?.source !== 'reasoning') return false
+  if (stage.status === 'running' && message.isStreaming) return false
+  return collapsedReasoningStageKeys.value.has(getReasoningStageKey(message.id, stageIndex))
+}
+
+const toggleReasoningStage = (message: Message, stageIndex: number) => {
+  const stage = message.taskStages?.[stageIndex]
+  if (stage?.source !== 'reasoning') return
+  const key = getReasoningStageKey(message.id, stageIndex)
+  const next = new Set(collapsedReasoningStageKeys.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  collapsedReasoningStageKeys.value = next
 }
 
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
@@ -1413,6 +1438,7 @@ watch(
       sidePanelOpen.value = false
       sidePanelTab.value = 'console'
       activeAssistantMessageId.value = null
+      collapsedReasoningStageKeys.value = new Set()
       resetTokenUsagePanel()
       resetHistory()
     }
@@ -1547,9 +1573,26 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
   }
 }
 
+const completeRunningReasoningStages = (message?: Message) => {
+  const targetMessages = message ? [message] : messages.value
+  for (const item of targetMessages) {
+    if (item.role !== 'assistant' || !item.taskStages?.length) continue
+    let changed = false
+    const nextStages = item.taskStages.map((stage) => {
+      if (stage.source === 'reasoning' && stage.status === 'running') {
+        changed = true
+        return { ...stage, status: 'completed' as const }
+      }
+      return stage
+    })
+    if (changed) item.taskStages = nextStages
+  }
+}
+
 const appendAssistantContent = (content: string) => {
   if (!content) return
   const assistant = ensureAssistantMessage()
+  completeRunningReasoningStages(assistant)
   assistant.content += content
   const segments = assistant.segments || []
   const last = segments[segments.length - 1]
@@ -1562,6 +1605,7 @@ const appendAssistantContent = (content: string) => {
 }
 
 const finishStreamingMessages = () => {
+  completeRunningReasoningStages()
   for (const item of messages.value) {
     if (item.role === 'assistant') item.isStreaming = false
   }
@@ -1569,12 +1613,60 @@ const finishStreamingMessages = () => {
 
 const setActiveAssistantError = (error: string) => {
   const assistant = ensureAssistantMessage()
+  completeRunningReasoningStages(assistant)
   assistant.error = error
   assistant.isStreaming = false
 }
 
+const appendReasoningStage = (content: string) => {
+  if (!content) return
+  const assistant = ensureAssistantMessage()
+  const stages = [...(assistant.taskStages || [])]
+  const segments = [...(assistant.segments || [])]
+  const lastSegment = segments[segments.length - 1]
+  if (lastSegment?.type === 'taskStage') {
+    const existing = stages[lastSegment.stageIndex]
+    if (existing?.stage === 'thinking' && existing.source === 'reasoning' && existing.status === 'running') {
+      stages[lastSegment.stageIndex] = {
+        ...existing,
+        content: `${existing.content || ''}${content}`,
+      }
+      assistant.taskStages = stages
+      assistant.segments = segments
+      activeAssistantMessageId.value = assistant.id
+      return
+    }
+  }
+
+  const stageIndex = stages.length
+  stages.push({
+    stage: 'thinking',
+    status: 'running',
+    title: '思考',
+    content,
+    source: 'reasoning',
+  })
+  segments.push({ type: 'taskStage', stageIndex })
+  assistant.taskStages = stages
+  assistant.segments = segments
+  activeAssistantMessageId.value = assistant.id
+}
+
 const handleLangGraphMessage = (msg: LangGraphMessage) => {
+  if (msg.type === 'thinking') {
+    const reasoningContent = typeof msg.content === 'string'
+      ? msg.content
+      : typeof msg.additional_kwargs?.reasoning_content === 'string'
+        ? msg.additional_kwargs.reasoning_content
+        : ''
+    if (reasoningContent) {
+      appendReasoningStage(reasoningContent)
+    }
+    return
+  }
+
   if (msg.tool_calls?.length) {
+    completeRunningReasoningStages(ensureAssistantMessage())
     for (const tc of msg.tool_calls) {
       if (!tc.id || !tc.name) continue
       const existing = toolCallsMap.value.get(tc.id)
@@ -1590,6 +1682,7 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
   }
 
   if (msg.type === 'tool' && msg.tool_call_id) {
+    completeRunningReasoningStages(ensureAssistantMessage())
     const existing = toolCallsMap.value.get(msg.tool_call_id)
     const result = msg.content || ''
     const toolInfo: ToolCallInfo = {
@@ -1608,18 +1701,24 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
 
 const upsertTaskStage = (stage: TaskStageInfo) => {
   const assistant = ensureAssistantMessage()
-  const stages = [...(assistant.taskStages || [])]
-  const existingIndex = stages.findIndex(item => item.stage === stage.stage)
-  if (existingIndex >= 0) {
-    const existing = stages[existingIndex] || stage
-    const isDelta = stage.status === 'running' && stage.content !== undefined && !stage.title && !stage.steps
-    stages[existingIndex] = isDelta
-      ? { ...existing, status: 'running', content: `${existing.content || ''}${stage.content || ''}` }
-      : { ...existing, ...stage }
+  if (stage.source !== 'reasoning') {
+    completeRunningReasoningStages(assistant)
   }
-  else stages.push(stage)
+  const stages = [...(assistant.taskStages || [])]
+  const incomingStage: TaskStageInfo = { ...stage, source: stage.source || 'task_stage' }
+  const existingIndex = stages.findIndex(item => item.stage === incomingStage.stage && item.source !== 'reasoning')
+  if (existingIndex >= 0) {
+    const existing = stages[existingIndex] || incomingStage
+    const isDelta = incomingStage.status === 'running' && incomingStage.content !== undefined && !incomingStage.title && !incomingStage.steps
+    stages[existingIndex] = isDelta
+      ? { ...existing, status: 'running', content: `${existing.content || ''}${incomingStage.content || ''}` }
+      : { ...existing, ...incomingStage }
+  }
+  else stages.push(incomingStage)
   assistant.taskStages = stages
-  const stageIndex = stages.findIndex(item => item.stage === stage.stage)
+  const stageIndex = existingIndex >= 0
+    ? existingIndex
+    : stages.findIndex(item => item.stage === incomingStage.stage && item.source !== 'reasoning')
   const segments = assistant.segments || []
   if (!segments.some(segment => segment.type === 'taskStage' && segment.stageIndex === stageIndex)) {
     segments.push({ type: 'taskStage', stageIndex })
@@ -1652,12 +1751,13 @@ const getTaskStageByIndex = (message: Message, index: number): TaskStageInfo | n
   return message.taskStages?.[index] || null
 }
 
-const isTaskStageLast = (message: Message, index: number): boolean => {
-  const segments = message.segments || []
-  const taskStageIndexes = segments
-    .filter(segment => segment.type === 'taskStage')
-    .map(segment => segment.stageIndex)
-  return taskStageIndexes[taskStageIndexes.length - 1] === index
+const getTaskStageDisplayStatus = (message: Message, index: number): TaskStageInfo['status'] => {
+  const stage = getTaskStageByIndex(message, index)
+  if (!stage) return 'completed'
+  if (stage.source === 'reasoning' && stage.status === 'running' && !message.isStreaming) {
+    return 'completed'
+  }
+  return stage.status
 }
 
 const shouldShowTaskStageLine = (message: Message, segmentIndex: number): boolean => {
@@ -1671,8 +1771,12 @@ const shouldShowTaskStageLine = (message: Message, segmentIndex: number): boolea
   if (stage.stage === 'execute' && !hasBody && (nextSegment?.type === 'text' || nextSegment?.type === 'toolCall')) {
     return false
   }
-  if (!isTaskStageLast(message, segment.stageIndex)) return true
-  return stage.stage === 'execute' && segments.slice(segmentIndex + 1).some(item => item.type === 'text' || item.type === 'toolCall')
+  return segments.slice(segmentIndex + 1).some((item) => {
+    if (item.type === 'text') return Boolean(item.content)
+    if (item.type === 'toolCall') return Boolean(getMessageToolCall(message, item.toolCallId))
+    if (item.type === 'taskStage') return Boolean(getTaskStageByIndex(message, item.stageIndex))
+    return false
+  })
 }
 
 const isExecutionDetailSegment = (message: Message, segmentIndex: number): boolean => {
@@ -1711,6 +1815,7 @@ const handleSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
 
 const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequiredInfo) => {
   const assistant = ensureAssistantMessage()
+  completeRunningReasoningStages(assistant)
   assistant.semanticConfigSelectRequired = payload
   assistant.isStreaming = false
 }
@@ -1824,7 +1929,8 @@ const submitAnalysisQuery = async (
       },
       (payload) => handleSemanticConfigSelected(payload),
       (payload) => handleSemanticConfigSelectRequired(payload),
-      effectiveSemanticConfigSelection
+      effectiveSemanticConfigSelection,
+      enableDeepThinking.value
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
@@ -2038,6 +2144,19 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       </select>
                       <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
                     </div>
+                    <button
+                      type="button"
+                      :class="[
+                        'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                        enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
+                      ]"
+                      :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
+                      :aria-pressed="enableDeepThinking"
+                      @click="enableDeepThinking = !enableDeepThinking"
+                    >
+                      <i class="fa-solid fa-brain text-[10px]"></i>
+                      <span>深度思考</span>
+                    </button>
                   </div>
                   <button
                     type="submit"
@@ -2168,15 +2287,15 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         <div
                           :class="[
                             'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px]',
-                            getTaskStageByIndex(msg, segment.stageIndex)!.status === 'error'
+                            getTaskStageDisplayStatus(msg, segment.stageIndex) === 'error'
                               ? 'bg-red-50 text-red-500'
-                              : getTaskStageByIndex(msg, segment.stageIndex)!.status === 'running'
+                              : getTaskStageDisplayStatus(msg, segment.stageIndex) === 'running'
                                 ? 'bg-blue-50 text-blue-500'
                                 : 'bg-emerald-50 text-emerald-600'
                           ]"
                         >
-                          <i v-if="getTaskStageByIndex(msg, segment.stageIndex)!.status === 'running'" class="fa-solid fa-spinner fa-spin"></i>
-                          <i v-else-if="getTaskStageByIndex(msg, segment.stageIndex)!.status === 'error'" class="fa-solid fa-xmark"></i>
+                          <i v-if="getTaskStageDisplayStatus(msg, segment.stageIndex) === 'running'" class="fa-solid fa-spinner fa-spin"></i>
+                          <i v-else-if="getTaskStageDisplayStatus(msg, segment.stageIndex) === 'error'" class="fa-solid fa-xmark"></i>
                           <i v-else class="fa-solid fa-check"></i>
                         </div>
                         <div
@@ -2191,7 +2310,25 @@ const handleKeyDown = (event: KeyboardEvent) => {
                           (getTaskStageByIndex(msg, segment.stageIndex)!.content || getTaskStageByIndex(msg, segment.stageIndex)!.steps?.length) ? 'pb-4' : 'pb-1'
                         ]"
                       >
-                        <div class="flex items-center gap-2 text-sm font-medium text-slate-800">
+                        <button
+                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.source === 'reasoning'"
+                          type="button"
+                          class="flex w-full items-center gap-2 border-none bg-transparent p-0 text-left text-sm font-medium text-slate-800 cursor-pointer"
+                          @click="toggleReasoningStage(msg, segment.stageIndex)"
+                        >
+                          <i
+                            :class="[
+                              'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
+                              !isReasoningStageCollapsed(msg, segment.stageIndex) && 'rotate-90'
+                            ]"
+                          ></i>
+                          <i class="text-xs text-slate-500" :class="getTaskStageIcon(getTaskStageByIndex(msg, segment.stageIndex)!.stage)"></i>
+                          <span>{{ getTaskStageByIndex(msg, segment.stageIndex)!.title || getTaskStageLabel(getTaskStageByIndex(msg, segment.stageIndex)!.stage) }}</span>
+                          <span class="ml-auto text-[11px] font-normal text-slate-400">
+                            {{ isReasoningStageCollapsed(msg, segment.stageIndex) ? '展开' : '收起' }}
+                          </span>
+                        </button>
+                        <div v-else class="flex items-center gap-2 text-sm font-medium text-slate-800">
                           <i class="text-xs text-slate-500" :class="getTaskStageIcon(getTaskStageByIndex(msg, segment.stageIndex)!.stage)"></i>
                           <span>{{ getTaskStageByIndex(msg, segment.stageIndex)!.title || getTaskStageLabel(getTaskStageByIndex(msg, segment.stageIndex)!.stage) }}</span>
                           <span
@@ -2201,10 +2338,16 @@ const handleKeyDown = (event: KeyboardEvent) => {
                             失败
                           </span>
                         </div>
-                        <div v-if="getTaskStageByIndex(msg, segment.stageIndex)!.content" class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-500">
+                        <div
+                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.content && !isReasoningStageCollapsed(msg, segment.stageIndex)"
+                          class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-500"
+                        >
                           {{ getTaskStageByIndex(msg, segment.stageIndex)!.content }}
                         </div>
-                        <ol v-if="getTaskStageByIndex(msg, segment.stageIndex)!.steps?.length" class="mt-1.5 list-decimal space-y-0.5 pl-4 text-sm leading-relaxed text-slate-500">
+                        <ol
+                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.steps?.length && !isReasoningStageCollapsed(msg, segment.stageIndex)"
+                          class="mt-1.5 list-decimal space-y-0.5 pl-4 text-sm leading-relaxed text-slate-500"
+                        >
                           <li v-for="step in getTaskStageByIndex(msg, segment.stageIndex)!.steps" :key="step">{{ step }}</li>
                         </ol>
                       </div>
@@ -2378,6 +2521,19 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     </select>
                     <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
                   </div>
+                  <button
+                    type="button"
+                    :class="[
+                      'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                      enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
+                    ]"
+                    :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
+                    :aria-pressed="enableDeepThinking"
+                    @click="enableDeepThinking = !enableDeepThinking"
+                  >
+                    <i class="fa-solid fa-brain text-[10px]"></i>
+                    <span>深度思考</span>
+                  </button>
                   <div v-if="tokenUsageDisplay" class="relative">
                     <button
                       type="button"

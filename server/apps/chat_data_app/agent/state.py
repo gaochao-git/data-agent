@@ -68,6 +68,11 @@ def merge_query_results(existing: list[dict] | None, new: list[dict] | None) -> 
     return merged[-10:]
 
 
+def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
+    """追加模型原生思考分段，供历史会话恢复。"""
+    return list(existing or []) + list(new or [])
+
+
 class QueryResultIndex(TypedDict):
     """查询结果索引，用于 LLM 选择"""
     id: str           # 结果文件 ID
@@ -104,3 +109,5 @@ class SqlGeneratorState(TypedDict):
     execution_target_info: str
     # 当前轮模型上下文 token 占用估算
     token_usage: NotRequired[dict[str, Any] | None]
+    # 模型原生思考分段
+    reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]

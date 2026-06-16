@@ -4,7 +4,7 @@
  * 展示思考过程和工具调用链路
  */
 import { computed, ref, watch, nextTick } from 'vue'
-import type { SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ToolCallInfo } from '../types'
+import type { SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import StructuredMessage from './StructuredMessage.vue'
 import ToolCallList from './ToolCallList.vue'
 
@@ -12,6 +12,7 @@ import ToolCallList from './ToolCallList.vue'
 export interface AnalysisData {
   roundId: string              // 轮次唯一标识
   thinkingContent: string      // 思考内容
+  thinkingSegments?: ThinkingSegment[] // 按时序分段的思考内容
   toolCalls: ToolCallInfo[]    // 工具调用列表
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   semanticConfigSelectRequired?: SemanticConfigSelectRequiredInfo | null
@@ -48,8 +49,26 @@ const hasToolCalls = computed(() => visibleToolCalls.value.length > 0)
 // 是否有需要用户处理的指标集选择过程；自动选择结果在工具调用结果中展示。
 const hasSemanticConfigStep = computed(() => Boolean(props.data?.semanticConfigSelectRequired))
 
-const understandingContent = computed(() => props.data?.thinkingContent || '')
-const hasUnderstandingStep = computed(() => Boolean(understandingContent.value))
+const stripThinkingWrapper = (content: string): string => {
+  const match = content.match(/^<thinking>([\s\S]*?)<\/thinking>$/)
+  return match?.[1] ?? content
+}
+
+const thinkingSegments = computed<ThinkingSegment[]>(() => {
+  const maxToolCount = visibleToolCalls.value.length
+  const segments = props.data?.thinkingSegments
+    ?.filter(item => item.content)
+    .map(item => ({
+      ...item,
+      content: stripThinkingWrapper(item.content),
+      toolCallCount: Math.min(Math.max(0, item.toolCallCount), maxToolCount),
+    })) || []
+  if (segments.length) return segments
+  return props.data?.thinkingContent
+    ? [{ id: 'thinking-legacy', content: stripThinkingWrapper(props.data.thinkingContent), toolCallCount: 0 }]
+    : []
+})
+const hasUnderstandingStep = computed(() => thinkingSegments.value.length > 0)
 const isEnabledFlag = (value: unknown) => value === true || value === 'true' || value === 1 || value === '1'
 const semanticConfigBeforeUnderstanding = computed(() => Boolean(
   isEnabledFlag(props.data?.semanticConfigSelection?.user_selected)
@@ -57,21 +76,42 @@ const semanticConfigBeforeUnderstanding = computed(() => Boolean(
 ))
 const understandingStepOrder = computed(() => semanticConfigBeforeUnderstanding.value ? 2 : 1)
 const semanticConfigStepOrder = computed(() => semanticConfigBeforeUnderstanding.value ? 1 : 2)
-const understandingHasNext = computed(() => Boolean(
-  semanticConfigBeforeUnderstanding.value
-    ? (hasToolCalls.value || props.isStreaming)
-    : (hasSemanticConfigStep.value || hasToolCalls.value || props.isStreaming)
-))
 const semanticConfigHasNext = computed(() => Boolean(
   semanticConfigBeforeUnderstanding.value
     ? (hasUnderstandingStep.value || hasToolCalls.value || props.isStreaming)
     : (hasToolCalls.value || props.isStreaming)
 ))
-const understandingInProgress = computed(() => Boolean(
-  props.isStreaming
-  && !hasToolCalls.value
-  && (!hasSemanticConfigStep.value || semanticConfigBeforeUnderstanding.value)
-))
+
+type TimelineEntry =
+  | { type: 'thinking'; key: string; segment: ThinkingSegment }
+  | { type: 'tool'; key: string; tool: ToolCallInfo }
+
+const timelineEntries = computed<TimelineEntry[]>(() => {
+  const entries: TimelineEntry[] = []
+  const maxToolCount = visibleToolCalls.value.length
+  for (let toolCount = 0; toolCount <= maxToolCount; toolCount += 1) {
+    thinkingSegments.value
+      .filter(segment => segment.toolCallCount === toolCount)
+      .forEach(segment => {
+        entries.push({ type: 'thinking', key: `thinking-${toolCount}-${entries.length}-${segment.id}`, segment })
+      })
+    const tool = visibleToolCalls.value[toolCount]
+    if (tool) {
+      entries.push({ type: 'tool', key: tool.tool_call_id, tool })
+    }
+  }
+  return entries
+})
+
+const hasTimeline = computed(() => timelineEntries.value.length > 0)
+const hasCompletionStep = computed(() => !props.isStreaming && (hasTimeline.value || hasSemanticConfigStep.value))
+
+const isTimelineEntryInProgress = (entry: TimelineEntry, index: number): boolean => {
+  if (!props.isStreaming) return false
+  if (index !== timelineEntries.value.length - 1) return false
+  if (entry.type === 'tool') return entry.tool.status === 'generating' || entry.tool.status === 'running'
+  return true
+}
 
 // 自动滚动
 const contentRef = ref<HTMLDivElement | null>(null)
@@ -85,7 +125,7 @@ const handleContentScroll = () => {
 }
 
 watch(
-  () => [props.data?.thinkingContent, props.data?.toolCalls, props.data?.semanticConfigSelection, props.data?.semanticConfigSelectRequired],
+  () => [props.data?.thinkingContent, props.data?.thinkingSegments, props.data?.toolCalls, props.data?.semanticConfigSelection, props.data?.semanticConfigSelectRequired],
   () => {
     if (props.isStreaming && contentRef.value && isNearBottom.value) {
       nextTick(() => {
@@ -130,44 +170,14 @@ watch(
     </div>
 
     <!-- 面板内容 - 链路布局 -->
-    <div ref="contentRef" class="flex flex-1 flex-col overflow-y-auto p-4" @scroll="handleContentScroll">
+    <div ref="contentRef" class="flex flex-1 flex-col overflow-y-auto px-4 pt-4 pb-10" @scroll="handleContentScroll">
       <!-- 等待第一个数据时的占位（面板已打开但还没有内容） -->
-      <div v-if="!hasUnderstandingStep && !hasSemanticConfigStep && !hasToolCalls" class="flex items-center gap-2 text-gray-500 text-sm py-2">
+      <div v-if="!hasTimeline && !hasSemanticConfigStep" class="flex items-center gap-2 text-gray-500 text-sm py-2">
         <i class="fa-solid fa-spinner fa-spin text-blue-500"></i>
         <span>正在思考...</span>
       </div>
 
-      <!-- 步骤 1：理解需求 -->
-      <div v-if="hasUnderstandingStep" class="flex relative" :style="{ order: understandingStepOrder }">
-        <div class="flex flex-col items-center mr-4">
-          <div :class="[
-            'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
-            understandingInProgress
-              ? 'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
-              : 'bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 text-emerald-500'
-          ]">
-            <i v-if="understandingInProgress" class="fa-solid fa-spinner fa-spin"></i>
-            <i v-else class="fa-solid fa-check"></i>
-          </div>
-          <div
-            v-if="understandingHasNext"
-            class="w-px flex-1 min-h-5 mt-2"
-            style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
-          ></div>
-        </div>
-        <div class="flex-1 pb-6">
-          <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">理解需求</h4>
-          <div class="text-sm text-gray-600">
-            <StructuredMessage
-              :content="understandingContent"
-              :is-streaming="isStreaming && !hasToolCalls"
-              @copy-sql="emit('copySql', $event)"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- 步骤 2：选择指标集（仅保留需要用户选择的阻塞场景） -->
+      <!-- 需要用户选择指标集的阻塞场景 -->
       <div v-if="hasSemanticConfigStep" class="flex relative" :style="{ order: semanticConfigStepOrder }">
         <div class="flex flex-col items-center mr-4">
           <div :class="[
@@ -203,44 +213,59 @@ watch(
         </div>
       </div>
 
-      <!-- 步骤 3：执行任务 -->
-      <div v-if="hasToolCalls" class="flex relative" :style="{ order: 3 }">
+      <!-- 按时序展示思考与工具调用 -->
+      <div
+        v-for="(entry, index) in timelineEntries"
+        :key="entry.key"
+        class="flex relative"
+        :style="{ order: understandingStepOrder }"
+      >
         <div class="flex flex-col items-center mr-4">
           <div :class="[
             'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
-            isStreaming
+            isTimelineEntryInProgress(entry, index)
               ? 'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
               : 'bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 text-emerald-500'
           ]">
-            <i v-if="isStreaming" class="fa-solid fa-spinner fa-spin"></i>
+            <i v-if="isTimelineEntryInProgress(entry, index)" class="fa-solid fa-spinner fa-spin"></i>
             <i v-else class="fa-solid fa-check"></i>
           </div>
           <div
-            v-if="!isStreaming"
+            v-if="index < timelineEntries.length - 1 || props.isStreaming || hasCompletionStep"
             class="w-px flex-1 min-h-5 mt-2"
             style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
           ></div>
         </div>
         <div class="flex-1 pb-6">
-          <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">执行任务</h4>
-          <div class="text-sm text-gray-600">
+          <template v-if="entry.type === 'thinking'">
+            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">思考</h4>
+            <div class="text-sm text-gray-600">
+              <StructuredMessage
+                :content="`<thinking>${entry.segment.content}</thinking>`"
+                :is-streaming="isTimelineEntryInProgress(entry, index)"
+                @copy-sql="emit('copySql', $event)"
+              />
+            </div>
+          </template>
+          <template v-else>
+            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">执行任务</h4>
             <ToolCallList
-              :tool-calls="visibleToolCalls"
+              :tool-calls="[entry.tool]"
               :datasource-id="datasourceId"
               :default-expanded="true"
             />
-          </div>
+          </template>
         </div>
       </div>
 
       <!-- 步骤 4：任务完成（流式结束且有实际内容后才显示） -->
-      <div v-if="!isStreaming && (hasUnderstandingStep || hasSemanticConfigStep || hasToolCalls)" class="flex relative" :style="{ order: 4 }">
+      <div v-if="hasCompletionStep" class="flex relative" :style="{ order: 4 }">
         <div class="flex flex-col items-center mr-4">
           <div class="w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px] bg-gradient-to-br from-emerald-500 to-emerald-600 text-white">
             <i class="fa-solid fa-check"></i>
           </div>
         </div>
-        <div class="flex-1 flex items-center pb-0">
+        <div class="flex-1 flex min-h-8 items-center pb-4">
           <span class="text-sm font-medium text-emerald-500">任务完成</span>
         </div>
       </div>

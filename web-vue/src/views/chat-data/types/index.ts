@@ -144,6 +144,7 @@ export interface NL2SQLRequest {
   return_metadata: boolean
   datasource_id?: string | null
   conversation_id?: string | null
+  enable_thinking?: boolean
 }
 
 // API 响应
@@ -212,6 +213,8 @@ export interface LangGraphMessage {
   id?: string
   type: string
   content?: string
+  additional_kwargs?: Record<string, unknown>
+  response_metadata?: Record<string, unknown>
   status?: ToolCallInfo['status']
   tool_calls?: Array<{
     id: string
@@ -231,6 +234,13 @@ export interface TaskStageInfo {
   title?: string
   content?: string
   steps?: string[]
+  source?: 'reasoning' | 'task_stage'
+}
+
+export interface ThinkingSegment {
+  id: string
+  content: string
+  toolCallCount: number
 }
 
 export interface SemanticConfigSelectionInfo {
@@ -276,6 +286,7 @@ export interface Message {
   timestamp: Date
   result?: unknown
   toolCalls?: ToolCallInfo[]
+  thinkingSegments?: ThinkingSegment[]
   segments?: MessageSegment[]
   error?: string
   isStreaming?: boolean
@@ -464,7 +475,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta' | 'semantic_config_selected' | 'semantic_config_select_required'
+export type SSEEventType = 'message' | 'message_end' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta' | 'semantic_config_selected' | 'semantic_config_select_required'
 
 // 工具状态
 export type ToolStatus = 'pending' | 'running' | 'completed'

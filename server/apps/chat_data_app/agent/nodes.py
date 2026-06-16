@@ -59,7 +59,12 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
     return header + build_semantic_prompt(semantic_config, mode)
 
 
-def create_agent_node(tools: list, semantic_config: dict | None = None, model_id: str | None = None) -> Callable:
+def create_agent_node(
+    tools: list,
+    semantic_config: dict | None = None,
+    model_id: str | None = None,
+    enable_thinking: bool | None = None,
+) -> Callable:
     """
     创建 agent 节点的工厂函数
 
@@ -114,7 +119,7 @@ def create_agent_node(tools: list, semantic_config: dict | None = None, model_id
         llm_messages = [SystemMessage(content=system_prompt)] + messages
 
         # 调用 LLM（指定模型失败时回退默认模型）
-        llm = get_chat_data_llm(model=model_id, streaming=True, temperature=0)
+        llm = get_chat_data_llm(model=model_id, streaming=True, temperature=0, enable_thinking=enable_thinking)
 
         # 统计上下文 tokens
         message_tokens = count_messages_tokens(llm_messages)
@@ -148,7 +153,7 @@ def create_agent_node(tools: list, semantic_config: dict | None = None, model_id
                 raise
             fallback_model = get_default_chat_data_model()
             logger.warning(f"[agent] 指定模型调用失败，回退默认模型: model_id={model_id}, fallback={fallback_model}, err={err}")
-            llm = get_chat_data_llm(model=fallback_model, streaming=True, temperature=0)
+            llm = get_chat_data_llm(model=fallback_model, streaming=True, temperature=0, enable_thinking=enable_thinking)
             if active_tools:
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)
             else:

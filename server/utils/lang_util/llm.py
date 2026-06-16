@@ -3,9 +3,49 @@ LLM 公共工具函数
 """
 
 import os
+from typing import Any, Mapping
+
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, AIMessageChunk
+
+
+_THIRD_PARTY_REASONING_KEYS = ("reasoning_content", "reasoning", "reasoning_text")
+_REASONING_PATCHED = False
+
+
+def _patch_langchain_openai_reasoning_fields() -> None:
+    """Preserve third-party OpenAI-compatible reasoning fields in streamed chunks."""
+    global _REASONING_PATCHED
+    if _REASONING_PATCHED:
+        return
+    try:
+        import langchain_openai.chat_models.base as openai_chat_base
+    except Exception:
+        _REASONING_PATCHED = True
+        return
+
+    original = openai_chat_base._convert_delta_to_message_chunk
+
+    def patched_convert_delta_to_message_chunk(
+        delta: Mapping[str, Any],
+        default_class: type,
+    ):
+        chunk = original(delta, default_class)
+        reasoning_payload = {
+            key: delta.get(key)
+            for key in _THIRD_PARTY_REASONING_KEYS
+            if isinstance(delta.get(key), str) and delta.get(key)
+        }
+        if reasoning_payload and isinstance(chunk, AIMessageChunk):
+            chunk.additional_kwargs = {
+                **(chunk.additional_kwargs or {}),
+                **reasoning_payload,
+            }
+        return chunk
+
+    openai_chat_base._convert_delta_to_message_chunk = patched_convert_delta_to_message_chunk
+    _REASONING_PATCHED = True
 
 
 def count_tokens(llm: BaseChatModel, messages: list[BaseMessage], tools: list | None = None) -> int:
@@ -57,6 +97,8 @@ def get_llm(
     Returns:
         LLM 实例
     """
+    _patch_langchain_openai_reasoning_fields()
+
     kwargs = {
         "model": model or os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-4o-mini"),
         "model_provider": os.getenv("LLM_PROVIDER", "openai"),

@@ -4162,8 +4162,8 @@ const saveOntologyRules = () => {
                 <button
                   v-else
                   class="px-3 py-1.5 rounded-md border-none bg-[#1677FF] text-xs text-white disabled:opacity-60"
-                  :disabled="!canRunEvaluation || evaluationSelectedCount === 0"
-                  :title="hasUnsavedSemanticConfig ? '请先保存当前指标集配置' : !canRunEvaluation ? '请先在测试集页生成草稿并保存' : '请勾选要运行的用例'"
+                  :disabled="evaluationSelectedCount === 0"
+                  :title="evaluationSelectedCount === 0 ? '请勾选要运行的用例' : '运行选中的评测用例'"
                   @click="runActiveEvaluation"
                 >
                   <i class="fa-solid fa-play mr-1"></i>运行选中 ({{ evaluationSelectedCount }})

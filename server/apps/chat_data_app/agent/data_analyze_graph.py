@@ -86,10 +86,16 @@ def merge_task_stages(existing: list[dict[str, Any]] | None, new: list[dict[str,
     return stages
 
 
+def merge_reasoning_segments(existing: list[dict[str, Any]] | None, new: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """追加模型原生思考分段，供历史会话恢复。"""
+    return list(existing or []) + list(new or [])
+
+
 class DataAnalyzeFlowState(TypedDict):
     """DataAnalyze 外层任务流状态。"""
     messages: Annotated[list[BaseMessage], add_messages]
     task_stages: Annotated[list[dict[str, Any]], merge_task_stages]
+    reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     task_run_id: str
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]
@@ -293,14 +299,27 @@ def create_data_analyze_agent(
     user_id: str = "system",
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
+    enable_thinking: bool | None = None,
 ):
     """创建 LangChain 通用分析 agent。"""
-    llm: BaseChatModel = get_chat_data_llm(model=model_id, streaming=True, stream_usage=True, temperature=0.2)
+    llm: BaseChatModel = get_chat_data_llm(
+        model=model_id,
+        streaming=True,
+        stream_usage=True,
+        temperature=0.2,
+        enable_thinking=enable_thinking,
+    )
     token_usage_middleware = create_request_token_usage_middleware(model_id)
     middleware = [token_usage_middleware]
     fallback_model = get_default_chat_data_model()
     if model_id and fallback_model and fallback_model != model_id:
-        fallback_llm = get_chat_data_llm(model=fallback_model, streaming=True, stream_usage=True, temperature=0.2)
+        fallback_llm = get_chat_data_llm(
+            model=fallback_model,
+            streaming=True,
+            stream_usage=True,
+            temperature=0.2,
+            enable_thinking=enable_thinking,
+        )
         middleware.append(ModelFallbackMiddleware(fallback_llm))
     agent = create_agent(
         model=llm,
@@ -356,9 +375,16 @@ def create_data_analyze_flow_graph(
     member_datasource_ids: list[str] | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
+    enable_thinking: bool | None = None,
 ):
     """创建 thinking -> plan -> execute -> done 的 DataAnalyze 外层 LangGraph。"""
-    flow_llm: BaseChatModel = get_chat_data_llm(model=model_id, streaming=True, stream_usage=True, temperature=0.1)
+    flow_llm: BaseChatModel = get_chat_data_llm(
+        model=model_id,
+        streaming=True,
+        stream_usage=True,
+        temperature=0.1,
+        enable_thinking=enable_thinking,
+    )
     execution_session_ref = SandboxExecutionSessionRef()
     execute_agent = create_data_analyze_agent(
         workspace_root=workspace_root,
@@ -372,6 +398,7 @@ def create_data_analyze_flow_graph(
         user_id=user_id,
         operator_name=operator_name,
         execution_session_ref=execution_session_ref,
+        enable_thinking=enable_thinking,
     )
 
     async def thinking_node(state: DataAnalyzeFlowState) -> dict[str, Any]:

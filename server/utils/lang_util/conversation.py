@@ -102,6 +102,21 @@ def _extract_timestamp(msg) -> str:
     return ""
 
 
+def _extract_reasoning_content(msg) -> str:
+    """从消息元数据中提取模型原生思考内容。"""
+    candidates = []
+    for attr in ("additional_kwargs", "response_metadata"):
+        value = getattr(msg, attr, None)
+        if isinstance(value, dict):
+            candidates.append(value)
+    for candidate in candidates:
+        for key in ("reasoning_content", "reasoning", "reasoning_text"):
+            value = candidate.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
 def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     """
     序列化LangChain消息为前端格式
@@ -164,6 +179,9 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                         "args": tc_args
                     })
                 ai_msg["tool_calls"] = tool_calls_list
+            reasoning_content = _extract_reasoning_content(msg)
+            if reasoning_content:
+                ai_msg["reasoning_content"] = reasoning_content
             serialized.append(ai_msg)
 
         elif msg.type == 'tool':
@@ -211,10 +229,37 @@ def _serialize_task_stages(task_stages: Any) -> List[Dict[str, Any]]:
             value = item.get(key)
             if isinstance(value, str):
                 stage_data[key] = value
+        source = item.get("source")
+        if source in {"reasoning", "task_stage"}:
+            stage_data["source"] = source
         steps = item.get("steps")
         if isinstance(steps, builtins.list):
             stage_data["steps"] = [str(step) for step in steps if str(step).strip()]
         serialized.append(stage_data)
+    return serialized
+
+
+def _serialize_reasoning_segments(reasoning_segments: Any) -> List[Dict[str, Any]]:
+    """序列化模型原生思考分段，供前端恢复展示。"""
+    if not isinstance(reasoning_segments, builtins.list):
+        return []
+    serialized = []
+    for index, item in enumerate(reasoning_segments):
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, str) or not content:
+            continue
+        tool_call_count = item.get("tool_call_count", item.get("toolCallCount", 0))
+        try:
+            normalized_tool_call_count = max(0, int(tool_call_count))
+        except (TypeError, ValueError):
+            normalized_tool_call_count = 0
+        serialized.append({
+            "id": str(item.get("id") or f"reasoning-history-{index}"),
+            "content": content,
+            "tool_call_count": normalized_tool_call_count,
+        })
     return serialized
 
 
@@ -528,6 +573,7 @@ async def get_detail(
     # 从 checkpoint 获取消息和中断状态
     messages = []
     task_stages = []
+    reasoning_segments = []
     pending_tool = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
@@ -541,6 +587,7 @@ async def get_detail(
                 raw_messages = state.values.get("messages", [])
                 messages = _serialize_messages(raw_messages)
                 task_stages = _serialize_task_stages(state.values.get("task_stages"))
+                reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
                 # 检查是否有待确认的工具
                 pending_tool = _get_interrupt_info(state)
 
@@ -549,6 +596,7 @@ async def get_detail(
         "title": title,
         "messages": messages,
         "task_stages": task_stages,
+        "reasoning_segments": reasoning_segments,
         "is_favorited": is_favorited,
         "pending_tool": pending_tool
     }

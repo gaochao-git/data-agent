@@ -126,6 +126,12 @@ def normalize_filters(value: Any) -> list[Any]:
     return sorted(normalized, key=lambda item: str(item))
 
 
+def normalize_int_value(value: Any) -> int | Any:
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return value
+
+
 def normalize_dsl(dsl: dict[str, Any] | None) -> dict[str, Any]:
     payload = dsl or {}
     normalized = {
@@ -134,8 +140,8 @@ def normalize_dsl(dsl: dict[str, Any] | None) -> dict[str, Any]:
         "filters": normalize_filters(payload.get("filters")),
         "having": normalize_list(payload.get("having")),
         "order_by": normalize_list(payload.get("order_by")),
-        "limit": payload.get("limit"),
-        "offset": payload.get("offset"),
+        "limit": normalize_int_value(payload.get("limit")),
+        "offset": normalize_int_value(payload.get("offset")),
     }
     return normalized
 

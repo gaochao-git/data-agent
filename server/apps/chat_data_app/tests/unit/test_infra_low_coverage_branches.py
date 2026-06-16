@@ -84,6 +84,20 @@ def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
     }
 
 
+def test_llm_patch_preserves_stream_reasoning_content():
+    import langchain_openai.chat_models.base as openai_chat_base
+
+    llm._REASONING_PATCHED = False
+    llm._patch_langchain_openai_reasoning_fields()
+
+    chunk = openai_chat_base._convert_delta_to_message_chunk(
+        {"role": "assistant", "content": "", "reasoning_content": "思考内容"},
+        openai_chat_base.AIMessageChunk,
+    )
+
+    assert chunk.additional_kwargs["reasoning_content"] == "思考内容"
+
+
 def test_checkpoint_config_branches(monkeypatch, tmp_path):
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "sqlite")
     monkeypatch.setattr(checkpoint, "DB_PATH", str(tmp_path / "checkpoints.db"))

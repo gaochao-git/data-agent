@@ -91,7 +91,8 @@ export function useSqlGenerator() {
     onMessageEnd?: (usage: ChatDataTokenUsage | null) => void,
     onSemanticConfigSelected?: (payload: SemanticConfigSelectionInfo) => void,
     onSemanticConfigSelectRequired?: (payload: SemanticConfigSelectRequiredInfo) => void,
-    semanticConfigSelection?: SemanticConfigSelectionInfo | null
+    semanticConfigSelection?: SemanticConfigSelectionInfo | null,
+    enableThinking?: boolean
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -108,6 +109,7 @@ export function useSqlGenerator() {
       const options: Record<string, unknown> = {
         datasource_id: datasourceId,
         mode,  // generate: 仅生成SQL, query: 生成并执行
+        enable_thinking: enableThinking === true,
       }
 
       // 模型选择
@@ -213,6 +215,24 @@ export function useSqlGenerator() {
             } catch (err) {
               console.error('解析 message_end 数据失败:', err, dataStr)
               onMessageEnd?.(null)
+            }
+            continue
+          }
+
+          if (event === 'thinking') {
+            try {
+              const data = JSON.parse(dataStr)
+              const content = typeof data?.content === 'string' ? data.content : ''
+              if (content) {
+                onMessage?.({
+                  type: 'thinking',
+                  content,
+                  timestamp: data?.timestamp,
+                  additional_kwargs: { reasoning_content: content },
+                } as LangGraphMessage)
+              }
+            } catch (err) {
+              console.error('解析 thinking 数据失败:', err, dataStr)
             }
             continue
           }
@@ -330,7 +350,8 @@ export function useSqlGenerator() {
     onPendingTool?: (pendingTool: PendingTool) => void,
     onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void,
     datasourceId?: string,
-    semanticConfigId?: string
+    semanticConfigId?: string,
+    enableThinking?: boolean
   ): Promise<void> => {
     loading.value = true
     error.value = null
@@ -341,6 +362,7 @@ export function useSqlGenerator() {
         modified_sql: action === 'edit' ? modifiedSql : undefined,
         datasource_id: datasourceId,
         semantic_config_id: semanticConfigId,
+        enable_thinking: enableThinking === true,
       })
 
       if (!response.ok) {
@@ -389,6 +411,24 @@ export function useSqlGenerator() {
               // 保留原始文本。
             }
             throw new Error(errorMsg)
+          }
+
+          if (event === 'thinking') {
+            try {
+              const data = JSON.parse(dataStr)
+              const content = typeof data?.content === 'string' ? data.content : ''
+              if (content) {
+                onMessage?.({
+                  type: 'thinking',
+                  content,
+                  timestamp: data?.timestamp,
+                  additional_kwargs: { reasoning_content: content },
+                } as LangGraphMessage)
+              }
+            } catch (err) {
+              console.error('解析 thinking 数据失败:', err, dataStr)
+            }
+            continue
           }
 
           // 处理 tool 事件

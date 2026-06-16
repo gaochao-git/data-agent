@@ -6,6 +6,7 @@ import pytest
 
 from runner import (
     ToolTrace,
+    build_dsl_from_tool_args,
     build_dsl2sql_payload,
     choose_final_dsl2sql_trace,
     consume_sse_line,
@@ -275,6 +276,17 @@ SELECT SUM(`quantity`) AS `销量` FROM order_items LIMIT 100
     assert payload["dsl"]["metrics"] == ["销量"]
     assert payload["dsl"]["limit"] == 100
     assert payload["sql"] == "SELECT SUM(`quantity`) AS `销量` FROM order_items LIMIT 100"
+
+
+def test_build_dsl_from_tool_args_normalizes_numeric_pagination_strings():
+    dsl = build_dsl_from_tool_args({
+        "metrics": ["订单数量"],
+        "limit": "4",
+        "offset": "4",
+    })
+
+    assert dsl["limit"] == 4
+    assert dsl["offset"] == 4
 
 
 def test_build_dsl2sql_payload_keeps_tool_error_when_no_sql():

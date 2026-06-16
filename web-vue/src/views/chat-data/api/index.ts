@@ -1270,11 +1270,20 @@ export function streamResume(conversationId: string, data: {
   modified_sql?: string
   datasource_id?: string
   semantic_config_id?: string
+  enable_thinking?: boolean
 }): Promise<Response> {
   return requestStream({
     url: `/agents/api/conversations/${conversationId}/resume`,
     method: 'POST',
-    data
+    data: {
+      action: data.action,
+      data: {
+        sql: data.action === 'edit' ? data.modified_sql : undefined,
+        datasource_id: data.datasource_id,
+        semantic_config_id: data.semantic_config_id,
+        enable_thinking: data.enable_thinking,
+      },
+    }
   })
 }
 

@@ -11,6 +11,7 @@ import { createDashboardFromSpec, getChatDataConfig } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
+import { useDeepThinking } from '../composables/useDeepThinking'
 import StructuredMessage from './StructuredMessage.vue'
 import ToolCallList from './ToolCallList.vue'
 import AsyncQueryResult from './AsyncQueryResult.vue'
@@ -250,6 +251,7 @@ const recommendationContentType = computed<'skills' | 'queries'>(() =>
 const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '智能问数')
 const modelOptions = ref<ChatDataModelOption[]>([])
 const selectedModel = ref('')
+const { enableDeepThinking } = useDeepThinking()
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelOpen = ref(false)
 const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
@@ -650,6 +652,42 @@ watch(input, () => {
 
 // 处理 LangGraph 消息
 const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
+  if (msg.type === 'thinking') {
+    const reasoningContent = typeof msg.content === 'string'
+      ? msg.content
+      : typeof msg.additional_kwargs?.reasoning_content === 'string'
+        ? msg.additional_kwargs.reasoning_content
+        : ''
+    if (reasoningContent) {
+      const msgIndex = messages.value.findIndex((m) => m.id === messageId)
+      if (msgIndex >= 0) {
+        const m = messages.value[msgIndex]
+        if (m) {
+          const visibleContent = stripThinkingContent(m.content)
+          const toolCallCount = getVisibleToolCalls(m.toolCalls).length
+          const thinkingSegments = [...(m.thinkingSegments || [])]
+          const lastSegment = thinkingSegments[thinkingSegments.length - 1]
+          if (lastSegment && lastSegment.toolCallCount === toolCallCount) {
+            lastSegment.content += reasoningContent
+          } else {
+            thinkingSegments.push({
+              id: `thinking-${Date.now()}-${thinkingSegments.length}`,
+              content: reasoningContent,
+              toolCallCount,
+            })
+          }
+          m.thinkingSegments = thinkingSegments
+          const nextThinking = thinkingSegments
+            .map(segment => `<thinking>${segment.content}</thinking>`)
+            .join('')
+          m.content = visibleContent ? `${nextThinking}${visibleContent}` : nextThinking
+          syncAnalysisPanelFromMessage(m, true)
+        }
+      }
+    }
+    return
+  }
+
   // 处理工具调用
   if (msg.tool_calls && msg.tool_calls.length > 0) {
     for (const tc of msg.tool_calls) {
@@ -1086,7 +1124,8 @@ const submitQuery = async (
       },
       (payload) => handleSemanticConfigSelected(payload, assistantMessageId),
       (payload) => handleSemanticConfigSelectRequired(payload, assistantMessageId),
-      effectiveSemanticConfigSelection
+      effectiveSemanticConfigSelection,
+      enableDeepThinking.value
     )
   } catch (err) {
     console.error('生成失败:', err)
@@ -1217,6 +1256,7 @@ const buildAnalysisDataFromMessage = (msg: Message): AnalysisData => {
   return {
     roundId: msg.id,
     thinkingContent: extractThinkingContent(msg.content),
+    thinkingSegments: msg.thinkingSegments || extractThinkingSegments(msg.content),
     toolCalls: getVisibleToolCalls(msg.toolCalls),
     semanticConfigSelection: msg.semanticConfigSelection || null,
     semanticConfigSelectRequired: msg.semanticConfigSelectRequired || null,
@@ -1237,7 +1277,7 @@ const syncAnalysisPanelFromMessage = (msg: Message, autoOpen: boolean) => {
   }
 }
 
-// 提取 thinking 内容（支持流式中未闭合的 thinking 标签）
+// 提取第一个 thinking 内容（兼容历史数据）
 const extractThinkingContent = (content: string): string => {
   // 优先匹配完整闭合的 thinking 块
   const completeMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/)
@@ -1246,6 +1286,29 @@ const extractThinkingContent = (content: string): string => {
   const incompleteMatch = content.match(/<thinking>([\s\S]*)$/)
   if (incompleteMatch) return `<thinking>${incompleteMatch[1]}</thinking>`
   return ''
+}
+
+const extractThinkingSegments = (content: string) => {
+  const segments: Array<{ id: string; content: string; toolCallCount: number }> = []
+  const completeRegex = /<thinking>([\s\S]*?)<\/thinking>/g
+  let match: RegExpExecArray | null
+  while ((match = completeRegex.exec(content)) !== null) {
+    segments.push({
+      id: `thinking-history-${segments.length}`,
+      content: match[1] || '',
+      toolCallCount: segments.length,
+    })
+  }
+  if (segments.length) return segments
+  const incompleteMatch = content.match(/<thinking>([\s\S]*)$/)
+  if (incompleteMatch) {
+    return [{
+      id: 'thinking-history-0',
+      content: incompleteMatch[1] || '',
+      toolCallCount: 0,
+    }]
+  }
+  return []
 }
 
 // 去除 thinking 内容（主对话区不显示思考过程）
@@ -1522,6 +1585,19 @@ const handleViewAnalysis = (msg: Message) => {
                     </select>
                     <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
                   </div>
+                  <button
+                    type="button"
+                    :class="[
+                      'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                      enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
+                    ]"
+                    :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
+                    :aria-pressed="enableDeepThinking"
+                    @click="enableDeepThinking = !enableDeepThinking"
+                  >
+                    <i class="fa-solid fa-brain text-[10px]"></i>
+                    <span>深度思考</span>
+                  </button>
                   <ExecutionTargetPicker
                     v-if="!hideExecutionTargetSelector && executionTargets.length > 0"
                     v-model="selectedMemberDatasourceIds"
@@ -1817,6 +1893,19 @@ const handleViewAnalysis = (msg: Message) => {
                   </select>
                   <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
                 </div>
+                <button
+                  type="button"
+                  :class="[
+                    'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                    enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
+                  ]"
+                  :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
+                  :aria-pressed="enableDeepThinking"
+                  @click="enableDeepThinking = !enableDeepThinking"
+                >
+                  <i class="fa-solid fa-brain text-[10px]"></i>
+                  <span>深度思考</span>
+                </button>
                 <ExecutionTargetPicker
                   v-if="!hideExecutionTargetSelector && executionTargets.length > 0"
                   v-model="selectedMemberDatasourceIds"

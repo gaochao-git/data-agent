@@ -29,7 +29,13 @@ def _format_tool_error(exc: Exception) -> str:
     return error_text
 
 
-def get_chat_data_graph(checkpointer=None, semantic_config: dict | None = None, model_id: str | None = None, mode: str | None = None):
+def get_chat_data_graph(
+    checkpointer=None,
+    semantic_config: dict | None = None,
+    model_id: str | None = None,
+    mode: str | None = None,
+    enable_thinking: bool | None = None,
+):
     """
     编译图（带持久化）
 
@@ -49,7 +55,7 @@ def get_chat_data_graph(checkpointer=None, semantic_config: dict | None = None, 
         semantic_config = None
 
     # 创建 agent 节点，传入 semantic_config（而不是 semantic_prompt）
-    agent_node = create_agent_node(tools, semantic_config, model_id=model_id)
+    agent_node = create_agent_node(tools, semantic_config, model_id=model_id, enable_thinking=enable_thinking)
 
     # 构建图
     builder = StateGraph(SqlGeneratorState)

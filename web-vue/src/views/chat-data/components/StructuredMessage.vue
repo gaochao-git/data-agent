@@ -116,8 +116,8 @@ const renderMarkdown = (content: string) => {
         </button>
         <div
           :class="[
-            'overflow-hidden transition-all duration-200',
-            isThinkingExpanded(index, segment.inProgress) ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0'
+            'transition-all duration-200',
+            isThinkingExpanded(index, segment.inProgress) ? 'max-h-none opacity-100' : 'max-h-0 overflow-hidden opacity-0'
           ]"
         >
           <div

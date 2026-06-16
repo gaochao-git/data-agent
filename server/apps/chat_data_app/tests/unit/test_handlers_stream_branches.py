@@ -22,6 +22,8 @@ class FakeChunk:
         tool_call_chunks=None,
         tool_call_id="",
         name="",
+        additional_kwargs=None,
+        response_metadata=None,
     ):
         self.content = content
         self.type = msg_type
@@ -29,6 +31,8 @@ class FakeChunk:
         self.tool_call_chunks = tool_call_chunks or []
         self.tool_call_id = tool_call_id
         self.name = name
+        self.additional_kwargs = additional_kwargs or {}
+        self.response_metadata = response_metadata or {}
 
     def model_dump(self):
         data = {
@@ -39,6 +43,10 @@ class FakeChunk:
             data["tool_call_id"] = self.tool_call_id
         if self.name:
             data["name"] = self.name
+        if self.additional_kwargs:
+            data["additional_kwargs"] = self.additional_kwargs
+        if self.response_metadata:
+            data["response_metadata"] = self.response_metadata
         return data
 
 
@@ -70,6 +78,49 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert handlers._is_tool_result_error('[dashboard_write] {"success": false}') is True
     assert handlers._is_tool_result_error("error: bad") is True
     assert handlers._is_tool_result_error("执行失败") is True
+
+    assert handlers._visible_tool_count({}) == 0
+    assert handlers._visible_tool_count({
+        "hidden": "load_skill_tool",
+        "sql": "execute_sql_tool",
+        "dsl": "dsl2sql_tool",
+    }) == 2
+
+    reasoning_segments = []
+    handlers._append_reasoning_segment(reasoning_segments, "工具前", 0)
+    handlers._append_reasoning_segment(reasoning_segments, "继续", 0)
+    handlers._append_reasoning_segment(reasoning_segments, "工具后", 2)
+    assert reasoning_segments == [
+        {"id": "reasoning-0", "content": "工具前继续", "tool_call_count": 0},
+        {"id": "reasoning-1", "content": "工具后", "tool_call_count": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persist_reasoning_segments_only_writes_delta():
+    class Graph:
+        def __init__(self):
+            self.updates = []
+
+        async def aupdate_state(self, config, values, as_node=None):
+            self.updates.append((config, values, as_node))
+
+    graph = Graph()
+    segments = [
+        {"id": "reasoning-0", "content": "工具前", "tool_call_count": 0},
+        {"id": "reasoning-1", "content": "工具后", "tool_call_count": 1},
+    ]
+
+    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent")
+    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent", persisted_count)
+    segments.append({"id": "reasoning-2", "content": "继续", "tool_call_count": 1})
+    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent", persisted_count)
+
+    assert persisted_count == 3
+    assert [update[1]["reasoning_segments"] for update in graph.updates] == [
+        segments[:2],
+        [segments[2]],
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,6 +184,41 @@ async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeyp
     assert "status" in text and "pending" in text
     assert "message_end" in text
     assert text.rstrip().endswith("data: [DONE]")
+
+
+@pytest.mark.asyncio
+async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
+    class Graph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+        async def astream(self, *_args, **_kwargs):
+            yield FakeChunk(
+                msg_type="ai",
+                additional_kwargs={"reasoning_content": "正在判断问题类型"},
+            ), {"langgraph_node": "agent"}
+            yield FakeChunk(content="你好", msg_type="ai"), {"langgraph_node": "agent"}
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
+
+    async def empty_execution_target_info(*_args, **_kwargs):
+        return ""
+
+    monkeypatch.setattr(handlers, "_build_execution_target_info_async", empty_execution_target_info)
+
+    chunks = await collect_stream(handlers._stream_sql_generation(
+        thread_id="conv",
+        user_query="你好",
+        datasource_id="ds",
+        user_id="u1",
+        mode="query",
+    ))
+
+    text = "".join(chunks)
+    assert "event: thinking" in text
+    assert "正在判断问题类型" in text
+    assert "event: message" in text
 
 
 @pytest.mark.asyncio

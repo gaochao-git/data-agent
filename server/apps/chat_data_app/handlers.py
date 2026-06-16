@@ -79,6 +79,90 @@ def _format_sse(event: str, data: dict | str) -> str:
     return f"event: {event}\ndata: {data_str}\n\n"
 
 
+def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str:
+    """从 OpenAI compatible 流式 chunk 中提取思考内容。"""
+    candidates: list[Any] = []
+    for attr in ("additional_kwargs", "response_metadata"):
+        value = getattr(message_chunk, attr, None)
+        if isinstance(value, dict):
+            candidates.append(value)
+    if isinstance(msg_data, dict):
+        for key in ("additional_kwargs", "response_metadata"):
+            value = msg_data.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+        candidates.append(msg_data)
+
+    for candidate in candidates:
+        for key in ("reasoning_content", "reasoning", "reasoning_text"):
+            value = candidate.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str | None:
+    reasoning_content = _extract_reasoning_content(message_chunk, msg_data)
+    if not reasoning_content:
+        return None
+    return _format_sse("thinking", {
+        "content": reasoning_content,
+        "timestamp": _get_timestamp(),
+    })
+
+
+def _append_reasoning_segment(segments: list[dict[str, Any]], content: str, tool_call_count: int) -> None:
+    if not content:
+        return
+    if segments and segments[-1].get("tool_call_count") == tool_call_count:
+        segments[-1]["content"] = f"{segments[-1].get('content') or ''}{content}"
+        return
+    segments.append({
+        "id": f"reasoning-{len(segments)}",
+        "content": content,
+        "tool_call_count": tool_call_count,
+    })
+
+
+def _visible_tool_count(tool_names: dict[str, str]) -> int:
+    """计算已出现且前端可见的工具数量，用于恢复思考与工具的时序。"""
+    return sum(1 for name in tool_names.values() if name != "load_skill_tool")
+
+
+def _normalize_enable_thinking(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
+
+async def _persist_reasoning_segments(
+    graph: Any,
+    config: dict[str, Any],
+    segments: list[dict[str, Any]],
+    as_node: str,
+    persisted_count: int = 0,
+) -> int:
+    pending_segments = segments[persisted_count:]
+    if not pending_segments or not hasattr(graph, "aupdate_state"):
+        return persisted_count
+    try:
+        await graph.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
+        return len(segments)
+    except Exception as exc:
+        logger.warning("保存模型思考分段失败: %s", exc)
+        return persisted_count
+
+
 def _format_tool_event(
     tool_name: str,
     tool_call_id: str | None,
@@ -429,7 +513,8 @@ async def _stream_sql_generation(
     temp_semantic_config: dict | None = None,
     request: Request | None = None,
     model_id: str | None = None,
-    semantic_config_selection: dict | None = None
+    semantic_config_selection: dict | None = None,
+    enable_thinking: bool | None = None,
 ):
     """流式执行 SQL 生成"""
     datasource_id = str(datasource_id or "").strip() or None
@@ -472,7 +557,13 @@ async def _stream_sql_generation(
         async with get_checkpointer() as checkpointer:
             # 构建 graph，传入语义配置（如果有）
             # 语义模式时，graph 会添加 semantic_to_sql_tool 工具
-            graph = get_chat_data_graph(checkpointer=checkpointer, semantic_config=semantic_config, model_id=model_id, mode=mode)
+            graph = get_chat_data_graph(
+                checkpointer=checkpointer,
+                semantic_config=semantic_config,
+                model_id=model_id,
+                mode=mode,
+                enable_thinking=enable_thinking,
+            )
 
             # 语义模式不需要表结构，semantic_to_sql_tool 内部已封装
             # NL2SQL 模式需要加载表结构给 LLM
@@ -536,6 +627,8 @@ async def _stream_sql_generation(
             tool_call_args_buffer: dict[str, str] = {}
             # 用于存储工具名称
             tool_call_names: dict[str, str] = {}
+            reasoning_segments: list[dict[str, Any]] = []
+            persisted_reasoning_count = 0
 
             # 流式执行
             # 使用 stream_mode="messages" 捕获 LLM 输出
@@ -548,6 +641,13 @@ async def _stream_sql_generation(
                 # 检测客户端断连，停止消费事件
                 if request and await request.is_disconnected():
                     logger.info(f"客户端已断开，停止流式输出: {thread_id}")
+                    persisted_reasoning_count = await _persist_reasoning_segments(
+                        graph,
+                        config,
+                        reasoning_segments,
+                        as_node="agent",
+                        persisted_count=persisted_reasoning_count,
+                    )
                     return
 
                 message_chunk, metadata = event
@@ -565,8 +665,18 @@ async def _stream_sql_generation(
                 has_content = hasattr(message_chunk, 'content') and message_chunk.content
                 has_tool_calls = hasattr(message_chunk, 'tool_calls') and message_chunk.tool_calls
                 has_tool_call_chunks = hasattr(message_chunk, 'tool_call_chunks') and message_chunk.tool_call_chunks
-                if not has_content and not has_tool_calls and not has_tool_call_chunks:
+                thinking_event = _format_thinking_event(message_chunk)
+                if not has_content and not has_tool_calls and not has_tool_call_chunks and not thinking_event:
                     continue
+                if thinking_event:
+                    _append_reasoning_segment(
+                        reasoning_segments,
+                        _extract_reasoning_content(message_chunk),
+                        _visible_tool_count(tool_call_names),
+                    )
+                    yield thinking_event
+                    if not has_content and not has_tool_calls and not has_tool_call_chunks:
+                        continue
 
                 # 调试：打印 AI 消息内容
                 if msg_type == 'ai' and has_content:
@@ -666,6 +776,13 @@ async def _stream_sql_generation(
                     yield _format_sse(event_name, msg_data)
 
             # 检查是否被 interrupt() 中断
+            persisted_reasoning_count = await _persist_reasoning_segments(
+                graph,
+                config,
+                reasoning_segments,
+                as_node="agent",
+                persisted_count=persisted_reasoning_count,
+            )
             state = await graph.aget_state(config)
             token_usage = state.values.get("token_usage") if state and state.values else None
             interrupt_info = _get_interrupt_info(state)
@@ -702,7 +819,8 @@ async def _continue_execution(
     action: str = "approve",
     semantic_config: dict | None = None,
     request: Request | None = None,
-    model_id: str | None = None
+    model_id: str | None = None,
+    enable_thinking: bool | None = None,
 ):
     """
     继续执行被 interrupt() 暂停的图
@@ -726,7 +844,12 @@ async def _continue_execution(
     try:
         async with get_checkpointer() as checkpointer:
             # 传入语义配置，保持工具列表与原始执行一致
-            graph = get_chat_data_graph(checkpointer=checkpointer, semantic_config=semantic_config, model_id=model_id)
+            graph = get_chat_data_graph(
+                checkpointer=checkpointer,
+                semantic_config=semantic_config,
+                model_id=model_id,
+                enable_thinking=enable_thinking,
+            )
 
             # 构建恢复数据
             resume_data = {"action": action}
@@ -740,6 +863,8 @@ async def _continue_execution(
             tool_call_args_buffer: dict[str, str] = {}
             # 用于存储工具名称
             tool_call_names: dict[str, str] = {}
+            reasoning_segments: list[dict[str, Any]] = []
+            persisted_reasoning_count = 0
 
             # 使用 Command(resume=...) 恢复执行
             # 通过 metadata["langgraph_node"] 过滤工具内部的 LLM 调用
@@ -751,6 +876,13 @@ async def _continue_execution(
                 # 检测客户端断连
                 if request and await request.is_disconnected():
                     logger.info(f"客户端已断开，停止流式输出: {thread_id}")
+                    persisted_reasoning_count = await _persist_reasoning_segments(
+                        graph,
+                        config,
+                        reasoning_segments,
+                        as_node="agent",
+                        persisted_count=persisted_reasoning_count,
+                    )
                     return
 
                 message_chunk, metadata = event
@@ -765,8 +897,18 @@ async def _continue_execution(
                 has_content = hasattr(message_chunk, 'content') and message_chunk.content
                 has_tool_calls = hasattr(message_chunk, 'tool_calls') and message_chunk.tool_calls
                 has_tool_call_chunks = hasattr(message_chunk, 'tool_call_chunks') and message_chunk.tool_call_chunks
-                if not has_content and not has_tool_calls and not has_tool_call_chunks:
+                thinking_event = _format_thinking_event(message_chunk)
+                if not has_content and not has_tool_calls and not has_tool_call_chunks and not thinking_event:
                     continue
+                if thinking_event:
+                    _append_reasoning_segment(
+                        reasoning_segments,
+                        _extract_reasoning_content(message_chunk),
+                        _visible_tool_count(tool_call_names),
+                    )
+                    yield thinking_event
+                    if not has_content and not has_tool_calls and not has_tool_call_chunks:
+                        continue
 
                 # 根据消息类型选择事件名
                 if msg_type == 'tool':
@@ -845,6 +987,13 @@ async def _continue_execution(
                     yield _format_sse(event_name, msg_data)
 
             # 检查是否又被中断（可能有多个工具需要确认）
+            persisted_reasoning_count = await _persist_reasoning_segments(
+                graph,
+                config,
+                reasoning_segments,
+                as_node="agent",
+                persisted_count=persisted_reasoning_count,
+            )
             state = await graph.aget_state(config)
             token_usage = state.values.get("token_usage") if state and state.values else None
             interrupt_info = _get_interrupt_info(state)
@@ -889,6 +1038,7 @@ async def sql_completion_handler(
     mode = options_data.get("mode", "generate")
     semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None  # 语义配置 ID（可选）
     model_id = options_data.get("model_id")  # 模型选择（可选）
+    enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
     member_datasource_ids = options_data.get("member_datasource_ids") or []
     semantic_config_selection = options_data.get("semantic_config_selection")
 
@@ -908,6 +1058,7 @@ async def sql_completion_handler(
             request=request,
             model_id=model_id,
             semantic_config_selection=semantic_config_selection,
+            enable_thinking=enable_thinking,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
@@ -925,6 +1076,7 @@ async def data_analyze_completion_handler(
     """DataAnalyze 智能体 completion 处理器。"""
     options_data = options or {}
     model_id = options_data.get("model_id")
+    enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
     datasource_id = str(options_data.get("datasource_id") or "").strip() or None
     semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None
     member_datasource_ids = options_data.get("member_datasource_ids") or []
@@ -998,6 +1150,7 @@ async def data_analyze_completion_handler(
                     member_datasource_ids=member_datasource_ids,
                     user_id=user_id,
                     operator_name=username,
+                    enable_thinking=enable_thinking,
                 )
                 log_phase("create_agent")
                 tool_call_names: dict[str, str] = {}
@@ -1006,6 +1159,8 @@ async def data_analyze_completion_handler(
                 tool_call_index_map: dict[int, str] = {}
                 emitted_running_tool_ids: set[str] = set()
                 active_tool_call_id: str | None = None
+                reasoning_segments: list[dict[str, Any]] = []
+                persisted_reasoning_count = 0
                 first_chunk_logged = False
                 latest_token_usage: dict[str, Any] | None = None
                 async for stream_item in agent.astream(initial_state, config=config, stream_mode=["messages", "updates", "custom"], subgraphs=True):
@@ -1030,6 +1185,13 @@ async def data_analyze_completion_handler(
                         log_phase("first_model_chunk")
                     if request and await request.is_disconnected():
                         logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
+                        persisted_reasoning_count = await _persist_reasoning_segments(
+                            agent,
+                            config,
+                            reasoning_segments,
+                            as_node="execute",
+                            persisted_count=persisted_reasoning_count,
+                        )
                         return
                     node_name = metadata.get("langgraph_node")
                     if node_name and node_name.startswith("__"):
@@ -1048,8 +1210,18 @@ async def data_analyze_completion_handler(
                     has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
                     has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
                     msg_type = getattr(message_chunk, "type", None)
-                    if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
+                    thinking_event = _format_thinking_event(message_chunk)
+                    if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool" and not thinking_event:
                         continue
+                    if thinking_event:
+                        _append_reasoning_segment(
+                            reasoning_segments,
+                            _extract_reasoning_content(message_chunk),
+                            _visible_tool_count(tool_call_names),
+                        )
+                        yield thinking_event
+                        if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
+                            continue
                     if has_tool_calls:
                         for tc in getattr(message_chunk, "tool_calls", []) or []:
                             tc_id = str(tc.get("id") or "").strip()
@@ -1124,6 +1296,13 @@ async def data_analyze_completion_handler(
                     else:
                         yield _format_sse("message", msg_data)
                 log_phase("agent_stream_done")
+                persisted_reasoning_count = await _persist_reasoning_segments(
+                    agent,
+                    config,
+                    reasoning_segments,
+                    as_node="execute",
+                    persisted_count=persisted_reasoning_count,
+                )
                 if latest_token_usage:
                     yield _format_sse("message_end", {"usage": latest_token_usage})
             yield _format_sse("done", "[DONE]")
@@ -1169,6 +1348,7 @@ async def sql_resume_handler(
     modified_sql = data.get("sql")
     datasource_id = data.get("datasource_id")
     semantic_config_id = data.get("semantic_config_id")
+    enable_thinking = _normalize_enable_thinking(data.get("enable_thinking"))
 
     # 获取语义配置（如果有）
     semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id)
@@ -1182,7 +1362,8 @@ async def sql_resume_handler(
             thread_id=conversation_id,
             modified_sql=modified_sql,
             action=effective_action,
-            semantic_config=semantic_config
+            semantic_config=semantic_config,
+            enable_thinking=enable_thinking,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}

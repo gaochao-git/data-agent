@@ -199,12 +199,22 @@ def build_dsl_from_tool_args(args: dict[str, Any]) -> dict[str, Any]:
         return {}
     nested_dsl = args.get("dsl")
     if isinstance(nested_dsl, dict):
-        return nested_dsl
+        return normalize_pagination_values(nested_dsl)
     dsl: dict[str, Any] = {}
     for key in ("metrics", "dimensions", "filters", "having", "order_by", "limit", "offset", "visualization"):
         if key in args:
             dsl[key] = args.get(key)
-    return dsl
+    return normalize_pagination_values(dsl)
+
+
+def normalize_pagination_values(dsl: dict[str, Any]) -> dict[str, Any]:
+    """把模型输出中的纯数字分页字符串收敛为整数。"""
+    normalized = dict(dsl)
+    for key in ("limit", "offset"):
+        value = normalized.get(key)
+        if isinstance(value, str) and value.strip().isdigit():
+            normalized[key] = int(value.strip())
+    return normalized
 
 
 def build_dsl2sql_payload(trace: ToolTrace) -> dict[str, Any]:
@@ -351,6 +361,7 @@ async def compile_dsl_locally(
 
     semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id)
     payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl, semantic_config)
+    payload = normalize_pagination_values(payload)
     if payload.get("compare"):
         return {"success": False, "sql": "", "error": "DSL2SQL 不支持 compare；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析", "warnings": warnings}
     result = SemanticSQLGenerator(semantic_config).generate_sql(

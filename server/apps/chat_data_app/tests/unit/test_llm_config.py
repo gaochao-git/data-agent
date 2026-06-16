@@ -13,7 +13,7 @@ from apps.chat_data_app.services import llm_config
 from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_config
 
 
-def test_chat_data_qwen_disables_thinking_by_default(monkeypatch):
+def test_chat_data_thinking_disabled_by_default(monkeypatch):
     captured = {}
 
     def fake_get_llm(**kwargs):
@@ -21,7 +21,6 @@ def test_chat_data_qwen_disables_thinking_by_default(monkeypatch):
         return object()
 
     monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.6-35b-a3b")
-    monkeypatch.delenv("CHAT_DATA_ENABLE_THINKING", raising=False)
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -38,15 +37,30 @@ def test_chat_data_qwen_can_enable_thinking(monkeypatch):
         return object()
 
     monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.6-35b-a3b")
-    monkeypatch.setenv("CHAT_DATA_ENABLE_THINKING", "true")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
-    llm_config.get_chat_data_llm()
+    llm_config.get_chat_data_llm(enable_thinking=True)
 
     assert captured["extra_body"] == {"enable_thinking": True}
 
 
-def test_chat_data_non_qwen_omits_extra_body(monkeypatch):
+def test_chat_data_glm_uses_same_thinking_payload(monkeypatch):
+    captured = {}
+
+    def fake_get_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
+    llm_config.get_chat_data_llm(enable_thinking=True)
+
+    assert captured["model"] == "glm-5.1"
+    assert captured["extra_body"] == {"enable_thinking": True}
+
+
+def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
     captured = {}
 
     def fake_get_llm(**kwargs):
@@ -59,7 +73,7 @@ def test_chat_data_non_qwen_omits_extra_body(monkeypatch):
 
     llm_config.get_chat_data_llm()
 
-    assert captured["extra_body"] is None
+    assert captured["extra_body"] == {"enable_thinking": False}
     assert captured["api_key"] is None
 
 

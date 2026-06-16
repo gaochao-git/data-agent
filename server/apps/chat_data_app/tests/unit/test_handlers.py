@@ -1094,12 +1094,17 @@ def test_sql_completion_and_resume_handlers_wrap_streams(monkeypatch):
     assert captured["stream_kwargs"]["username"] == "测试用户"
     assert captured["stream_kwargs"]["member_datasource_ids"] == ["m1"]
 
-    resume = asyncio.run(sql_resume_handler("conv_sql", action="edit", data={"sql": "select 2", "datasource_id": "ds_a", "semantic_config_id": "cfg"}))
+    resume = asyncio.run(sql_resume_handler(
+        "conv_sql",
+        action="edit",
+        data={"sql": "select 2", "datasource_id": "ds_a", "semantic_config_id": "cfg", "enable_thinking": True},
+    ))
     chunks = asyncio.run(_collect_async_iter(resume.body_iterator))
     assert chunks == ["event: done\ndata: [DONE]\n\n"]
     assert captured["continue_kwargs"]["action"] == "approve"
     assert captured["continue_kwargs"]["modified_sql"] == "select 2"
     assert captured["continue_kwargs"]["semantic_config"] == {"id": "cfg"}
+    assert captured["continue_kwargs"]["enable_thinking"] is True
 
 
 def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monkeypatch):

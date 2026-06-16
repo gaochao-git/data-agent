@@ -160,7 +160,17 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(chat_data_graph, "START", "__start__")
     monkeypatch.setattr(chat_data_graph, "TOOLS", ["execute_sql_tool"])
     monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", lambda model_id=None, semantic_config=None: ["select_semantic_config_tool", "dsl2sql_tool"])
-    monkeypatch.setattr(chat_data_graph, "create_agent_node", lambda tools, semantic_config=None, model_id=None: ("agent", tools, semantic_config, model_id))
+    monkeypatch.setattr(
+        chat_data_graph,
+        "create_agent_node",
+        lambda tools, semantic_config=None, model_id=None, enable_thinking=None: (
+            "agent",
+            tools,
+            semantic_config,
+            model_id,
+            enable_thinking,
+        ),
+    )
 
     compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1")
 

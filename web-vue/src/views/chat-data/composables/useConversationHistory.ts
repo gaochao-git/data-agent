@@ -4,14 +4,19 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ToolCallInfo, Message, MessageSegment, PendingTool, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo } from '../types'
+import type { ToolCallInfo, Message, MessageSegment, PendingTool, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
 
-const buildAssistantHistorySegments = (message: Message): MessageSegment[] => {
+const buildAssistantHistorySegments = (message: Message, stageOffset = 0): MessageSegment[] => {
   const segments: MessageSegment[] = []
-  if (message.content) {
-    segments.push({ type: 'text', content: message.content })
+  for (const [_index, stage] of (message.taskStages || []).entries()) {
+    void stage
+    segments.push({ type: 'taskStage', stageIndex: stageOffset + _index })
+  }
+  const visibleContent = stripThinkingContent(message.content)
+  if (visibleContent) {
+    segments.push({ type: 'text', content: visibleContent })
   }
   for (const toolCall of message.toolCalls || []) {
     segments.push({ type: 'toolCall', toolCallId: toolCall.tool_call_id })
@@ -19,15 +24,43 @@ const buildAssistantHistorySegments = (message: Message): MessageSegment[] => {
   return segments
 }
 
+const appendThinkingSegmentsToContent = (segments: ThinkingSegment[], visibleContent: string): string => {
+  const thinkingContent = segments.map(segment => `<thinking>${segment.content}</thinking>`).join('')
+  return visibleContent ? `${thinkingContent}${visibleContent}` : thinkingContent
+}
+
+const extractThinkingText = (content: string): string[] => {
+  const result: string[] = []
+  const regex = /<thinking>([\s\S]*?)<\/thinking>/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(content || '')) !== null) {
+    result.push(match[1] || '')
+  }
+  return result
+}
+
+const stripThinkingContent = (content: string): string => {
+  return String(content || '').replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
+}
+
 const appendAssistantHistoryMessage = (target: Message, source: Message) => {
   if (source.content) {
     target.content = (target.content || '') + (target.content ? '\n' : '') + source.content
+  }
+  if (source.thinkingSegments?.length) {
+    const currentToolCallCount = (target.toolCalls || []).filter(tool => !HIDDEN_TOOLS.includes(tool.tool_name)).length
+    const normalizedThinkingSegments = source.thinkingSegments.map(segment => ({
+      ...segment,
+      toolCallCount: currentToolCallCount + segment.toolCallCount,
+    }))
+    target.thinkingSegments = [...(target.thinkingSegments || []), ...normalizedThinkingSegments]
+    target.content = appendThinkingSegmentsToContent(target.thinkingSegments, stripThinkingContent(target.content || ''))
   }
   if (source.toolCalls?.length) {
     target.toolCalls = [...(target.toolCalls || []), ...source.toolCalls]
   }
   if (source.taskStages?.length) {
-    target.taskStages = source.taskStages
+    target.taskStages = [...(target.taskStages || []), ...source.taskStages]
   }
   if (source.semanticConfigSelection) {
     target.semanticConfigSelection = source.semanticConfigSelection
@@ -38,24 +71,26 @@ const appendAssistantHistoryMessage = (target: Message, source: Message) => {
   }
   target.segments = [
     ...(target.segments || []),
-    ...buildAssistantHistorySegments(source),
+    ...buildAssistantHistorySegments(source, (target.taskStages?.length || 0) - (source.taskStages?.length || 0)),
   ]
 }
 
 const applyTaskStagesToHistoryMessage = (message: Message, taskStages: TaskStageInfo[]) => {
   if (taskStages.length === 0) return
-  message.taskStages = taskStages
+  const existingStages = message.taskStages || []
+  const stageOffset = existingStages.length
+  message.taskStages = [...existingStages, ...taskStages]
   const segments = message.segments || []
   const beforeExecuteDetails: MessageSegment[] = []
   const afterExecuteDetails: MessageSegment[] = []
   taskStages.forEach((stage, index) => {
-    const segment: MessageSegment = { type: 'taskStage', stageIndex: index }
-    if (stage.stage === 'done') afterExecuteDetails.push(segment)
-    else beforeExecuteDetails.push(segment)
+    const shiftedSegment: MessageSegment = { type: 'taskStage', stageIndex: stageOffset + index }
+    if (stage.stage === 'done') afterExecuteDetails.push(shiftedSegment)
+    else beforeExecuteDetails.push(shiftedSegment)
   })
   message.segments = [
     ...beforeExecuteDetails,
-    ...segments.filter(segment => segment.type !== 'taskStage'),
+    ...segments,
     ...afterExecuteDetails,
   ]
 }
@@ -80,9 +115,93 @@ const normalizeTaskStages = (value: unknown): TaskStageInfo[] => {
       title: typeof data.title === 'string' ? data.title : undefined,
       content: typeof data.content === 'string' ? data.content : undefined,
       steps,
+      source: data.source === 'reasoning' ? 'reasoning' : 'task_stage',
     })
   }
   return result
+}
+
+const normalizeReasoningContent = (value: unknown): string => {
+  return typeof value === 'string' ? value : ''
+}
+
+const normalizeReasoningSegments = (value: unknown): ThinkingSegment[] => {
+  if (!Array.isArray(value)) return []
+  const result: ThinkingSegment[] = []
+  value.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return
+    const data = item as Record<string, unknown>
+    const content = typeof data.content === 'string' ? data.content : ''
+    if (!content) return
+    const rawToolCallCount = data.tool_call_count ?? data.toolCallCount ?? 0
+    const toolCallCount = Number.isFinite(Number(rawToolCallCount))
+      ? Math.max(0, Math.floor(Number(rawToolCallCount)))
+      : 0
+    result.push({
+      id: String(data.id || `thinking-history-global-${index}`),
+      content,
+      toolCallCount,
+    })
+  })
+  return result
+}
+
+const applyThinkingSegmentsToHistoryMessage = (message: Message, thinkingSegments: ThinkingSegment[]) => {
+  if (message.role !== 'assistant' || thinkingSegments.length === 0) return
+  if (message.thinkingSegments?.length) return
+  message.thinkingSegments = thinkingSegments
+  message.taskStages = [
+    ...(message.taskStages || []),
+    ...thinkingSegments.map((segment): TaskStageInfo => ({
+      stage: 'thinking',
+      status: 'completed',
+      title: '思考',
+      content: segment.content,
+      source: 'reasoning',
+    })),
+  ]
+  message.content = appendThinkingSegmentsToContent(thinkingSegments, stripThinkingContent(message.content || ''))
+  message.segments = buildAssistantHistorySegments(message)
+}
+
+const setThinkingSegmentsOnHistoryMessage = (message: Message, thinkingSegments: ThinkingSegment[]) => {
+  if (message.role !== 'assistant' || thinkingSegments.length === 0) return
+  message.thinkingSegments = thinkingSegments
+  const nonReasoningStages = (message.taskStages || []).filter(stage => stage.source !== 'reasoning')
+  const reasoningStages = thinkingSegments.map((segment): TaskStageInfo => ({
+    stage: 'thinking',
+    status: 'completed',
+    title: '思考',
+    content: segment.content,
+    source: 'reasoning',
+  }))
+  message.taskStages = [...reasoningStages, ...nonReasoningStages]
+  message.content = appendThinkingSegmentsToContent(thinkingSegments, stripThinkingContent(message.content || ''))
+  message.segments = buildAssistantHistorySegments(message)
+}
+
+const applyReasoningSegmentsToHistoryMessages = (messages: Message[], reasoningSegments: ThinkingSegment[]) => {
+  if (reasoningSegments.length === 0) return
+  const groups: ThinkingSegment[][] = []
+  for (const segment of reasoningSegments) {
+    const latestGroup = groups[groups.length - 1]
+    const previousSegment = latestGroup?.[latestGroup.length - 1]
+    if (!latestGroup || (previousSegment && segment.toolCallCount < previousSegment.toolCallCount)) {
+      groups.push([segment])
+    } else {
+      latestGroup.push(segment)
+    }
+  }
+  const assistantMessages = messages.filter(message => message.role === 'assistant' && !message.thinkingSegments?.length)
+  if (assistantMessages.length === 0) return
+  if (groups.length === 0) return
+  const startIndex = Math.max(0, assistantMessages.length - groups.length)
+  groups.forEach((group, groupIndex) => {
+    const targetIndex = Math.min(startIndex + groupIndex, assistantMessages.length - 1)
+    const targetMessage = assistantMessages[targetIndex]
+    if (!targetMessage) return
+    setThinkingSegmentsOnHistoryMessage(targetMessage, [...(targetMessage.thinkingSegments || []), ...group])
+  })
 }
 
 const normalizeSemanticConfigSelection = (value: unknown): SemanticConfigSelectionInfo | null => {
@@ -220,6 +339,7 @@ export function useConversationHistory({
         const historyMessages = data.data?.messages || []
         const historyPendingTool = data.data?.pending_tool
         const historyTaskStages = normalizeTaskStages(data.data?.task_stages)
+        const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
 
         if (historyMessages.length > 0) {
           const formattedMessages: Message[] = historyMessages.map((msg: any) => {
@@ -237,8 +357,28 @@ export function useConversationHistory({
             const message: Message = {
               id: msg.id,
               role: msg.role,
-              content: msg.content,
+              content: stripThinkingContent(msg.content || ''),
               timestamp,
+            }
+
+            const existingThinkingTexts = extractThinkingText(msg.content || '')
+            const reasoningContent = normalizeReasoningContent(msg.reasoning_content)
+            const thinkingTexts = [...existingThinkingTexts]
+            if (reasoningContent) thinkingTexts.push(reasoningContent)
+            if (thinkingTexts.length > 0 && msg.role === 'assistant') {
+              message.thinkingSegments = thinkingTexts.map((content, index) => ({
+                id: `thinking-history-${msg.id || 'message'}-${index}`,
+                content,
+                toolCallCount: index,
+              }))
+              message.taskStages = thinkingTexts.map((content): TaskStageInfo => ({
+                stage: 'thinking',
+                status: 'completed',
+                title: '思考',
+                content,
+                source: 'reasoning',
+              }))
+              message.content = appendThinkingSegmentsToContent(message.thinkingSegments, message.content)
             }
 
             const semanticConfigSelection = normalizeSemanticConfigSelection(msg.semantic_config_selection)
@@ -453,10 +593,9 @@ export function useConversationHistory({
             }
           })
 
+          applyReasoningSegmentsToHistoryMessages(displayMessages, historyReasoningSegments)
           const latestAssistantMessage = [...displayMessages].reverse().find(msg => msg.role === 'assistant')
-          if (latestAssistantMessage) {
-            applyTaskStagesToHistoryMessage(latestAssistantMessage, historyTaskStages)
-          }
+          if (latestAssistantMessage) applyTaskStagesToHistoryMessage(latestAssistantMessage, historyTaskStages)
 
           messages.value = displayMessages
           isFirstMessage.value = false
