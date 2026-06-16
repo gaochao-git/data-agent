@@ -723,7 +723,7 @@ export function getConversations(
   pagination?: { page?: number; page_size?: number }
 ): Promise<ApiResponse<ConversationItem[] | { conversations: ConversationItem[]; page?: number; page_size?: number; has_more?: boolean }>> {
   return request({
-    url: '/agents/api/conversations',
+    url: '/agents/api/chatdata/conversations',
     method: 'get',
     params: { agent_id: agentId, datasource_id: datasourceId, ...pagination }
   })
@@ -736,7 +736,7 @@ export function createConversation(data: {
   title?: string
 }): Promise<ApiResponse<{ id: string; conversation?: ConversationItem; create_time?: string }>> {
   return request({
-    url: '/agents/api/conversations',
+    url: '/agents/api/chatdata/conversations',
     method: 'post',
     data
   })
@@ -785,7 +785,7 @@ export function importDataAnalyzeWorkspaceSkill(conversationId: string, data: { 
 /** 删除会话 */
 export function deleteConversation(conversationId: string): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/conversations/${conversationId}`,
+    url: `/agents/api/chatdata/conversations/${conversationId}`,
     method: 'delete'
   })
 }
@@ -793,7 +793,7 @@ export function deleteConversation(conversationId: string): Promise<ApiResponse<
 /** 更新会话 */
 export function updateConversation(conversationId: string, data: { title?: string }): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/conversations/${conversationId}`,
+    url: `/agents/api/chatdata/conversations/${conversationId}`,
     method: 'put',
     data
   })
@@ -802,7 +802,7 @@ export function updateConversation(conversationId: string, data: { title?: strin
 /** 生成会话标题 */
 export function generateConversationTitle(conversationId: string): Promise<ApiResponse<{ title: string }>> {
   return request({
-    url: `/agents/api/conversations/${conversationId}/title`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/title`,
     method: 'post'
   })
 }
@@ -1007,7 +1007,7 @@ export interface SqlExecuteResult {
 
 export function getConversationArtifact<T = unknown>(artifactId: string): Promise<ApiResponse<T>> {
   return request({
-    url: `/agents/api/conversations/artifacts/${artifactId}`,
+    url: `/agents/api/chatdata/conversations/artifacts/${artifactId}`,
     method: 'get',
   })
 }
@@ -1257,7 +1257,7 @@ export function streamCompletion(conversationId: string, data: {
   options?: Record<string, unknown>
 }, signal?: AbortSignal): Promise<Response> {
   return requestStream({
-    url: `/agents/api/conversations/${conversationId}/completion`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/completion`,
     method: 'POST',
     data,
     signal
@@ -1273,7 +1273,7 @@ export function streamResume(conversationId: string, data: {
   enable_thinking?: boolean
 }): Promise<Response> {
   return requestStream({
-    url: `/agents/api/conversations/${conversationId}/resume`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/resume`,
     method: 'POST',
     data: {
       action: data.action,
@@ -1307,6 +1307,6 @@ export function streamQuickSql(data: {
 /** 获取会话历史（流式接口） */
 export function getConversationHistory(conversationId: string): Promise<Response> {
   return requestStream({
-    url: `/agents/api/conversations/${conversationId}`
+    url: `/agents/api/chatdata/conversations/${conversationId}`
   })
 }

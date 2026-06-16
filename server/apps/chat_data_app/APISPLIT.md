@@ -50,14 +50,14 @@
 
 #### 公共会话接口
 
-- `GET /api/conversations`
-- `POST /api/conversations`
-- `GET /api/conversations/{id}`
-- `PUT /api/conversations/{id}`
-- `DELETE /api/conversations/{id}`
-- `POST /api/conversations/{id}/completion`
-- `POST /api/conversations/{id}/resume`
-- `POST /api/conversations/{id}/title`
+- `GET /api/chatdata/conversations`
+- `POST /api/chatdata/conversations`
+- `GET /api/chatdata/conversations/{id}`
+- `PUT /api/chatdata/conversations/{id}`
+- `DELETE /api/chatdata/conversations/{id}`
+- `POST /api/chatdata/conversations/{id}/completion`
+- `POST /api/chatdata/conversations/{id}/resume`
+- `POST /api/chatdata/conversations/{id}/title`
 
 #### 智能问数接口
 - `POST /api/chatdata/nl2sql`              # SQL 编辑器中的 AI 辅助生成 SQL 能力

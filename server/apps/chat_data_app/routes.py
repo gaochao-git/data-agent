@@ -2789,5 +2789,5 @@ async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderS
 
 
 # ============ 对话接口 ============
-# 会话管理（创建、列表、删除、详情、completion）统一由公共接口 /api/conversations 处理
+# 会话管理（创建、列表、删除、详情、completion）统一由公共接口 /api/chatdata/conversations 处理
 # sql_generator 的 completion handler 已在 __init__.py 中注册

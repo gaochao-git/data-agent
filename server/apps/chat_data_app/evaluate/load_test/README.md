@@ -3,14 +3,14 @@
 智能问数压测目录。默认脚本直接压后端真实 SSE 接口：
 
 ```text
-POST /api/conversations
-POST /api/conversations/{conversation_id}/completion
+POST /api/chatdata/conversations
+POST /api/chatdata/conversations/{conversation_id}/completion
 ```
 
 脚本会自动完成：
 
 - 注入 `X-Service-Token`、`X-User-Id`、`X-Username` 服务转发认证头
-- `/api/conversations` 创建会话
+- `/api/chatdata/conversations` 创建会话
 - 并发请求 completion
 - 消费 SSE 流并统计成功率、首包耗时、总耗时、分位耗时
 - 结束后输出普通摘要和 Markdown Summary 表格

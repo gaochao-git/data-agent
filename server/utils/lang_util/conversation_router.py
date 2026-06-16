@@ -250,7 +250,7 @@ def _get_current_user_identity(request: Request) -> tuple[str, str]:
 
 # ============ 路由 ============
 
-router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+router = APIRouter(prefix="/api/chatdata/conversations", tags=["conversations"])
 
 
 @router.post("", status_code=201)
@@ -258,7 +258,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
     """
     创建新会话
 
-    POST /api/conversations
+    POST /api/chatdata/conversations
     Body: {"agent_id": "..."}
 
     返回：
@@ -294,7 +294,7 @@ async def list_conversations(
     """
     获取会话列表
 
-    GET /api/conversations?agent_id=xxx&page=1&page_size=20
+    GET /api/chatdata/conversations?agent_id=xxx&page=1&page_size=20
 
     参数：
     - agent_id: 可选，指定则只返回该智能体的会话，不指定则返回所有会话
@@ -352,7 +352,7 @@ async def get_conversation_detail(conversation_id: str, req: Request):
     """
     获取会话详情
 
-    GET /api/conversations/{id}
+    GET /api/chatdata/conversations/{id}
 
     返回：
     {
@@ -392,7 +392,7 @@ async def delete_conversation(conversation_id: str, req: Request):
     """
     删除会话
 
-    DELETE /api/conversations/{id}
+    DELETE /api/chatdata/conversations/{id}
 
     返回：
     {
@@ -426,7 +426,7 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
     """
     修改会话标题
 
-    PUT /api/conversations/{id}/title
+    PUT /api/chatdata/conversations/{id}/title
     Body: {"title": "新标题"}
 
     返回：
@@ -465,7 +465,7 @@ async def generate_conversation_title(conversation_id: str, req: Request):
     """
     自动生成会话标题
 
-    POST /api/conversations/{id}/title
+    POST /api/chatdata/conversations/{id}/title
 
     返回：
     {
@@ -505,7 +505,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
     """
     切换会话收藏状态
 
-    POST /api/conversations/{id}/favorite
+    POST /api/chatdata/conversations/{id}/favorite
 
     返回：
     {
@@ -542,7 +542,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
     """
     对话（发送消息）
 
-    POST /api/conversations/{id}/completion
+    POST /api/chatdata/conversations/{id}/completion
     Body: {"query": "...", "agent_id": "...", "options": {...}}
 
     返回：StreamingResponse (SSE)
@@ -597,7 +597,7 @@ async def resume_conversation(conversation_id: str, request: ResumeRequest, req:
     """
     恢复被中断的会话（Human-in-the-Loop 工具确认）
 
-    POST /api/conversations/{id}/resume
+    POST /api/chatdata/conversations/{id}/resume
     Body: {"action": "approve" | "edit" | "reject", "data": {...}}
 
     返回：StreamingResponse (SSE)
@@ -663,7 +663,7 @@ async def upload_file(
     """
     上传文件
 
-    POST /api/conversations/{id}/files
+    POST /api/chatdata/conversations/{id}/files
     Form: file
 
     返回：
@@ -720,7 +720,7 @@ async def download_file(
     """
     下载或预览文件
 
-    GET /api/conversations/{id}/files/{file_id}?preview=false
+    GET /api/chatdata/conversations/{id}/files/{file_id}?preview=false
 
     返回：文件内容
     """
@@ -759,7 +759,7 @@ async def list_files(conversation_id: str, req: Request):
     """
     列出会话的所有文件
 
-    GET /api/conversations/{id}/files
+    GET /api/chatdata/conversations/{id}/files
 
     返回：
     {
@@ -796,7 +796,7 @@ async def get_artifact(artifact_id: str, req: Request):
     """
     获取 Artifact 数据
 
-    GET /api/conversations/artifacts/{id}
+    GET /api/chatdata/conversations/artifacts/{id}
 
     artifact_id 是全局唯一的 UUID，会自动查找对应的类型和数据
 

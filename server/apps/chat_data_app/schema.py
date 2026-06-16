@@ -37,7 +37,7 @@ class NL2SQLRequest(BaseModel):
     )
 
 
-# 注意：ContinueSQLRequest 已废弃，使用公共接口 /api/conversations/{id}/resume
+# 注意：ContinueSQLRequest 已废弃，使用公共接口 /api/chatdata/conversations/{id}/resume
 
 
 # ============ SQL 编辑器相关模型 ============

@@ -15,7 +15,7 @@ def payload(response):
 
 
 class FakeRequest:
-    def __init__(self, path="/api/conversations"):
+    def __init__(self, path="/api/chatdata/conversations"):
         self.url = SimpleNamespace(path=path)
 
 

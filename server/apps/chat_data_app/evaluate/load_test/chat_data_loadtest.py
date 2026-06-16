@@ -138,7 +138,7 @@ def load_queries(path: str | None) -> list[str]:
 
 
 async def create_conversation(client: httpx.AsyncClient, base_url: str, agent_id: str) -> str:
-    response = await client.post(f"{base_url}/api/conversations", json={"agent_id": agent_id})
+    response = await client.post(f"{base_url}/api/chatdata/conversations", json={"agent_id": agent_id})
     response.raise_for_status()
     payload = response.json()
     if payload.get("status") != "success":
@@ -166,7 +166,7 @@ async def consume_completion(
     status_code = 0
     error = ""
     ok = False
-    url = f"{base_url}/api/conversations/{conversation_id}/completion"
+    url = f"{base_url}/api/chatdata/conversations/{conversation_id}/completion"
     body = {"query": query, "agent_id": agent_id, "options": options}
     try:
         async with client.stream("POST", url, json=body, timeout=request_timeout) as response:

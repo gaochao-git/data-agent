@@ -16,7 +16,7 @@ from .service import (
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/uploaded-files", tags=["uploaded-files"])
+router = APIRouter(prefix="/api/chatdata/uploaded-files", tags=["uploaded-files"])
 
 
 @router.post("/upload")

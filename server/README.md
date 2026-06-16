@@ -70,8 +70,8 @@ uvicorn main:app --host 0.0.0.0 --port 5001
 智能问数：
 
 - `/agents/api/chatdata/*`
-- `/agents/api/conversations/*`
-- `/api/uploaded-files/*`
+- `/agents/api/chatdata/conversations/*`
+- `/api/chatdata/uploaded-files/*`
 
 具体接口以 `apps/chat_data_app/routes.py`、`apps/chat_data_app/route_modules/` 和 `utils/lang_util/conversation_router.py` 为准。
 
