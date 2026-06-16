@@ -54,7 +54,13 @@ def get_default_chat_data_model() -> str:
 
 
 def _get_chat_data_extra_body(enable_thinking: bool | None = None) -> dict[str, Any]:
-    return {"enable_thinking": bool(enable_thinking)}
+    thinking_enabled = bool(enable_thinking)
+    return {
+        "enable_thinking": thinking_enabled,
+        "chat_template_kwargs": {
+            "enable_thinking": thinking_enabled,
+        },
+    }
 
 
 def _get_chat_data_api_key() -> str | None:

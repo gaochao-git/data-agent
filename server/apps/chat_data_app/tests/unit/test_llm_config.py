@@ -13,6 +13,15 @@ from apps.chat_data_app.services import llm_config
 from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_config
 
 
+def _assert_thinking_extra_body(extra_body, enabled: bool):
+    assert extra_body == {
+        "enable_thinking": enabled,
+        "chat_template_kwargs": {
+            "enable_thinking": enabled,
+        },
+    }
+
+
 def test_chat_data_thinking_disabled_by_default(monkeypatch):
     captured = {}
 
@@ -26,7 +35,7 @@ def test_chat_data_thinking_disabled_by_default(monkeypatch):
     llm_config.get_chat_data_llm()
 
     assert captured["model"] == "qwen3.6-35b-a3b"
-    assert captured["extra_body"] == {"enable_thinking": False}
+    _assert_thinking_extra_body(captured["extra_body"], False)
 
 
 def test_chat_data_qwen_can_enable_thinking(monkeypatch):
@@ -41,7 +50,7 @@ def test_chat_data_qwen_can_enable_thinking(monkeypatch):
 
     llm_config.get_chat_data_llm(enable_thinking=True)
 
-    assert captured["extra_body"] == {"enable_thinking": True}
+    _assert_thinking_extra_body(captured["extra_body"], True)
 
 
 def test_chat_data_glm_uses_same_thinking_payload(monkeypatch):
@@ -57,7 +66,7 @@ def test_chat_data_glm_uses_same_thinking_payload(monkeypatch):
     llm_config.get_chat_data_llm(enable_thinking=True)
 
     assert captured["model"] == "glm-5.1"
-    assert captured["extra_body"] == {"enable_thinking": True}
+    _assert_thinking_extra_body(captured["extra_body"], True)
 
 
 def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
@@ -73,7 +82,7 @@ def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
 
     llm_config.get_chat_data_llm()
 
-    assert captured["extra_body"] == {"enable_thinking": False}
+    _assert_thinking_extra_body(captured["extra_body"], False)
     assert captured["api_key"] is None
 
 
