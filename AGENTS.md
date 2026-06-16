@@ -35,6 +35,7 @@
 - 后端导入检查：`cd server && python - <<'PY'\nimport main\nprint('backend import ok')\nPY`
 - 前端构建：`cd web-vue && npm run build-only`
 - 前端完整检查：`cd web-vue && npm run build`
+- 后端条件覆盖率和行覆盖率要求大于95%
 
 ## 4. 代码风格
 
