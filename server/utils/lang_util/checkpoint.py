@@ -22,6 +22,7 @@ MySQL 配置：
 
 import os
 
+from .db_failover import DatabaseEndpointSelector, parse_database_endpoints
 from utils.logger import get_logger
 from utils.storage_paths import DATA_ROOT
 
@@ -35,10 +36,12 @@ CHECKPOINTER_TYPE = os.getenv("CHECKPOINTER_TYPE", "sqlite").lower()
 DB_PATH = os.path.join(DATA_ROOT, "checkpoints.db")
 
 # MySQL 配置
-MYSQL_HOST = os.getenv("CHECKPOINTER_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("CHECKPOINTER_PORT", "3306"))
+MYSQL_HOST = os.getenv("CHECKPOINTER_HOST") or f"localhost:{MYSQL_PORT}"
 MYSQL_DB = os.getenv("CHECKPOINTER_DB", "langgraph_memory")
 MYSQL_USER = os.getenv("CHECKPOINTER_USER", "root")
+MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST, MYSQL_PORT)
+_endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS)
 
 
 def _get_mysql_password() -> str:
@@ -104,6 +107,42 @@ def _get_sqlite_checkpointer():
     return _SqliteCheckpointerContext(DB_PATH)
 
 
+class _MySQLCheckpointerFailoverContext:
+    """Wrap MySQL checkpointer contexts to advance endpoint after connection failure."""
+
+    def __init__(self, context, endpoint):
+        self.context = context
+        self.endpoint = endpoint
+
+    async def __aenter__(self):
+        try:
+            return await self.context.__aenter__()
+        except Exception as err:
+            _advance_checkpointer_endpoint(self.endpoint, err)
+            raise
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self.context.__aexit__(exc_type, exc_val, exc_tb)
+
+
+def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:
+    previous, current, advanced = _endpoint_selector.advance_if_current(failed_endpoint)
+    if not advanced:
+        logger.warning(
+            "MySQL checkpointer 连接节点已由其他请求切换: failed=%s current=%s reason=%s",
+            failed_endpoint.label(),
+            current.label(),
+            reason,
+        )
+        return
+    logger.warning(
+        "MySQL checkpointer 连接节点切换: %s -> %s, reason=%s",
+        previous.label(),
+        current.label(),
+        reason,
+    )
+
+
 def _get_mysql_checkpointer():
     """获取 MySQL checkpointer"""
     try:
@@ -114,11 +153,16 @@ def _get_mysql_checkpointer():
         )
 
     password = _get_mysql_password()
+    endpoint = _endpoint_selector.current()
     conn_string = (
         f"mysql+aiomysql://{MYSQL_USER}:{password}"
-        f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
+        f"@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
     )
-    return AIOMySQLSaver.from_conn_string(conn_string)
+    try:
+        return _MySQLCheckpointerFailoverContext(AIOMySQLSaver.from_conn_string(conn_string), endpoint)
+    except Exception as err:
+        _advance_checkpointer_endpoint(endpoint, err)
+        raise
 
 
 # ============ 初始化函数 ============
@@ -159,10 +203,12 @@ def get_checkpoint_info() -> dict:
             "path": DB_PATH,
         }
     elif CHECKPOINTER_TYPE == "mysql":
+        endpoint = _endpoint_selector.current()
         return {
             "type": "mysql",
-            "host": MYSQL_HOST,
-            "port": MYSQL_PORT,
+            "host": endpoint.host,
+            "port": endpoint.port,
+            "endpoints": _endpoint_selector.labels(),
             "database": MYSQL_DB,
             "user": MYSQL_USER,
             "password": "(已设置)",

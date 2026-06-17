@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
+from sqlalchemy.exc import OperationalError
 
 import auth
 from apps.chat_data_app.agent.skills import loader
@@ -16,6 +17,7 @@ from apps.chat_data_app.route_modules import data_analyze_workspace
 from apps.chat_data_app.schema import SkillImportFromWorkspaceRequest
 from utils import logger as logger_module
 from utils.lang_util import checkpoint, database, llm
+from utils.lang_util.db_failover import DatabaseEndpointSelector, parse_database_endpoints
 
 
 def _payload(response):
@@ -109,6 +111,7 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
     monkeypatch.setattr(checkpoint, "MYSQL_USER", "user")
     monkeypatch.setattr(checkpoint, "MYSQL_HOST", "127.0.0.1")
     monkeypatch.setattr(checkpoint, "MYSQL_PORT", 3306)
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306", 3306)))
     monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
     monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pwd")
     assert checkpoint.get_checkpoint_info()["type"] == "mysql"
@@ -120,12 +123,101 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
 
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
     mysql_context = checkpoint._get_mysql_checkpointer()
-    assert mysql_context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert mysql_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
 
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
     with pytest.raises(ValueError, match="不支持"):
         checkpoint.get_checkpointer()
     assert checkpoint.get_checkpoint_info() == {"type": "unknown"}
+
+
+def test_database_endpoint_parsing_and_selector():
+    endpoints = parse_database_endpoints("62.1.1.1:3306, 62.1.1.2:3307,62.1.1.3:3308", 3306)
+    assert [endpoint.label() for endpoint in endpoints] == ["62.1.1.1:3306", "62.1.1.2:3307", "62.1.1.3:3308"]
+
+    single_endpoint = parse_database_endpoints("62.1.1.4:3306", 3306)
+    assert [endpoint.label() for endpoint in single_endpoint] == ["62.1.1.4:3306"]
+
+    selector = DatabaseEndpointSelector(endpoints)
+    assert selector.current().label() == "62.1.1.1:3306"
+    previous, current = selector.advance()
+    assert previous.label() == "62.1.1.1:3306"
+    assert current.label() == "62.1.1.2:3307"
+    previous, current, advanced = selector.advance_if_current(endpoints[0])
+    assert advanced is False
+    assert previous.label() == "62.1.1.2:3307"
+    assert current.label() == "62.1.1.2:3307"
+    previous, current, advanced = selector.advance_if_current(endpoints[1])
+    assert advanced is True
+    assert previous.label() == "62.1.1.2:3307"
+    assert current.label() == "62.1.1.3:3308"
+    selector.set_current(endpoints[2])
+    assert selector.current().label() == "62.1.1.3:3308"
+
+    with pytest.raises(ValueError, match="端口无效"):
+        parse_database_endpoints("127.0.0.1:bad", 3306)
+
+    with pytest.raises(ValueError, match="必须使用 host:port"):
+        parse_database_endpoints("127.0.0.1", 3306)
+
+    with pytest.raises(ValueError, match="必须使用 host:port"):
+        parse_database_endpoints("127.0.0.1:3306,127.0.0.2", 3306)
+
+    with pytest.raises(ValueError, match="不能为空"):
+        parse_database_endpoints(" , ", 3306)
+
+
+def test_checkpoint_mysql_failover_advances_after_create_error(monkeypatch):
+    monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
+    monkeypatch.setattr(checkpoint, "MYSQL_USER", "user")
+    monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
+    monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pwd")
+    monkeypatch.setattr(
+        checkpoint,
+        "_endpoint_selector",
+        DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306)),
+    )
+
+    class FakeSaver:
+        calls = []
+
+        @classmethod
+        def from_conn_string(cls, conn_string):
+            cls.calls.append(conn_string)
+            if len(cls.calls) == 1:
+                raise RuntimeError("down")
+            return {"conn_string": conn_string}
+
+    monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
+    with pytest.raises(RuntimeError, match="down"):
+        checkpoint._get_mysql_checkpointer()
+
+    mysql_context = checkpoint._get_mysql_checkpointer()
+    assert FakeSaver.calls[0] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert mysql_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.2:3307/db"
+
+
+def test_checkpoint_mysql_failover_advances_after_enter_error(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+
+    class BadContext:
+        async def __aenter__(self):
+            raise RuntimeError("enter down")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    context = checkpoint._MySQLCheckpointerFailoverContext(BadContext(), selector.current())
+
+    async def enter_context():
+        async with context:
+            pass
+
+    with pytest.raises(RuntimeError, match="enter down"):
+        asyncio.run(enter_context())
+
+    assert selector.current().label() == "127.0.0.2:3307"
 
 
 def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
@@ -159,6 +251,7 @@ def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
 def test_database_session_commit_rollback_and_info(monkeypatch):
     database._engine = None
     database._session_factory = None
+    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306", 3306)))
     monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
     url = database.get_database_url()
     assert url.drivername == "mysql+aiomysql"
@@ -220,6 +313,81 @@ def test_database_session_commit_rollback_and_info(monkeypatch):
 
     asyncio.run(database.close_database())
     assert fake_engine.disposed is True
+
+
+def test_database_session_connection_error_advances_endpoint(monkeypatch):
+    database._engine = None
+    database._session_factory = None
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    monkeypatch.setattr(database, "_endpoint_selector", selector)
+
+    class FakeEngine:
+        def __init__(self):
+            self.disposed = False
+
+        async def dispose(self):
+            self.disposed = True
+
+    fake_engine = FakeEngine()
+    database._engine = fake_engine
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+    class FakeFactory:
+        def __call__(self):
+            return FakeSession()
+
+    monkeypatch.setattr(database, "get_session_factory", lambda: FakeFactory())
+    monkeypatch.setattr(database, "_is_connection_error", lambda err: isinstance(err, RuntimeError))
+
+    async def use_failure():
+        async with database.get_session():
+            raise RuntimeError("connection down")
+
+    with pytest.raises(RuntimeError, match="connection down"):
+        asyncio.run(use_failure())
+
+    assert fake_engine.disposed is True
+    assert database._engine is None
+    assert database._session_factory is None
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
+def test_database_failover_does_not_advance_stale_endpoint(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    monkeypatch.setattr(database, "_endpoint_selector", selector)
+    stale_endpoint = selector.current()
+    selector.advance()
+
+    asyncio.run(database._failover_database_endpoint(stale_endpoint, RuntimeError("already switched")))
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
+def test_database_connection_error_detection_is_selective():
+    disconnected = OperationalError(
+        statement="select 1",
+        params=None,
+        orig=SimpleNamespace(args=(2003, "connect failed")),
+    )
+    syntax_like = OperationalError(
+        statement="select 1",
+        params=None,
+        orig=SimpleNamespace(args=(1064, "syntax")),
+    )
+    assert database._is_connection_error(disconnected) is True
+    assert database._is_connection_error(syntax_like) is False
+    assert database._is_connection_error(RuntimeError("boom")) is False
 
 
 def test_logger_env_and_manager_branches(monkeypatch, tmp_path):
