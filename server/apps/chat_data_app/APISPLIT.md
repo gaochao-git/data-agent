@@ -76,6 +76,7 @@
 #### 数据源管理
 
 - `GET /api/chatdata/datasources`
+- `POST /api/chatdata/datasources/groups`
 - `PATCH /api/chatdata/datasources/{datasource_id}`
 - `PATCH /api/chatdata/datasources/{datasource_id}/mapped-modules`
 - `POST /api/chatdata/datasources/{datasource_id}/set-default`

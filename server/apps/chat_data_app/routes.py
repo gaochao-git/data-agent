@@ -1010,7 +1010,7 @@ async def get_datasources(request: Request, include_tables: bool = True):
         )
 
 
-@router.post("/datasource-groups")
+@router.post("/datasources/groups")
 async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request):
     """创建数据源组。"""
     try:

@@ -678,7 +678,7 @@ export function createDatasourceGroup(data: {
   }>
 }): Promise<ApiResponse<DataSource>> {
   return request({
-    url: `/agents/api/chatdata/datasource-groups`,
+    url: `/agents/api/chatdata/datasources/groups`,
     method: 'post',
     data
   })
