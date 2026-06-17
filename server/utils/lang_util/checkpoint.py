@@ -22,7 +22,7 @@ MySQL 配置：
 
 import os
 
-from .db_failover import DatabaseEndpointSelector, parse_database_endpoints
+from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 from utils.logger import get_logger
 from utils.storage_paths import DATA_ROOT
 
@@ -122,7 +122,11 @@ class _MySQLCheckpointerFailoverContext:
             raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return await self.context.__aexit__(exc_type, exc_val, exc_tb)
+        try:
+            return await self.context.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            if exc_val is not None and is_mysql_connection_error(exc_val):
+                _advance_checkpointer_endpoint(self.endpoint, exc_val)
 
 
 def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:

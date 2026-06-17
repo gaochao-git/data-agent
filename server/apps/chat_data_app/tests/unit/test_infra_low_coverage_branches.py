@@ -17,7 +17,7 @@ from apps.chat_data_app.route_modules import data_analyze_workspace
 from apps.chat_data_app.schema import SkillImportFromWorkspaceRequest
 from utils import logger as logger_module
 from utils.lang_util import checkpoint, database, llm
-from utils.lang_util.db_failover import DatabaseEndpointSelector, parse_database_endpoints
+from utils.lang_util.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 
 def _payload(response):
@@ -220,6 +220,30 @@ def test_checkpoint_mysql_failover_advances_after_enter_error(monkeypatch):
     assert selector.current().label() == "127.0.0.2:3307"
 
 
+def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+
+    class Context:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    context = checkpoint._MySQLCheckpointerFailoverContext(Context(), selector.current())
+    err = OperationalError(statement="select 1", params=None, orig=SimpleNamespace(args=(2006, "gone away")))
+
+    async def use_context():
+        async with context:
+            raise err
+
+    with pytest.raises(OperationalError):
+        asyncio.run(use_context())
+
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
 def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
     events = []
 
@@ -364,6 +388,47 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
     assert selector.current().label() == "127.0.0.2:3307"
 
 
+def test_database_session_rollback_connection_error_advances_endpoint(monkeypatch):
+    database._engine = None
+    database._session_factory = None
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    monkeypatch.setattr(database, "_endpoint_selector", selector)
+
+    class FakeEngine:
+        async def dispose(self):
+            pass
+
+    database._engine = FakeEngine()
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            raise OperationalError(statement="rollback", params=None, orig=SimpleNamespace(args=(2006, "gone away")))
+
+    class FakeFactory:
+        def __call__(self):
+            return FakeSession()
+
+    monkeypatch.setattr(database, "get_session_factory", lambda: FakeFactory())
+
+    async def use_failure():
+        async with database.get_session():
+            raise RuntimeError("business error")
+
+    with pytest.raises(RuntimeError, match="business error"):
+        asyncio.run(use_failure())
+
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
 def test_database_failover_does_not_advance_stale_endpoint(monkeypatch):
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
@@ -388,6 +453,45 @@ def test_database_connection_error_detection_is_selective():
     assert database._is_connection_error(disconnected) is True
     assert database._is_connection_error(syntax_like) is False
     assert database._is_connection_error(RuntimeError("boom")) is False
+    assert is_mysql_connection_error(SimpleNamespace(args=(2013, "lost"))) is True
+
+
+def test_database_probe_reraises_non_connection_error(monkeypatch):
+    endpoint = parse_database_endpoints("127.0.0.1:3306", 3306)[0]
+    monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
+
+    class FakeConn:
+        async def __aenter__(self):
+            raise PermissionError("access denied")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConn()
+
+        async def dispose(self):
+            pass
+
+    monkeypatch.setattr(database, "create_async_engine", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(database, "_is_connection_error", lambda err: False)
+
+    with pytest.raises(PermissionError, match="access denied"):
+        asyncio.run(database._probe_database_endpoint(endpoint))
+
+
+def test_select_available_endpoint_reraises_non_connection_error(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3306", 3306))
+    monkeypatch.setattr(database, "_endpoint_selector", selector)
+
+    async def fake_probe(_endpoint):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(database, "_probe_database_endpoint", fake_probe)
+
+    with pytest.raises(PermissionError, match="access denied"):
+        asyncio.run(database.select_available_database_endpoint())
 
 
 def test_logger_env_and_manager_branches(monkeypatch, tmp_path):

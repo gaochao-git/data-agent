@@ -503,7 +503,7 @@ def _get_database_type() -> str:
     """获取业务表数据库类型。"""
     if any(
         os.getenv(key)
-        for key in ("FXCJG_DB_HOST", "FXCJG_DB_PORT", "FXCJG_DB", "FXCJG_DB_USER", "FXCJG_DB_PASSWORD")
+        for key in ("FXCJG_DB_HOST", "FXCJG_DB", "FXCJG_DB_USER", "FXCJG_DB_PASSWORD")
     ):
         return "mysql"
     raise ValueError("缺少业务数据库配置: FXCJG_DB_*")

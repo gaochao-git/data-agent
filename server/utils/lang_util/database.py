@@ -9,12 +9,11 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
-from .db_failover import DatabaseEndpointSelector, parse_database_endpoints
+from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +32,7 @@ DATABASE_TYPE = "mysql"
 
 # MySQL 配置
 MYSQL_HOST = _get_env("FXCJG_DB_HOST")
-MYSQL_PORT = int(_get_env("FXCJG_DB_PORT"))
+MYSQL_PORT = int(os.getenv("FXCJG_DB_PORT", "3306"))
 MYSQL_DB = _get_env("FXCJG_DB")
 MYSQL_USER = _get_env("FXCJG_DB_USER")
 MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST, MYSQL_PORT)
@@ -75,15 +74,7 @@ def create_engine() -> AsyncEngine:
 
 def _is_connection_error(err: Exception) -> bool:
     """判断异常是否表示当前数据库连接已失效。"""
-    if isinstance(err, DBAPIError) and getattr(err, "connection_invalidated", False):
-        return True
-    if not isinstance(err, (OperationalError, InterfaceError)):
-        return False
-    original = getattr(err, "orig", None)
-    error_code = None
-    if getattr(original, "args", None):
-        error_code = original.args[0]
-    return error_code in {2003, 2006, 2013}
+    return is_mysql_connection_error(err)
 
 
 async def _dispose_engine() -> None:
@@ -138,6 +129,9 @@ async def _probe_database_endpoint(endpoint) -> bool:
             await conn.execute(text("SELECT 1"))
         return True
     except Exception as err:
+        if not _is_connection_error(err):
+            logger.error("业务库节点探测遇到非连接类错误: %s, error=%s", endpoint.label(), err)
+            raise
         logger.warning("业务库节点探测失败: %s, error=%s", endpoint.label(), err)
         return False
     finally:
@@ -146,18 +140,11 @@ async def _probe_database_endpoint(endpoint) -> bool:
 
 async def select_available_database_endpoint() -> None:
     """启动时按顺序选择一个可用业务库节点。"""
-    first_error = None
     for endpoint in _endpoint_selector.endpoints:
-        try:
-            if await _probe_database_endpoint(endpoint):
-                _endpoint_selector.set_current(endpoint)
-                logger.info("业务库当前连接节点: %s", endpoint.label())
-                return
-        except Exception as err:
-            first_error = err
-            logger.warning("业务库节点探测异常: %s, error=%s", endpoint.label(), err)
-    if first_error:
-        raise ValueError("所有业务库节点均不可用") from first_error
+        if await _probe_database_endpoint(endpoint):
+            _endpoint_selector.set_current(endpoint)
+            logger.info("业务库当前连接节点: %s", endpoint.label())
+            return
     raise ValueError("所有业务库节点均不可用")
 
 
@@ -197,8 +184,13 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
         except Exception as err:
-            await session.rollback()
-            if _is_connection_error(err):
+            should_failover = _is_connection_error(err)
+            try:
+                await session.rollback()
+            except Exception as rollback_err:
+                should_failover = should_failover or _is_connection_error(rollback_err)
+                logger.warning("数据库会话 rollback 失败: %s", rollback_err)
+            if should_failover:
                 await _failover_database_endpoint(endpoint, err)
             raise
 
