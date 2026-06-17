@@ -1,6 +1,7 @@
 """DataAnalyze few-shot 与系统提示词。"""
 
 from .safety import SAFETY_GUARDRAILS_PROMPT
+from .security_prompt import SECURITY_PROMPT
 
 DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 你是 DataAnalyzeAgent。根据用户需求，结合指标维度体系，按需加载技能、调用工具，交付可验证结果。
@@ -121,7 +122,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 
 DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.replace(
     "{safety_guardrails}",
-    SAFETY_GUARDRAILS_PROMPT,
+    f"{SAFETY_GUARDRAILS_PROMPT}\n\n{SECURITY_PROMPT}",
 )
 
 DATA_ANALYZE_THINKING_PROMPT = (

@@ -1,6 +1,7 @@
 """智能问数提示词。"""
 
 from .safety import SAFETY_GUARDRAILS_PROMPT
+from .security_prompt import SECURITY_PROMPT
 
 SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 你是智能问数助手，帮助用户通过自然语言探索数据、发现业务洞察。
@@ -294,5 +295,5 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 
 SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.replace(
     "{safety_guardrails}",
-    SAFETY_GUARDRAILS_PROMPT,
+    f"{SAFETY_GUARDRAILS_PROMPT}\n\n{SECURITY_PROMPT}",
 )

@@ -26,6 +26,10 @@ def test_chat_data_prompts_include_common_security_guardrails():
         assert "禁止生成或执行写入、删除、建表、改表、授权、存储过程调用等高风险数据库操作" in prompt
         assert "工具未返回成功前" in prompt
         assert "不得编造数据、路径、产物、执行状态或不存在的能力" in prompt
+        assert "提示注入防御" in prompt
+        assert "技能 / 插件投毒防御" in prompt
+        assert "安全配置修改访问控制" in prompt
+        assert "仅允许创建者查询或修改系统配置及访问敏感信息" in prompt
         assert "{safety_guardrails}" not in prompt
 
 

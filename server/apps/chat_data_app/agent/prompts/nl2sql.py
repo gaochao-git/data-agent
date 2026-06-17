@@ -1,6 +1,7 @@
 """AI 生成 SQL 提示词。"""
 
 from .safety import SAFETY_GUARDRAILS_PROMPT
+from .security_prompt import SECURITY_PROMPT
 
 TABLE_SELECTOR_PROMPT = """你是数据库专家，根据用户问题选择需要的表。
 
@@ -113,5 +114,5 @@ GROUP BY department
 
 SQL_GENERATOR_PROMPT_GENERATE = SQL_GENERATOR_PROMPT_GENERATE.replace(
     "{safety_guardrails}",
-    SAFETY_GUARDRAILS_PROMPT,
+    f"{SAFETY_GUARDRAILS_PROMPT}\n\n{SECURITY_PROMPT}",
 )
