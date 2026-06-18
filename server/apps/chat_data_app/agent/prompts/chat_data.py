@@ -166,6 +166,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 
 - **filters 格式**: `[{{"dimension": "维度名", "operator": "=", "value": "值", "value_type": "literal"}}]`
   - 时间筛选优先使用明确日期值（`YYYY-MM-DD`）或 `current_date()`，避免使用方言差异较大的函数组合
+  - 日期/时间维度过滤时，筛选值必须和该维度当前查询使用的表达式口径一致：如果维度表达式或 `time_grain` 已把原始数值日期格式化为 `YYYY-MM-DD`、`YYYY-MM` 等展示格式，`value` 必须使用转换后的展示格式；如果没有任何日期格式化转换，则 `value` 必须使用数据库原始存储格式（例如 `20260530`），不要混用原始数值和格式化后的日期字符串
   - 日期范围筛选优先使用半开区间：`>= 起始日` 且 `< 结束日下一天`。例如查询 2025 年 1 月，使用 `>= '2025-01-01'` 和 `< '2025-02-01'`，避免 timestamp 字段漏掉结束日当天非零时分秒数据
   - `value_type` 仅允许: `literal` / `sql_function`
   - 复杂过滤可以使用树形 `and` / `or`，例如 `filters=[{{"or":[{{"dimension":"维度A","operator":"=","value":"取值1"}},{{"dimension":"维度A","operator":"=","value":"取值2"}}]}}]`

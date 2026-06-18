@@ -52,6 +52,15 @@ def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
     assert "超过 5 位的数字" in prompt
 
 
+def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expression():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "日期/时间维度过滤时" in prompt
+    assert "筛选值必须和该维度当前查询使用的表达式口径一致" in prompt
+    assert "value` 必须使用转换后的展示格式" in prompt
+    assert "value` 必须使用数据库原始存储格式" in prompt
+
+
 def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
