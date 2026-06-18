@@ -607,3 +607,247 @@ async def test_continue_execution_forced_missing_buffer_interrupt_without_usage(
     assert '"accumulated_args": {"forced": true}' in text
     assert '"status": "pending"' in text
     assert "message_end" not in text
+
+
+@pytest.mark.asyncio
+async def test_data_analyze_stream_thinking_and_semantic_selection_branches(monkeypatch):
+    class Agent:
+        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+            yield ("custom", {"type": "token_usage", "usage": {}})
+            yield ("messages", (FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (FakeChunk(content="思考后继续", additional_kwargs={"reasoning_content": "有内容思考"}), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (FakeChunk(content="", msg_type="ai"), {"langgraph_node": "thinking"}))
+            yield ("messages", (FakeChunk(content="阶段内容", msg_type="ai"), {"langgraph_node": "plan"}))
+            yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_selected", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (
+                FakeChunk(
+                    content='[select_semantic_config_tool] {"selected": true, "selected_config_id": "cfg", "selected_config_name": "指标集"}',
+                    msg_type="tool",
+                    tool_call_id="tc_selected",
+                    name="select_semantic_config_tool",
+                ),
+                {"langgraph_node": "tools"},
+            ))
+            yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_candidates", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (
+                FakeChunk(
+                    content='[select_semantic_config_tool] {"selected": false, "candidates": [{"id": "cfg_a", "name": "指标集A"}]}',
+                    msg_type="tool",
+                    tool_call_id="tc_candidates",
+                    name="select_semantic_config_tool",
+                ),
+                {"langgraph_node": "tools"},
+            ))
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+
+    response = await handlers.data_analyze_completion_handler(
+        conversation_id="conv_da",
+        query="分析销售额",
+        options={"datasource_id": "ds_a"},
+        user_id="u1",
+    )
+    chunks = await collect_stream(response.body_iterator)
+    text = "".join(chunks)
+
+    assert "event: thinking" in text
+    assert "思考后继续" in text
+    assert "event: task_stage_delta" in text
+    assert "semantic_config_selected" in text
+    assert "semantic_config_select_required" in text
+
+
+@pytest.mark.asyncio
+async def test_data_analyze_stream_tool_selection_payload_empty_branch(monkeypatch):
+    class Agent:
+        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+            yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_empty", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (
+                FakeChunk(
+                    content='[select_semantic_config_tool] {"selected": false}',
+                    msg_type="tool",
+                    tool_call_id="tc_empty",
+                    name="select_semantic_config_tool",
+                ),
+                {"langgraph_node": "tools"},
+            ))
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+
+    response = await handlers.data_analyze_completion_handler(
+        conversation_id="conv_da_empty",
+        query="分析销售额",
+        options={"datasource_id": "ds_a"},
+        user_id="u1",
+    )
+    chunks = await collect_stream(response.body_iterator)
+    text = "".join(chunks)
+
+    assert "select_semantic_config_tool" in text
+    assert "semantic_config_selected" not in text
+    assert "semantic_config_select_required" not in text
+
+
+@pytest.mark.asyncio
+async def test_persist_reasoning_segments_keeps_count_on_update_error():
+    class Graph:
+        async def aupdate_state(self, *_args, **_kwargs):
+            raise RuntimeError("state write failed")
+
+    segments = [{"id": "reasoning-0", "content": "思考", "tool_call_count": 0}]
+
+    assert await handlers._persist_reasoning_segments(Graph(), {"thread_id": "t"}, segments, "agent") == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(monkeypatch):
+    class Graph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+        async def astream(self, *_args, **_kwargs):
+            yield FakeChunk(
+                content="带思考的回答",
+                msg_type="ai",
+                additional_kwargs={"reasoning_content": "先想一下"},
+            ), {"langgraph_node": "agent"}
+            yield FakeChunk(content="untracked tool", msg_type="tool", tool_call_id="missing"), {"langgraph_node": "tools"}
+            yield FakeChunk(tool_calls=[{"id": "tc_select_bad", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(
+                content="[select_semantic_config_tool] not-json",
+                msg_type="tool",
+                tool_call_id="tc_select_bad",
+            ), {"langgraph_node": "tools"}
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
+    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    chunks = await collect_stream(handlers._stream_sql_generation(
+        thread_id="conv",
+        user_query="查",
+        datasource_id="ds_a",
+        mode="query",
+    ))
+    text = "".join(chunks)
+
+    assert "event: thinking" in text
+    assert "带思考的回答" in text
+    assert "untracked tool" in text
+    assert "semantic_config_selected" not in text
+    assert "semantic_config_select_required" not in text
+
+
+@pytest.mark.asyncio
+async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
+    class Graph:
+        async def astream(self, *_args, **_kwargs):
+            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(
+                values={},
+                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
+            )
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
+    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    chunks = await collect_stream(handlers._stream_sql_generation(
+        thread_id="conv",
+        user_query="查",
+        datasource_id="ds_a",
+        mode="query",
+    ))
+    text = "".join(chunks)
+
+    assert '"status": "pending"' in text
+    assert "message_end" not in text
+
+
+@pytest.mark.asyncio
+async def test_continue_execution_thinking_duplicate_tool_and_empty_args(monkeypatch):
+    class Graph:
+        async def astream(self, *_args, **_kwargs):
+            yield FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "agent"}
+            yield FakeChunk(content="思考后输出", additional_kwargs={"reasoning_content": "继续想"}), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_calls=[
+                {"id": "tc_dup", "name": "execute_sql_tool"},
+                {"id": "tc_dup", "name": "execute_sql_tool"},
+            ]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc_empty", "name": "execute_sql_tool", "args": ""}]), {"langgraph_node": "agent"}
+            yield FakeChunk(content="empty args done", msg_type="tool", tool_call_id="tc_empty", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(content="missing buffer done", msg_type="tool", tool_call_id="missing", name="execute_sql_tool"), {"langgraph_node": "tools"}
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
+
+    chunks = await collect_stream(handlers._continue_execution("conv", action="approve"))
+    text = "".join(chunks)
+
+    assert "event: thinking" in text
+    assert "思考后输出" in text
+    assert text.count('"tool_call_id": "tc_dup"') == 1
+    assert "empty args done" in text
+    assert "missing buffer done" in text
+
+
+@pytest.mark.asyncio
+async def test_data_analyze_stream_bad_selection_payload_branch(monkeypatch):
+    class Agent:
+        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+            yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_bad", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (
+                FakeChunk(
+                    content="[select_semantic_config_tool] not-json",
+                    msg_type="tool",
+                    tool_call_id="tc_bad",
+                    name="select_semantic_config_tool",
+                ),
+                {"langgraph_node": "tools"},
+            ))
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+
+    response = await handlers.data_analyze_completion_handler(
+        conversation_id="conv_da_bad_selection",
+        query="分析销售额",
+        options={"datasource_id": "ds_a"},
+        user_id="u1",
+    )
+    text = "".join(await collect_stream(response.body_iterator))
+
+    assert "select_semantic_config_tool" in text
+    assert "semantic_config_selected" not in text
+    assert "semantic_config_select_required" not in text

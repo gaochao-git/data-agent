@@ -98,6 +98,13 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
     assert "order_id bigint PRIMARY KEY  -- 订单ID" in ddl
     assert "status TEXT  -- 订单状态" in ddl
 
+    no_comment = agent_tools.get_tables_create_format(
+        [{"table_name": "logs", "description": "", "columns": [{"name": "id"}]}],
+        ["logs"],
+    )
+    assert "    id TEXT" in no_comment
+    assert "--" not in no_comment
+
 
 def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relationships():
     prompt = agent_tools.build_semantic_prompt({
@@ -546,6 +553,27 @@ def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
     assert captured["conversation_id"] == "conv_a"
 
 
+def test_execute_sql_tool_large_result_without_sql_omits_sql_summary(monkeypatch):
+    async def fake_execute_sql_real(*_args, **_kwargs):
+        return {
+            "success": True,
+            "columns": ["content"],
+            "data": [{"content": "x" * 200}],
+            "total_count": 1,
+            "execution_time_ms": 12,
+        }
+
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_no_sql")
+    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
+
+    result = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+
+    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+    assert payload["artifact_id"] == "artifact_no_sql"
+    assert "sql" not in payload
+
+
 def test_execute_sql_tool_approval_reject_and_rewrite_branches(monkeypatch):
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
         return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
@@ -580,7 +608,10 @@ def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch()
     }
 
     prompt = agent_tools.build_semantic_prompt({
-        "metrics": [],
+        "metrics": [
+            {"name": "无表指标", "expression": "COUNT(*)", "table": "", "description": ""},
+            {"name": "同表指标", "expression": "SUM(amount)", "table": "orders", "table_alias": "orders"},
+        ],
         "dimensions": [
             {"name": "别名维度", "table": "", "table_alias": "alias_only", "column": "", "description": ""},
             {"name": "空表达式", "table": "", "column": "", "description": ""},
@@ -588,6 +619,9 @@ def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch()
         "relationships": [],
     })
 
+    assert "无表指标" in prompt
+    assert "无表指标，表达式: COUNT(*)，表" not in prompt
+    assert "**同表指标**，表达式: SUM(amount)，表: orders" in prompt
     assert "表: alias_only" in prompt
     assert "表达式: -" in prompt
 

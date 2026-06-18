@@ -89,6 +89,27 @@ def test_hive_meta_headers_include_auth_token(monkeypatch):
     }
 
 
+def test_hive_meta_log_summary_helpers():
+    short_payload = hive_meta_http._meta_payload_summary({"orgCode": "org_1", "table_names": ["a", "b"]})
+    assert short_payload["table_count"] == 2
+    assert short_payload["table_names"] == ["a", "b"]
+
+    long_names = [f"t{i}" for i in range(12)]
+    long_payload = hive_meta_http._meta_payload_summary({"table_names": long_names})
+    assert long_payload["table_count"] == 12
+    assert long_payload["table_names"] == long_names[:10]
+
+    assert hive_meta_http._meta_response_summary(["bad"]) == {"payload_type": "list"}
+    assert hive_meta_http._meta_response_summary({"code": 20000, "data": {"tables": [1, 2]}}) == {
+        "code": 20000,
+        "table_count": 2,
+    }
+    assert hive_meta_http._meta_response_summary({"message": "ok", "tables": []}) == {
+        "msg": "ok",
+        "table_count": 0,
+    }
+
+
 def test_hive_meta_table_and_schema_normalization():
     tables = hive_meta_http._normalize_table_items([
         {"table_name": "orders", "table_description": "订单表"},

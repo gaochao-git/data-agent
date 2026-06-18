@@ -16,6 +16,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.services import hive_sync, mysql_sync, query_metadata
 from apps.chat_data_app.services.hive_sync import HiveSyncService
 from apps.chat_data_app.services.mysql_sync import MySQLSyncService
+from utils.lang_util.models import ChatDataQueryTask, SqlQueryHistory
 
 
 def test_hive_identifier_validation_and_socket_timeout():
@@ -69,6 +70,18 @@ def test_hive_socket_timeout_ignores_nested_transport_failures():
             raise RuntimeError("transport fail")
 
     hive_sync._apply_socket_timeout(BadTransport(), 2)
+
+
+def test_hive_socket_timeout_skips_none_nested_and_handle_fallbacks():
+    class Transport:
+        def __init__(self):
+            self._trans = None
+            self._sock = None
+            self.handle = SimpleNamespace(settimeout=lambda value: setattr(self, "handle_timeout", value))
+
+    transport = Transport()
+    hive_sync._apply_socket_timeout(transport, 5)
+    assert transport.handle_timeout == 5
 
 
 def test_hive_read_positive_int_env(monkeypatch):
@@ -177,6 +190,31 @@ def test_hive_sync_parses_tables_metadata_and_schema():
     assert schema[1]["description"] == "用户表"
 
 
+def test_hive_sync_metadata_parser_skips_hash_and_comment_rows():
+    rows_by_sql = {
+        "DESCRIBE FORMATTED `orders`": [
+            (None, "string", "skip"),
+            ("# col_name", "data_type", "comment"),
+            ("id", "string", "主键"),
+            ("# Partition Information", "", ""),
+            ("id", "string", "重复分区"),
+            ("dt", "string", "分区"),
+            ("# Detailed Table Information", "", ""),
+            ("comment", "订单表", ""),
+            ("# Storage Information", "", ""),
+            ("Serde Library", "serde", ""),
+        ],
+    }
+    conn = FakeHiveConnection(rows_by_sql)
+    service = HiveSyncService("localhost")
+
+    metadata = service._get_table_metadata("orders", conn)
+
+    assert metadata["comment"] == "订单表"
+    assert [column["name"] for column in metadata["columns"]] == ["id", "dt"]
+    assert metadata["columns"][1]["is_partition"] is True
+
+
 def test_hive_sync_fetches_tables_and_metadata_with_owned_connection():
     rows_by_sql = {
         "SHOW TABLES": [("orders",)],
@@ -238,6 +276,71 @@ def test_hive_sync_async_methods_delegate_to_sync_methods():
 
     assert asyncio.run(service.get_tables_async()) == ["orders"]
     assert asyncio.run(service.get_full_schema_async(["orders"], max_workers=3)) == [{"table_name": "orders", "max_workers": 3}]
+
+
+@pytest.mark.asyncio
+async def test_mysql_sync_positive_int_env_and_empty_schema_rows(monkeypatch):
+    monkeypatch.delenv("CHATDATA_MYSQL_TEST_INT", raising=False)
+    assert mysql_sync._read_positive_int_env("CHATDATA_MYSQL_TEST_INT", 6) == 6
+    monkeypatch.setenv("CHATDATA_MYSQL_TEST_INT", "0")
+    assert mysql_sync._read_positive_int_env("CHATDATA_MYSQL_TEST_INT", 6) == 6
+    monkeypatch.setenv("CHATDATA_MYSQL_TEST_INT", "9")
+    assert mysql_sync._read_positive_int_env("CHATDATA_MYSQL_TEST_INT", 6) == 9
+
+    connections = [
+        AsyncMySQLConnection([]),
+        AsyncMySQLConnection([{"TABLE_NAME": "orders", "TABLE_COMMENT": "订单表", "COLUMN_NAME": ""}]),
+    ]
+
+    async def fake_connect(**_kwargs):
+        return connections.pop(0)
+
+    monkeypatch.setattr(mysql_sync.aiomysql, "connect", fake_connect)
+    monkeypatch.setattr(mysql_sync.aiomysql, "DictCursor", object())
+
+    service = MySQLSyncService("localhost", database="demo")
+    assert await service.get_full_schema_async() == []
+    assert await service.get_full_schema_async() == [
+        {"table_name": "orders", "description": "订单表", "columns": []}
+    ]
+
+
+def test_lang_util_model_to_dict_json_branches():
+    history = SqlQueryHistory(
+        datasource_id="ds_a",
+        sql_text="select 1",
+        query_title="查询",
+        query_type="sql",
+        builder_config='{"metrics":["销售额"]}',
+    )
+    assert history.to_dict()["builder_config"] == {"metrics": ["销售额"]}
+    history.builder_config = "{bad"
+    assert history.to_dict()["builder_config"] is None
+    history.builder_config = ""
+    assert "builder_config" not in history.to_dict()
+
+    task = ChatDataQueryTask(
+        task_id="task_1",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="succeeded",
+        result_payload='{"success":true}',
+        request_payload='{"sql":"select 1"}',
+    )
+    payload = task.to_dict()
+    assert payload["result_payload"] == {"success": True}
+    assert payload["request_payload"] == {"sql": "select 1"}
+    task.result_payload = "{bad"
+    task.request_payload = "{bad"
+    bad_payload = task.to_dict()
+    assert bad_payload["result_payload"] is None
+    assert bad_payload["request_payload"] is None
+    task.result_payload = ""
+    task.request_payload = ""
+    empty_payload = task.to_dict()
+    assert empty_payload["result_payload"] is None
+    assert empty_payload["request_payload"] is None
 
 
 class AsyncCursor:

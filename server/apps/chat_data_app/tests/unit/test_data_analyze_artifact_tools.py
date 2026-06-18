@@ -80,6 +80,14 @@ def test_chart_artifact_payload_supports_graph_and_rejects_incomplete_specs(tmp_
     assert artifact_payloads.parse_chart_spec_payload(pie_without_y) is None
     assert artifact_payloads.parse_chart_spec_payload(wrong_version) is None
 
+    graph_top_level = _write_json(tmp_path / "outputs" / "graph-top.json", {
+        "version": "1.0",
+        "chart_type": "graph",
+        "nodes": [{"id": "a"}],
+        "links": [{"source": "a", "target": "b"}],
+    })
+    assert artifact_payloads.parse_chart_spec_payload(graph_top_level)["chart_type"] == "graph"
+
 
 def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(tmp_path):
     invalid_json = tmp_path / "outputs" / "invalid-json.json"
@@ -113,6 +121,18 @@ def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(
         "chart_type": "graph",
         "data": {"nodes": [{"id": "a"}], "edges": []},
     })
+    y_missing = _write_json(tmp_path / "outputs" / "missing-y-field.json", {
+        "version": "1.0",
+        "chart_type": "line",
+        "data": [{"month": "2026-01", "sales": 1}],
+        "encoding": {"x": "month", "y": ["missing"]},
+    })
+    non_dict_rows = _write_json(tmp_path / "outputs" / "non-dict-rows.json", {
+        "version": "1.0",
+        "chart_type": "table",
+        "data": ["row"],
+        "encoding": {"x": "", "y": []},
+    })
 
     assert artifact_payloads.parse_chart_spec_payload(invalid_json) is None
     assert artifact_payloads.parse_chart_spec_payload(unsupported_type) is None
@@ -120,6 +140,8 @@ def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(
     assert artifact_payloads.parse_chart_spec_payload(missing_encoding) is None
     assert artifact_payloads.parse_chart_spec_payload(missing_x) is None
     assert artifact_payloads.parse_chart_spec_payload(graph_without_links) is None
+    assert artifact_payloads.parse_chart_spec_payload(y_missing) is None
+    assert artifact_payloads.parse_chart_spec_payload(non_dict_rows)["chart_type"] == "table"
 
 
 def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path):

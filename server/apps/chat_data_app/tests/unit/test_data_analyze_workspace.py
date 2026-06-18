@@ -182,6 +182,10 @@ def test_workspace_json_list_read_and_visible_paths():
     visible_path = write_workspace_json(paths["root"], "workspace/context.json", {"用户": "张三"})
 
     assert visible_path == "/workspace/context.json"
+    assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"
+    assert resolve_workspace_path(paths["root"], "") == Path(paths["root"]).resolve()
+    (Path(paths["root"]) / "outputs").rmdir()
+    (Path(paths["workspace"]) / "nested-dir").mkdir()
     files = list_workspace_files(Path(paths["root"]).name)
     assert any(item["path"] == "/workspace/context.json" and item["directory"] == "workspace" for item in files)
 
@@ -553,6 +557,27 @@ def test_parse_patch_rejects_malformed_inputs():
         file_edit_tool_module.parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\n+x")
 
 
+def test_parse_patch_accepts_delete_eof_and_multiple_update_hunks():
+    ops = file_edit_tool_module.parse_patch(
+        "*** Begin Patch\n"
+        "*** Delete File: workspace/remove.txt\n"
+        "*** Update File: workspace/demo.txt\n"
+        "@@\n"
+        " old\n"
+        "-a\n"
+        "+b\n"
+        "*** End of File\n"
+        "@@ second\n"
+        " b\n"
+        "+c\n"
+        "*** End Patch"
+    )
+
+    assert isinstance(ops[0], file_edit_tool_module.DeleteOp)
+    assert isinstance(ops[1], file_edit_tool_module.UpdateOp)
+    assert len(ops[1].hunks) == 2
+
+
 def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp_path):
     root = tmp_path
     (root / "workspace").mkdir()
@@ -579,6 +604,61 @@ def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp
             root=str(root),
         )
 
+
+def test_apply_patch_ops_delete_and_update_without_trailing_newline(tmp_path):
+    root = tmp_path
+    workspace = root / "workspace"
+    workspace.mkdir()
+    delete_target = workspace / "remove.txt"
+    update_target = workspace / "exists.txt"
+    delete_target.write_text("remove", encoding="utf-8")
+    update_target.write_text("old", encoding="utf-8")
+
+    actions = file_edit_tool_module.apply_patch_ops(
+        [
+            file_edit_tool_module.DeleteOp(path="workspace/remove.txt"),
+            file_edit_tool_module.UpdateOp(
+                path="workspace/exists.txt",
+                hunks=[file_edit_tool_module.Hunk(lines=["-old", "+new"])],
+            ),
+        ],
+        root=str(root),
+    )
+
+    assert actions == ["delete workspace/remove.txt", "update workspace/exists.txt"]
+    assert not delete_target.exists()
+    assert update_target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_file_edit_private_patch_helpers_cover_remaining_branches():
+    assert file_edit_tool_module._find_hunk_start(["a", "b"], [], 1) == 1
+    assert file_edit_tool_module._ops_to_sandbox_payload([
+        file_edit_tool_module.DeleteOp(path="workspace/remove.txt")
+    ]) == [{"kind": "delete", "path": "workspace/remove.txt", "visible_path": "workspace/remove.txt"}]
+
+
+def test_file_edit_next_action_helpers_cover_path_variants():
+    assert "草稿已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "/workspace/dashboard_draft/demo.json",
+        "write",
+    )
+    assert "看板预览文件已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "/mnt/user-data/outputs/demo.dashboard.json",
+        "write",
+    )
+    assert "文件已 patch 更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "workspace/notes.txt",
+        "patch",
+    )
+    assert file_edit_tool_module._dashboard_next_action_for_path("workspace/notes.txt", "write") is None
+
+    payload = {}
+    file_edit_tool_module._attach_dashboard_next_action(
+        payload,
+        operation="write",
+        paths=["workspace/notes.txt", "outputs/demo.dashboard.json"],
+    )
+    assert "看板预览文件已更新" in payload["next_required_action"]
 
 @pytest.mark.asyncio
 async def test_file_edit_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):

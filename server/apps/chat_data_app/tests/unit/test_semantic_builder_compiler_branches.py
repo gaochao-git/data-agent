@@ -247,6 +247,29 @@ def test_semantic_builder_collects_or_filter_tables_and_empty_alias_branch():
     assert tables_needed == {"orders", "u"}
 
 
+def test_semantic_builder_collect_and_main_table_remaining_edges():
+    tables_needed = set()
+    SemanticBuilderCompiler._collect_filter_tables(
+        {"and": ["skip", {"table": "orders", "tableAlias": "o"}]},
+        tables_needed,
+    )
+    assert tables_needed == {"o"}
+
+    compiler = SemanticBuilderCompiler(build_semantic_config())
+    assert compiler._resolve_main_table(
+        [{"table": "", "tableAlias": "", "column": ""}, {"table": "orders", "tableAlias": "o", "column": "city"}],
+        [],
+        [],
+        [],
+    ) == ("orders", "o")
+    assert compiler._resolve_main_table(
+        [],
+        [],
+        [{"and": [{"table": ""}, {"table": "users", "tableAlias": "u"}]}],
+        [],
+    ) == ("users", "u")
+
+
 def test_semantic_builder_compile_full_path_with_aliases_and_field_ref():
     compiler = SemanticBuilderCompiler(build_semantic_config())
 
@@ -288,6 +311,8 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
             return {"id": datasource_id, "source_type": "hive"} if datasource_id == "ds_a" else None
 
         async def get_runtime_semantic_config_async(self, datasource_id, config_id):
+            if config_id == "plain":
+                return {"id": config_id, "enabled": True, "metrics": [], "dimensions": []}
             if config_id == "disabled":
                 return {"id": config_id, "enabled": False}
             if config_id == "missing_id":
@@ -296,7 +321,7 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
 
     class FallbackManager:
         async def get_datasource_async(self, datasource_id):
-            return {"id": datasource_id, "source_type": "mysql"}
+            return {"id": datasource_id}
 
         async def get_semantic_config_async(self, datasource_id, config_id):
             return {"id": config_id, "enabled": True, "joins": [], "relationships": [{"left_table": "x"}]}
@@ -313,13 +338,16 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
         await compiler_module.load_runtime_semantic_config("ds_a", "disabled")
 
     loaded = await compiler_module.load_runtime_semantic_config("ds_a", "missing_id")
+    plain = await compiler_module.load_runtime_semantic_config("ds_a", "plain")
     assert loaded["id"] == "missing_id"
     assert loaded["source_type"] == "hive"
     assert loaded["joins"] == loaded["relationships"]
+    assert "joins" not in plain
+    assert plain["source_type"] == "hive"
 
     monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: FallbackManager())
     fallback = await compiler_module.load_runtime_semantic_config("ds_b", "cfg_b")
-    assert fallback["source_type"] == "mysql"
+    assert "source_type" not in fallback
     assert fallback["joins"] == [{"left_table": "x"}]
 
 

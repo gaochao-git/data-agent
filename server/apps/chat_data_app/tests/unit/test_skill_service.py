@@ -321,6 +321,116 @@ def test_skill_service_db_metadata_handles_store_errors(monkeypatch):
     assert asyncio.run(service._get_db_skill_metadata_async("missing")) is None
 
 
+def test_skill_service_remaining_private_helper_edges(tmp_path, monkeypatch):
+    service = SkillService()
+
+    class MissingPathStore:
+        async def get_skill_async(self, *_args, **_kwargs):
+            return {
+                "skill_id": "skill_1",
+                "skill_name": "missing-skill",
+                "skill_source": "user",
+                "owner_user_id": "u1",
+                "current_skill_version_no": 1,
+            }
+
+        async def get_published_version_async(self, *_args, **_kwargs):
+            return {"skill_version_dir": str(tmp_path / "missing")}
+
+        async def get_latest_draft_version_async(self, *_args, **_kwargs):
+            return None
+
+        async def get_latest_published_version_async(self, *_args, **_kwargs):
+            return None
+
+    service._store = MissingPathStore()
+    assert asyncio.run(service._get_db_skill_detail_async("missing-skill", user_id="u1")) is None
+
+    class EditableStore:
+        async def get_skill_async(self, *_args, **_kwargs):
+            return {"skill_id": "skill_1", "skill_source": "user", "owner_user_id": "u1"}
+
+        async def get_version_async(self, *_args, **_kwargs):
+            return None
+
+    service._store = EditableStore()
+    with pytest.raises(ValueError, match="技能版本不存在"):
+        asyncio.run(service._get_editable_version_dir_async("skill_1", 1, "u1"))
+
+    class CopyStore:
+        def __init__(self, draft=None, published=None, latest=None):
+            self.draft = draft
+            self.published = published
+            self.latest = latest
+
+        async def get_latest_draft_version_async(self, *_args, **_kwargs):
+            return self.draft
+
+        async def get_published_version_async(self, *_args, **_kwargs):
+            return self.published
+
+        async def get_latest_published_version_async(self, *_args, **_kwargs):
+            return self.latest
+
+    draft = {"skill_version_no": 2}
+    service._store = CopyStore(draft=draft)
+    assert asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u1"}, "u1")) is draft
+
+    latest = {"skill_version_no": 1}
+    service._store = CopyStore(latest=latest)
+    assert asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1")) is latest
+
+    service._store = CopyStore()
+    with pytest.raises(ValueError, match="没有可复制的技能版本"):
+        asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1"))
+
+    class SystemStore:
+        async def get_version_async(self, *_args, **_kwargs):
+            return {"skill_version_dir": str(tmp_path / "system-missing")}
+
+    service._store = SystemStore()
+    with pytest.raises(ValueError, match="技能版本目录无效"):
+        asyncio.run(service._get_system_version_dir_async({"skill_id": "system_1", "skill_root_dir": ""}, 1))
+
+    class ReadableStore:
+        async def get_skill_async(self, *_args, **_kwargs):
+            return {"skill_id": "system_1", "skill_source": "system"}
+
+    service._store = ReadableStore()
+    monkeypatch.setattr(service, "_get_system_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path))
+    assert asyncio.run(service._get_readable_version_dir_async("system_1", 1, "u1")) == tmp_path
+
+    service._resolve_file_under_version_dir(tmp_path, "references", "guide")
+    with pytest.raises(ValueError, match="文件路径无效"):
+        service._resolve_file_under_version_dir(tmp_path, "scripts", "../bad.py")
+
+    archived = {}
+
+    class ArchiveStore:
+        async def list_versions_async(self, *_args, **_kwargs):
+            return [{"skill_version_no": 1, "skill_version_dir": str(tmp_path / "external" / "v1")}]
+
+        async def update_version_dir_async(self, skill_id, version_no, version_dir, **_kwargs):
+            archived["version_dir"] = version_dir
+
+        async def delete_skill_async(self, skill_id, archive_name, archive_root_dir, **_kwargs):
+            archived["archive_root_dir"] = archive_root_dir
+
+    service._store = ArchiveStore()
+    asyncio.run(service._archive_user_skill_async(
+        {"skill_id": "skill_1", "skill_name": "demo-skill", "skill_root_dir": str(tmp_path / "not-exist")},
+        "u1",
+    ))
+    assert archived["version_dir"].startswith(archived["archive_root_dir"])
+    assert archived["version_dir"].endswith("versions/v1")
+
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+    cleanup_dir = tmp_path / "cleanup-skill"
+    cleanup_dir.mkdir()
+    service.cleanup_user_skill_dir("cleanup-skill")
+    assert not cleanup_dir.exists()
+
+
 def test_create_user_skill_async_uses_async_store(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     archived = {}
@@ -1690,3 +1800,88 @@ def test_skill_service_remaining_file_and_archive_branches(tmp_path, monkeypatch
 
     assert updated["version_dir"].endswith("versions/v3")
     assert deleted["archive_name"] == "demo-skill--deleted-abcdefff"
+
+
+def test_skill_service_extra_private_helper_branches(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+
+    class DetailStore:
+        async def get_skill_async(self, *_args, **_kwargs):
+            return {
+                "skill_id": "skill-1",
+                "skill_name": "demo-skill",
+                "skill_title": "Demo",
+                "skill_source": "user",
+                "skill_publish_status": "published",
+                "current_skill_version_no": 1,
+            }
+
+        async def get_published_version_async(self, *_args, **_kwargs):
+            return {"skill_version_dir": str(tmp_path / "missing")}
+
+        async def get_latest_published_version_async(self, *_args, **_kwargs):
+            return None
+
+        async def get_latest_draft_version_async(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(service, "_store", DetailStore())
+    assert asyncio.run(service._get_db_skill_detail_async("demo-skill")) is None
+
+    class BuiltinStoreError:
+        async def get_skill_async(self, *_args, **_kwargs):
+            raise RuntimeError("db down")
+
+    async def no_builtin(_skill_id):
+        return None
+
+    monkeypatch.setattr(service, "_store", BuiltinStoreError())
+    monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", no_builtin)
+    with pytest.raises(RuntimeError, match="db down"):
+        asyncio.run(service._get_editable_version_dir_async("skill-1", 1, "u1"))
+
+    class CurrentVersionStore:
+        async def get_latest_draft_version_async(self, *_args, **_kwargs):
+            return None
+
+        async def get_published_version_async(self, *_args, **_kwargs):
+            return {"skill_version_no": 3}
+
+        async def get_latest_published_version_async(self, *_args, **_kwargs):
+            raise AssertionError("current published version should be used")
+
+    monkeypatch.setattr(service, "_store", CurrentVersionStore())
+    assert asyncio.run(service._get_copy_source_version_async(
+        {"skill_id": "skill-1", "owner_user_id": "u2", "current_skill_version_no": 3},
+        "u1",
+    )) == {"skill_version_no": 3}
+
+    class UserReadableStore:
+        async def get_skill_async(self, *_args, **_kwargs):
+            return {"skill_id": "skill-1", "skill_source": "user", "owner_user_id": "u1"}
+
+    monkeypatch.setattr(service, "_store", UserReadableStore())
+    monkeypatch.setattr(service, "_get_editable_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path))
+    assert asyncio.run(service._get_readable_version_dir_async("skill-1", 1, "u1")) == tmp_path
+
+    class SystemRootStore:
+        async def get_version_async(self, *_args, **_kwargs):
+            return None
+
+    system_root = tmp_path / "system-root"
+    system_root.mkdir()
+    (system_root / "SKILL.md").write_text("---\nname: sys\n---\n# Sys", encoding="utf-8")
+    monkeypatch.setattr(service, "_store", SystemRootStore())
+    assert asyncio.run(service._get_system_version_dir_async({"skill_id": "sys", "skill_root_dir": str(system_root)}, 0)) == system_root
+
+    assert service._resolve_file_under_version_dir(tmp_path, "references", "guide").name == "guide.md"
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside", encoding="utf-8")
+    link = tmp_path / "references" / "link.md"
+    link.symlink_to(outside)
+    with pytest.raises(ValueError, match="文件路径越界"):
+        service._resolve_file_under_version_dir(tmp_path, "references", "link.md")
+
+    cleanup_missing = tmp_path / "missing-cleanup"
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+    service.cleanup_user_skill_dir(cleanup_missing.name)

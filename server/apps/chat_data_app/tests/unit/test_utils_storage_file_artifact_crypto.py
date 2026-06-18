@@ -2,6 +2,7 @@ import asyncio
 import base64
 import importlib
 import os
+import runpy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,6 +49,34 @@ def test_storage_paths_scope_and_path_helpers(tmp_path):
         storage_paths.normalize_complaint_scope_context(object())
     with pytest.raises(ValueError):
         storage_paths.normalize_reporter_name("...")
+
+
+def test_storage_paths_additional_error_and_dedupe_branches():
+    with pytest.raises(ValueError, match="Invalid path segment type"):
+        storage_paths.normalize_user_id(None)
+    with pytest.raises(ValueError, match="must not be empty"):
+        storage_paths.validate_base_id("  ")
+    with pytest.raises(ValueError, match="unsupported"):
+        storage_paths.validate_base_id("bad value")
+
+    assert storage_paths.normalize_reporter_name(" 张/三\\四 ") == "张_三_四"
+    assert storage_paths.normalize_reporter_name("张三-fys-case") == "张三"
+    assert storage_paths.normalize_reporter_name("-fys-case") == ""
+
+    default_ctx = storage_paths.resolve_complaint_scope("default", reporter_name="张三")
+    assert [item.scope_path for item in storage_paths.complaint_scope_read_chain(default_ctx)] == ["default/张三"]
+
+    org_ctx = storage_paths.resolve_complaint_scope("org", org_id="org_a")
+    assert [item.scope for item in storage_paths.complaint_scope_read_chain(org_ctx)] == ["org", "default"]
+
+    entity_ctx = storage_paths.resolve_complaint_scope("entity", org_id="default", entity_id="default")
+    chain = storage_paths.complaint_scope_read_chain(entity_ctx)
+    assert [item.scope_path for item in chain] == ["default/default", "default"]
+
+    assert storage_paths.resolve_complaint_scope("auto", org_id="org_only").scope == "org"
+    assert storage_paths.normalize_complaint_scope_context(None) is None
+    with pytest.raises(ValueError, match="entity scope"):
+        storage_paths.resolve_complaint_scope("entity", entity_id="entity_only")
 
 
 def test_storage_paths_requires_data_root(monkeypatch):
@@ -139,6 +168,8 @@ def test_artifact_store_save_load_delete_and_singleton(tmp_path, monkeypatch):
     assert store.load_with_meta("query_result", "") is None
     assert store.load_by_id("") is None
     assert store.load_meta_by_id("") is None
+    assert store.load_by_id("missing") is None
+    assert store.load("query_result", "missing") is None
 
     monkeypatch.setattr(artifact_store, "_default_store", None)
     monkeypatch.setattr(artifact_store, "_DEFAULT_ARTIFACT_DIR", tmp_path / "default")
@@ -201,3 +232,22 @@ def test_crypto_command_line_usage(monkeypatch, capsys):
         exec(Path(module.__file__).read_text(encoding="utf-8"), {"__name__": "__main__", "__file__": module.__file__})
     assert exc.value.code == 1
     assert "用法:" in capsys.readouterr().out
+
+
+def test_crypto_command_line_encrypt_decrypt_and_error(monkeypatch, capsys):
+    monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
+
+    monkeypatch.setattr("sys.argv", ["crypto.py", "encrypt", "secret"])
+    runpy.run_module("utils.crypto", run_name="__main__")
+    encrypted = capsys.readouterr().out.strip()
+    assert ":" in encrypted
+
+    monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", encrypted])
+    runpy.run_module("utils.crypto", run_name="__main__")
+    assert capsys.readouterr().out.strip() == "secret"
+
+    monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", "bad-format"])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("utils.crypto", run_name="__main__")
+    assert exc.value.code == 1
+    assert "错误:" in capsys.readouterr().out

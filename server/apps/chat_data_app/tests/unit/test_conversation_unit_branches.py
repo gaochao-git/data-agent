@@ -122,18 +122,50 @@ def test_conversation_serializer_object_tool_calls_and_stage_edges():
     stages = conversation_module._serialize_task_stages([
         {"run_id": "r1", "stage": "thinking", "status": "done", "title": 1, "content": None, "steps": "bad"},
         {"run_id": "r1", "stage": "plan", "status": "done", "steps": [1, " two ", ""]},
+        {"run_id": "r1", "stage": "execute", "status": "done", "source": "reasoning"},
     ])
 
     serialized = conversation_module._serialize_messages([SimpleNamespace(type="unknown")])
+    human_without_files = HumanMessage(content="无附件", id="h_no_file", additional_kwargs={"file_ids": []})
+    human_without_file_payload = conversation_module._serialize_messages([human_without_files])[0]
 
     assert conversation_module._extract_timestamp(SimpleNamespace(additional_kwargs={})) == ""
+    assert conversation_module._extract_timestamp(SimpleNamespace(additional_kwargs={"timestamp": ""})) == ""
     assert conversation_module._serialize_messages([ai])[0]["tool_calls"][0] == {"id": "obj_tc", "name": "object_tool", "args": {"x": 2}}
+    assert "file_ids" not in human_without_file_payload
     assert semantic_selection["semantic_config_name"] == "cfg"
     assert semantic_selection["matched_metrics"] == []
     assert semantic_selection["matched_dimensions"] == []
     assert stages[0] == {"stage": "thinking", "status": "done"}
     assert stages[1]["steps"] == ["1", " two "]
+    assert stages[2]["source"] == "reasoning"
     assert serialized == []
+
+
+def test_conversation_reasoning_serialization_and_timestamp_branches():
+    ai = AIMessage(
+        content="回答",
+        id="ai_reasoning",
+        additional_kwargs={"reasoning_content": "思考过程", "timestamp": "t1"},
+    )
+    serialized_ai = conversation_module._serialize_messages([ai])[0]
+    assert serialized_ai["reasoning_content"] == "思考过程"
+    assert serialized_ai["timestamp"] == "t1"
+
+    assert conversation_module._extract_reasoning_content(SimpleNamespace(additional_kwargs={}, response_metadata={})) == ""
+    assert conversation_module._extract_reasoning_content(SimpleNamespace(response_metadata={"reasoning": "元数据思考"})) == "元数据思考"
+    assert conversation_module._serialize_reasoning_segments("bad") == []
+    assert conversation_module._serialize_reasoning_segments([
+        "skip",
+        {"content": ""},
+        {"id": "", "content": "第一段", "toolCallCount": "2"},
+        {"content": "第二段", "tool_call_count": "bad"},
+        {"content": "第三段", "tool_call_count": -3},
+    ]) == [
+        {"id": "reasoning-history-2", "content": "第一段", "tool_call_count": 2},
+        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0},
+        {"id": "reasoning-history-4", "content": "第三段", "tool_call_count": 0},
+    ]
 
 
 def test_conversation_interrupt_info_branches():
@@ -142,6 +174,15 @@ def test_conversation_interrupt_info_branches():
     assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[])])) is None
     assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[object()])])) is None
     assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value="bad")])])) is None
+    assert conversation_module._get_interrupt_info(SimpleNamespace(
+        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"x": 1}})])],
+        values={"messages": []},
+    )) == {
+        "tool_name": "unknown_tool",
+        "tool_call_id": None,
+        "args": {"x": 1},
+        "message": None,
+    }
 
     state = SimpleNamespace(
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
@@ -211,6 +252,7 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     assert await conversation_module.delete("", "conv_system", user_id=None) is True
     assert await conversation_module.update_title("", "conv_existing", "无用户过滤标题", user_id=None) is True
     assert await conversation_module.toggle_favorite("", "conv_existing", user_id=None) in {True, False}
+    assert await conversation_module.get_agent_id("", "conv_existing", user_id=None) == "agent_a"
 
 
 @pytest.mark.asyncio
@@ -270,8 +312,33 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert detail["title"] == "详情标题"
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
     assert detail["task_stages"][0]["stage"] == "thinking"
+    assert detail["reasoning_segments"] == []
     assert detail["pending_tool"]["args"] == {"sql": "select 1"}
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
+
+
+@pytest.mark.asyncio
+async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
+    await conversation_module.sync_thread_to_db("u1", "conv_empty_graph", "agent_a", title="空状态", is_new=True)
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Graph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={})
+
+    detail = await conversation_module.get_detail("", "conv_empty_graph", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1")
+
+    assert detail["title"] == "空状态"
+    assert detail["messages"] == []
+    assert detail["task_stages"] == []
+    assert detail["reasoning_segments"] == []
+    assert detail["pending_tool"] is None
 
 
 @pytest.mark.asyncio

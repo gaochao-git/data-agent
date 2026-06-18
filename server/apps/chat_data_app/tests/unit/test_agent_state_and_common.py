@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -162,3 +163,15 @@ def test_common_format_json_and_normalize_json_like_payload():
     assert common.normalize_json_like_payload("not json") == "not json"
     assert common.normalize_json_like_payload("```json\n{\"a\": 1}\n```") == {"a": 1}
     assert common.normalize_json_like_payload("\"{\\\"a\\\": 1}\"") == {"a": 1}
+    assert common.normalize_json_like_payload("```\n{\"a\": 1}") == {"a": 1}
+    assert common.normalize_json_like_payload("{\"a\": 1}\n```") == "{\"a\": 1}\n```"
+    assert common.normalize_json_like_payload("```\nnot json\n```") == "```\nnot json\n```"
+
+
+def test_common_iter_files_skips_ignored_root_name(tmp_path):
+    ignored_root = tmp_path / "node_modules"
+    nested = ignored_root / "a.txt"
+    nested.parent.mkdir()
+    nested.write_text("a", encoding="utf-8")
+
+    assert common.iter_files(Path(ignored_root)) == []

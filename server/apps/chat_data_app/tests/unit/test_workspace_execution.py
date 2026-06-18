@@ -4,6 +4,8 @@ import sys
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -368,6 +370,7 @@ def test_sandbox_run_allows_ls_and_maps_cwd(monkeypatch):
     assert result["success"] is True
     assert result["cwd"] == "/mnt/user-data/workspace"
     assert "ls -la /mnt/user-data/workspace" in calls[0]["command"]
+    assert sandbox_run._normalize_cwd(None) == "/mnt/user-data/workspace"
 
 
 def test_sandbox_run_rejects_background_command():
@@ -377,6 +380,11 @@ def test_sandbox_run_rejects_background_command():
         assert "后台进程" in str(exc)
     else:
         raise AssertionError("expected background command to be rejected")
+
+    with pytest.raises(ValueError, match="command is required"):
+        sandbox_run._validate_command("")
+    with pytest.raises(ValueError, match="空字节"):
+        sandbox_run._validate_command("echo bad\x00")
 
 
 def test_sandbox_run_rejects_paths_outside_workspace():
@@ -395,6 +403,11 @@ def test_sandbox_run_rejects_parent_path_escape():
         assert "当前会话目录" in str(exc)
     else:
         raise AssertionError("expected parent path escape to be rejected")
+
+    with pytest.raises(ValueError, match="解析失败"):
+        sandbox_run._validate_command_paths("cat 'unterminated")
+
+    sandbox_run._validate_command_paths("cat /mnt/user-data/workspace/a.txt /mnt/user-data/outputs/out.txt")
 
 
 def test_list_workspace_files_attaches_output_artifacts(monkeypatch):

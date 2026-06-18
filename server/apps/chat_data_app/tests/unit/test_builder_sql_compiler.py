@@ -86,6 +86,9 @@ def test_builder_sql_compiler_helper_branches():
 
 
 def test_builder_sql_compiler_remaining_helper_branch_edges():
+    assert compiler._is_sql_function("now()") is True
+    assert compiler._is_sql_function("concat('a;b')") is False
+    assert compiler._is_sql_function("now();") is False
     assert compiler._is_sql_function("now()--comment") is False
     assert compiler._has_balanced_parentheses(r"concat(\"x\", col)") is True
     assert compiler._build_having_leaf_clause(
@@ -102,6 +105,19 @@ def test_builder_sql_compiler_remaining_helper_branch_edges():
         aggregations=[],
         agg_by_id={},
     ) == "orders.score NOT IN (select score from s)"
+    assert compiler._build_where_leaf_clause(
+        {"table": "orders", "column": "score", "operator": "IN", "valueType": "expression", "rightExpression": "select score from s"},
+        is_multi_table=False,
+        main_table="orders",
+        dimension_expr_map={},
+    ) == "`score` IN (select score from s)"
+    assert compiler._build_having_leaf_clause(
+        {"table": "orders", "column": "amount", "operator": ">", "valueType": "expression", "rightExpression": "10 + 1", "aggFunc": "SUM"},
+        is_multi_table=False,
+        main_table="orders",
+        aggregations=[],
+        agg_by_id={},
+    ) == "SUM(`amount`) > 10 + 1"
 
 
 def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_table():
@@ -242,6 +258,23 @@ def test_compile_builder_sql_duplicate_alias_raw_metric_and_join_conditions():
     assert "orders.`status` IN (select status from valid_status)" in sql
     assert "orders.amount + orders.tax > 0" in sql
     assert "ORDER BY `重复名` ASC" in sql
+
+
+def test_compile_builder_sql_alias_suffix_skips_existing_duplicate():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [
+            {"id": "d1", "table": "orders", "column": "status", "alias": "重复名"},
+            {"id": "d2", "table": "orders", "column": "city", "alias": "重复名"},
+            {"id": "d3", "table": "orders", "column": "province", "alias": "重复名"},
+        ],
+        "aggregations": [],
+        "orderBy": [],
+    })
+
+    assert "`status` AS `重复名`" in sql
+    assert "`city` AS `重复名_2`" in sql
+    assert "`province` AS `重复名_3`" in sql
 
 
 def test_compile_builder_sql_where_operator_branches_and_tree_empty_nodes():
@@ -575,6 +608,19 @@ def test_compile_builder_sql_empty_having_tree_is_ignored():
     assert "HAVING" not in sql
 
 
+def test_compile_builder_sql_empty_having_tree_with_order_by_branch():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
+        "filters": [{"and": ["skip"]}],
+        "orderBy": [{"table": "orders", "column": "status", "direction": "ASC", "displayName": "missing"}],
+    })
+
+    assert "HAVING" not in sql
+    assert "ORDER BY `状态` ASC" in sql
+
+
 def test_compile_builder_sql_single_child_filter_trees_are_unwrapped():
     sql = compile_builder_sql({
         "mainTable": "orders",
@@ -606,6 +652,29 @@ def test_compile_builder_sql_having_expression_branches_without_tree():
     })
 
     assert "HAVING o.score > 10 + 1 OR o.score IN (select score from whitelist)" in sql
+
+
+def test_compile_builder_sql_having_non_tree_expression_in_branch():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "filters": [
+            {
+                "id": "h1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "amount",
+                "operator": "IN",
+                "aggFunc": "SUM",
+                "valueType": "expression",
+                "rightExpression": "select amount from whitelist",
+            }
+        ],
+    })
+
+    assert "HAVING SUM(`amount`) IN (select amount from whitelist)" in sql
 
 
 def test_compile_builder_sql_having_and_order_remaining_branches():
@@ -1858,3 +1927,23 @@ def test_compile_builder_sql_order_by_fallbacks_and_rejections():
             "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
             "orderBy": [{"table": "orders", "tableAlias": "o", "column": "unknown", "direction": "DESC"}],
         })
+
+
+def test_compile_builder_sql_unselected_transformed_dimension_order_fallbacks():
+    group_expr_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"table": "orders", "tableAlias": "o", "column": "created_at", "alias": "下单月", "transform": "month"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "created_at", "direction": "DESC"}],
+    })
+    assert "ORDER BY `下单月_month` DESC" in group_expr_sql
+
+    dimension_expr_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"table": "orders", "tableAlias": "o", "column": "created_at", "alias": "下单月", "transform": "month"}],
+        "aggregations": [],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "created_at", "direction": "ASC"}],
+    })
+    assert "ORDER BY `下单月_month` ASC" in dimension_expr_sql

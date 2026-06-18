@@ -76,6 +76,41 @@ def test_scorer_normalizes_dimensions_temporal_filters_and_offset():
     assert result["slot_scores"]["offset"] == 1.0
 
 
+def test_scorer_filter_and_slot_mismatch_branches():
+    assert scorers.normalize_temporal_exclusive_upper("bad", inclusive=True) is None
+    assert scorers.normalize_filter("plain") == ["plain"]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}) == [
+        {"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["2026-06-01", "2026-06-02"]}) == [
+        {"dimension": "下单时间", "operator": ">=", "value": "2026-06-01 00:00:00"},
+        {"dimension": "下单时间", "operator": "<", "value": "2026-06-03 00:00:00"},
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": ">=", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": ">=", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": ">", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": ">", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": "<", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<=", "value": "bad"}) == [
+        {"dimension": "下单时间", "operator": "<=", "value": "bad"}
+    ]
+
+    score = scorers.score_dsl(
+        {"metrics": ["销售额"], "dimensions": ["城市"], "order_by": [{"field": "城市"}], "limit": "10"},
+        {"metrics": ["订单数"], "dimensions": [], "order_by": [], "limit": 10},
+    )
+
+    assert score["dsl_exact_match"] is False
+    assert score["slot_scores"]["metrics"] == 0.0
+    assert score["slot_scores"]["dimensions"] == 0.0
+    assert score["slot_scores"]["order_by"] == 1.0
+    assert score["slot_scores"]["limit"] == 1.0
+
+
 def test_runner_case_validation_and_sql_helpers(tmp_path):
     cases = [_case()]
     runner.validate_cases(cases, tmp_path / "cases.json")
@@ -142,6 +177,11 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert traces[0].name == "dsl2sql_tool"
     assert traces[0].args == {"metrics": ["订单数"]}
     assert state["error"] == "模型失败"
+
+    dsl = runner.normalize_pagination_values({"limit": " 10 ", "offset": "05", "keep": " 7a "})
+    assert dsl == {"limit": 10, "offset": 5, "keep": " 7a "}
+    runner.flush_sse_event(state={"current_event": None, "data_lines": []}, tool_traces=traces)
+    assert len(traces) == 1
 
 
 def test_dsl2sql_payload_selection_and_execution_summary():

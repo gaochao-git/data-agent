@@ -601,6 +601,26 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_router_conversation_routes_return_not_found_when_config_missing(router_state, monkeypatch):
+    request = FakeRequest()
+
+    async def missing_config(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
+
+    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == 40404
+    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == 40404
+    assert payload(await conversation_router.update_conversation_title(
+        "conv",
+        conversation_router.UpdateTitleRequest(title="标题"),
+        request,
+    ))["code"] == 40404
+    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == 40404
+    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == 40404
+
+
+@pytest.mark.asyncio
 async def test_generic_resume_stream_additional_interrupt_shapes():
     class Checkpointer:
         async def __aenter__(self):

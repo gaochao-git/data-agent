@@ -16,14 +16,18 @@ from apps.chat_data_app.handlers import (
     _build_execution_target_info_async,
     _build_semantic_selection_error,
     _build_semantic_select_required_event,
+    _extract_reasoning_content,
     _continue_execution,
     _extract_select_semantic_config_payload,
     _format_sse,
+    _format_thinking_event,
     _format_tool_event,
     _get_interrupt_info,
     _get_semantic_config_async,
     _is_tool_result_error,
+    _normalize_enable_thinking,
     _normalize_semantic_selection_payload,
+    _append_reasoning_segment,
     _parse_tool_args_buffer,
     _prepare_data_analyze_workspace_sync,
     _stream_sql_generation,
@@ -93,6 +97,49 @@ def test_format_tool_event_uses_result_as_content():
     assert '"tool_name": "execute_sql_tool"' in text
     assert '"content": "执行完成"' in text
     assert '"timestamp": "2026-06-02 10:00:00"' in text
+
+
+def test_reasoning_and_thinking_helper_branches():
+    assert _extract_reasoning_content(SimpleNamespace()) == ""
+    assert _extract_reasoning_content(SimpleNamespace(additional_kwargs={"reasoning_content": "思考A"})) == "思考A"
+    assert _extract_reasoning_content(SimpleNamespace(response_metadata={"reasoning": "思考B"})) == "思考B"
+    assert _extract_reasoning_content(
+        SimpleNamespace(additional_kwargs={}),
+        {"response_metadata": {"reasoning_text": "思考C"}},
+    ) == "思考C"
+    assert _extract_reasoning_content(
+        SimpleNamespace(additional_kwargs={}),
+        {"reasoning_content": "思考D"},
+    ) == "思考D"
+    assert _format_thinking_event(SimpleNamespace(additional_kwargs={})) is None
+    thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
+    assert thinking_event.startswith("event: thinking")
+    assert "正在分析" in thinking_event
+
+    segments = []
+    _append_reasoning_segment(segments, "", 0)
+    assert segments == []
+    _append_reasoning_segment(segments, "a", 0)
+    _append_reasoning_segment(segments, "b", 0)
+    _append_reasoning_segment(segments, "c", 1)
+    assert segments == [
+        {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
+        {"id": "reasoning-1", "content": "c", "tool_call_count": 1},
+    ]
+
+
+def test_normalize_enable_thinking_branches():
+    assert _normalize_enable_thinking(None) is None
+    assert _normalize_enable_thinking(True) is True
+    assert _normalize_enable_thinking(False) is False
+    assert _normalize_enable_thinking(1) is True
+    assert _normalize_enable_thinking(0) is False
+    assert _normalize_enable_thinking(" true ") is True
+    assert _normalize_enable_thinking("YES") is True
+    assert _normalize_enable_thinking("off") is False
+    assert _normalize_enable_thinking("no") is False
+    assert _normalize_enable_thinking("unknown") is None
+    assert _normalize_enable_thinking(object()) is None
 
 
 def test_semantic_selection_helper_branches():

@@ -330,6 +330,24 @@ def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
     assert aggregated["fields"][-1]["role"] == "metric"
 
 
+def test_auto_prefill_prompt_generation_request_branches():
+    prompt = build_auto_prefill_prompt(
+        model_guidance=build_prefill_model_guidance("detail"),
+        table_payload=[{"table": "orders", "columns": [{"name": "amount"}]}],
+        generate_business_flow=True,
+    )
+    knowledge_prompt = build_auto_prefill_knowledge_prompt(
+        table_payload=[{"table": "orders", "columns": [{"name": "amount"}]}],
+        generate_business_flow=True,
+    )
+
+    assert '"generation_request": {"business_flow": true}' in prompt
+    assert '"business_flow":"业务运转说明"' in prompt
+    assert "business_flow 面向业务整体" in prompt
+    assert '"generation_request": {"business_flow": true}' in knowledge_prompt
+    assert '"business_flow":"业务运转说明"' in knowledge_prompt
+
+
 def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
     class FakeManager:
         async def get_datasource_async(self, datasource_id):
@@ -974,6 +992,18 @@ def test_prefill_prompt_builders_cover_guidance_branches():
         table_payload=table_payload,
         generate_business_flow=False,
     )
+    assert '"knowledge":' not in build_auto_prefill_prompt(
+        model_guidance=detail_guidance,
+        table_payload=table_payload,
+        generate_business_flow=False,
+    )
+    knowledge_without_business = build_auto_prefill_knowledge_prompt(
+        table_payload=table_payload,
+        generate_business_flow=False,
+    )
+    assert '"knowledge":{}' in knowledge_without_business
+    assert '"business_flow"' not in knowledge_without_business
+    assert '"generation_request":' not in knowledge_without_business
     with_business = build_auto_prefill_prompt(
         model_guidance=aggregated_guidance,
         table_payload=table_payload,
@@ -1845,3 +1875,60 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
         object(),
     )))
     assert failed["code"] == 50010
+
+
+def test_semantic_config_remaining_history_helper_edges():
+    compact = semantic_config._compact_history_conversation_messages([
+        {"role": "tool", "content": '{"success": true}', "timestamp": "t1"},
+    ])
+    assert compact == {"user_turns": [], "assistant_turns": [], "negative_feedback": [], "tool_errors": []}
+
+    assert semantic_config._semantic_scope_tables({
+        "metrics": [{"table": "orders"}],
+        "dimensions": [{"table": ""}],
+        "relationships": [{"left_table": "orders", "right_table": ""}],
+    }) == {"orders"}
+
+    duplicate_items = [
+        {"name": "金额", "table_alias": "a", "table": "orders"},
+        {"name": "金额", "table_alias": "long_alias", "table": "orders"},
+    ]
+    deduped = semantic_config._dedupe_prefill_display_names(duplicate_items)
+    assert deduped[0]["name"].endswith("金额")
+    assert deduped[1]["name"].endswith("金额")
+    assert deduped[0]["name"] != deduped[1]["name"]
+
+    assert "amount" in semantic_config._extract_expression_columns("SUM(`amount`) + t.price + 'literal_text'")
+
+    indexes = semantic_config._build_existing_semantic_indexes({
+        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        "dimensions": [
+            {"name": "城市", "table": "orders", "column": ""},
+            {"name": "状态", "table": "orders", "field_name": "status"},
+        ],
+    })
+    assert "orders.status" in indexes["dimension_columns"]
+    assert "orders.status" in indexes["dimension_fields"]
+    assert "城市" in indexes["dimension_names"]
+
+    sample_map = {"exec_1": {"execution_id": "exec_1", "source": "sql"}}
+    datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "status"}, {"name": "amount"}]}]}
+    missing_column = semantic_config._normalize_history_suggestion_item(
+        {
+            "source": "sql",
+            "confidence": "high",
+            "sample_execution_ids": ["exec_1"],
+            "support_count": 1,
+            "name": "城市",
+            "table": "orders",
+            "field_name": "city",
+            "column": "city",
+            "type": "categorical",
+            "reason": "常用",
+        },
+        "dimensions",
+        sample_map,
+        datasource,
+    )
+    assert missing_column["needs_review"] is True
+    assert "字段不在当前表结构中" in missing_column["review_reason"]

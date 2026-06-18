@@ -30,6 +30,7 @@ def test_extract_datasource_id_from_state():
     assert extract_datasource_id({"datasource_id": ""}) is None
     assert extract_datasource_id({}) is None
     assert extract_datasource_id(None) is None
+    assert extract_semantic_config_id(None) is None
     assert extract_semantic_config_id({"semantic_config_id": " sc_001 "}) == "sc_001"
     assert extract_semantic_config_id({"semantic_config_id": ""}) is None
 
@@ -84,6 +85,17 @@ def test_selection_to_tool_payload_branches():
     assert unsupported["message"] == "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
 
 
+def test_selection_payload_selected_without_config_summary():
+    selected = _selection_to_tool_payload({
+        "selected_config_id": "cfg_a",
+        "coverage": "full",
+    })
+
+    assert selected["selected"] is True
+    assert selected["selected_config_name"] == "cfg_a"
+    assert "semantic_config" not in selected
+
+
 def test_load_runtime_semantic_config_branches(monkeypatch):
     class RuntimeManager:
         async def get_datasource_async(self, datasource_id):
@@ -96,6 +108,8 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
                 return {"id": semantic_config_id, "enabled": True, "relationships": [{"left_table": "orders"}]}
             if semantic_config_id == "disabled":
                 return {"id": semantic_config_id, "enabled": False}
+            if semantic_config_id == "plain":
+                return {"id": semantic_config_id, "enabled": True}
             if semantic_config_id == "no_id":
                 return {"enabled": True}
             return None
@@ -116,9 +130,11 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
     assert asyncio.run(load_runtime_semantic_config("ds", "disabled")) is None
 
     enabled = asyncio.run(load_runtime_semantic_config("ds", "enabled"))
+    plain = asyncio.run(load_runtime_semantic_config("ds", "plain"))
     no_id = asyncio.run(load_runtime_semantic_config("ds", "no_id"))
     assert enabled["joins"] == [{"left_table": "orders"}]
     assert enabled["source_type"] == "hive"
+    assert "joins" not in plain
     assert no_id["id"] == "no_id"
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: FallbackManager())

@@ -136,6 +136,106 @@ def test_build_seed_case_candidates_detail_table_uses_dimensions_only():
     assert any(case["gold_dsl"]["filters"] for case in cases)
 
 
+def test_build_seed_case_candidates_skip_and_limit_edges():
+    detail_no_named_dimensions = evaluation._build_seed_case_candidates(
+        "cfg_detail",
+        {
+            "metrics": [],
+            "dimensions": [
+                {"name": "", "table": "orders", "column": "status", "type": "categorical", "allowed_values": ["paid"]},
+                {"name": "空值维度", "table": "orders", "column": "city", "type": "categorical", "allowed_values": []},
+            ],
+            "relationships": [],
+        },
+        "订单明细",
+    )
+    assert detail_no_named_dimensions[0]["gold_dsl"]["dimensions"] == ["空值维度"]
+    assert all(case["gold_dsl"]["filters"] == [] for case in detail_no_named_dimensions)
+
+    config = {
+        "metrics": [
+            {"name": f"指标{i}", "table": "orders", "expression": f"SUM(amount{i})"}
+            for i in range(1, 8)
+        ],
+        "dimensions": [
+            {"name": "", "table": "orders", "column": "ignored", "type": "categorical", "allowed_values": ["x"]},
+            {"name": "跨表维度", "table": "dim_table", "column": "name", "type": "categorical", "allowed_values": ["A"]},
+            {"name": "无枚举维度", "table": "orders", "column": "city", "type": "categorical", "allowed_values": []},
+            {"name": "空枚举值维度", "table": "orders", "column": "status", "type": "categorical", "allowed_values": [""]},
+        ],
+        "relationships": [{"left_table": "orders", "right_table": "dim_table"}],
+    }
+
+    cases = evaluation._build_seed_case_candidates("cfg_many", config, "订单分析")
+
+    assert len(cases) <= 30
+    assert all(
+        case["gold_dsl"]["filters"][0]["dimension"] != "空枚举值维度"
+        for case in cases
+        if case["gold_dsl"]["filters"]
+    )
+    assert any("跨表维度" in case["nl"] for case in cases)
+
+    no_detail_case = evaluation._build_seed_case_candidates(
+        "cfg_empty_detail",
+        {
+            "metrics": [],
+            "dimensions": [{"name": "", "table": "orders", "column": "id", "type": "categorical"}],
+            "relationships": [],
+        },
+        "订单明细",
+    )
+    assert no_detail_case == []
+
+    skip_blank_dimension_config = {
+        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        "dimensions": [
+            {"name": "", "table": "orders", "column": "city", "type": "categorical", "allowed_values": ["杭州"]},
+            {"name": "", "table": "orders", "column": "dt", "type": "time"},
+        ],
+        "relationships": [],
+    }
+    skip_blank_cases = evaluation._build_seed_case_candidates("cfg_skip", skip_blank_dimension_config, "订单分析")
+    assert [case["nl"] for case in skip_blank_cases] == ["查询销售额"]
+
+    many_join_config = {
+        "metrics": [
+            {"name": f"指标{i}", "table": "fact", "expression": f"SUM(amount{i})"}
+            for i in range(1, 12)
+        ],
+        "dimensions": [
+            {"name": f"维度{i}", "table": f"dim{i}", "column": "name", "type": "categorical", "allowed_values": ["A"]}
+            for i in range(1, 12)
+        ],
+        "relationships": [{"left_table": "fact", "right_table": "dim1"}],
+    }
+    many_join_cases = evaluation._build_seed_case_candidates("cfg_join_many", many_join_config, "订单分析")
+    assert len(many_join_cases) <= 30
+
+
+def test_build_seed_case_candidates_internal_empty_helper_edges(monkeypatch):
+    monkeypatch.setattr(evaluation, "_metric_names", lambda _config: [])
+    monkeypatch.setattr(evaluation, "_dimension_items", lambda _config: [{"name": ""}])
+    monkeypatch.setattr(evaluation, "_categorical_dimensions", lambda _config: [])
+    monkeypatch.setattr(evaluation, "_time_dimensions", lambda _config: [])
+    assert evaluation._build_seed_case_candidates("cfg_blank_detail", {}, "订单分析") == []
+
+    monkeypatch.setattr(evaluation, "_metric_names", lambda _config: ["销售额"])
+    monkeypatch.setattr(evaluation, "_dimension_items", lambda _config: [])
+    monkeypatch.setattr(evaluation, "_categorical_dimensions", lambda _config: [{"name": ""}])
+    monkeypatch.setattr(evaluation, "_time_dimensions", lambda _config: [{"name": ""}])
+    metric_only_cases = evaluation._build_seed_case_candidates("cfg_blank_dims", {"relationships": []}, "订单分析")
+    assert [case["nl"] for case in metric_only_cases] == ["查询销售额"]
+
+    monkeypatch.setattr(evaluation, "_categorical_dimensions", lambda _config: [])
+    no_join_cases = evaluation._build_seed_case_candidates(
+        "cfg_no_join_candidates",
+        {"metrics": [{"name": "销售额", "table": "orders"}], "relationships": [{"left_table": "orders", "right_table": "users"}]},
+        "订单分析",
+    )
+    assert [case["query_type"] for case in no_join_cases] == ["aggregation"]
+
+
 def test_looks_like_sql_detects_select_and_with():
     assert evaluation._looks_like_sql("select * from orders") is True
     assert evaluation._looks_like_sql(" WITH t AS (select 1) select * from t") is True
@@ -299,6 +399,7 @@ def test_iter_accuracy_evaluation_sse_updates_records(monkeypatch):
     async def fake_iter(_args, _cases):
         yield {"event": "case_result", "id": "case_1", "result": {"semantic_accuracy": 1, "status": "succeeded"}}
         yield {"event": "progress", "summary": {"scored": 1}}
+        yield {"event": "heartbeat", "ts": 1}
         yield {"event": "done", "report": {"summary": {"total": 1, "scored": 1, "failed": 0, "semantic_accuracy": 1}}}
 
     monkeypatch.setattr(evaluation.uuid, "uuid4", lambda: SimpleNamespace(hex="run_1"))
@@ -317,10 +418,48 @@ def test_iter_accuracy_evaluation_sse_updates_records(monkeypatch):
         current_user=SimpleNamespace(user_id="u1"),
     )))
 
-    assert len(events) == 3
+    assert len(events) == 4
     assert '"event": "case_result"' in events[0]
+    assert '"event": "heartbeat"' in events[2]
     assert ("upsert", "run_1", "case_1", 1) in calls
     assert any(call[0] == "update" and call[2].get("status") == "succeeded" for call in calls)
+
+
+def test_iter_accuracy_evaluation_sse_done_without_report_skips_update(monkeypatch):
+    calls = []
+
+    async def fake_create(_run_id, _payload, _current_user):
+        calls.append(("create",))
+
+    async def fake_args(_payload, _current_user):
+        return SimpleNamespace()
+
+    async def fake_cases(_payload, _args):
+        return []
+
+    async def fake_update(run_id, **kwargs):
+        calls.append(("update", run_id, kwargs))
+
+    async def fake_iter(_args, _cases):
+        yield {"event": "done"}
+
+    monkeypatch.setattr(evaluation.uuid, "uuid4", lambda: SimpleNamespace(hex="run_done"))
+    monkeypatch.setattr(evaluation, "_create_eval_run_record", fake_create)
+    monkeypatch.setattr(evaluation, "_build_accuracy_runner_args", fake_args)
+    monkeypatch.setattr(evaluation, "_load_accuracy_runner_cases", fake_cases)
+    monkeypatch.setattr(evaluation, "_update_eval_run_record", fake_update)
+    monkeypatch.setitem(sys.modules, "apps.chat_data_app.evaluate.accuracy.runner", SimpleNamespace(
+        iter_accuracy_evaluation_events=fake_iter,
+    ))
+
+    events = asyncio.run(_collect(evaluation._iter_accuracy_evaluation_sse(
+        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
+        request=None,
+        current_user=SimpleNamespace(user_id="u1"),
+    )))
+
+    assert events == ['data: {"event": "done"}\n\n']
+    assert calls == [("create",), ("update", "run_done", {"status": "succeeded", "summary": {}})]
 
 
 async def _collect(async_iterable):
@@ -426,8 +565,13 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
         "elapsed_ms": 20,
     })
     await evaluation._update_eval_run_record("run_1", status="succeeded", summary={"total": 2, "scored": 2, "failed": 0, "semantic_accuracy": 1})
+    await evaluation._update_eval_run_record("run_1")
+    await evaluation._update_eval_run_record("run_1", summary={"total": 3, "scored": 2, "failed": 1})
+    await evaluation._update_eval_run_record("run_1", error_message="")
+    await evaluation._update_eval_run_record("missing", status="failed")
 
     list_response = await evaluation.list_accuracy_evaluation_runs(datasource_id="ds_a", semantic_config_id="cfg_a", page=-1, page_size=500)
+    list_all_response = await evaluation.list_accuracy_evaluation_runs(page=1, page_size=1)
     detail_response = await evaluation.get_accuracy_evaluation_run_detail("run_1")
     missing_response = await evaluation.get_accuracy_evaluation_run_detail("missing")
 
@@ -436,16 +580,19 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
         case_rows = (await session.execute(select(ChatDataEvalRunCase).filter_by(run_id="run_1").order_by(ChatDataEvalRunCase.case_id))).scalars().all()
 
     list_payload = json.loads(list_response.body.decode("utf-8"))
+    list_all_payload = json.loads(list_all_response.body.decode("utf-8"))
     detail_payload = json.loads(detail_response.body.decode("utf-8"))
     missing_payload = json.loads(missing_response.body.decode("utf-8"))
 
     assert run_row.run_status == "succeeded"
     assert run_row.finished_time is not None
-    assert run_row.total_count == 2
-    assert run_row.passed_count == 2
+    assert run_row.total_count == 3
+    assert run_row.passed_count == 1
+    assert run_row.error_message is None
     assert [row.case_status for row in case_rows] == ["passed", "passed"]
     assert list_payload["data"]["page"] == 1
     assert list_payload["data"]["page_size"] == 100
+    assert list_all_payload["data"]["total"] == 1
     assert list_payload["data"]["runs"][0]["tester_name"] == "测试人员"
     assert detail_payload["data"]["run"]["run_id"] == "run_1"
     assert len(detail_payload["data"]["cases"]) == 2

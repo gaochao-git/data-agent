@@ -7,14 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.route_modules import data_analyze_workspace
-from apps.chat_data_app.schema import SkillImportFromWorkspaceRequest
+from apps.chat_data_app.route_modules import common, data_analyze_workspace
+from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from utils import logger as logger_module
 from utils.lang_util import checkpoint, database, llm
 from utils.lang_util.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
@@ -86,6 +86,45 @@ def test_llm_count_tokens_and_get_llm_kwargs(monkeypatch):
     }
 
 
+def test_llm_get_llm_omits_optional_kwargs_and_patch_import_failure(monkeypatch):
+    captured = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model=kwargs["model"])
+
+    real_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "langchain_openai.chat_models.base":
+            raise ImportError("missing")
+        return real_import(name, *args, **kwargs)
+
+    llm._REASONING_PATCHED = False
+    monkeypatch.setattr("builtins.__import__", fake_import)
+    llm._patch_langchain_openai_reasoning_fields()
+    assert llm._REASONING_PATCHED is True
+
+    llm._REASONING_PATCHED = True
+    monkeypatch.setattr(llm, "init_chat_model", fake_init_chat_model)
+    monkeypatch.setenv("OPENAI_ANALYSIS_MODEL", "env-model")
+    monkeypatch.setenv("LLM_PROVIDER", "fake-provider")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://env")
+
+    model = llm.get_llm(streaming=False, max_tokens=0, timeout=0, stream_usage=None, extra_body={})
+
+    assert model.model == "env-model"
+    assert captured == {
+        "model": "env-model",
+        "model_provider": "fake-provider",
+        "temperature": 0.7,
+        "api_key": "env-key",
+        "base_url": "http://env",
+        "streaming": False,
+    }
+
+
 def test_llm_patch_preserves_stream_reasoning_content():
     import langchain_openai.chat_models.base as openai_chat_base
 
@@ -98,6 +137,26 @@ def test_llm_patch_preserves_stream_reasoning_content():
     )
 
     assert chunk.additional_kwargs["reasoning_content"] == "思考内容"
+
+
+def test_llm_patch_ignores_non_reasoning_or_non_ai_chunks():
+    import langchain_openai.chat_models.base as openai_chat_base
+
+    llm._REASONING_PATCHED = False
+    llm._patch_langchain_openai_reasoning_fields()
+    llm._patch_langchain_openai_reasoning_fields()
+
+    human_chunk = openai_chat_base._convert_delta_to_message_chunk(
+        {"role": "user", "content": "hello", "reasoning_content": "ignored"},
+        openai_chat_base.HumanMessageChunk,
+    )
+    empty_reasoning = openai_chat_base._convert_delta_to_message_chunk(
+        {"role": "assistant", "content": "hello", "reasoning_content": ""},
+        openai_chat_base.AIMessageChunk,
+    )
+
+    assert "reasoning_content" not in human_chunk.additional_kwargs
+    assert "reasoning_content" not in empty_reasoning.additional_kwargs
 
 
 def test_checkpoint_config_branches(monkeypatch, tmp_path):
@@ -122,6 +181,8 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
             return {"conn_string": conn_string}
 
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
+    get_context = checkpoint.get_checkpointer()
+    assert get_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
     mysql_context = checkpoint._get_mysql_checkpointer()
     assert mysql_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
 
@@ -165,6 +226,25 @@ def test_database_endpoint_parsing_and_selector():
 
     with pytest.raises(ValueError, match="不能为空"):
         parse_database_endpoints(" , ", 3306)
+
+
+def test_database_endpoint_parser_remaining_error_edges():
+    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.1:3306", 3306)
+    assert [endpoint.label() for endpoint in endpoints] == ["127.0.0.1:3306"]
+
+    with pytest.raises(ValueError, match="端口不能为空"):
+        parse_database_endpoints("127.0.0.1:", 3306)
+    with pytest.raises(ValueError, match="主机不能为空"):
+        parse_database_endpoints(":3306", 3306)
+    with pytest.raises(ValueError, match="端口超出范围"):
+        parse_database_endpoints("127.0.0.1:0", 3306)
+    with pytest.raises(ValueError, match="不能为空"):
+        DatabaseEndpointSelector([])
+
+    invalidated = DBAPIError("select 1", None, Exception("lost"), connection_invalidated=True)
+    assert is_mysql_connection_error(invalidated) is True
+    assert is_mysql_connection_error(SimpleNamespace(args=())) is False
+    assert is_mysql_connection_error(SimpleNamespace(args=("bad",))) is False
 
 
 def test_checkpoint_mysql_failover_advances_after_create_error(monkeypatch):
@@ -241,6 +321,22 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
     with pytest.raises(OperationalError):
         asyncio.run(use_context())
 
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
+def test_checkpoint_context_noop_exit_and_stale_endpoint(monkeypatch):
+    sqlite_context = checkpoint._SqliteCheckpointerContext("/tmp/unused.db")
+
+    async def exit_without_connection():
+        assert await sqlite_context.__aexit__(None, None, None) is False
+
+    asyncio.run(exit_without_connection())
+
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    stale_endpoint = selector.current()
+    selector.advance()
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+    checkpoint._advance_checkpointer_endpoint(stale_endpoint, RuntimeError("already advanced"))
     assert selector.current().label() == "127.0.0.2:3307"
 
 
@@ -337,6 +433,20 @@ def test_database_session_commit_rollback_and_info(monkeypatch):
 
     asyncio.run(database.close_database())
     assert fake_engine.disposed is True
+
+
+def test_database_dispose_and_close_noop_branches(monkeypatch):
+    database._engine = None
+    database._session_factory = object()
+    asyncio.run(database._dispose_engine())
+    assert database._engine is None
+    assert database._session_factory is None
+
+    database._engine = None
+    database._session_factory = object()
+    asyncio.run(database.close_database())
+    assert database._session_factory is not None
+    database._session_factory = None
 
 
 def test_database_session_connection_error_advances_endpoint(monkeypatch):
@@ -481,6 +591,46 @@ def test_database_probe_reraises_non_connection_error(monkeypatch):
         asyncio.run(database._probe_database_endpoint(endpoint))
 
 
+def test_database_probe_connection_error_returns_false_and_success(monkeypatch):
+    endpoint = parse_database_endpoints("127.0.0.1:3306", 3306)[0]
+    monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
+
+    class ErrorConn:
+        async def __aenter__(self):
+            raise RuntimeError("connect down")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class SuccessConn:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def execute(self, _sql):
+            return None
+
+    class FakeEngine:
+        def __init__(self, conn):
+            self.conn = conn
+            self.disposed = False
+
+        def connect(self):
+            return self.conn
+
+        async def dispose(self):
+            self.disposed = True
+
+    engines = [FakeEngine(ErrorConn()), FakeEngine(SuccessConn())]
+    monkeypatch.setattr(database, "create_async_engine", lambda *args, **kwargs: engines.pop(0))
+    monkeypatch.setattr(database, "_is_connection_error", lambda err: isinstance(err, RuntimeError))
+
+    assert asyncio.run(database._probe_database_endpoint(endpoint)) is False
+    assert asyncio.run(database._probe_database_endpoint(endpoint)) is True
+
+
 def test_select_available_endpoint_reraises_non_connection_error(monkeypatch):
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3306", 3306))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
@@ -494,8 +644,44 @@ def test_select_available_endpoint_reraises_non_connection_error(monkeypatch):
         asyncio.run(database.select_available_database_endpoint())
 
 
+def test_select_available_endpoint_sets_first_success_and_all_failed(monkeypatch):
+    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306)
+    selector = DatabaseEndpointSelector(endpoints)
+    monkeypatch.setattr(database, "_endpoint_selector", selector)
+
+    async def second_endpoint_only(endpoint):
+        return endpoint.host == "127.0.0.2"
+
+    monkeypatch.setattr(database, "_probe_database_endpoint", second_endpoint_only)
+    asyncio.run(database.select_available_database_endpoint())
+    assert selector.current().label() == "127.0.0.2:3307"
+
+    async def always_false(_endpoint):
+        return False
+
+    monkeypatch.setattr(database, "_probe_database_endpoint", always_false)
+    with pytest.raises(ValueError, match="所有业务库节点均不可用"):
+        asyncio.run(database.select_available_database_endpoint())
+
+
+def test_init_database_selects_endpoint_and_creates_engine(monkeypatch):
+    calls = []
+
+    async def fake_select():
+        calls.append("select")
+
+    monkeypatch.setattr(database, "select_available_database_endpoint", fake_select)
+    monkeypatch.setattr(database, "get_engine", lambda: calls.append("engine") or object())
+
+    asyncio.run(database.init_database())
+
+    assert calls == ["select", "engine"]
+
+
 def test_logger_env_and_manager_branches(monkeypatch, tmp_path):
     assert logger_module._env_text("MISSING_LOG_ENV", "fallback") == "fallback"
+    monkeypatch.setenv("UNIT_BOOL_ENV", "  ")
+    assert logger_module._env_bool("UNIT_BOOL_ENV", default=True) is True
     monkeypatch.setenv("LOG_LEVEL", "  ")
     assert logger_module.get_current_log_level() == "INFO"
     monkeypatch.setenv("LOG_CONSOLE", "off")
@@ -534,6 +720,36 @@ def test_logger_env_and_manager_branches(monkeypatch, tmp_path):
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     public_log = logger_module.get_logger("unit.public")
     assert public_log.level == logging.DEBUG
+
+    existing_logger = logging.getLogger("unit.existing")
+    existing_logger.handlers[:] = [logging.NullHandler()]
+    logger_module.LoggerManager._loggers.pop("unit.existing", None)
+    assert logger_module.LoggerManager.get_logger("unit.existing") is existing_logger
+
+
+def test_route_common_and_schema_edge_branches(monkeypatch):
+    with pytest.raises(ValueError, match="success/error"):
+        common.business_response(status="bad")
+
+    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    with pytest.raises(common.HTTPException, match="Missing user_id"):
+        common._get_current_user(SimpleNamespace(headers={}))
+
+    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    assert common._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
+
+    assert common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
+
+    for field, value, message in [
+        ("org_name", " ", "org_name"),
+        ("org_code", " ", "org_code"),
+        ("host", " ", "host"),
+        ("database", " ", "database"),
+    ]:
+        payload = {"org_name": "机构", "org_code": "ORG", "query_executor_type": "direct", "host": "127.0.0.1", "database": "demo"}
+        payload[field] = value
+        with pytest.raises(ValueError, match=message):
+            DatasourceSourceItem(**payload)
 
 
 def test_skills_loader_frontmatter_metadata_and_activation(tmp_path, monkeypatch):
@@ -576,14 +792,27 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(loader, "yaml", SimpleNamespace(safe_load=lambda _raw: (_ for _ in ()).throw(RuntimeError("bad yaml"))))
     assert loader._parse_frontmatter("---\nname: fallback\nquoted: 'v'\n---\nbody") == {"name": "fallback", "quoted": "v"}
     assert loader._parse_frontmatter("no frontmatter") == {}
+    monkeypatch.setattr(loader, "yaml", None)
+    assert loader._parse_frontmatter("---\nname: no-yaml\nignored-line\n---\nbody") == {"name": "no-yaml"}
+    monkeypatch.setattr(loader, "yaml", SimpleNamespace(safe_load=lambda _raw: ["not", "dict"]))
+    assert loader._parse_frontmatter("---\nname: list-yaml\n---\nbody") == {"name": "list-yaml"}
 
     root = tmp_path / "skills"
     good = root / "good"
     hidden = root / "_hidden"
+    bad = root / "bad"
     good.mkdir(parents=True)
     hidden.mkdir()
+    bad.mkdir()
     (good / "SKILL.md").write_text("---\nname: good\ndescription: Good & safe\n---\nbody", encoding="utf-8")
     (hidden / "SKILL.md").write_text("---\nname: hidden\n---\nbody", encoding="utf-8")
+    (bad / "SKILL.md").write_text("---\ntitle: Missing name\n---\nbody", encoding="utf-8")
+    schema_skill = root / "schema"
+    schema_skill.mkdir()
+    schema_skill_file = schema_skill / "SKILL.md"
+    schema_skill_file.write_text("---\nname: schema\ninput_schema:\n  type: object\n---\nbody", encoding="utf-8")
+    monkeypatch.setattr(loader, "yaml", __import__("yaml"))
+    assert loader.parse_metadata(schema_skill_file)["input_schema"] == {"type": "object"}
 
     class FakePath:
         @staticmethod
@@ -596,8 +825,12 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     metadata = loader.load_metadata()
     assert "good" in metadata
     assert "hidden" not in metadata
+    assert "bad" not in metadata
     prompt = loader.format_skills_prompt([{"name": "good", "title": "G", "description": "A&B", "domain": "d", "category": "c"}])
     assert "&amp;" in prompt
+    minimal_prompt = loader.format_skills_prompt([{"name": "plain", "title": "Plain", "description": "desc"}])
+    assert "<domain>" not in minimal_prompt
+    assert "<category>" not in minimal_prompt
 
 
 @pytest.mark.asyncio

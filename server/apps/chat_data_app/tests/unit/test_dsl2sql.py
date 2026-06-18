@@ -607,6 +607,12 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
         "relationships": [],
     }
     generator = SemanticSQLGenerator(config)
+    monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
+    monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
+    monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
+    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
+    monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
 
     result = generator.generate_sql(
         metrics=["表达式状态"],
@@ -748,6 +754,12 @@ def test_generator_builder_config_branches_for_metric_columns_and_table_sets(mon
         "relationships": [],
     }
     generator = SemanticSQLGenerator(config)
+    monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
+    monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
+    monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
+    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
+    monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
 
     result = generator.generate_sql(
         metrics=["支付金额", "最大金额"],
@@ -813,6 +825,252 @@ def test_generator_error_validation_edges():
     )
     assert bad_having["success"] is False
     assert "HAVING 条件中的指标" in bad_having["error"]
+
+
+def test_generator_remaining_branch_edges(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT remaining"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "数量", "expression": "COUNT(id)", "table": "orders"},
+            {"name": "原始金额", "expression": "orders.amount", "table": "orders", "column": "amount"},
+            {"name": "无列指标", "expression": "", "table": "orders"},
+        ],
+        "dimensions": [
+            {"name": "缺失维度", "table": "orders", "column": ""},
+            {"name": "状态", "table": "orders", "column": "status"},
+        ],
+        "relationships": [
+            {"left_table": "orders", "right_table": "users", "join_type": "left", "join_conditions": []},
+        ],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    assert generator._extract_dimension_name({"bad": "x"}) == ""
+    assert generator._extract_time_grain("状态") is None
+    assert generator._relationship_left_alias({"left_alias": "o", "left_table": "orders"}) == "o"
+    assert generator._relationship_right_alias({"right_alias": "u", "right_table": "users"}) == "u"
+    assert generator._build_builder_joins("orders", {"orders"}) == []
+    assert generator._build_builder_joins("orders", {"orders", "users"})[0]["joinConditions"] == []
+
+    result = generator.generate_sql(
+        metrics=["无列指标"],
+        dimensions=[],
+        filters=[],
+        having=[],
+        order_by=[],
+        user_query="查看明细",
+    )
+    assert result["success"] is True
+    assert captured["builder_config"]["aggregations"][0]["column"] == "*"
+    assert captured["builder_config"]["aggregations"][0]["expression"] == ""
+
+    aggregate_raw_star = generator.generate_sql(
+        metrics=["数量", "无列指标"],
+        dimensions=[],
+        filters=[],
+        having=[],
+        order_by=[],
+    )
+    assert aggregate_raw_star["success"] is True
+    assert any(item["alias"] == "无列指标" and item["func"] == "RAW" for item in captured["builder_config"]["aggregations"])
+
+    missing_dim_cfg = generator.generate_sql(
+        metrics=[],
+        dimensions=["状态"],
+        filters=[],
+        having=[],
+        order_by=[],
+    )
+    assert missing_dim_cfg["success"] is True
+    assert captured["builder_config"]["dimensions"][0]["transform"] == "raw"
+
+    no_fields = generator.generate_sql(metrics=[], dimensions=["缺失维度"], filters=[], having=[], order_by=[])
+    assert no_fields["success"] is True
+    assert captured["builder_config"]["dimensions"][0]["column"] == ""
+
+
+def test_generator_disconnected_join_and_missing_dimension_metric_branches(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT disconnected"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "订单数", "expression": "COUNT(*)", "table": "orders"},
+            {"name": "无表达式指标", "expression": "", "table": "orders", "column": "status"},
+        ],
+        "dimensions": [
+            {"name": "订单状态", "table": "orders", "column": "status"},
+            {"name": "缺列维度", "table": "orders", "column": ""},
+            {"name": "商品类型", "table": "products", "column": "category"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "left_column": "user_id",
+                "right_column": "id",
+                "join_type": "left",
+            }
+        ],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    assert generator._build_builder_joins("orders", {"orders", "products"}) == []
+    monkeypatch.setattr(
+        generator.validator,
+        "validate_dimensions",
+        lambda _dimensions: (["不存在维度", "订单状态"], None),
+    )
+
+    result = generator.generate_sql(
+        metrics=["无表达式指标"],
+        dimensions=["不存在维度", "订单状态"],
+        filters=[],
+        having=[],
+        order_by=[
+            {"field": "无表达式指标", "direction": "DESC"},
+            {"field": "订单状态", "direction": "ASC"},
+        ],
+        user_query="查看明细",
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert [item["alias"] for item in builder_config["dimensions"]] == ["订单状态"]
+    assert builder_config["aggregations"][0]["column"] == "status"
+    assert builder_config["orderBy"][0]["column"] == "status"
+
+
+def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT empty tables"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "原始空表", "expression": "", "table": "", "column": ""},
+        ],
+        "dimensions": [
+            {"name": "空表维度", "table": "", "column": ""},
+        ],
+        "relationships": [],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    result = generator.generate_sql(
+        metrics=["原始空表"],
+        dimensions=["空表维度"],
+        filters=[],
+        having=[],
+        order_by=[],
+        user_query="查看明细",
+    )
+
+    assert result["success"] is False
+    assert "查询至少需要一个指标或维度" in result["error"]
+
+
+def test_generator_remaining_builder_mapping_edges(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT mapped"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "总数", "expression": "COUNT(*)", "table": "orders"},
+            {"name": "原始状态", "expression": "", "table": "orders", "column": "status"},
+            {"name": "列指标", "expression": "", "table": "orders", "column": "amount"},
+        ],
+        "dimensions": [
+            {"name": "订单状态", "table": "orders", "column": "status"},
+        ],
+        "relationships": [],
+    }
+    generator = SemanticSQLGenerator(config)
+    monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
+    monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
+    monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
+    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+    monkeypatch.setattr(generator.validator, "validate_limit", lambda limit: (limit, None))
+    monkeypatch.setattr(generator.validator, "validate_offset", lambda offset: (offset, None))
+
+    result = generator.generate_sql(
+        metrics=["总数", "原始状态"],
+        dimensions=["订单状态"],
+        filters=[{"and": [{"dimension": "订单状态", "operator": "=", "value": "paid"}, {"value": "skip-no-table"}]}],
+        having=[{"metric": "列指标", "operator": ">", "value": 1}],
+        order_by=[{"field": "列指标", "direction": "DESC"}],
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert any(item["column"] == "*" for item in builder_config["aggregations"])
+    assert [item["alias"] for item in builder_config["dimensions"]].count("原始状态") == 0
+    having_node = next(item for item in builder_config["filters"] if item.get("id") == "having-列指标")
+    assert having_node["column"] == "amount"
+    assert builder_config["orderBy"][0]["column"] == "amount"
+
+
+def test_generator_reversed_join_fallback_and_no_selected_relation():
+    config = {
+        "source_type": "mysql",
+        "metrics": [],
+        "dimensions": [],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "left_column": "user_id",
+                "right_column": "id",
+                "join_type": "left",
+            },
+            {
+                "left_table": "products",
+                "right_table": "categories",
+                "left_column": "category_id",
+                "right_column": "id",
+                "join_type": "left",
+            },
+        ],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    reversed_join = generator._build_builder_joins("users", {"users", "orders"})
+    assert reversed_join[0]["leftTable"] == "users"
+    assert reversed_join[0]["leftColumn"] == "id"
+    assert reversed_join[0]["rightTable"] == "orders"
+    assert reversed_join[0]["rightColumn"] == "user_id"
+
+    assert generator._build_builder_joins("orders", {"orders", "categories"}) == []
 
 
 class TestSemanticToolInput:

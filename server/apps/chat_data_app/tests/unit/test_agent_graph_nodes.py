@@ -41,6 +41,13 @@ def test_mode_config_and_prompt_formatters():
     assert nodes.format_query_results_for_llm([]) == ""
     assert nodes.format_execution_target_info_for_llm("  机构A  ") == "\n机构A\n"
     assert nodes.format_execution_target_info_for_llm("") == ""
+    assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
+    assert "当前未选择指标集" in nodes.build_semantic_layer_context(None, "query")
+    assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"}, "query")
+    assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
+    assert "当前未选择指标集" in nodes.build_semantic_layer_context({}, "query")
+    assert "semantic_config_id" not in nodes.build_semantic_layer_context({"name": "订单分析"}, "query")
+    assert "当前已选择指标集。" in nodes.build_semantic_layer_context({"id": "", "name": ""}, "query")
 
 
 class FakeLLM:
@@ -123,6 +130,93 @@ async def test_create_agent_node_falls_back_when_explicit_model_fails(monkeypatc
     assert calls == ["bad_model", "default_model"]
 
 
+@pytest.mark.asyncio
+async def test_create_agent_node_explicit_model_fallback_without_tools(monkeypatch):
+    failed_llm = FakeLLM(fail_once=True)
+    fallback_llm = FakeLLM("默认模型无工具完成")
+    calls = []
+
+    def fake_get_chat_data_llm(model=None, **_kwargs):
+        calls.append(model)
+        return failed_llm if model == "bad_model" else fallback_llm
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", fake_get_chat_data_llm)
+    monkeypatch.setattr(nodes, "get_default_chat_data_model", lambda: "default_model")
+    monkeypatch.setattr(nodes, "filter_tools_by_config", lambda tools, config: [])
+    monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
+    monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 0)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
+    monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
+    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
+
+    result = await nodes.create_agent_node(["dsl2sql_tool"], semantic_config=None, model_id="bad_model")({
+        "messages": [HumanMessage(content="查询")],
+        "mode": "query",
+    })
+
+    assert result["messages"][0].content == "默认模型无工具完成"
+    assert calls == ["bad_model", "default_model"]
+    assert fallback_llm.bound_tools is None
+
+
+@pytest.mark.asyncio
+async def test_create_agent_node_explicit_model_fallback_with_tools(monkeypatch):
+    failed_llm = FakeLLM(fail_once=True)
+    fallback_llm = FakeLLM("默认模型工具完成")
+    calls = []
+
+    def fake_get_chat_data_llm(model=None, **_kwargs):
+        calls.append(model)
+        return failed_llm if model == "bad_model" else fallback_llm
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", fake_get_chat_data_llm)
+    monkeypatch.setattr(nodes, "get_default_chat_data_model", lambda: "default_model")
+    monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
+    monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 1)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
+    monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
+    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
+
+    result = await nodes.create_agent_node(["dsl2sql_tool"], semantic_config={"id": "sc_a"}, model_id="bad_model")({
+        "messages": [HumanMessage(content="查询")],
+        "mode": "query",
+    })
+
+    assert result["messages"][0].content == "默认模型工具完成"
+    assert calls == ["bad_model", "default_model"]
+    assert fallback_llm.bound_tools == ["dsl2sql_tool"]
+
+
+@pytest.mark.asyncio
+async def test_create_agent_node_no_model_reraises_and_no_tools(monkeypatch):
+    class AlwaysFailLLM(FakeLLM):
+        async def ainvoke(self, messages):
+            raise RuntimeError("model down")
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", lambda model=None, **_kwargs: AlwaysFailLLM())
+    monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
+    monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 0)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
+    monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
+    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
+
+    with pytest.raises(RuntimeError, match="model down"):
+        await nodes.create_agent_node([], semantic_config=None, model_id=None)({
+            "messages": [HumanMessage(content="查询")],
+            "mode": "query",
+        })
+
+    fake_llm = FakeLLM("无工具调用")
+    monkeypatch.setattr(nodes, "get_chat_data_llm", lambda model=None, **_kwargs: fake_llm)
+    result = await nodes.create_agent_node([], semantic_config=None, model_id=None)({
+        "messages": [HumanMessage(content="查询")],
+        "mode": "query",
+    })
+    assert result["messages"][0].content == "无工具调用"
+    assert fake_llm.bound_tools is None
+
+
 def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     errors = []
     monkeypatch.setattr(chat_data_graph.logger, "error", lambda message, **_kwargs: errors.append(message))
@@ -178,6 +272,8 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     assert compiled["nodes"][0][1][1] == ["select_semantic_config_tool", "dsl2sql_tool", "execute_sql_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]
     assert compiled["checkpointer"] == "ckpt"
+
+    assert chat_data_graph._format_tool_error(RuntimeError("boom")) == "boom"
 
 
 @pytest.mark.asyncio

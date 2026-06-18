@@ -76,6 +76,23 @@ def test_stage_context_empty_and_multimodal_message_edges():
     assert no_history_prompt == "当前用户目标：\n当前问题"
 
 
+def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
+    assert data_analyze_graph._message_text([{"text": ""}, {"content": None}]) == ""
+    assert data_analyze_graph._message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"
+    assert data_analyze_graph._format_stage_conversation_context([HumanMessage(content=""), SystemMessage(content="ignored")]) == ""
+    assert data_analyze_graph._extract_source_type({"semantic_configs": ["bad", {}]}) == ""
+
+    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills />")
+    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+        skill=None,
+        data_context={},
+        workspace_root=str(tmp_path),
+        available_skills_xml=None,
+    )
+    assert "<skills />" in prompt
+    assert str(tmp_path) in prompt
+
+
 def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_path):
     monkeypatch.setattr(data_analyze_graph, "create_tool_retry_guard", lambda tools: tools)
     tools = data_analyze_graph.create_data_analyze_tools(
