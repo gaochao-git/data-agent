@@ -9,6 +9,7 @@ import { ElMessage } from 'element-plus'
 import type { ToolCallInfo } from '../types'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
+import { extractGeneratedSqlFromToolCall, extractSemanticDslFromArgs } from '../utils/semanticTool'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -113,7 +114,6 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   having: { bg: 'rgba(139, 92, 246, 0.1)', text: '#7c3aed' },
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
-const SEMANTIC_DSL_KEYS = ['metrics', 'dimensions', 'filters', 'having', 'order_by', 'limit', 'offset'] as const
 
 // 获取工具元数据
 const meta = computed(() => {
@@ -157,11 +157,13 @@ const compactDescription = computed(() => {
   return ''
 })
 
-// 是否可以保存到看板（semantic_query_tool 完成且有 SQL）
+const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
+
+// 是否可以保存到看板（semantic_query_tool 完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
   return props.toolCall.tool_name === 'semantic_query_tool' &&
     props.toolCall.status === 'completed' &&
-    props.toolCall.args?.sql
+    Boolean(generatedSql.value)
 })
 
 const copyText = (text: string, message: string) => {
@@ -202,19 +204,9 @@ function isEmptyParamValue(value: unknown): boolean {
 }
 
 function buildSemanticDslParam(args: Record<string, unknown>): Record<string, unknown> | null {
-  if (props.toolCall.tool_name !== 'dsl2sql_tool') return null
   if (Object.prototype.hasOwnProperty.call(args, 'dsl')) return null
-  const hasDslField = SEMANTIC_DSL_KEYS.some(key => Object.prototype.hasOwnProperty.call(args, key))
-  if (!hasDslField) return null
-  return {
-    metrics: args.metrics || [],
-    dimensions: args.dimensions || [],
-    filters: args.filters || [],
-    having: args.having || [],
-    order_by: args.order_by || [],
-    limit: Object.prototype.hasOwnProperty.call(args, 'limit') ? args.limit : null,
-    offset: Object.prototype.hasOwnProperty.call(args, 'offset') ? args.offset : null,
-  }
+  if (props.toolCall.tool_name !== 'dsl2sql_tool' && props.toolCall.tool_name !== 'semantic_query_tool') return null
+  return extractSemanticDslFromArgs(args)
 }
 
 // 过滤要展示的参数
@@ -644,7 +636,7 @@ function getSqlTokenClass(type: string): string {
             <AsyncQueryResult
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"
-              :sql="toolCall.args?.sql as string"
+              :sql="generatedSql"
               :semantic-params="toolCall.semanticParams"
               :on-view-analysis="onViewAnalysis"
               :is-analysis-active="isAnalysisActive"
@@ -679,7 +671,7 @@ function getSqlTokenClass(type: string): string {
     <SaveToPanelModal
       v-if="canSaveToPanel"
       v-model:visible="showSaveModal"
-      :sql="toolCall.args?.sql as string"
+      :sql="generatedSql"
       :datasource-id="datasourceId"
     />
   </div>

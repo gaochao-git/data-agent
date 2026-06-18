@@ -530,7 +530,7 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
 async def test_continue_execution_chunk_creates_buffer_and_finishes_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_only_chunk", "name": "semantic_query_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc_only_chunk", "name": "semantic_query_tool", "args": '{"dsl":{"metrics":["订单数"]}}'}]), {"langgraph_node": "agent"}
             yield FakeChunk(content="ok", msg_type="tool", tool_call_id="tc_only_chunk", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
         async def aget_state(self, _config):
@@ -542,7 +542,7 @@ async def test_continue_execution_chunk_creates_buffer_and_finishes_without_toke
     chunks = await collect_stream(handlers._continue_execution("conv", action="approve"))
     text = "".join(chunks)
 
-    assert '"accumulated_args": {"sql": "select 1"}' in text
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in text
     assert "message_end" not in text
     assert text.rstrip().endswith("data: [DONE]")
 

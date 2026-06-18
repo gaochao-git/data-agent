@@ -5,6 +5,7 @@
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
 import type { ToolCallInfo, Message, MessageSegment, PendingTool, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
 
@@ -466,20 +467,12 @@ export function useConversationHistory({
           // 更新每个 assistant 消息中的 toolCalls
           formattedMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls) {
-              // 先收集 dsl2sql_tool 的语义参数
+              // 先收集 dsl2sql_tool 的语义参数，作为旧消息的顺序兜底
               const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
               msg.toolCalls.forEach((tc) => {
                 if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
                   dsl2sqlTools.push({
-                    semanticParams: {
-                      metrics: tc.args.metrics as string[] | undefined,
-                      dimensions: tc.args.dimensions as SemanticParams['dimensions'],
-                      filters: tc.args.filters as SemanticParams['filters'],
-                      having: tc.args.having as SemanticParams['having'],
-                      order_by: tc.args.order_by as SemanticParams['order_by'],
-                      limit: tc.args.limit as number | undefined,
-                      offset: tc.args.offset as number | undefined,
-                    },
+                    semanticParams: extractSemanticParamsFromArgs(tc.args),
                   })
                 }
               })
@@ -501,8 +494,9 @@ export function useConversationHistory({
                     renderId = queryResultMatch[1].trim()
                     renderType = 'queryResult'
                   }
-                  // 从对应的 dsl2sql_tool 获取语义参数
-                  if (executeSqlIndex < dsl2sqlTools.length) {
+                  semanticParams = extractSemanticParamsFromArgs(tc.args)
+                  // 从对应的 dsl2sql_tool 获取语义参数作为旧历史兜底
+                  if (!semanticParams && executeSqlIndex < dsl2sqlTools.length) {
                     semanticParams = dsl2sqlTools[executeSqlIndex]?.semanticParams
                   }
                   executeSqlIndex++
@@ -555,20 +549,12 @@ export function useConversationHistory({
           // 因为它们原本在不同的 assistant 消息中，合并前无法正确关联
           displayMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-              // 收集合并后消息中所有 dsl2sql_tool 的参数
+              // 收集合并后消息中所有 dsl2sql_tool 的参数，作为旧消息的顺序兜底
               const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
               msg.toolCalls.forEach((tc) => {
                 if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
                   dsl2sqlTools.push({
-                    semanticParams: {
-                      metrics: tc.args.metrics as string[] | undefined,
-                      dimensions: tc.args.dimensions as SemanticParams['dimensions'],
-                      filters: tc.args.filters as SemanticParams['filters'],
-                      having: tc.args.having as SemanticParams['having'],
-                      order_by: tc.args.order_by as SemanticParams['order_by'],
-                      limit: tc.args.limit as number | undefined,
-                      offset: tc.args.offset as number | undefined,
-                    },
+                    semanticParams: extractSemanticParamsFromArgs(tc.args),
                   })
                 }
               })
@@ -580,10 +566,11 @@ export function useConversationHistory({
                   if (tc.tool_name === 'semantic_query_tool') {
                     const dslTool = dsl2sqlTools[executeSqlIndex]
                     executeSqlIndex++
-                    if (dslTool) {
+                    const semanticParams = extractSemanticParamsFromArgs(tc.args) || dslTool?.semanticParams
+                    if (semanticParams) {
                       return {
                         ...tc,
-                        semanticParams: dslTool.semanticParams,
+                        semanticParams,
                       }
                     }
                   }

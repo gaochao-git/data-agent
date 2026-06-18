@@ -88,7 +88,7 @@ def test_format_tool_event_uses_result_as_content():
         tool_name="semantic_query_tool",
         tool_call_id="call_1",
         status="completed",
-        args={"sql": "select 1"},
+        args={"dsl": {"metrics": ["订单数"]}},
         result="执行完成",
         timestamp="2026-06-02 10:00:00",
     )
@@ -867,7 +867,7 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     fake_graph = _FakeGraph(
         events=[
             (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"sql\":\"select 1\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询订单数据"), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="内部工具模型输出"), {"langgraph_node": "tools"}),
@@ -893,7 +893,7 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
 
     joined = "".join(events)
     assert '"status": "running"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "已查询订单数据" in joined
     assert "内部工具模型输出" not in joined
     assert 'event: message_end\ndata: {"usage": {"total_tokens": 12}}' in joined
@@ -1053,7 +1053,7 @@ def test_continue_execution_streams_resume_events(monkeypatch):
     fake_graph = _FakeGraph(
         events=[
             (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"sql\":\"select 2\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="继续完成"), {"langgraph_node": "agent"}),
         ],
@@ -1072,7 +1072,7 @@ def test_continue_execution_streams_resume_events(monkeypatch):
 
     joined = "".join(events)
     assert '"status": "running"' in joined
-    assert '"accumulated_args": {"sql": "select 2"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "继续完成" in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
 
@@ -1163,8 +1163,8 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
             assert config["configurable"]["thread_id"] == "conv_da"
             yield ("updates", {"thinking": {"task_stages": [{"stage": "thinking", "status": "completed", "content": "理解完成"}]}})
             yield ("messages", (_FakeMessageChunk(content="规划中"), {"langgraph_node": "plan"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"sql": "select 1"}}]), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"dsl": {"metrics": ["销售额"]}}}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": '{"dsl":{"metrics":["销售额"]}}'}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content='{"success": true}', type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}))
             yield ("custom", {"type": "token_usage", "usage": {"total_tokens": 9}})
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
@@ -1190,7 +1190,7 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert "理解完成" in joined
     assert "event: task_stage_delta" in joined
     assert '"tool_name": "semantic_query_tool"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["销售额"]}}' in joined
     assert "分析完成" in joined
     assert 'event: message_end\ndata: {"usage": {"total_tokens": 9}}' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
@@ -1307,8 +1307,8 @@ def test_data_analyze_completion_handler_covers_subgraph_chunks_and_disconnect(m
     class FakeDataAnalyzeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
             yield (("subgraph",), "messages", (_FakeMessageChunk(content="跳过内部"), {"langgraph_node": "__internal__"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "semantic_query_tool", "args": '{"sql":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"args": '"select 1"}', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "semantic_query_tool", "args": '{"dsl":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"args": '{"metrics":["订单数"]}}', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content="执行失败: 表不存在", type_="tool", tool_call_id="chunk_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="", type_="tool", tool_call_id="missing_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="", type_="ai"), {"langgraph_node": "data_analyze_agent"}))
@@ -1328,7 +1328,7 @@ def test_data_analyze_completion_handler_covers_subgraph_chunks_and_disconnect(m
     assert "跳过内部" not in joined
     assert '"status": "running"' in joined
     assert '"status": "error"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "完成" in joined
 
     class DisconnectRequest:

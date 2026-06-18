@@ -12,6 +12,7 @@ import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
+import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs } from '../utils/semanticTool'
 import StructuredMessage from './StructuredMessage.vue'
 import ToolCallList from './ToolCallList.vue'
 import AsyncQueryResult from './AsyncQueryResult.vue'
@@ -697,18 +698,10 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         const toolName = tc.name || existingInfo?.tool_name || ''
         if (!toolName) continue
 
-        // 如果是 dsl2sql_tool，提取语义参数
+        // 如果是语义工具，提取 DSL 参数用于结果展示
         let semanticParams = existingInfo?.semanticParams
-        if (toolName === 'dsl2sql_tool' && mergedArgs) {
-          semanticParams = {
-            metrics: mergedArgs.metrics as string[] | undefined,
-            dimensions: mergedArgs.dimensions as SemanticParams['dimensions'],
-            filters: mergedArgs.filters as SemanticParams['filters'],
-            having: mergedArgs.having as SemanticParams['having'],
-            order_by: mergedArgs.order_by as SemanticParams['order_by'],
-            limit: mergedArgs.limit as number | undefined,
-            offset: mergedArgs.offset as number | undefined,
-          }
+        if ((toolName === 'dsl2sql_tool' || toolName === 'semantic_query_tool') && mergedArgs) {
+          semanticParams = extractSemanticParamsFromArgs(mergedArgs) || semanticParams
         }
 
         const toolCallInfo: ToolCallInfo = {
@@ -760,25 +753,19 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         // 更新工具调用的 args
         toolInfo.args = { ...toolInfo.args, ...accumulatedArgs }
 
-        // 如果是 dsl2sql_tool，从 accumulated_args 提取语义参数
-        if (toolInfo.tool_name === 'dsl2sql_tool') {
-          semanticParams = {
-            metrics: accumulatedArgs.metrics as string[] | undefined,
-            dimensions: accumulatedArgs.dimensions as SemanticParams['dimensions'],
-            filters: accumulatedArgs.filters as SemanticParams['filters'],
-            having: accumulatedArgs.having as SemanticParams['having'],
-            order_by: accumulatedArgs.order_by as SemanticParams['order_by'],
-            limit: accumulatedArgs.limit as number | undefined,
-            offset: accumulatedArgs.offset as number | undefined,
-          }
+        // 从 accumulated_args 提取语义参数。semantic_query_tool 新格式直接携带 dsl。
+        if (toolInfo.tool_name === 'dsl2sql_tool' || toolInfo.tool_name === 'semantic_query_tool') {
+          semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || semanticParams
 
           // 更新 dsl2sqlToolCalls 中对应的记录
-          const dslIndex = dsl2sqlToolCalls.value.findIndex(t => t.tool_call_id === msg.tool_call_id)
-          if (dslIndex >= 0) {
-            dsl2sqlToolCalls.value[dslIndex] = {
-              ...dsl2sqlToolCalls.value[dslIndex]!,
-              semanticParams,
-              args: toolInfo.args,
+          if (toolInfo.tool_name === 'dsl2sql_tool') {
+            const dslIndex = dsl2sqlToolCalls.value.findIndex(t => t.tool_call_id === msg.tool_call_id)
+            if (dslIndex >= 0) {
+              dsl2sqlToolCalls.value[dslIndex] = {
+                ...dsl2sqlToolCalls.value[dslIndex]!,
+                semanticParams,
+                args: toolInfo.args,
+              }
             }
           }
         }
@@ -792,14 +779,16 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
           renderType = 'queryResult'
         }
 
-        // 从对应的 dsl2sql_tool 获取语义参数
+        semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || semanticParams
+
+        // 从对应的 dsl2sql_tool 获取语义参数作为旧历史和异常流式 chunk 的兜底
         // 策略：按顺序匹配（第 N 个 semantic_query_tool 对应第 N 个 dsl2sql_tool）
         const executeSqlTools = Array.from(toolCallsMap.value.values())
           .filter(t => t.tool_name === 'semantic_query_tool')
         const currentIndex = executeSqlTools.findIndex(t => t.tool_call_id === msg.tool_call_id)
         if (currentIndex >= 0 && currentIndex < dsl2sqlToolCalls.value.length) {
           const dsl2sqlTool = dsl2sqlToolCalls.value[currentIndex]
-          if (dsl2sqlTool) {
+          if (!semanticParams && dsl2sqlTool) {
             semanticParams = dsl2sqlTool.semanticParams
           }
         }
@@ -1689,7 +1678,7 @@ const handleViewAnalysis = (msg: Message) => {
                     :key="tc.tool_call_id"
                     class="max-h-[46vh]"
                     :result-data="tc.renderId!"
-                    :sql="tc.args?.sql as string"
+                    :sql="extractGeneratedSqlFromToolCall(tc)"
                     :semantic-params="tc.semanticParams"
                     :on-view-analysis="() => handleViewAnalysis(msg)"
                     :is-analysis-active="isAnalysisPanelOpen && currentAnalysisRoundId === msg.id"

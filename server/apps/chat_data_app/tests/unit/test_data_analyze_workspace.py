@@ -851,8 +851,29 @@ async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
 async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
     writes = []
+    input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
+
+    async def fake_get_config(datasource_id, semantic_config_id):
+        assert datasource_id == "ds_1"
+        assert semantic_config_id == "sc_1"
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    def fake_remove_mixed(payload, semantic_config):
+        assert semantic_config["id"] == "sc_1"
+        return payload, ["warn_a"]
+
+    class FakeGenerator:
+        def __init__(self, semantic_config):
+            assert semantic_config["id"] == "sc_1"
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["销售额"]
+            assert kwargs["dimensions"] == ["月份"]
+            return {"success": True, "sql": "select month, sales from t"}
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
+        assert sql == "select month, sales from t"
+        assert kwargs["query_text"] == "统计销售额"
         return {
             "success": True,
             "sql": sql,
@@ -866,13 +887,17 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         writes.append({"file_path": file_path, "content": content, "mode": mode})
         return {"file_path": "/mnt/user-data/workspace/current.json"}
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(exec_sql_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
     result = await tools["semantic_query_tool"].ainvoke({
-        "sql": "select month, sales from t",
+        "dsl": input_dsl,
         "save_as": "workspace/current.json",
+        "user_query": "统计销售额",
     })
 
     payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
@@ -880,6 +905,9 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     assert payload["result_path"] == "/mnt/user-data/workspace/current.json"
     assert payload["columns"] == ["month", "sales"]
     assert payload["row_count"] == 1
+    assert payload["sql"] == "select month, sales from t"
+    assert payload["dsl"] == input_dsl
+    assert payload["warnings"] == ["warn_a"]
     assert not (Path(paths["workspace"]) / "current.json").exists()
     assert writes[0]["file_path"] == "workspace/current.json"
     assert writes[0]["mode"] == "overwrite"
@@ -890,8 +918,21 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
 @pytest.mark.asyncio
 async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
+    input_dsl = {"metrics": ["订单数"]}
+
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    class FakeGenerator:
+        def __init__(self, _semantic_config):
+            pass
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["订单数"]
+            return {"success": True, "sql": "select count(*) cnt from t"}
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
+        assert sql == "select count(*) cnt from t"
         return {
             "success": True,
             "sql": sql,
@@ -900,42 +941,65 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
             "total_count": 1,
         }
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
-    result = await tools["semantic_query_tool"].ainvoke({"sql": "select count(*) cnt from t"})
+    result = await tools["semantic_query_tool"].ainvoke({"dsl": input_dsl})
 
     payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
     assert "result_path" not in payload
     assert payload["data"] == [{"cnt": 3}]
+    assert payload["sql"] == "select count(*) cnt from t"
+    assert payload["dsl"]["metrics"] == input_dsl["metrics"]
+    assert payload["dsl"]["dimensions"] == []
+
+    blank_save_result = await tools["semantic_query_tool"].ainvoke({"dsl": input_dsl, "save_as": "   "})
+    blank_save_payload = json.loads(blank_save_result.replace("[semantic_query_tool]\n", "", 1))
+    assert "result_path" not in blank_save_payload
+    assert blank_save_payload["data"] == [{"cnt": 3}]
 
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
-    tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths)
+    tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths, semantic_config_id="sc_1")
 
-    assert await tools_without_datasource["semantic_query_tool"].ainvoke({"sql": "select 1"}) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
+    assert await tools_without_datasource["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}}) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
         return {"success": True, "sql": sql, "columns": [], "data": []}
 
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tool_without_workspace = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1")
-    assert await tool_without_workspace.ainvoke({"sql": "select 1", "save_as": "workspace/a.json"}) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+    tool_without_workspace = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1", semantic_config_id="sc_1")
+    assert await tool_without_workspace.ainvoke({"dsl": {"metrics": ["订单数"]}, "save_as": "workspace/a.json"}) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
 
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
-    assert await tools["semantic_query_tool"].ainvoke({"sql": "select 1", "save_as": "workspace/a.txt"}) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}, "save_as": "workspace/a.txt"}) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"sql": "select 1"}}) == "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
 
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_error_{uuid.uuid4().hex}")
 
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    class FakeGenerator:
+        def __init__(self, _semantic_config):
+            pass
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
     async def fake_execute_sql_real(*_args, **_kwargs):
         raise RuntimeError("执行失败")
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
-    assert await tools["semantic_query_tool"].ainvoke({"sql": "select 1"}) == "semantic_query_tool 执行失败: 执行失败"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}}) == "semantic_query_tool 执行失败: 执行失败"

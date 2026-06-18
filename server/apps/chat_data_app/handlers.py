@@ -544,6 +544,8 @@ async def _stream_sql_generation(
 
     if mode == "query":
         logger.info("query 模式使用统一语义工具链")
+    if semantic_config and not semantic_config_id:
+        semantic_config_id = str(semantic_config.get("id") or "").strip() or None
 
     config = {
         "configurable": {
@@ -613,6 +615,7 @@ async def _stream_sql_generation(
                 "mode": mode,
                 "datasource_id": datasource_id,  # 传递数据源ID，用于真实SQL执行
                 "semantic_config_id": semantic_config_id,
+                "semantic_config": semantic_config,
                 "user_id": user_id,
                 "operator_name": username or "",
                 "conversation_id": thread_id,

@@ -108,24 +108,39 @@ def _get_sqlite_checkpointer():
 
 
 class _MySQLCheckpointerFailoverContext:
-    """Wrap MySQL checkpointer contexts to advance endpoint after connection failure."""
+    """Wrap MySQL checkpointer contexts and retry connection-class failures."""
 
-    def __init__(self, context, endpoint):
-        self.context = context
-        self.endpoint = endpoint
+    def __init__(self, context_factory):
+        self.context_factory = context_factory
+        self.context = None
+        self.endpoint = None
 
     async def __aenter__(self):
-        try:
-            return await self.context.__aenter__()
-        except Exception as err:
-            _advance_checkpointer_endpoint(self.endpoint, err)
-            raise
+        last_error = None
+        for _ in range(len(_endpoint_selector.endpoints)):
+            endpoint = _endpoint_selector.current()
+            context = self.context_factory(endpoint)
+            try:
+                checkpointer = await context.__aenter__()
+                self.context = context
+                self.endpoint = endpoint
+                return checkpointer
+            except Exception as err:
+                last_error = err
+                if not is_mysql_connection_error(err):
+                    raise
+                _advance_checkpointer_endpoint(endpoint, err)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("MySQL checkpointer 未配置可用节点")
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.context is None:
+            return False
         try:
             return await self.context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            if exc_val is not None and is_mysql_connection_error(exc_val):
+            if self.endpoint is not None and exc_val is not None and is_mysql_connection_error(exc_val):
                 _advance_checkpointer_endpoint(self.endpoint, exc_val)
 
 
@@ -157,16 +172,15 @@ def _get_mysql_checkpointer():
         )
 
     password = _get_mysql_password()
-    endpoint = _endpoint_selector.current()
-    conn_string = (
-        f"mysql+aiomysql://{MYSQL_USER}:{password}"
-        f"@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
-    )
-    try:
-        return _MySQLCheckpointerFailoverContext(AIOMySQLSaver.from_conn_string(conn_string), endpoint)
-    except Exception as err:
-        _advance_checkpointer_endpoint(endpoint, err)
-        raise
+
+    def context_factory(endpoint):
+        conn_string = (
+            f"mysql+aiomysql://{MYSQL_USER}:{password}"
+            f"@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
+        )
+        return AIOMySQLSaver.from_conn_string(conn_string)
+
+    return _MySQLCheckpointerFailoverContext(context_factory)
 
 
 # ============ 初始化函数 ============

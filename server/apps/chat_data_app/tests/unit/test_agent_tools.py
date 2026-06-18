@@ -473,6 +473,20 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
 def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     from langchain_core.messages import HumanMessage
 
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["订单数"]
+            assert kwargs["user_query"] == "查订单"
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(datasource_id, semantic_config_id):
+        assert datasource_id == "ds_a"
+        assert semantic_config_id == "cfg_a"
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
         assert sql == "select 1"
         assert datasource_id == "ds_a"
@@ -497,19 +511,73 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "messages": [HumanMessage(content="查订单")],
     }
 
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
+    success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": state}))
 
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
-    failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
+    failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": state}))
 
     assert success.startswith("<query_result>")
     assert '"data": [{"id": 1}]' in success
+    assert '"sql": "select 1"' in success
     assert failed == "查询失败: 表不存在"
+
+
+def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_payload(monkeypatch):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    captured = {}
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **kwargs):
+            captured["user_query"] = kwargs["user_query"]
+            return {"success": True, "sql": "select latest"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fake_execute_sql_real(sql, *_args, **_kwargs):
+        return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
+
+    state = {
+        "datasource_id": "ds_a",
+        "semantic_config_id": "cfg_a",
+        "messages": [
+            HumanMessage(content="上一轮问题"),
+            AIMessage(content="上一轮回答"),
+            HumanMessage(content="最新问题"),
+        ],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": state}))
+    assert '"sql": "select latest"' in result
+    assert captured["user_query"] == "最新问题"
+
+    legacy_sql_result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"sql": "select 1"}, "state": state}))
+    assert legacy_sql_result == "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
 
 
 def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
     from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select content from big_table"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
 
     async def fake_execute_sql_real(*_args, **_kwargs):
         return {
@@ -538,11 +606,13 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
         "messages": [HumanMessage(content="查大结果")],
     }
 
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(agent_tools, "save_query_result", fake_save_query_result)
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
-    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["内容"]}, "state": state}))
 
     assert result.startswith("<query_result>")
     assert '"artifact_id": "artifact_large"' in result
@@ -553,7 +623,14 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
     assert captured["conversation_id"] == "conv_a"
 
 
-def test_semantic_query_tool_large_result_without_sql_omits_sql_summary(monkeypatch):
+def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sql_in_large_summary(monkeypatch):
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_temp"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select compiled from temp_config"}
+
     async def fake_execute_sql_real(*_args, **_kwargs):
         return {
             "success": True,
@@ -563,33 +640,85 @@ def test_semantic_query_tool_large_result_without_sql_omits_sql_summary(monkeypa
             "execution_time_ms": 12,
         }
 
+    async def fail_load_config(*_args, **_kwargs):
+        raise AssertionError("state semantic_config should be used before runtime loading")
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_no_sql")
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
-    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
+    state = {
+        "semantic_config_id": "cfg_temp",
+        "semantic_config": {"id": "cfg_temp", "metrics": [], "dimensions": []},
+    }
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["临时指标"]}, "state": state}))
 
     payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
     assert payload["artifact_id"] == "artifact_no_sql"
-    assert "sql" not in payload
+    assert payload["sql"] == "select compiled from temp_config"
+
+
+def test_semantic_query_tool_accepts_temp_semantic_config_without_id(monkeypatch):
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["metrics"] == []
+            assert "id" not in config
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select temp"}
+
+    async def fail_load_config(*_args, **_kwargs):
+        raise AssertionError("temp semantic_config should not require runtime loading")
+
+    async def fake_execute_sql_real(sql, *_args, **_kwargs):
+        return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["临时指标"]},
+        "state": {"semantic_config": {"metrics": [], "dimensions": []}},
+    }))
+
+    assert '"sql": "select temp"' in result
 
 
 def test_semantic_query_tool_approval_reject_and_rewrite_branches(monkeypatch):
+    class FakeGenerator:
+        counter = 0
+
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            FakeGenerator.counter += 1
+            return {"success": True, "sql": f"select {FakeGenerator.counter}"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
         return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
 
+    state = {"semantic_config_id": "cfg_a"}
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "SQL_APPROVAL_ENABLED", True)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "reject"})
-    rejected = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
+    rejected = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
     assert rejected == "用户取消了 SQL 执行"
 
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "approve", "sql": "select 2"})
-    rewritten = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
+    rewritten = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
     assert '"sql": "select 2"' in rewritten
 
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: "approve")
-    default_approval = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 3", "state": {}}))
+    default_approval = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
     assert '"sql": "select 3"' in default_approval
 
 

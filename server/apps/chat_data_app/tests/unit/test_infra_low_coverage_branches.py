@@ -182,9 +182,9 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
 
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
     get_context = checkpoint.get_checkpointer()
-    assert get_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert get_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
     mysql_context = checkpoint._get_mysql_checkpointer()
-    assert mysql_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
+    assert mysql_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
 
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
     with pytest.raises(ValueError, match="不支持"):
@@ -247,7 +247,7 @@ def test_database_endpoint_parser_remaining_error_edges():
     assert is_mysql_connection_error(SimpleNamespace(args=("bad",))) is False
 
 
-def test_checkpoint_mysql_failover_advances_after_create_error(monkeypatch):
+def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
     monkeypatch.setattr(checkpoint, "MYSQL_USER", "user")
     monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
@@ -258,26 +258,45 @@ def test_checkpoint_mysql_failover_advances_after_create_error(monkeypatch):
         DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306)),
     )
 
+    class FakeContext:
+        def __init__(self, conn_string):
+            self.conn_string = conn_string
+
+        async def __aenter__(self):
+            FakeSaver.enter_calls.append(self.conn_string)
+            if len(FakeSaver.enter_calls) == 1:
+                raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+            return {"conn_string": self.conn_string}
+
+        async def __aexit__(self, *_args):
+            return False
+
     class FakeSaver:
-        calls = []
+        create_calls = []
+        enter_calls = []
 
         @classmethod
         def from_conn_string(cls, conn_string):
-            cls.calls.append(conn_string)
-            if len(cls.calls) == 1:
-                raise RuntimeError("down")
-            return {"conn_string": conn_string}
+            cls.create_calls.append(conn_string)
+            return FakeContext(conn_string)
 
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
-    with pytest.raises(RuntimeError, match="down"):
-        checkpoint._get_mysql_checkpointer()
+    context = checkpoint._get_mysql_checkpointer()
 
-    mysql_context = checkpoint._get_mysql_checkpointer()
-    assert FakeSaver.calls[0] == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
-    assert mysql_context.context["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.2:3307/db"
+    async def enter_context():
+        async with context as checkpointer_obj:
+            return checkpointer_obj
+
+    checkpointer_obj = asyncio.run(enter_context())
+    assert FakeSaver.create_calls == [
+        "mysql+aiomysql://user:pwd@127.0.0.1:3306/db",
+        "mysql+aiomysql://user:pwd@127.0.0.2:3307/db",
+    ]
+    assert FakeSaver.enter_calls == FakeSaver.create_calls
+    assert checkpointer_obj["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.2:3307/db"
 
 
-def test_checkpoint_mysql_failover_advances_after_enter_error(monkeypatch):
+def test_checkpoint_mysql_failover_raises_non_connection_enter_error(monkeypatch):
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
 
@@ -288,7 +307,7 @@ def test_checkpoint_mysql_failover_advances_after_enter_error(monkeypatch):
         async def __aexit__(self, *_args):
             return False
 
-    context = checkpoint._MySQLCheckpointerFailoverContext(BadContext(), selector.current())
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: BadContext())
 
     async def enter_context():
         async with context:
@@ -297,7 +316,7 @@ def test_checkpoint_mysql_failover_advances_after_enter_error(monkeypatch):
     with pytest.raises(RuntimeError, match="enter down"):
         asyncio.run(enter_context())
 
-    assert selector.current().label() == "127.0.0.2:3307"
+    assert selector.current().label() == "127.0.0.1:3306"
 
 
 def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypatch):
@@ -311,7 +330,9 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
         async def __aexit__(self, *_args):
             return False
 
-    context = checkpoint._MySQLCheckpointerFailoverContext(Context(), selector.current())
+    endpoint = selector.current()
+    context = checkpoint._MySQLCheckpointerFailoverContext(lambda _endpoint: Context())
+    context.endpoint = endpoint
     err = OperationalError(statement="select 1", params=None, orig=SimpleNamespace(args=(2006, "gone away")))
 
     async def use_context():

@@ -576,9 +576,20 @@ class ExecuteSemanticInput(BaseModel):
 # ============ Agent 工具输入模型 ============
 
 class SemanticQueryInput(BaseModel):
-    """语义查询工具的输入参数。当前阶段仍接收 DSL2SQL 生成的 SQL。"""
-    sql: str = Field(..., description="要执行的 SQL 语句")
+    """语义查询工具的输入参数。接收 DSL，内部生成 SQL 后执行。"""
+    dsl: Dict[str, Any] = Field(
+        ...,
+        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset",
+    )
     semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_sql(cls, data: Any):
+        """拒绝旧版 sql 参数，避免模型绕过语义 DSL 编译链路。"""
+        if isinstance(data, dict) and "sql" in data:
+            raise ValueError("semantic_query_tool 已改为接收 dsl 参数，禁止传入 sql")
+        return data
 
 
 class CalculatorItem(BaseModel):

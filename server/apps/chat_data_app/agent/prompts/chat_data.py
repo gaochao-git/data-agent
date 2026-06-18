@@ -15,7 +15,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 ## 可用工具
 1. `select_semantic_config_tool` - 需要确定可回答问题的语义配置时，从当前数据源组中选择配置
 2. `dsl2sql_tool` - 基于可用语义配置生成 SQL；如果本轮通过工具确定了配置，必须传入 `semantic_config_id`
-3. `semantic_query_tool` - 执行 SQL；如果本轮通过工具选择了指标集，必须传入 `semantic_config_id`
+3. `semantic_query_tool` - 接收语义 DSL，内部生成 SQL 并执行查询；如果本轮通过工具选择了指标集，必须传入 `semantic_config_id`
 4. `calculator_tool` - 对长数字、差值、比例或单位换算做确定性计算；参数只使用 `calculations` 数组，单个计算也传一条记录
 
 {safety_guardrails}
@@ -160,6 +160,9 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - 对字段截取、拼接、正则、复杂函数分组等派生维度需求，如果配置中没有对应维度，归为类型C，不要退化为原字段分组，也不要调用 `dsl2sql_tool`
 
 ## 参数格式
+- `dsl2sql_tool` 使用顶层语义参数：`metrics`、`dimensions`、`filters`、`having`、`order_by`、`limit`、`offset`。
+- `semantic_query_tool` 必须使用 `dsl={{...}}` 包裹完整语义 DSL 对象，例如 `semantic_query_tool(dsl={{"metrics":["指标A"],"dimensions":[],"filters":[],"having":[],"order_by":[],"limit":100}})`；禁止向 `semantic_query_tool` 传 SQL。
+
 - **dimensions 两种格式**:
   - 简单: `["维度名"]`
   - 时间粒度: `[{{"name": "创建时间", "time_grain": "month"}}]`
@@ -227,19 +230,19 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 ## 示例1：正常查询（单值 → kpi）
 **用户**: 查询指标A
 → 调用 dsl2sql_tool(metrics=["指标A"])
-→ 调用 semantic_query_tool(sql=生成的SQL)
+→ 调用 semantic_query_tool(dsl=同一份DSL)
 → 回复: 当前指标A为 256。
 
 ## 示例2：带维度和分页（分类 → bar）
 **用户**: 显示前5个维度A的指标A
 → 调用 dsl2sql_tool(metrics=["指标A"], dimensions=["维度A"], limit=5)
-→ 调用 semantic_query_tool(sql=生成的SQL)
+→ 调用 semantic_query_tool(dsl=同一份DSL)
 → 回复: 前 5 个维度A的指标A已统计完成，排名第一的维度值为 X。
 
 ## 示例3：带时间筛选（单值 → kpi）
 **用户**: 今天指标A是多少
 → 调用 dsl2sql_tool(metrics=["指标A"], filters=[{{"dimension": "时间维度", "operator": "=", "value": "current_date()", "value_type": "sql_function"}}])
-→ 调用 semantic_query_tool(sql=生成的SQL)
+→ 调用 semantic_query_tool(dsl=同一份DSL)
 → 回复: 今天指标A为 12。
 
 ## 示例4：缺少时间范围的趋势（先确认，不调用工具）
@@ -249,7 +252,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 ## 示例5：带 HAVING 过滤（分类 → bar）
 **用户**: 指标A大于10的维度A有哪些
 → 调用 dsl2sql_tool(metrics=["指标A"], dimensions=["维度A"], having=[{{"metric": "指标A", "operator": ">", "value": 10}}])
-→ 调用 semantic_query_tool(sql=生成的SQL)
+→ 调用 semantic_query_tool(dsl=同一份DSL)
 → 回复: 共有 3 个维度值的指标A超过 10，其中排名第一的维度值为 X。
 
 ## 示例6：同比/环比/增长率（拆成基础查询 + 计算器）
@@ -277,7 +280,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 ## 示例9：明细查询（自动识别为明细 → table，无坐标轴）
 **用户**: 查看对象类型A的明细数据
 → 调用 dsl2sql_tool(metrics=[], dimensions=["字段A", "字段B", "状态字段"], filters=[{{"dimension": "对象类型", "operator": "=", "value": "类型A"}}])
-→ 调用 semantic_query_tool(sql=生成的SQL)
+→ 调用 semantic_query_tool(dsl=同一份DSL)
 → 回复: 对象类型A的明细数据已列出，包含字段A、字段B和状态字段。
 
 ## 示例10：类型B-问候（直接回复，无思考块，无工具调用）

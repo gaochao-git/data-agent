@@ -97,6 +97,8 @@ class SqlGeneratorState(TypedDict):
     datasource_id: str | None
     # 当前语义配置ID（用于查询历史学习按指标集归属过滤）
     semantic_config_id: str | None
+    # 当前轮可直接使用的语义配置（临时配置或已预加载配置）
+    semantic_config: NotRequired[dict[str, Any] | None]
     # 当前登录用户ID（用于 HTTP 执行器透传）
     user_id: str | None
     # 当前登录用户展示名称（用于查询历史执行人员展示）

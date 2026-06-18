@@ -18,8 +18,10 @@ from utils.logger import get_logger
 from ...schema import SemanticQueryInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
+from ...services.semantic_tools import load_runtime_semantic_config
 from ...services import query_runtime
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
+from ...semantic.compiler import SemanticSQLGenerator
 from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
@@ -212,19 +214,88 @@ async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> li
 
 # ============ 语义查询工具 ============
 
+def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
+    """判断 state 中预加载的语义配置是否可用于本次工具调用。"""
+    if not config:
+        return False
+    if not semantic_config_id:
+        return True
+    config_id = str(config.get("id") or "").strip()
+    return not config_id or config_id == semantic_config_id
+
+
+def _latest_human_query(messages: list[Any] | None) -> str:
+    """提取最近一条用户消息，保持 DSL 校验和执行阶段的意图判定一致。"""
+    for message in reversed(messages or []):
+        if isinstance(message, HumanMessage):
+            return str(getattr(message, "content", "") or "").strip()
+        if getattr(message, "type", None) == "human":
+            return str(getattr(message, "content", "") or "").strip()
+    return ""
+
+
+async def _resolve_semantic_query_config(
+    state: dict,
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+) -> dict[str, Any] | None:
+    """优先复用图状态里的临时配置，否则按数据源和指标集 ID 读取运行时配置。"""
+    state_config = state.get("semantic_config")
+    if isinstance(state_config, dict) and _state_semantic_config_matches(state_config, semantic_config_id):
+        config = dict(state_config)
+        if semantic_config_id and not config.get("id"):
+            config["id"] = semantic_config_id
+        return config
+    return await load_runtime_semantic_config(datasource_id, semantic_config_id)
+
+
 @tool(args_schema=SemanticQueryInput)
 async def semantic_query_tool(
-    sql: str,
+    dsl: dict,
     state: Annotated[dict, InjectedState],
     semantic_config_id: str | None = None
 ) -> str:
     """
     执行语义查询并返回结果。
 
-    当前迁移阶段仍接收 dsl2sql_tool 生成的 SQL。
+    接收语义 DSL，内部生成 SQL 后执行。
     返回的 result_id 可用于后续生成图表。
     """
-    logger.info(f"执行 SQL: {sql[:100]}...")
+    if not isinstance(dsl, dict):
+        return "semantic_query_tool 执行失败: dsl 必须是对象"
+    if "sql" in dsl:
+        return "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+
+    datasource_id = state.get("datasource_id")
+    state_config = state.get("semantic_config")
+    state_config_id = str((state_config or {}).get("id") or "").strip() if isinstance(state_config, dict) else ""
+    semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or state_config_id or "").strip() or None
+    if not semantic_config_id and not isinstance(state_config, dict):
+        return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+
+    config = await _resolve_semantic_query_config(state, datasource_id, semantic_config_id)
+    if not config:
+        return f"semantic_query_tool 执行失败: 未找到可用指标集 {semantic_config_id or '-'}"
+
+    query_text = _latest_human_query(state.get("messages") or [])
+
+    compile_result = SemanticSQLGenerator(config).generate_sql(
+        metrics=dsl.get("metrics") or [],
+        dimensions=dsl.get("dimensions") or [],
+        filters=dsl.get("filters") or [],
+        having=dsl.get("having") or [],
+        order_by=dsl.get("order_by") or [],
+        limit=dsl.get("limit"),
+        offset=dsl.get("offset"),
+        user_query=query_text or None,
+    )
+    if not compile_result.get("success"):
+        return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
+    sql = str(compile_result.get("sql") or "").strip()
+    if not sql:
+        return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+
+    logger.info(f"执行语义查询 SQL: {sql[:100]}...")
 
     # Human-in-the-Loop: 根据开关决定是否需要用户确认
     if SQL_APPROVAL_ENABLED:
@@ -248,18 +319,13 @@ async def semantic_query_tool(
         logger.info(f"直接执行 SQL（审批已关闭）: {sql[:100]}...")
 
     # 获取数据源ID
-    datasource_id = state.get("datasource_id")
     user_id = str(state.get("user_id") or "").strip() or None
     operator_name = str(state.get("operator_name") or "").strip() or None
     member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
     logger.info("chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s", user_id, operator_name, datasource_id, member_datasource_ids)
-    semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or "").strip() or None
     conversation_id = str(state.get("conversation_id") or "").strip() or None
-    query_text = ""
-    messages = state.get("messages") or []
-    if messages:
-        query_text = str(getattr(messages[0], "content", "") or "").strip()
     query_result = await _execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    query_result["sql"] = query_result.get("sql") or sql
 
     if query_result["success"]:
         result_json = json.dumps(query_result, ensure_ascii=False)
