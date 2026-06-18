@@ -2,7 +2,7 @@
 chat_data_app 的 completion handler
 
 使用 LangGraph interrupt() 函数实现 Human-in-the-Loop:
-- execute_sql_tool 内部调用 interrupt() 暂停等待用户确认
+- semantic_query_tool 内部调用 interrupt() 暂停等待用户确认
 - 用户确认后通过 Command(resume=...) 恢复执行
 
 语义模式：

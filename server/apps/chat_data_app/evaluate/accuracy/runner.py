@@ -171,7 +171,7 @@ def parse_tool_content(content: str) -> dict[str, Any]:
 def strip_tool_content_prefix(content: str) -> str:
     """移除工具返回内容中的内部前缀。"""
     text = str(content or "").strip()
-    for prefix in ("[dsl2sql_tool]", "[execute_sql_tool]"):
+    for prefix in ("[dsl2sql_tool]", "[semantic_query_tool]"):
         if text.startswith(prefix):
             return text.replace(prefix, "", 1).strip()
     return text
@@ -335,7 +335,7 @@ def summarize_execution_success(tool_traces: list[ToolTrace]) -> bool | None:
     execute_payloads = [
         parse_tool_content(trace.content)
         for trace in tool_traces
-        if trace.name == "execute_sql_tool" and trace.content
+        if trace.name == "semantic_query_tool" and trace.content
     ]
     execute_payloads = [payload for payload in execute_payloads if payload]
     if not execute_payloads:

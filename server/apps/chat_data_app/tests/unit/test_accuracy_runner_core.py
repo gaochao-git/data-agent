@@ -153,7 +153,7 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert runner.parse_tool_content("") == {}
     assert runner.parse_tool_content("[dsl2sql_tool]") == {}
     assert runner.parse_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select 1"})) == {"sql": "select 1"}
-    assert runner.parse_tool_content("[execute_sql_tool]\n[]") == {}
+    assert runner.parse_tool_content("[semantic_query_tool]\n[]") == {}
     assert runner.extract_sql_from_tool_content("") == ""
     assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select json"})) == "select json"
     assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n```sql\nselect * from orders\n```") == "select * from orders"
@@ -198,9 +198,9 @@ def test_dsl2sql_payload_selection_and_execution_summary():
         content="[dsl2sql_tool]\n```sql\nselect sum(amount) from orders\n```",
     )
     other_trace = ToolTrace(
-        name="execute_sql_tool",
+        name="semantic_query_tool",
         status="done",
-        content="[execute_sql_tool]\n" + json.dumps({"success": False}),
+        content="[semantic_query_tool]\n" + json.dumps({"success": False}),
     )
 
     payload = runner.build_dsl2sql_payload(trace_from_json)
@@ -223,7 +223,7 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     assert selected_trace is trace_from_text
     assert selected_payload["dsl"] == {"metrics": ["销售额"]}
     no_trace, no_payload = runner.choose_final_dsl2sql_trace([
-        ToolTrace(name="execute_sql_tool", status="done", content=json.dumps({"success": True})),
+        ToolTrace(name="semantic_query_tool", status="done", content=json.dumps({"success": True})),
         ToolTrace(name="dsl2sql_tool", status="done", content="bad"),
     ])
     assert no_trace is None

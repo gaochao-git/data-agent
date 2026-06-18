@@ -577,7 +577,7 @@ const getSkillLoadProducedPaths = (tool: ToolCallInfo): string[] => {
 
 const getToolProducedPaths = (tool: ToolCallInfo): string[] => {
   if (tool.tool_name === 'skill_load') return getSkillLoadProducedPaths(tool)
-  if (!['file_edit', 'execute_sql_tool', 'file_read'].includes(tool.tool_name)) return []
+  if (!['file_edit', 'semantic_query_tool', 'file_read'].includes(tool.tool_name)) return []
   const payload = parseToolResultPayload(tool.result)
   const argPath = typeof tool.args?.file_path === 'string' ? tool.args.file_path : ''
   const argSaveAs = typeof tool.args?.save_as === 'string' ? tool.args.save_as : ''
@@ -1226,7 +1226,7 @@ const activeToolTotalRows = computed(() => {
   return Number.isFinite(total) && total >= activeToolTableRows.value.length ? total : activeToolTableRows.value.length
 })
 const hasActiveToolTablePreview = computed(() => (
-  activeToolCall.value?.tool_name === 'execute_sql_tool' &&
+  activeToolCall.value?.tool_name === 'semantic_query_tool' &&
   activeToolTableColumns.value.length > 0 &&
   activeToolPreviewRows.value.length > 0
 ))

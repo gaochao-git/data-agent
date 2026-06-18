@@ -848,7 +848,7 @@ async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
+async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
     writes = []
 
@@ -870,12 +870,12 @@ async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
     monkeypatch.setattr(exec_sql_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
     tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
 
-    result = await tools["execute_sql_tool"].ainvoke({
+    result = await tools["semantic_query_tool"].ainvoke({
         "sql": "select month, sales from t",
         "save_as": "workspace/current.json",
     })
 
-    payload = json.loads(result.replace("[execute_sql_tool]\n", "", 1))
+    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
     assert payload["success"] is True
     assert payload["result_path"] == "/mnt/user-data/workspace/current.json"
     assert payload["columns"] == ["month", "sales"]
@@ -888,7 +888,7 @@ async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_without_save_as_keeps_full_result(monkeypatch):
+async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
@@ -903,33 +903,33 @@ async def test_execute_sql_tool_without_save_as_keeps_full_result(monkeypatch):
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
 
-    result = await tools["execute_sql_tool"].ainvoke({"sql": "select count(*) cnt from t"})
+    result = await tools["semantic_query_tool"].ainvoke({"sql": "select count(*) cnt from t"})
 
-    payload = json.loads(result.replace("[execute_sql_tool]\n", "", 1))
+    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
     assert "result_path" not in payload
     assert payload["data"] == [{"cnt": 3}]
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
+async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
     tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths)
 
-    assert await tools_without_datasource["execute_sql_tool"].ainvoke({"sql": "select 1"}) == "execute_sql_tool 执行失败: 当前会话未绑定数据源"
+    assert await tools_without_datasource["semantic_query_tool"].ainvoke({"sql": "select 1"}) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
         return {"success": True, "sql": sql, "columns": [], "data": []}
 
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tool_without_workspace = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1")
-    assert await tool_without_workspace.ainvoke({"sql": "select 1", "save_as": "workspace/a.json"}) == "execute_sql_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+    assert await tool_without_workspace.ainvoke({"sql": "select 1", "save_as": "workspace/a.json"}) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
 
     tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
-    assert await tools["execute_sql_tool"].ainvoke({"sql": "select 1", "save_as": "workspace/a.txt"}) == "execute_sql_tool 执行失败: save_as 只支持 .json 文件"
+    assert await tools["semantic_query_tool"].ainvoke({"sql": "select 1", "save_as": "workspace/a.txt"}) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_returns_dependency_error(monkeypatch):
+async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_error_{uuid.uuid4().hex}")
 
     async def fake_execute_sql_real(*_args, **_kwargs):
@@ -938,4 +938,4 @@ async def test_execute_sql_tool_returns_dependency_error(monkeypatch):
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
 
-    assert await tools["execute_sql_tool"].ainvoke({"sql": "select 1"}) == "execute_sql_tool 执行失败: 执行失败"
+    assert await tools["semantic_query_tool"].ainvoke({"sql": "select 1"}) == "semantic_query_tool 执行失败: 执行失败"

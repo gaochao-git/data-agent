@@ -59,7 +59,7 @@ def test_retry_guard_clears_failure_count_after_success():
 
 
 def test_retry_guard_does_not_treat_success_payload_error_null_as_failure():
-    result = '[execute_sql_tool]\n{"success": true, "error": null, "rows": []}'
+    result = '[semantic_query_tool]\n{"success": true, "error": null, "rows": []}'
 
     assert is_failed_tool_result(result) is False
 

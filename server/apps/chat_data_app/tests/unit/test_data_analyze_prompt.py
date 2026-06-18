@@ -45,7 +45,7 @@ def test_nl2sql_prompt_does_not_require_visible_fake_thinking():
 def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "查询结果明细已经由 `execute_sql_tool` 返回并由前端表格/图表展示" in prompt
+    assert "查询结果明细已经由 `semantic_query_tool` 返回并由前端表格/图表展示" in prompt
     assert "不要重复输出结果表格" in prompt
     assert "禁止在最终回复中使用 markdown 表格、逐行明细列表、完整结果清单" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
@@ -59,6 +59,16 @@ def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expressi
     assert "筛选值必须和该维度当前查询使用的表达式口径一致" in prompt
     assert "value` 必须使用转换后的展示格式" in prompt
     assert "value` 必须使用数据库原始存储格式" in prompt
+
+
+def test_chat_data_query_prompt_stops_when_question_exceeds_current_capability():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "超出当前智能问数能力" in prompt
+    assert "必须停止该查询分支" in prompt
+    assert "不要继续反复调用工具" in prompt
+    assert "当前指标体系不支持 / 当前可用指标集暂不支持 / 缺少指标集ID / 未找到可用指标集 / DSL2SQL 不支持" in prompt
+    assert "不要继续使用相同参数反复调用" in prompt
 
 
 def test_semantic_query_prompt_requires_selection_when_missing_current_config():

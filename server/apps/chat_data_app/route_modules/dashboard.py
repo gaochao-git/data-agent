@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from utils.lang_util.database import get_session
 from utils.lang_util.models import ChatDataQueryExecution
 from utils.logger import get_logger
-from ..agent.tools import execute_sql_direct as execute_sql_tool_direct
+from ..agent.tools import execute_sql_direct as execute_sql_direct_runner
 from ..chart_types import get_chart_type_label
 from ..schema import (
     DashboardCreateRequest,
@@ -106,7 +106,7 @@ async def _execute_dashboard_panel_sql(
     sql = panel.get("sql") or ""
 
     if not datasource_id:
-        result = await execute_sql_tool_direct(sql, None)
+        result = await execute_sql_direct_runner(sql, None)
         return {
             "member_datasource_id": None,
             "member_name": None,

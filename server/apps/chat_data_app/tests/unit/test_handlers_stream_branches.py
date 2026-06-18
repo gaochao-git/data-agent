@@ -82,7 +82,7 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert handlers._visible_tool_count({}) == 0
     assert handlers._visible_tool_count({
         "hidden": "load_skill_tool",
-        "sql": "execute_sql_tool",
+        "sql": "semantic_query_tool",
         "dsl": "dsl2sql_tool",
     }) == 2
 
@@ -254,9 +254,9 @@ async def test_continue_execution_filters_disconnect_and_tool_args(monkeypatch):
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(content="skip", msg_type="ai"), {"langgraph_node": "tool_llm"}
             yield FakeChunk(), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_calls=[{"id": "tc1", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "execute_sql_tool", "args": "{bad"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="执行失败", msg_type="tool", tool_call_id="tc1", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "semantic_query_tool", "args": "{bad"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(content="执行失败", msg_type="tool", tool_call_id="tc1", name="semantic_query_tool"), {"langgraph_node": "tools"}
             yield FakeChunk(content="done", msg_type="ai"), {"langgraph_node": "agent"}
 
         async def aget_state(self, _config):
@@ -267,7 +267,7 @@ async def test_continue_execution_filters_disconnect_and_tool_args(monkeypatch):
 
     chunks = await collect_stream(handlers._continue_execution("conv", modified_sql="select 1", action="edit"))
     text = "".join(chunks)
-    assert "execute_sql_tool" in text
+    assert "semantic_query_tool" in text
     assert "accumulated_args" not in text
     assert "message_end" in text
 
@@ -413,11 +413,11 @@ async def test_continue_execution_error_and_pending_interrupt_paths(monkeypatch)
 
     class PendingGraph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
 
         async def aget_state(self, _config):
             return SimpleNamespace(
-                values={"token_usage": {"total_tokens": 9}, "messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "execute_sql_tool"}])]},
+                values={"token_usage": {"total_tokens": 9}, "messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}])]},
                 tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
             )
 
@@ -435,9 +435,9 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
             return SimpleNamespace(tasks=[], values={})
 
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[{"id": "tc_bad", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_calls=[{"id": "tc_bad", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
             yield FakeChunk(tool_call_chunks=[{"id": None, "name": "", "args": "{bad"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="tool done", msg_type="tool", tool_call_id="tc_bad", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(content="tool done", msg_type="tool", tool_call_id="tc_bad", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
@@ -450,7 +450,7 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
         mode="query",
     ))
     text = "".join(chunks)
-    assert "execute_sql_tool" in text
+    assert "semantic_query_tool" in text
     assert "tool done" in text
     assert "accumulated_args" not in text
 
@@ -503,11 +503,11 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(tool_calls=[
                 {"id": "", "name": "skip_missing_id"},
-                {"id": "tc_dup", "name": "execute_sql_tool"},
+                {"id": "tc_dup", "name": "semantic_query_tool"},
             ]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_calls=[{"id": "tc_dup", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_fresh", "name": "execute_sql_tool", "args": ""}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="fresh done", msg_type="tool", tool_call_id="tc_fresh", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(tool_calls=[{"id": "tc_dup", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc_fresh", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "agent"}
+            yield FakeChunk(content="fresh done", msg_type="tool", tool_call_id="tc_fresh", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
@@ -530,8 +530,8 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
 async def test_continue_execution_chunk_creates_buffer_and_finishes_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_only_chunk", "name": "execute_sql_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="ok", msg_type="tool", tool_call_id="tc_only_chunk", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc_only_chunk", "name": "semantic_query_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "agent"}
+            yield FakeChunk(content="ok", msg_type="tool", tool_call_id="tc_only_chunk", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
         async def aget_state(self, _config):
             return SimpleNamespace(values={}, tasks=[])
@@ -593,7 +593,7 @@ async def test_continue_execution_forced_missing_buffer_interrupt_without_usage(
 
         async def aget_state(self, _config):
             return SimpleNamespace(
-                values={"messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "execute_sql_tool"}])]},
+                values={"messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}])]},
                 tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
             )
 
@@ -760,7 +760,7 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
 async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
 
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -791,12 +791,12 @@ async def test_continue_execution_thinking_duplicate_tool_and_empty_args(monkeyp
             yield FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "agent"}
             yield FakeChunk(content="思考后输出", additional_kwargs={"reasoning_content": "继续想"}), {"langgraph_node": "agent"}
             yield FakeChunk(tool_calls=[
-                {"id": "tc_dup", "name": "execute_sql_tool"},
-                {"id": "tc_dup", "name": "execute_sql_tool"},
+                {"id": "tc_dup", "name": "semantic_query_tool"},
+                {"id": "tc_dup", "name": "semantic_query_tool"},
             ]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_empty", "name": "execute_sql_tool", "args": ""}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="empty args done", msg_type="tool", tool_call_id="tc_empty", name="execute_sql_tool"), {"langgraph_node": "tools"}
-            yield FakeChunk(content="missing buffer done", msg_type="tool", tool_call_id="missing", name="execute_sql_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc_empty", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "agent"}
+            yield FakeChunk(content="empty args done", msg_type="tool", tool_call_id="tc_empty", name="semantic_query_tool"), {"langgraph_node": "tools"}
+            yield FakeChunk(content="missing buffer done", msg_type="tool", tool_call_id="missing", name="semantic_query_tool"), {"langgraph_node": "tools"}
 
         async def aget_state(self, _config):
             return SimpleNamespace(values={}, tasks=[])

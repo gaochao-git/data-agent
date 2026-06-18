@@ -26,7 +26,7 @@ def test_data_analyze_tool_metadata_and_dialect_sections():
         "sandbox_run",
         "select_semantic_config_tool",
         "dsl2sql_tool",
-        "execute_sql_tool",
+        "semantic_query_tool",
     ]
     assert "`skill_load`" in data_analyze_graph.get_data_analyze_allowed_tool_names_text()
     assert "Hive" in data_analyze_graph.build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
@@ -113,7 +113,7 @@ def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_pa
         "sandbox_run",
         "select_semantic_config_tool",
         "dsl2sql_tool",
-        "execute_sql_tool",
+        "semantic_query_tool",
     ]
 
 

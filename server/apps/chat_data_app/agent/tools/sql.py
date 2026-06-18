@@ -15,7 +15,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import interrupt
 
 from utils.logger import get_logger
-from ...schema import ExecuteSqlInput
+from ...schema import SemanticQueryInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
 from ...services import query_runtime
@@ -210,23 +210,18 @@ async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> li
 
 # ============ Agent 工具定义 ============
 
-from langchain_core.tools import tool
+# ============ 语义查询工具 ============
 
-from ...schema import ExecuteSqlInput
-
-
-# ============ 执行 SQL 工具 ============
-
-@tool(args_schema=ExecuteSqlInput)
-async def execute_sql_tool(
+@tool(args_schema=SemanticQueryInput)
+async def semantic_query_tool(
     sql: str,
     state: Annotated[dict, InjectedState],
     semantic_config_id: str | None = None
 ) -> str:
     """
-    执行 SQL 查询并返回结果。
+    执行语义查询并返回结果。
 
-    当用户需要查询数据时，调用此工具执行 SQL。
+    当前迁移阶段仍接收 dsl2sql_tool 生成的 SQL。
     返回的 result_id 可用于后续生成图表。
     """
     logger.info(f"执行 SQL: {sql[:100]}...")

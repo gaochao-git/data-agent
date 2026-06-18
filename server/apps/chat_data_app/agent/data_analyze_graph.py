@@ -58,7 +58,7 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "sandbox_run", "status": "available", "description": "在当前会话沙箱中执行 ls/find/python3/node/bash 等非交互命令。"},
     {"name": "select_semantic_config_tool", "status": "available", "description": "当前没有手动选择指标集时，从数据源组指标集中选择可回答问题的指标集。"},
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
-    {"name": "execute_sql_tool", "status": "available", "description": "执行只读 SQL 查询，返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
+    {"name": "semantic_query_tool", "status": "available", "description": "执行只读 SQL 查询，返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
 ]
 MAX_STAGE_HISTORY_MESSAGES = 10
 MAX_STAGE_HISTORY_CHARS = 4000

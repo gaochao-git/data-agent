@@ -6,7 +6,7 @@ from .sql import (
     SemanticToolNames,
     build_semantic_prompt,
     execute_sql_direct,
-    execute_sql_tool,
+    semantic_query_tool,
     get_all_tables_async,
     get_tables_create_format,
     get_tables_name_comment,
@@ -14,7 +14,7 @@ from .sql import (
 )
 from ...services.semantic_tools import create_semantic_config_selection_tools
 
-TOOLS = [execute_sql_tool, calculator_tool]
+TOOLS = [semantic_query_tool, calculator_tool]
 
 __all__ = [
     "SQL_APPROVAL_ENABLED",
@@ -24,7 +24,7 @@ __all__ = [
     "calculator_tool",
     "create_semantic_config_selection_tools",
     "execute_sql_direct",
-    "execute_sql_tool",
+    "semantic_query_tool",
     "get_all_tables_async",
     "get_tables_create_format",
     "get_tables_name_comment",

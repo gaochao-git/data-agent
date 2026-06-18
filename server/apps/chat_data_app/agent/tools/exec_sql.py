@@ -30,8 +30,8 @@ def create_exec_sql_tool(
     bound_operator_name = str(operator_name or "").strip() or None
     bound_workspace_root = str(workspace_root or "").strip()
 
-    @tool("execute_sql_tool")
-    async def execute_sql_tool(sql: str, save_as: str | None = None, semantic_config_id: str | None = None) -> str:
+    @tool("semantic_query_tool")
+    async def semantic_query_tool(sql: str, save_as: str | None = None, semantic_config_id: str | None = None) -> str:
         """
         执行只读 SQL 查询并返回真实数据结果。
 
@@ -40,7 +40,7 @@ def create_exec_sql_tool(
         """
         try:
             if not bound_datasource_id:
-                return "execute_sql_tool 执行失败: 当前会话未绑定数据源"
+                return "semantic_query_tool 执行失败: 当前会话未绑定数据源"
             effective_semantic_config_id = str(semantic_config_id or bound_semantic_config_id or "").strip() or None
             query_result = await _execute_sql_real(
                 sql=sql,
@@ -53,10 +53,10 @@ def create_exec_sql_tool(
             )
             if save_as:
                 if not bound_workspace_root:
-                    return "execute_sql_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+                    return "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
                 save_path = str(save_as or "").strip()
                 if not save_path.lower().endswith(".json"):
-                    return "execute_sql_tool 执行失败: save_as 只支持 .json 文件"
+                    return "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
                 write_result = await sandbox_write_text_file(
                     session_ref=execution_session_ref,
                     file_path=save_path,
@@ -74,10 +74,10 @@ def create_exec_sql_tool(
                     "sql": query_result.get("sql") or sql,
                     "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
                 }
-                return "[execute_sql_tool]\n" + json_dumps(payload)
-            return "[execute_sql_tool]\n" + json_dumps(query_result)
+                return "[semantic_query_tool]\n" + json_dumps(payload)
+            return "[semantic_query_tool]\n" + json_dumps(query_result)
         except Exception as exc:
-            logger.error("execute_sql_tool 执行失败: %s", exc, exc_info=True)
-            return f"execute_sql_tool 执行失败: {exc}"
+            logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
+            return f"semantic_query_tool 执行失败: {exc}"
 
-    return execute_sql_tool
+    return semantic_query_tool

@@ -85,7 +85,7 @@ def test_format_sse_serializes_dict_as_event_payload():
 
 def test_format_tool_event_uses_result_as_content():
     text = _format_tool_event(
-        tool_name="execute_sql_tool",
+        tool_name="semantic_query_tool",
         tool_call_id="call_1",
         status="completed",
         args={"sql": "select 1"},
@@ -94,7 +94,7 @@ def test_format_tool_event_uses_result_as_content():
     )
 
     assert "event: tool" in text
-    assert '"tool_name": "execute_sql_tool"' in text
+    assert '"tool_name": "semantic_query_tool"' in text
     assert '"content": "执行完成"' in text
     assert '"timestamp": "2026-06-02 10:00:00"' in text
 
@@ -259,7 +259,7 @@ def test_get_interrupt_info_reads_task_interrupt_and_tool_call():
         ],
         values={
             "messages": [
-                SimpleNamespace(tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}])
+                SimpleNamespace(tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}])
             ]
         },
     )
@@ -268,7 +268,7 @@ def test_get_interrupt_info_reads_task_interrupt_and_tool_call():
 
     assert info["args"] == {"sql": "select 1"}
     assert info["message"] == "请确认"
-    assert info["tool_name"] == "execute_sql_tool"
+    assert info["tool_name"] == "semantic_query_tool"
     assert info["tool_call_id"] == "call_1"
 
 
@@ -866,8 +866,8 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": "{\"sql\":\"select 1\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"sql\":\"select 1\"}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询订单数据"), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="内部工具模型输出"), {"langgraph_node": "tools"}),
@@ -909,7 +909,7 @@ def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
         values={
             "token_usage": {"total_tokens": 8},
-            "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "execute_sql_tool"}])],
+            "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "semantic_query_tool"}])],
         },
     )
     fake_graph = _FakeGraph(events=[], state=interrupt_state)
@@ -1026,7 +1026,7 @@ def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_co
             raise RuntimeError("state missing")
 
     fake_graph = StateFailGraph(events=[
-        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": ""}]), {"langgraph_node": "agent"}),
+        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "agent"}),
         (_FakeMessageChunk(content="完成"), {"langgraph_node": "agent"}),
     ])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1052,8 +1052,8 @@ def test_continue_execution_streams_resume_events(monkeypatch):
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": "{\"sql\":\"select 2\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"sql\":\"select 2\"}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="继续完成"), {"langgraph_node": "agent"}),
         ],
@@ -1082,7 +1082,7 @@ def test_continue_execution_pending_interrupt_error_and_disconnect(monkeypatch):
 
     interrupt_state = SimpleNamespace(
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 3"}, "message": "继续确认"})])],
-        values={"token_usage": {"total_tokens": 7}, "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "execute_sql_tool"}])]},
+        values={"token_usage": {"total_tokens": 7}, "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "semantic_query_tool"}])]},
     )
     pending_graph = _FakeGraph(events=[], state=interrupt_state)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1163,8 +1163,8 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
             assert config["configurable"]["thread_id"] == "conv_da"
             yield ("updates", {"thinking": {"task_stages": [{"stage": "thinking", "status": "completed", "content": "理解完成"}]}})
             yield ("messages", (_FakeMessageChunk(content="规划中"), {"langgraph_node": "plan"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool", "args": {"sql": "select 1"}}]), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"sql": "select 1"}}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content='{"success": true}', type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}))
             yield ("custom", {"type": "token_usage", "usage": {"total_tokens": 9}})
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
@@ -1189,7 +1189,7 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert "event: task_stage" in joined
     assert "理解完成" in joined
     assert "event: task_stage_delta" in joined
-    assert '"tool_name": "execute_sql_tool"' in joined
+    assert '"tool_name": "semantic_query_tool"' in joined
     assert '"accumulated_args": {"sql": "select 1"}' in joined
     assert "分析完成" in joined
     assert 'event: message_end\ndata: {"usage": {"total_tokens": 9}}' in joined
@@ -1307,7 +1307,7 @@ def test_data_analyze_completion_handler_covers_subgraph_chunks_and_disconnect(m
     class FakeDataAnalyzeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
             yield (("subgraph",), "messages", (_FakeMessageChunk(content="跳过内部"), {"langgraph_node": "__internal__"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "execute_sql_tool", "args": '{"sql":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "semantic_query_tool", "args": '{"sql":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"args": '"select 1"}', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content="执行失败: 表不存在", type_="tool", tool_call_id="chunk_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="", type_="tool", tool_call_id="missing_tool"), {"langgraph_node": "tools"}))
@@ -1421,8 +1421,8 @@ def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monke
                 content="",
                 tool_calls=[
                     {"id": "", "name": "skip_missing_id", "index": 99},
-                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0, "args": {"fallback": True}},
-                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0},
+                    {"id": "call_indexed", "name": "semantic_query_tool", "index": 0, "args": {"fallback": True}},
+                    {"id": "call_indexed", "name": "semantic_query_tool", "index": 0},
                 ],
             ), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(

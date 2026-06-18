@@ -186,10 +186,10 @@ def test_conversation_interrupt_info_branches():
 
     state = SimpleNamespace(
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
-        values={"messages": [AIMessage(content="", tool_calls=[{"id": "tc1", "name": "execute_sql_tool", "args": {}}])]},
+        values={"messages": [AIMessage(content="", tool_calls=[{"id": "tc1", "name": "semantic_query_tool", "args": {}}])]},
     )
     assert conversation_module._get_interrupt_info(state) == {
-        "tool_name": "execute_sql_tool",
+        "tool_name": "semantic_query_tool",
         "tool_call_id": "tc1",
         "args": {"sql": "select 1"},
         "message": "确认执行",

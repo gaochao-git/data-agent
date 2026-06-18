@@ -360,12 +360,12 @@ def test_execute_panel_without_datasource_uses_tool_direct(monkeypatch):
         async def get_panel(self, panel_id, dashboard_id=None, user_id=None, include_public=True):
             return {"id": panel_id, "name": "SQL面板", "chart_type": "table", "chart_config": {}, "sql": "select 1", "datasource_id": ""}
 
-    async def fake_execute_sql_tool_direct(sql, _datasource_id):
+    async def fake_execute_sql_direct_runner(sql, _datasource_id):
         return {"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}
 
     runtime = FakeDashboardRuntime()
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: NoDatasourceDashboardService())
-    monkeypatch.setattr(dashboard_routes, "execute_sql_tool_direct", fake_execute_sql_tool_direct)
+    monkeypatch.setattr(dashboard_routes, "execute_sql_direct_runner", fake_execute_sql_direct_runner)
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,

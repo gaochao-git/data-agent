@@ -470,7 +470,7 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
     assert updates[-1]["status"] == "failed"
 
 
-def test_execute_sql_tool_returns_query_result_or_error(monkeypatch):
+def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
@@ -498,17 +498,17 @@ def test_execute_sql_tool_returns_query_result_or_error(monkeypatch):
     }
 
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    success = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+    success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
 
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
-    failed = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+    failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
 
     assert success.startswith("<query_result>")
     assert '"data": [{"id": 1}]' in success
     assert failed == "查询失败: 表不存在"
 
 
-def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
+def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     async def fake_execute_sql_real(*_args, **_kwargs):
@@ -542,7 +542,7 @@ def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
     monkeypatch.setattr(agent_tools, "save_query_result", fake_save_query_result)
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
-    result = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": state}))
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": state}))
 
     assert result.startswith("<query_result>")
     assert '"artifact_id": "artifact_large"' in result
@@ -553,7 +553,7 @@ def test_execute_sql_tool_stores_large_result_as_artifact(monkeypatch):
     assert captured["conversation_id"] == "conv_a"
 
 
-def test_execute_sql_tool_large_result_without_sql_omits_sql_summary(monkeypatch):
+def test_semantic_query_tool_large_result_without_sql_omits_sql_summary(monkeypatch):
     async def fake_execute_sql_real(*_args, **_kwargs):
         return {
             "success": True,
@@ -567,29 +567,29 @@ def test_execute_sql_tool_large_result_without_sql_omits_sql_summary(monkeypatch
     monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_no_sql")
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
-    result = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
 
     payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
     assert payload["artifact_id"] == "artifact_no_sql"
     assert "sql" not in payload
 
 
-def test_execute_sql_tool_approval_reject_and_rewrite_branches(monkeypatch):
+def test_semantic_query_tool_approval_reject_and_rewrite_branches(monkeypatch):
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
         return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
 
     monkeypatch.setattr(agent_tools, "SQL_APPROVAL_ENABLED", True)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "reject"})
-    rejected = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+    rejected = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
     assert rejected == "用户取消了 SQL 执行"
 
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "approve", "sql": "select 2"})
-    rewritten = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 1", "state": {}}))
+    rewritten = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 1", "state": {}}))
     assert '"sql": "select 2"' in rewritten
 
     monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: "approve")
-    default_approval = asyncio.run(agent_tools.execute_sql_tool.ainvoke({"sql": "select 3", "state": {}}))
+    default_approval = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"sql": "select 3", "state": {}}))
     assert '"sql": "select 3"' in default_approval
 
 

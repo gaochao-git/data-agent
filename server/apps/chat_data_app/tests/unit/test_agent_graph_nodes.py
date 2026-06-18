@@ -252,7 +252,7 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(chat_data_graph, "StateGraph", FakeStateGraph)
     monkeypatch.setattr(chat_data_graph, "ToolNode", FakeToolNode)
     monkeypatch.setattr(chat_data_graph, "START", "__start__")
-    monkeypatch.setattr(chat_data_graph, "TOOLS", ["execute_sql_tool"])
+    monkeypatch.setattr(chat_data_graph, "TOOLS", ["semantic_query_tool"])
     monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", lambda model_id=None, semantic_config=None: ["select_semantic_config_tool", "dsl2sql_tool"])
     monkeypatch.setattr(
         chat_data_graph,
@@ -269,7 +269,7 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1")
 
     assert compiled["nodes"][0][0] == "agent"
-    assert compiled["nodes"][0][1][1] == ["select_semantic_config_tool", "dsl2sql_tool", "execute_sql_tool"]
+    assert compiled["nodes"][0][1][1] == ["select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]
     assert compiled["checkpointer"] == "ckpt"
 

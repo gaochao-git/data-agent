@@ -56,7 +56,7 @@ const TOOL_META: Record<string, { label: string }> = {
   select_semantic_config_tool: { label: '选择指标集' },
   dsl2sql_tool: { label: '语义转SQL' },
   generate_chart_tool: { label: '聚合查询' },
-  execute_sql_tool: { label: 'SQL执行' }
+  semantic_query_tool: { label: '语义查询' }
 }
 
 // 参数标签
@@ -151,15 +151,15 @@ const compactDescription = computed(() => {
   if (props.toolCall.tool_name === 'skill_load') {
     return String(args.skill_name || args.name || getResultField('runtime_path') || '').trim()
   }
-  if (props.toolCall.tool_name === 'execute_sql_tool') {
+  if (props.toolCall.tool_name === 'semantic_query_tool') {
     return normalizeVisiblePath(args.save_as)
   }
   return ''
 })
 
-// 是否可以保存到看板（execute_sql_tool 完成且有 SQL）
+// 是否可以保存到看板（semantic_query_tool 完成且有 SQL）
 const canSaveToPanel = computed(() => {
-  return props.toolCall.tool_name === 'execute_sql_tool' &&
+  return props.toolCall.tool_name === 'semantic_query_tool' &&
     props.toolCall.status === 'completed' &&
     props.toolCall.args?.sql
 })

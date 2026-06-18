@@ -784,7 +784,7 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         }
       }
 
-      if (toolInfo.tool_name === 'execute_sql_tool') {
+      if (toolInfo.tool_name === 'semantic_query_tool') {
         const queryResultMatch = msg.content.match(/<query_result>([\s\S]*?)<\/query_result>/)
         const queryResultId = queryResultMatch?.[1]
         if (queryResultId) {
@@ -793,9 +793,9 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         }
 
         // 从对应的 dsl2sql_tool 获取语义参数
-        // 策略：按顺序匹配（第 N 个 execute_sql_tool 对应第 N 个 dsl2sql_tool）
+        // 策略：按顺序匹配（第 N 个 semantic_query_tool 对应第 N 个 dsl2sql_tool）
         const executeSqlTools = Array.from(toolCallsMap.value.values())
-          .filter(t => t.tool_name === 'execute_sql_tool')
+          .filter(t => t.tool_name === 'semantic_query_tool')
         const currentIndex = executeSqlTools.findIndex(t => t.tool_call_id === msg.tool_call_id)
         if (currentIndex >= 0 && currentIndex < dsl2sqlToolCalls.value.length) {
           const dsl2sqlTool = dsl2sqlToolCalls.value[currentIndex]
@@ -1334,7 +1334,7 @@ const shouldShowStreamingStatus = (message: Message): boolean => {
 const hasCompletedQueryResult = (toolCalls?: ToolCallInfo[]): boolean => {
   if (!toolCalls) return false
   return toolCalls.some(
-    (tc) => tc.tool_name === 'execute_sql_tool' && tc.status === 'completed' && tc.renderId
+    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
   )
 }
 
@@ -1342,7 +1342,7 @@ const hasCompletedQueryResult = (toolCalls?: ToolCallInfo[]): boolean => {
 const getCompletedQueryResults = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
   if (!toolCalls) return []
   return toolCalls.filter(
-    (tc) => tc.tool_name === 'execute_sql_tool' && tc.status === 'completed' && tc.renderId
+    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
   )
 }
 
@@ -1390,10 +1390,10 @@ const getStreamingStageText = (msg: Message): string => {
   if (msg.semanticConfigSelection && toolCalls.length === 0) {
     return '已选择指标集，正在生成查询...'
   }
-  if (toolCalls.some(tc => tc.tool_name === 'execute_sql_tool' && tc.status === 'running')) {
+  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool' && tc.status === 'running')) {
     return '正在查询数据...'
   }
-  if (toolCalls.some(tc => tc.tool_name === 'execute_sql_tool')) {
+  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool')) {
     return '正在执行查询...'
   }
   if (toolCalls.length > 0) {

@@ -26,7 +26,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 | `sandbox_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
 | `select_semantic_config_tool` | 当前没有手动选择指标集时，从数据源组指标集中选择可回答问题的指标集 |
 | `dsl2sql_tool` | 校验语义 DSL 并转换 SQL；禁止手写语义层 SQL |
-| `execute_sql_tool` | 只读查询真实数据，用于事实验证和结论支撑；需要后续脚本处理时可用 `save_as` 保存 JSON |
+| `semantic_query_tool` | 只读查询真实数据，用于事实验证和结论支撑；需要后续脚本处理时可用 `save_as` 保存 JSON |
 </available_tools>
 
 {safety_guardrails}
@@ -53,17 +53,17 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 - `data_context` 是本次运行的数据源、表结构、语义指标和维度体系，直接作为事实依据。
 - `data_context.datasource.source_type` 和 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
 - 如果 `semantic_configs` 中存在 `selected=true` 的配置，表示用户已手动选择指标集，后续只使用该指标集的指标和维度。
-- 如果没有 `selected=true` 的指标集，业务数据分析必须先调用 `select_semantic_config_tool`；返回唯一 `selected_config_id` 后，后续 `dsl2sql_tool` 和 `execute_sql_tool` 都必须传入该 `semantic_config_id`。
+- 如果没有 `selected=true` 的指标集，业务数据分析必须先调用 `select_semantic_config_tool`；返回唯一 `selected_config_id` 后，后续 `dsl2sql_tool` 和 `semantic_query_tool` 都必须传入该 `semantic_config_id`。
 - `select_semantic_config_tool` 的返回值是内部工具结果，只能用于后续工具入参；正文不得输出、复述、摘抄或用 Markdown 代码块展示其中任何 JSON 字段、候选列表、matched_metrics、matched_dimensions、semantic_config。
 - 如果选择工具返回多个 candidates、`ambiguous=true` 或 `cross_config_required=true`，必须让用户选择指标集，不要自行猜一个。
 - 生成 DSL 只能使用体系中真实存在的指标、维度、过滤条件和排序字段。
 - `metrics` 只放聚合指标；明细查询展示字段必须放 `dimensions`。`dimensions` 既用于明细查询展示字段，也用于聚合查询分组字段。
 - `order_by.field` 只能使用当前 DSL 已选择的输出字段，即 `metrics` 中的指标或 `dimensions` 中的维度；禁止按未输出的物理字段、明细字段或隐藏字段排序。
 - 时间分组必须在 DSL 的时间维度中使用 `time_grain`（可用值：`year/quarter/month/week/day/hour`），不要使用 `time_granularity`、`granularity` 等自造参数。
-- 当指标或维度没有说明枚举值含义、状态码 / 类型码映射、时间字段存储格式 / 粒度 / 时区、金额单位等关键存储口径时，先构造明细抽样 DSL，调用 `dsl2sql_tool` 生成 SQL，再调用 `execute_sql_tool` 查询 3 条原始明细确认字段取值和时间格式。抽样只用于理解数据结构，不作为最终结论。
+- 当指标或维度没有说明枚举值含义、状态码 / 类型码映射、时间字段存储格式 / 粒度 / 时区、金额单位等关键存储口径时，先构造明细抽样 DSL，调用 `dsl2sql_tool` 生成 SQL，再调用 `semantic_query_tool` 查询 3 条原始明细确认字段取值和时间格式。抽样只用于理解数据结构，不作为最终结论。
 
 ## SQL 与数据库边界
-- 所有语义数据查询必须先调用 `dsl2sql_tool`，再把工具返回的 SQL 原样传给 `execute_sql_tool`；禁止模型手写、拼接、改写或替换 SQL。
+- 所有语义数据查询必须先调用 `dsl2sql_tool`，再把工具返回的 SQL 原样传给 `semantic_query_tool`；禁止模型手写、拼接、改写或替换 SQL。
 - 如果 `dsl2sql_tool` 报参数错误，只能修正 DSL 字段后重试；如果生成 SQL 方言不符合 `source_type`，停止该分支并说明方言上下文异常，禁止手工把 MySQL SQL 改成 Hive SQL 或反向改写。
 - 聚合查询里，`ORDER BY` 只能按当前 SELECT 输出的分组维度或聚合指标排序。指标排序由 DSL 写指标名，例如 `{{"field":"订单数量","direction":"DESC"}}`，由 DSL2SQL 编译成 `ORDER BY COUNT(...)`；模型不要手写聚合函数。
 - 时间格式化规则只以 `dialect_context` 为准。模型不得把方言格式错误解释为 URL 编码或前端编码问题，也不得因此手写 SQL。
@@ -208,7 +208,7 @@ DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT = """# 示例
 - 不使用 compare；分别查询当前周期和对比周期的基础月度数据，再用脚本计算同比
 工具顺序：
 → 调用 `dsl2sql_tool`，参数包含指标“集群数量”、创建时间月粒度维度和当前周期过滤。
-→ 调用 `execute_sql_tool` 获取当前周期数据。
+→ 调用 `semantic_query_tool` 获取当前周期数据。
 → 再用基础 DSL 查询对比周期数据，最后用脚本对齐月份并计算同比。
 回复示例：集群数量按月同比趋势已生成。
 
@@ -244,10 +244,10 @@ DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT = """# 示例
 - 确认字段结构后，再构造正式趋势分析查询。
 工具顺序：
 1. 调用 `dsl2sql_tool`，参数包含状态、时间、订单金额等维度字段，限制 3 条。
-2. 调用 `execute_sql_tool` 查询 3 条原始明细。
+2. 调用 `semantic_query_tool` 查询 3 条原始明细。
 3. 根据抽样结果确认状态取值和时间格式。
 4. 调用 `dsl2sql_tool`，参数包含本月时间筛选、状态维度、订单金额指标和趋势粒度。
-5. 调用 `execute_sql_tool` 获取正式分析结果。
+5. 调用 `semantic_query_tool` 获取正式分析结果。
 回复示例：已根据原始明细确认状态取值和时间格式，并完成本月订单金额趋势分析。
 
 ## 示例11：阶段转化漏斗图
@@ -340,14 +340,14 @@ DATA_ANALYZE_MULTI_STEP_FEWSHOT_PROMPT = """# 多步数据分析示例
 处理原则：
 - 这是数据分析任务，不要求一条 SQL 完成。
 - 优先拆成“当前周期”和“对比周期”两次简单查询。
-- 每次查询都先调用 `dsl2sql_tool`，再调用 `execute_sql_tool`。
+- 每次查询都先调用 `dsl2sql_tool`，再调用 `semantic_query_tool`。
 - 最终基于真实查询结果计算差值和环比，不要凭 SQL 文本推断。
 
 工具顺序：
 1. 调用 `dsl2sql_tool` 生成本月订单金额查询。
-2. 调用 `execute_sql_tool(sql=本月SQL)`
+2. 调用 `semantic_query_tool(sql=本月SQL)`
 3. 调用 `dsl2sql_tool` 生成上月订单金额查询。
-4. 调用 `execute_sql_tool(sql=上月SQL)`
+4. 调用 `semantic_query_tool(sql=上月SQL)`
 5. 计算：
    - 差值 = 本月订单金额 - 上月订单金额
    - 环比 = 差值 / 上月订单金额
@@ -364,8 +364,8 @@ DATA_ANALYZE_MULTI_STEP_FEWSHOT_PROMPT = """# 多步数据分析示例
 - 如果用户没有明确日期范围，默认使用当前自然年，并说明默认口径。
 
 工具顺序：
-1. 查询今年销售额：`dsl2sql_tool` -> `execute_sql_tool`
-2. 查询去年同期销售额：`dsl2sql_tool` -> `execute_sql_tool`
+1. 查询今年销售额：`dsl2sql_tool` -> `semantic_query_tool`
+2. 查询去年同期销售额：`dsl2sql_tool` -> `semantic_query_tool`
 3. 计算：
    - 同比差值 = 今年销售额 - 去年同期销售额
    - 同比增长率 = 同比差值 / 去年同期销售额
@@ -379,8 +379,8 @@ DATA_ANALYZE_MULTI_STEP_FEWSHOT_PROMPT = """# 多步数据分析示例
 - 模型基于两次查询结果计算各分类占比。
 
 工具顺序：
-1. 总体订单金额：`dsl2sql_tool` -> `execute_sql_tool`
-2. 分类订单金额：`dsl2sql_tool` -> `execute_sql_tool`
+1. 总体订单金额：`dsl2sql_tool` -> `semantic_query_tool`
+2. 分类订单金额：`dsl2sql_tool` -> `semantic_query_tool`
 3. 计算：分类占比 = 分类订单金额 / 总体订单金额
 4. 输出贡献排名、主要贡献项和集中度判断，不输出原始结果表。
 """

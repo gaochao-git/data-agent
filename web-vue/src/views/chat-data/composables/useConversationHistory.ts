@@ -484,7 +484,7 @@ export function useConversationHistory({
                 }
               })
 
-              // 用于追踪 execute_sql_tool 索引（与 dsl2sql_tool 对应）
+              // 用于追踪 semantic_query_tool 索引（与 dsl2sql_tool 对应）
               let executeSqlIndex = 0
 
               msg.toolCalls = msg.toolCalls.map((tc) => {
@@ -495,7 +495,7 @@ export function useConversationHistory({
                 let renderType: 'queryResult' | 'chart' | undefined
                 let semanticParams: SemanticParams | undefined
 
-                if (tc.tool_name === 'execute_sql_tool') {
+                if (tc.tool_name === 'semantic_query_tool') {
                   const queryResultMatch = result.match(/<query_result>([\s\S]*?)<\/query_result>/)
                   if (queryResultMatch?.[1]) {
                     renderId = queryResultMatch[1].trim()
@@ -551,7 +551,7 @@ export function useConversationHistory({
             }
           }
 
-          // 合并后重新关联 dsl2sql_tool 和 execute_sql_tool 的语义参数
+          // 合并后重新关联 dsl2sql_tool 和 semantic_query_tool 的语义参数
           // 因为它们原本在不同的 assistant 消息中，合并前无法正确关联
           displayMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
@@ -573,11 +573,11 @@ export function useConversationHistory({
                 }
               })
 
-              // 重新关联 execute_sql_tool 的语义参数
+              // 重新关联 semantic_query_tool 的语义参数
               if (dsl2sqlTools.length > 0) {
                 let executeSqlIndex = 0
                 msg.toolCalls = msg.toolCalls.map((tc) => {
-                  if (tc.tool_name === 'execute_sql_tool') {
+                  if (tc.tool_name === 'semantic_query_tool') {
                     const dslTool = dsl2sqlTools[executeSqlIndex]
                     executeSqlIndex++
                     if (dslTool) {
@@ -607,7 +607,7 @@ export function useConversationHistory({
               setActiveMessageId(lastAssistantMsg.id)
               setPendingTool({
                 tool_call_id: historyPendingTool.tool_call_id || '',
-                tool_name: historyPendingTool.tool_name || 'execute_sql_tool',
+                tool_name: historyPendingTool.tool_name || 'semantic_query_tool',
                 args: historyPendingTool.args || {},
                 message: historyPendingTool.message,
               })

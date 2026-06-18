@@ -217,7 +217,7 @@ async def test_dashboard_panel_execution_helpers(dashboard_context, monkeypatch)
         assert datasource_id is None
         return {"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}
 
-    monkeypatch.setattr(dashboard_routes, "execute_sql_tool_direct", fake_execute_sql_direct)
+    monkeypatch.setattr(dashboard_routes, "execute_sql_direct_runner", fake_execute_sql_direct)
     local_result = await dashboard_routes._execute_dashboard_panel_sql(local_panel)
     assert local_result["success"] is True
     assert local_result["member_datasource_id"] is None
@@ -446,7 +446,7 @@ async def test_dashboard_run_panel_and_batch_failure_statuses(dashboard_context,
 async def test_dashboard_run_batch_task_statuses(dashboard_context, monkeypatch):
     service, runtime, _user = dashboard_context
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    monkeypatch.setattr(dashboard_routes, "execute_sql_tool_direct", lambda sql, datasource_id: asyncio.sleep(0, result={"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}))
+    monkeypatch.setattr(dashboard_routes, "execute_sql_direct_runner", lambda sql, datasource_id: asyncio.sleep(0, result={"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}))
 
     await dashboard_routes._run_dashboard_batch_task(
         "task_a",
@@ -931,7 +931,7 @@ async def test_execute_panel_and_dashboard_query_task_remaining_branches(dashboa
     service, runtime, _user = dashboard_context
     request = object()
     monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    monkeypatch.setattr(dashboard_routes, "execute_sql_tool_direct", lambda *_args, **_kwargs: asyncio.sleep(0, result={"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}))
+    monkeypatch.setattr(dashboard_routes, "execute_sql_direct_runner", lambda *_args, **_kwargs: asyncio.sleep(0, result={"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}))
 
     no_datasource = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_b", request))
     assert no_datasource["status"] == "success"

@@ -575,8 +575,8 @@ class ExecuteSemanticInput(BaseModel):
 
 # ============ Agent 工具输入模型 ============
 
-class ExecuteSqlInput(BaseModel):
-    """执行 SQL 工具的输入参数"""
+class SemanticQueryInput(BaseModel):
+    """语义查询工具的输入参数。当前阶段仍接收 DSL2SQL 生成的 SQL。"""
     sql: str = Field(..., description="要执行的 SQL 语句")
     semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
 
@@ -611,7 +611,7 @@ class CalculatorInput(BaseModel):
 class GenerateChartInput(BaseModel):
     """图表生成工具的输入参数"""
     result_id: str = Field(
-        description="查询结果ID，从 execute_sql_tool 返回的 result_id"
+        description="查询结果ID，从 semantic_query_tool 返回的 result_id"
     )
     chart_type: Optional[ChartType] = Field(
         default=None,

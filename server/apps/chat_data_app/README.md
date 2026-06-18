@@ -200,7 +200,7 @@ START → [agent节点] → [tools_condition] → [tools执行] → [agent节点
 | 工具 | 说明 |
 |-----|------|
 | `dsl2sql_tool` | 根据语义参数生成 SQL |
-| `execute_sql_tool` | 执行 SQL 查询 |
+| `semantic_query_tool` | 执行语义查询；当前阶段接收 `dsl2sql_tool` 生成的 SQL，后续收敛为 DSL 入参 |
 
 ---
 
