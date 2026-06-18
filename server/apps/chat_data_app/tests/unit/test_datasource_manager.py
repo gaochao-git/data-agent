@@ -381,6 +381,66 @@ def test_runtime_semantic_config_merges_column_dict_without_persisting():
     assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
 
 
+def test_runtime_semantic_configs_merge_column_dicts_for_selector_context():
+    class DictStore(_FakeStore):
+        async def get_column_dicts_by_group_id_async(self, group_id: str):
+            assert group_id == "group_ds_a"
+            return {
+                ("orders", "status"): {
+                    "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
+                    "synonyms": [],
+                    "storage_format": "tinyint",
+                    "unit": "",
+                },
+                ("orders", "amount"): {
+                    "enum_values": [],
+                    "synonyms": [],
+                    "storage_format": "",
+                    "unit": "元",
+                },
+            }
+
+    fake_store = DictStore()
+    fake_store.semantic_configs["group_ds_a"] = [{
+        "id": "sc_a",
+        "group_id": "group_ds_a",
+        "enabled": True,
+        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
+        "relationships": [],
+    }]
+    manager = _build_manager(fake_store)
+
+    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
+
+    assert configs[0]["dimensions"][0]["allowed_values"] == ["1", "0"]
+    assert configs[0]["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效；0=无效\n存储格式：tinyint"
+    assert configs[0]["metrics"][0]["metadata_supplement"] == "单位：元"
+    assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
+
+
+def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():
+    class FailingDictStore(_FakeStore):
+        async def get_column_dicts_by_group_id_async(self, group_id: str):
+            raise RuntimeError("dict unavailable")
+
+    fake_store = FailingDictStore()
+    fake_store.semantic_configs["group_ds_a"] = [{
+        "id": "sc_a",
+        "group_id": "group_ds_a",
+        "enabled": True,
+        "metrics": [],
+        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
+        "relationships": [],
+    }]
+    manager = _build_manager(fake_store)
+
+    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
+
+    assert configs == fake_store.semantic_configs["group_ds_a"]
+    assert "allowed_values" not in configs[0]["dimensions"][0]
+
+
 def test_datasource_manager_column_dict_helper_branches():
     manager = DataSourceManager.__new__(DataSourceManager)
 

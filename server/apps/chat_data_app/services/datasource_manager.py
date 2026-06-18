@@ -870,6 +870,26 @@ class DataSourceManager:
             )
         ]
 
+    async def get_runtime_semantic_configs_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
+        """异步获取智能问数运行时语义配置列表，并临时合并物理字段字典。"""
+        configs = await self.get_semantic_configs_async(datasource_id, user_id)
+        if not configs:
+            return []
+        try:
+            datasource = await self.db_store.get_datasource_async(datasource_id)
+            group_id = str((datasource or {}).get("group_id") or "").strip()
+            if not group_id:
+                return configs
+            column_dicts = await self.db_store.get_column_dicts_by_group_id_async(group_id)
+        except AttributeError:
+            column_dicts = {}
+        except Exception as e:
+            logger.warning("读取字段数据字典失败，指标集选择降级使用原始配置: datasource_id=%s error=%s", datasource_id, e)
+            column_dicts = {}
+        if not column_dicts:
+            return configs
+        return [self._merge_column_dict_into_semantic_config(config, column_dicts) for config in configs]
+
     async def get_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[dict]:
         """异步获取指定的语义配置。"""
         configs = await self.get_semantic_configs_async(datasource_id)

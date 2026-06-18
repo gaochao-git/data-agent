@@ -355,6 +355,37 @@ def test_select_semantic_config_for_query_uses_all_enabled_configs(monkeypatch):
     assert len(prompt_payload["semantic_configs"]) == 40
 
 
+def test_select_semantic_config_for_query_uses_runtime_configs_with_column_dict(monkeypatch):
+    class RuntimeManager:
+        async def get_runtime_semantic_configs_async(self, datasource_id):
+            assert datasource_id == "ds_a"
+            return [{
+                "id": "sc_order",
+                "name": "订单分析",
+                "enabled": True,
+                "metrics": [{"name": "销售额", "metadata_supplement": "单位：元"}],
+                "dimensions": [{
+                    "name": "订单状态",
+                    "allowed_values": ["1", "0"],
+                    "metadata_supplement": "枚举值：1=有效；0=无效\n存储格式：tinyint",
+                }],
+            }]
+
+    fake_llm = _FakeLLM()
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_datasource_manager", lambda: RuntimeManager())
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_chat_data_llm", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector._chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [summaries])
+
+    asyncio.run(select_semantic_config_for_query("ds_a", "查询有效订单销售额"))
+
+    prompt_payload = json.loads(fake_llm.prompts[0].split("输入：\n", 1)[1])
+    summary = prompt_payload["semantic_configs"][0]
+    assert summary["metrics"][0]["supplement"] == "单位：元"
+    assert summary["dimensions"][0]["allowed_values"] == ["1", "0"]
+    assert "1=有效" in summary["dimensions"][0]["supplement"]
+    assert "存储格式：tinyint" in summary["dimensions"][0]["supplement"]
+
+
 def test_select_semantic_config_for_query_blocks_multiple_full_matches_across_chunks(monkeypatch):
     class FakeChunkLLM:
         def __init__(self):

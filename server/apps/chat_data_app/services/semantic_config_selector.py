@@ -484,7 +484,10 @@ async def select_semantic_config_for_query(
         return None
 
     ds_manager = get_datasource_manager()
-    configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
+    if hasattr(ds_manager, "get_runtime_semantic_configs_async"):
+        configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id)
+    else:
+        configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
     enabled_configs = [
         config for config in configs or []
         if _config_id(config) and bool(config.get("enabled", True))
