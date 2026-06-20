@@ -37,6 +37,8 @@ watch(
   (newToolCalls) => {
     if (props.defaultExpanded) {
       expandedIds.value = new Set(newToolCalls.map((tc) => tc.tool_call_id))
+    } else {
+      expandedIds.value = new Set([...expandedIds.value].filter((id) => newToolCalls.some((tc) => tc.tool_call_id === id)))
     }
   },
   { immediate: true }

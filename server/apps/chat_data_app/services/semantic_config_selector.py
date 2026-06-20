@@ -20,6 +20,9 @@ SELECTOR_CHUNK_TOKEN_BUDGET = 90_000
 SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT = 100_000
 SELECTOR_MAX_CONCURRENCY = 4
 SELECTOR_MAX_REDUCER_CANDIDATES = 20
+SELECTOR_DIRECTORY_TOP_K = 5
+SELECTOR_MAX_QUERY_PLAN_TASKS = 5
+QUERY_PLAN_TYPES = {"single_config", "multi_config_independent", "multi_config_calculation", "ambiguous", "unsupported", "cross_join_required"}
 
 
 def _truncate(value: Any, max_length: int) -> str:
@@ -38,6 +41,104 @@ def _config_id(config: Dict[str, Any]) -> str:
 def _config_name(config: Dict[str, Any]) -> str:
     """读取指标集名称。"""
     return str(config.get("name") or config.get("semantic_config_name") or "").strip()
+
+
+def _config_description(config: Dict[str, Any]) -> str:
+    """读取指标集描述。"""
+    return str(config.get("description") or config.get("semantic_config_desc") or "").strip()
+
+
+def _semantic_config_directory_entry(config: Dict[str, Any]) -> Dict[str, str]:
+    """构造轻量指标集目录项，只用于候选召回。"""
+    config_id = _config_id(config)
+    return {
+        "id": config_id,
+        "name": _config_name(config) or config_id,
+        "description": _truncate(_config_description(config), 240),
+    }
+
+
+def _retrieval_terms(value: Any) -> set[str]:
+    """为轻量目录召回提取稳定关键词，避免依赖中文分词组件。"""
+    text = str(value or "").lower()
+    terms: set[str] = set()
+    token = []
+    cjk_chars: List[str] = []
+    for char in text:
+        if "\u4e00" <= char <= "\u9fff":
+            if token:
+                terms.add("".join(token))
+                token = []
+            cjk_chars.append(char)
+            continue
+        if char.isalnum() or char in {"_", "-"}:
+            token.append(char)
+            continue
+        if token:
+            terms.add("".join(token))
+            token = []
+    if token:
+        terms.add("".join(token))
+    for index, char in enumerate(cjk_chars):
+        terms.add(char)
+        if index + 1 < len(cjk_chars):
+            terms.add(char + cjk_chars[index + 1])
+    return {term for term in terms if term}
+
+
+def _directory_entry_score(user_query: str, entry: Dict[str, str]) -> int:
+    """按 id/name/description 对指标集目录项做轻量打分。"""
+    query = str(user_query or "").lower()
+    name = str(entry.get("name") or "").lower()
+    description = str(entry.get("description") or "").lower()
+    entry_text = f"{entry.get('id') or ''} {name} {description}".lower()
+    query_terms = _retrieval_terms(query)
+    entry_terms = _retrieval_terms(entry_text)
+    if not query_terms or not entry_terms:
+        return 0
+    score = 0
+    for term in query_terms:
+        if term in entry_terms:
+            score += 2 if len(term) >= 2 else 1
+        if len(term) >= 2 and term in name:
+            score += 4
+        elif len(term) >= 2 and term in description:
+            score += 2
+    if name and name in query:
+        score += 12
+    if description and description in query:
+        score += 6
+    return score
+
+
+def _retrieve_semantic_config_candidates(
+    configs: List[Dict[str, Any]],
+    user_query: str,
+    top_k: int = SELECTOR_DIRECTORY_TOP_K,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """先用指标集 id/name/description 召回候选，召回失败时回退全量。"""
+    if len(configs) <= max(int(top_k or 0), 0):
+        directory = [_semantic_config_directory_entry(config) for config in configs]
+        return configs, [{**item, "score": 0, "selected": True} for item in directory]
+
+    scored: List[tuple[int, int, Dict[str, Any], Dict[str, str]]] = []
+    for index, config in enumerate(configs):
+        entry = _semantic_config_directory_entry(config)
+        score = _directory_entry_score(user_query, entry)
+        if score > 0:
+            scored.append((score, index, config, entry))
+    if not scored:
+        directory = [_semantic_config_directory_entry(config) for config in configs]
+        return configs, [{**item, "score": 0, "selected": True} for item in directory]
+
+    limit = max(int(top_k or SELECTOR_DIRECTORY_TOP_K), 1)
+    selected = sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]
+    selected_ids = {_config_id(item[2]) for item in selected}
+    retrieval = [
+        {**entry, "score": score, "selected": _config_id(config) in selected_ids}
+        for score, _index, config, entry in sorted(scored, key=lambda item: (-item[0], item[1]))
+    ]
+    return [config for _score, _index, config, _entry in selected], retrieval
 
 
 def _compact_metric_summary(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -98,12 +199,14 @@ def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]]) -> st
         "5) 聚合统计必须有可表达用户统计口径的 metrics；如果只存在 dimensions 而无对应指标，聚合统计不能 coverage=full。\n"
         "6) 同比、环比、增长率这类问题，如果某个指标集同时包含基础指标和可用于周期筛选/分组的时间维度，应视为可拆成基础查询后计算，coverage=full；不要因为没有预置同比/环比/增长率指标就判为 partial 或 none。\n"
         "7) candidates 必须包含所有 coverage=full 的指标集；如果没有 full，可返回最相关的 partial 候选。\n"
-        "8) 如果多个指标集都能完整覆盖，且能从指标集 id、名称或描述中明确识别数仓层级，优先按 ads > dws > dwd > ods 选择；如果无法明确识别层级，或层级仍无法唯一判断，或业务口径冲突，ambiguous 返回 true，selected_config_id 返回空字符串，candidates 返回这些指标集，交给用户选择。\n"
-        "9) 如果用户问题必须同时使用多个指标集才能回答，cross_config_required 返回 true，selected_config_id 返回空字符串。\n"
-        "10) 如果所有指标集都无法完整表达用户问题，selected_config_id 返回空字符串，confidence 返回 none。\n"
-        "11) confidence 只能是 high、medium、low、none，只用于候选排序和展示，不能用来排除 coverage=full 的候选。\n"
-        "12) 输出 JSON，不要解释文本。格式：\n"
-        "{\"selected_config_id\":\"...\",\"coverage\":\"full|partial|none\",\"confidence\":\"high|medium|low|none\",\"reason\":\"...\",\"matched_metrics\":[\"...\"],\"matched_dimensions\":[\"...\"],\"ambiguous\":false,\"ambiguity_reason\":\"...\",\"cross_config_required\":false,\"cross_config_reason\":\"...\",\"candidates\":[{\"id\":\"...\",\"coverage\":\"full|partial|none\",\"confidence\":\"high|medium|low\",\"reason\":\"...\"}]}\n"
+        "8) 如果多个指标集都能完整覆盖同一个完整问题，且能从指标集 id、名称或描述中明确识别数仓层级，优先按 ads > dws > dwd > ods 选择；如果无法明确识别层级，或层级仍无法唯一判断，或业务口径冲突，ambiguous 返回 true，selected_config_id 返回空字符串，candidates 返回这些指标集，交给用户选择。\n"
+        "9) 如果没有单一指标集能完整覆盖，但多个指标集分别覆盖用户问题中的不同独立统计项，必须返回 query_plan.type=multi_config_independent，tasks 中每个子任务绑定一个 semantic_config_id；不要把这种情况标记为 ambiguous，也不要判为 unsupported。\n"
+        "10) 如果用户问题需要分别查询多个指标集后做差值、比例、转化率或其他计算，必须返回 query_plan.type=multi_config_calculation，并在 final_action/calculation 中说明后续计算；不要直接合并 SQL。\n"
+        "11) 只有用户问题必须跨指标集 JOIN、混合维度分组、自动补关系或拼成一张宽表时，才设置 cross_config_required=true，并返回 query_plan.type=cross_join_required；多个独立统计项分别查询后汇总不属于跨指标集 JOIN。\n"
+        "12) 如果所有指标集都无法完整表达用户问题，selected_config_id 返回空字符串，confidence 返回 none。\n"
+        "13) confidence 只能是 high、medium、low、none，只用于候选排序和展示，不能用来排除 coverage=full 的候选。\n"
+        "14) 输出 JSON，不要解释文本。格式：\n"
+        "{\"selected_config_id\":\"...\",\"coverage\":\"full|partial|none\",\"confidence\":\"high|medium|low|none\",\"reason\":\"...\",\"matched_metrics\":[\"...\"],\"matched_dimensions\":[\"...\"],\"ambiguous\":false,\"ambiguity_reason\":\"...\",\"cross_config_required\":false,\"cross_config_reason\":\"...\",\"candidates\":[{\"id\":\"...\",\"coverage\":\"full|partial|none\",\"confidence\":\"high|medium|low\",\"reason\":\"...\"}],\"query_plan\":{\"type\":\"single_config|multi_config_independent|multi_config_calculation|ambiguous|unsupported|cross_join_required\",\"tasks\":[{\"task_id\":\"t1\",\"semantic_config_id\":\"...\",\"question\":\"...\",\"intent\":\"aggregate|detail|trend|ranking|compare\",\"reason\":\"...\"}],\"final_action\":\"summarize|calculator|ask_user|unsupported\",\"calculation\":\"...\",\"reason\":\"...\"}}\n"
         "输入：\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -217,10 +320,12 @@ def _build_reducer_prompt(user_query: str, chunk_results: List[Dict[str, Any]], 
         "3) 同比、环比、增长率这类问题，如果候选同时包含基础指标和时间维度，应视为可拆成基础查询后计算，coverage=full。\n"
         "4) candidates 必须包含所有 coverage=full 的指标集；如果没有 full，可返回最相关的 partial 候选。\n"
         "5) 如果只有一个指标集能完整覆盖，selected_config_id 返回该 id。\n"
-        "6) 如果多个指标集都能完整覆盖，且能从候选 id、名称或描述中明确识别数仓层级，优先按 ads > dws > dwd > ods 选择；如果无法明确识别层级，或层级仍无法唯一判断，或业务口径冲突，ambiguous 返回 true，selected_config_id 返回空字符串，candidates 返回这些指标集，交给用户选择。\n"
-        "7) 如果问题必须同时使用多个指标集才能回答，cross_config_required 返回 true，selected_config_id 返回空字符串。\n"
-        "8) 如果没有指标集能完整表达问题，selected_config_id 返回空字符串，confidence 返回 none。\n"
-        "9) 输出 JSON，不要解释文本。格式与选择器一致。\n"
+        "6) 如果多个指标集都能完整覆盖同一个完整问题，且能从候选 id、名称或描述中明确识别数仓层级，优先按 ads > dws > dwd > ods 选择；如果无法明确识别层级，或层级仍无法唯一判断，或业务口径冲突，ambiguous 返回 true，selected_config_id 返回空字符串，candidates 返回这些指标集，交给用户选择。\n"
+        "7) 如果没有单一指标集能完整覆盖，但多个指标集分别覆盖问题中的不同独立统计项，必须返回 query_plan.type=multi_config_independent，tasks 中每个子任务绑定一个 semantic_config_id；不要判为 ambiguous 或 unsupported。\n"
+        "8) 如果问题需要分别查询多个指标集后再计算差值、比例、转化率等，返回 query_plan.type=multi_config_calculation，并在 final_action/calculation 中说明后续计算。\n"
+        "9) 只有必须跨指标集 JOIN、混合维度分组、自动补关系或拼成一张宽表时，才设置 cross_config_required=true，并返回 query_plan.type=cross_join_required；多个独立统计项分别查询后汇总不属于跨指标集 JOIN。\n"
+        "10) 如果没有指标集能完整表达问题，selected_config_id 返回空字符串，confidence 返回 none。\n"
+        "11) 输出 JSON，不要解释文本。格式与选择器一致，可包含 query_plan。\n"
         "输入：\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -242,6 +347,18 @@ def _build_empty_selection(reason: str = "") -> Dict[str, Any]:
         "cross_config_reason": "",
         "candidates": [],
     }
+
+
+def _has_multi_intent_query(user_query: str) -> bool:
+    """粗判断用户问题是否包含多个独立统计意图。"""
+    text = str(user_query or "").strip()
+    if not text:
+        return False
+    separators = ("、", "，", ",", "和", "及", "以及", "还有", "分别", "同时")
+    question_markers = ("多少", "几个", "几笔", "订单数", "用户数", "人数", "笔数", "数量", "金额", "平均", "均值", "转化率", "占比", "比例", "率")
+    separator_count = sum(text.count(item) for item in separators)
+    marker_count = sum(1 for item in question_markers if item in text)
+    return separator_count > 0 and marker_count >= 2
 
 
 def _normalize_confidence(value: Any) -> str:
@@ -317,6 +434,54 @@ def _normalize_candidates(value: Any, config_names: Dict[str, str]) -> List[Dict
     return result
 
 
+def _normalize_query_plan(value: Any, config_names: Dict[str, str]) -> Dict[str, Any] | None:
+    """标准化多指标集查询计划，确保只引用当前候选指标集。"""
+    if not isinstance(value, dict):
+        return None
+    raw_type = str(value.get("type") or "").strip()
+    plan_type = raw_type if raw_type in QUERY_PLAN_TYPES else ""
+    raw_tasks = value.get("tasks") if isinstance(value.get("tasks"), list) else []
+    valid_ids = set(config_names)
+    tasks: List[Dict[str, str]] = []
+    seen_task_ids: set[str] = set()
+    for index, item in enumerate(raw_tasks):
+        if not isinstance(item, dict):
+            continue
+        config_id = str(item.get("semantic_config_id") or item.get("config_id") or item.get("id") or "").strip()
+        if not config_id or config_id not in valid_ids:
+            continue
+        task_id = str(item.get("task_id") or f"task_{index + 1}").strip()[:80]
+        if not task_id or task_id in seen_task_ids:
+            task_id = f"task_{index + 1}"
+        seen_task_ids.add(task_id)
+        tasks.append({
+            "task_id": task_id,
+            "semantic_config_id": config_id,
+            "semantic_config_name": config_names.get(config_id, config_id),
+            "question": str(item.get("question") or "").strip()[:300],
+            "intent": str(item.get("intent") or "").strip()[:80],
+            "reason": str(item.get("reason") or "").strip()[:300],
+        })
+        if len(tasks) >= SELECTOR_MAX_QUERY_PLAN_TASKS:
+            break
+    if not plan_type:
+        plan_type = "single_config" if len(tasks) <= 1 else "multi_config_independent"
+    final_action = str(value.get("final_action") or "").strip()[:80]
+    calculation = str(value.get("calculation") or "").strip()[:300]
+    reason = str(value.get("reason") or "").strip()[:500]
+    if plan_type in {"multi_config_independent", "multi_config_calculation"} and len(tasks) < 2:
+        return None
+    if plan_type == "single_config" and not tasks:
+        return None
+    return {
+        "type": plan_type,
+        "tasks": tasks,
+        "final_action": final_action,
+        "calculation": calculation,
+        "reason": reason,
+    }
+
+
 def _full_match_candidates(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """提取完整覆盖的候选指标集。"""
     return [item for item in candidates if item.get("coverage") == "full"]
@@ -324,6 +489,14 @@ def _full_match_candidates(candidates: List[Dict[str, str]]) -> List[Dict[str, s
 
 def _normalize_ambiguous_selection(selection: Dict[str, Any]) -> Dict[str, Any]:
     """多个完整候选时强制转为待用户选择，避免模型自行猜一个。"""
+    plan = selection.get("query_plan") if isinstance(selection.get("query_plan"), dict) else None
+    if plan and plan.get("type") in {"multi_config_independent", "multi_config_calculation"}:
+        selection["selected_config_id"] = ""
+        selection["selected_config_name"] = ""
+        selection["confidence"] = "none"
+        selection["ambiguous"] = False
+        selection["cross_config_required"] = False
+        return selection
     candidates = selection.get("candidates") if isinstance(selection.get("candidates"), list) else []
     full_candidates = _full_match_candidates(candidates)
     selected_config_id = str(selection.get("selected_config_id") or "").strip()
@@ -385,6 +558,7 @@ def _parse_selection_response(content: str, configs: List[Dict[str, Any]]) -> Di
         "cross_config_required": bool(_normalize_bool(parsed.get("cross_config_required"))),
         "cross_config_reason": str(parsed.get("cross_config_reason") or "").strip()[:500],
         "candidates": _normalize_candidates(parsed.get("candidates"), config_names),
+        "query_plan": _normalize_query_plan(parsed.get("query_plan"), config_names),
     }
     return _normalize_ambiguous_selection(selection)
 
@@ -404,6 +578,7 @@ def _build_chunk_result_payload(selection: Dict[str, Any]) -> Dict[str, Any]:
         "cross_config_required": bool(selection.get("cross_config_required")),
         "cross_config_reason": selection.get("cross_config_reason") or "",
         "candidates": selection.get("candidates") or [],
+        "query_plan": selection.get("query_plan"),
     }
 
 
@@ -460,7 +635,7 @@ async def _reduce_semantic_config_selections(
         reasons = [str(item.get("reason") or "").strip() for item in selections if str(item.get("reason") or "").strip()]
         return _build_empty_selection(reasons[0] if reasons else "当前可用指标集暂不支持该问题")
     ambiguous_selection = _build_ambiguous_selection_from_full_candidates(candidates)
-    if ambiguous_selection:
+    if ambiguous_selection and not _has_multi_intent_query(user_query):
         return ambiguous_selection
     candidate_configs = [config for config in enabled_configs if _config_id(config) in {item["id"] for item in candidates}]
     prompt = _build_reducer_prompt(
@@ -495,7 +670,8 @@ async def select_semantic_config_for_query(
     if not enabled_configs:
         return None
 
-    summaries = [_summarize_semantic_config(config) for config in enabled_configs]
+    candidate_configs, directory_candidates = _retrieve_semantic_config_candidates(enabled_configs, normalized_query)
+    summaries = [_summarize_semantic_config(config) for config in candidate_configs]
     chunks = _chunk_semantic_config_summaries(summaries, normalized_query)
     chunk_tokens = [
         _estimate_selector_prompt_tokens(normalized_query, chunk)
@@ -504,7 +680,7 @@ async def select_semantic_config_for_query(
     logger.info(
         "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s max_chunk_tokens=%s",
         normalized_datasource_id,
-        len(enabled_configs),
+        len(candidate_configs),
         len(chunks),
         chunk_tokens,
         max(chunk_tokens) if chunk_tokens else 0,
@@ -514,15 +690,23 @@ async def select_semantic_config_for_query(
         selection = await _select_semantic_config_chunk(llm, normalized_query, chunks[0])
     else:
         chunk_selections = await _select_semantic_config_chunks(llm, normalized_query, chunks)
-        selection = await _reduce_semantic_config_selections(llm, normalized_query, chunk_selections, enabled_configs)
+        selection = await _reduce_semantic_config_selections(llm, normalized_query, chunk_selections, candidate_configs)
     selection["auto_selected"] = bool(selection.get("selected_config_id"))
+    selection["retrieval"] = {
+        "total_configs": len(enabled_configs),
+        "candidate_count": len(candidate_configs),
+        "top_k": SELECTOR_DIRECTORY_TOP_K,
+        "directory_candidates": directory_candidates[:SELECTOR_MAX_REDUCER_CANDIDATES],
+    }
     logger.info(
-        "智能问数指标集选择: datasource_id=%s configs=%s chunks=%s selected=%s confidence=%s",
+        "智能问数指标集选择: datasource_id=%s configs=%s candidates=%s chunks=%s selected=%s confidence=%s plan=%s",
         normalized_datasource_id,
         len(enabled_configs),
+        len(candidate_configs),
         len(chunks),
         selection.get("selected_config_id") or "",
         selection.get("confidence") or "",
+        (selection.get("query_plan") or {}).get("type") if isinstance(selection.get("query_plan"), dict) else "",
     )
     return selection
 

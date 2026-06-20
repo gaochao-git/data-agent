@@ -6,7 +6,6 @@ import asyncio
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -79,9 +78,9 @@ def test_selection_to_tool_payload_branches():
     assert selected["candidates"] == []
     assert ambiguous["selected"] is False
     assert ambiguous["ambiguous"] is True
-    assert "多个可用指标集" in ambiguous["message"]
+    assert "业务口径无法唯一判断" in ambiguous["message"]
     assert cross_config["cross_config_required"] is True
-    assert "跨指标集" in cross_config["message"]
+    assert "不支持跨指标集 JOIN" in cross_config["message"]
     assert unsupported["message"] == "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
 
 
@@ -94,6 +93,51 @@ def test_selection_payload_selected_without_config_summary():
     assert selected["selected"] is True
     assert selected["selected_config_name"] == "cfg_a"
     assert "semantic_config" not in selected
+
+
+def test_selection_to_tool_payload_keeps_multi_config_query_plan():
+    payload = _selection_to_tool_payload({
+        "coverage": "partial",
+        "query_plan": {
+            "type": "multi_config_independent",
+            "tasks": [
+                {"task_id": "t1", "semantic_config_id": "cfg_order", "semantic_config_name": "订单分析", "question": "查订单金额"},
+                {"task_id": "t2", "semantic_config_id": "cfg_user", "semantic_config_name": "用户分析", "question": "查用户数"},
+            ],
+            "final_action": "summarize",
+        },
+        "candidates": [
+            {"id": "cfg_order", "name": "订单分析"},
+            {"id": "cfg_user", "name": "用户分析"},
+        ],
+    })
+
+    assert payload["selected"] is False
+    assert payload["query_plan"]["type"] == "multi_config_independent"
+    assert [item["semantic_config_id"] for item in payload["query_plan"]["tasks"]] == ["cfg_order", "cfg_user"]
+    assert "逐个调用 dsl2sql_tool" in payload["message"]
+
+
+def test_selection_to_tool_payload_blocks_cross_join_query_plan():
+    payload = _selection_to_tool_payload({
+        "coverage": "partial",
+        "query_plan": {
+            "type": "cross_join_required",
+            "tasks": [
+                {"task_id": "t1", "semantic_config_id": "cfg_order", "semantic_config_name": "订单分析", "question": "按商品维度关联订单金额"},
+            ],
+            "final_action": "unsupported",
+        },
+        "candidates": [
+            {"id": "cfg_order", "name": "订单分析"},
+            {"id": "cfg_product", "name": "商品分析"},
+        ],
+    })
+
+    assert payload["selected"] is False
+    assert payload["cross_config_required"] is True
+    assert payload["query_plan"]["type"] == "cross_join_required"
+    assert "不支持跨指标集 JOIN" in payload["message"]
 
 
 def test_load_runtime_semantic_config_branches(monkeypatch):
@@ -176,6 +220,45 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     assert captured["model_id"] == "model_a"
     assert captured["load_args"] == ("ds_bound", "sc_a")
     assert payload["selected"] is True
+
+
+def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monkeypatch):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+        assert datasource_id == "ds_bound"
+        return {
+            "coverage": "partial",
+            "query_plan": {
+                "type": "multi_config_independent",
+                "tasks": [
+                    {"task_id": "order", "semantic_config_id": "sc_order", "question": "查询订单金额"},
+                    {"task_id": "user", "semantic_config_id": "sc_user", "question": "查询用户数"},
+                ],
+                "final_action": "summarize",
+            },
+            "candidates": [
+                {"id": "sc_order", "name": "订单分析"},
+                {"id": "sc_user", "name": "用户分析"},
+            ],
+        }
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        return {
+            "id": semantic_config_id,
+            "name": "订单分析" if semantic_config_id == "sc_order" else "用户分析",
+            "metrics": [{"name": "订单金额" if semantic_config_id == "sc_order" else "用户数"}],
+            "dimensions": [],
+        }
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(include_query_tools=False, datasource_id="ds_bound")[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询订单金额和用户数"}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert payload["selected"] is False
+    assert payload["query_plan"]["semantic_configs"]["sc_order"]["metrics"][0]["name"] == "订单金额"
+    assert payload["query_plan"]["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
 
 
 def test_select_semantic_config_tool_error_branches(monkeypatch):

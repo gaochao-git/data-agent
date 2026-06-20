@@ -3,7 +3,7 @@
 后端当前使用的高可用策略：
 
 - 配置格式是逗号分隔的 ``host:port`` 列表。每个节点都必须显式写端口；
-  ``*_PORT`` 变量只作为历史兼容入参保留，不再用于补齐多节点配置。
+  不再支持通过独立 ``*_PORT`` 变量补齐端口。
 - 启动时按顺序探测节点。如果是连接类错误，例如无法连接、server gone
   away、连接丢失，则继续尝试下一个节点。非连接类错误，例如密码错误、
   access denied、数据库不存在、SQL/权限错误，都属于配置或权限问题，必须
@@ -44,7 +44,7 @@ class DatabaseEndpoint:
         return f"{self.host}:{self.port}"
 
 
-def parse_database_endpoints(raw_hosts: str, default_port: int) -> list[DatabaseEndpoint]:
+def parse_database_endpoints(raw_hosts: str) -> list[DatabaseEndpoint]:
     """解析逗号分隔的 host:port 节点，并去重。"""
     endpoints: list[DatabaseEndpoint] = []
     for item in [raw_item.strip() for raw_item in str(raw_hosts or "").split(",") if raw_item.strip()]:

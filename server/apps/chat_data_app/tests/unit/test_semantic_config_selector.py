@@ -4,7 +4,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -17,6 +16,7 @@ from apps.chat_data_app.services.semantic_config_selector import (
     _chunk_semantic_config_summaries,
     _collect_selection_candidates,
     _parse_selection_response,
+    _retrieve_semantic_config_candidates,
     _summarize_semantic_config,
     select_semantic_config_for_query,
 )
@@ -205,6 +205,55 @@ def test_parse_selection_response_detects_cross_config_required():
     assert parsed["candidates"][0]["coverage"] == "partial"
 
 
+def test_parse_selection_response_accepts_multi_config_query_plan():
+    configs = [
+        {"id": "sc_order", "name": "订单分析"},
+        {"id": "sc_user", "name": "用户分析"},
+        {"id": "sc_bad", "name": "无关"},
+    ]
+
+    parsed = _parse_selection_response(json.dumps({
+        "selected_config_id": "",
+        "coverage": "partial",
+        "confidence": "none",
+        "query_plan": {
+            "type": "multi_config_independent",
+            "tasks": [
+                {"task_id": "order", "semantic_config_id": "sc_order", "question": "查询订单金额", "intent": "aggregate"},
+                {"task_id": "user", "semantic_config_id": "sc_user", "question": "查询用户数", "intent": "aggregate"},
+                {"task_id": "missing", "semantic_config_id": "missing", "question": "非法"},
+            ],
+            "final_action": "summarize",
+            "reason": "两个独立子问题",
+        },
+        "candidates": [
+            {"id": "sc_order", "coverage": "partial", "confidence": "medium"},
+            {"id": "sc_user", "coverage": "partial", "confidence": "medium"},
+        ],
+    }, ensure_ascii=False), configs)
+
+    assert parsed["selected_config_id"] == ""
+    assert parsed["ambiguous"] is False
+    assert parsed["cross_config_required"] is False
+    assert parsed["query_plan"]["type"] == "multi_config_independent"
+    assert [item["semantic_config_id"] for item in parsed["query_plan"]["tasks"]] == ["sc_order", "sc_user"]
+
+
+def test_retrieve_semantic_config_candidates_uses_directory_name_and_description():
+    configs = [
+        {"id": "sc_order", "name": "订单分析基线", "description": "订单经营分析评估用语义配置", "metrics": [{"name": "订单金额"}]},
+        {"id": "sc_course", "name": "课程报名", "description": "课程、学生和报名分析"},
+        {"id": "sc_pay", "name": "备付金监管", "description": "机构备付金余额和监管报表"},
+    ]
+
+    candidates, retrieval = _retrieve_semantic_config_candidates(configs, "查订单销售额", top_k=1)
+
+    assert [item["id"] for item in candidates] == ["sc_order"]
+    assert retrieval[0]["id"] == "sc_order"
+    assert retrieval[0]["selected"] is True
+    assert all("metrics" not in item for item in retrieval)
+
+
 def test_summarize_semantic_config_truncates_business_fields():
     config = {
         "id": "sc_a",
@@ -336,23 +385,28 @@ class _FakeLLM:
         }, ensure_ascii=False)})()
 
 
-def test_select_semantic_config_for_query_uses_all_enabled_configs(monkeypatch):
+def test_select_semantic_config_for_query_retrieves_directory_candidates(monkeypatch):
     configs = [
-        {"id": f"sc_{i}", "name": f"指标集{i}", "enabled": True, "metrics": [{"name": f"指标{i}"}], "dimensions": []}
+        {"id": f"sc_{i}", "name": f"指标集{i}", "description": f"普通指标集{i}", "enabled": True, "metrics": [{"name": f"指标{i}"}], "dimensions": []}
         for i in range(40)
     ]
+    configs[36]["name"] = "订单分析基线"
+    configs[36]["description"] = "订单经营分析评估用语义配置"
     fake_llm = _FakeLLM()
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_datasource_manager", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_chat_data_llm", lambda **_kwargs: fake_llm)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector._chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [summaries])
 
-    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询指标36"))
+    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单金额"))
 
     assert selection["selected_config_id"] == "sc_36"
     assert len(fake_llm.prompts) == 1
     prompt_payload = json.loads(fake_llm.prompts[0].split("输入：\n", 1)[1])
-    assert len(prompt_payload["semantic_configs"]) == 40
+    assert len(prompt_payload["semantic_configs"]) <= selector.SELECTOR_DIRECTORY_TOP_K
+    assert prompt_payload["semantic_configs"][0]["id"] == "sc_36"
+    assert selection["retrieval"]["total_configs"] == 40
+    assert selection["retrieval"]["candidate_count"] <= selector.SELECTOR_DIRECTORY_TOP_K
 
 
 def test_select_semantic_config_for_query_uses_runtime_configs_with_column_dict(monkeypatch):
@@ -422,6 +476,63 @@ def test_select_semantic_config_for_query_blocks_multiple_full_matches_across_ch
     assert selection["ambiguous"] is True
     assert [item["id"] for item in selection["candidates"]] == ["sc_test", "sc_order"]
     assert len(fake_llm.prompts) == 2
+
+
+def test_select_semantic_config_for_query_allows_multi_intent_plan_across_chunks(monkeypatch):
+    class FakeChunkAndReducerLLM:
+        def __init__(self):
+            self.prompts = []
+
+        async def ainvoke(self, messages):
+            prompt = messages[0].content
+            self.prompts.append(prompt)
+            data = json.loads(prompt.split("输入：\n", 1)[1])
+            if "chunk_results" in data:
+                return type("FakeResponse", (), {"content": json.dumps({
+                    "selected_config_id": "",
+                    "coverage": "partial",
+                    "confidence": "none",
+                    "query_plan": {
+                        "type": "multi_config_independent",
+                        "tasks": [
+                            {"task_id": "order", "semantic_config_id": "sc_order", "question": "查询订单数", "intent": "aggregate"},
+                            {"task_id": "user", "semantic_config_id": "sc_user", "question": "查询用户数", "intent": "aggregate"},
+                        ],
+                        "final_action": "summarize",
+                        "reason": "两个独立统计项",
+                    },
+                    "candidates": [
+                        {"id": "sc_order", "coverage": "partial", "confidence": "medium", "reason": "覆盖订单数"},
+                        {"id": "sc_user", "coverage": "partial", "confidence": "medium", "reason": "覆盖用户数"},
+                    ],
+                }, ensure_ascii=False)})()
+            config_ids = [item["id"] for item in data.get("semantic_configs", [])]
+            selected_id = config_ids[0] if config_ids else ""
+            return type("FakeResponse", (), {"content": json.dumps({
+                "selected_config_id": selected_id,
+                "coverage": "full",
+                "confidence": "high",
+                "reason": "分片内模型判断可覆盖",
+                "candidates": [{"id": selected_id, "coverage": "full", "confidence": "high", "reason": "分片候选"}],
+            }, ensure_ascii=False)})()
+
+    configs = [
+        {"id": "sc_order", "name": "订单分析", "enabled": True, "metrics": [{"name": "订单数"}], "dimensions": []},
+        {"id": "sc_user", "name": "用户分析", "enabled": True, "metrics": [{"name": "用户数"}], "dimensions": []},
+    ]
+    fake_llm = FakeChunkAndReducerLLM()
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_datasource_manager", lambda: _FakeDatasourceManager(configs))
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_chat_data_llm", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector._chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [[summaries[0]], [summaries[1]]])
+
+    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单数和用户数"))
+
+    assert selection["selected_config_id"] == ""
+    assert selection["ambiguous"] is False
+    assert selection["query_plan"]["type"] == "multi_config_independent"
+    assert [item["semantic_config_id"] for item in selection["query_plan"]["tasks"]] == ["sc_order", "sc_user"]
+    assert len(fake_llm.prompts) == 3
 
 
 def test_selector_low_level_normalizers_and_candidate_edges(monkeypatch):

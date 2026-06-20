@@ -32,10 +32,9 @@ DATABASE_TYPE = "mysql"
 
 # MySQL 配置
 MYSQL_HOST = _get_env("FXCJG_DB_HOST")
-MYSQL_PORT = int(os.getenv("FXCJG_DB_PORT", "3306"))
 MYSQL_DB = _get_env("FXCJG_DB")
 MYSQL_USER = _get_env("FXCJG_DB_USER")
-MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST, MYSQL_PORT)
+MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST)
 _endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS)
 
 

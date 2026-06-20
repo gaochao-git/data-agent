@@ -169,8 +169,7 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
     monkeypatch.setattr(checkpoint, "MYSQL_USER", "user")
     monkeypatch.setattr(checkpoint, "MYSQL_HOST", "127.0.0.1")
-    monkeypatch.setattr(checkpoint, "MYSQL_PORT", 3306)
-    monkeypatch.setattr(checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306", 3306)))
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306")))
     monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
     monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pwd")
     assert checkpoint.get_checkpoint_info()["type"] == "mysql"
@@ -193,10 +192,10 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
 
 
 def test_database_endpoint_parsing_and_selector():
-    endpoints = parse_database_endpoints("62.1.1.1:3306, 62.1.1.2:3307,62.1.1.3:3308", 3306)
+    endpoints = parse_database_endpoints("62.1.1.1:3306, 62.1.1.2:3307,62.1.1.3:3308")
     assert [endpoint.label() for endpoint in endpoints] == ["62.1.1.1:3306", "62.1.1.2:3307", "62.1.1.3:3308"]
 
-    single_endpoint = parse_database_endpoints("62.1.1.4:3306", 3306)
+    single_endpoint = parse_database_endpoints("62.1.1.4:3306")
     assert [endpoint.label() for endpoint in single_endpoint] == ["62.1.1.4:3306"]
 
     selector = DatabaseEndpointSelector(endpoints)
@@ -216,28 +215,28 @@ def test_database_endpoint_parsing_and_selector():
     assert selector.current().label() == "62.1.1.3:3308"
 
     with pytest.raises(ValueError, match="端口无效"):
-        parse_database_endpoints("127.0.0.1:bad", 3306)
+        parse_database_endpoints("127.0.0.1:bad")
 
     with pytest.raises(ValueError, match="必须使用 host:port"):
-        parse_database_endpoints("127.0.0.1", 3306)
+        parse_database_endpoints("127.0.0.1")
 
     with pytest.raises(ValueError, match="必须使用 host:port"):
-        parse_database_endpoints("127.0.0.1:3306,127.0.0.2", 3306)
+        parse_database_endpoints("127.0.0.1:3306,127.0.0.2")
 
     with pytest.raises(ValueError, match="不能为空"):
-        parse_database_endpoints(" , ", 3306)
+        parse_database_endpoints(" , ")
 
 
 def test_database_endpoint_parser_remaining_error_edges():
-    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.1:3306", 3306)
+    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.1:3306")
     assert [endpoint.label() for endpoint in endpoints] == ["127.0.0.1:3306"]
 
     with pytest.raises(ValueError, match="端口不能为空"):
-        parse_database_endpoints("127.0.0.1:", 3306)
+        parse_database_endpoints("127.0.0.1:")
     with pytest.raises(ValueError, match="主机不能为空"):
-        parse_database_endpoints(":3306", 3306)
+        parse_database_endpoints(":3306")
     with pytest.raises(ValueError, match="端口超出范围"):
-        parse_database_endpoints("127.0.0.1:0", 3306)
+        parse_database_endpoints("127.0.0.1:0")
     with pytest.raises(ValueError, match="不能为空"):
         DatabaseEndpointSelector([])
 
@@ -255,7 +254,7 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
     monkeypatch.setattr(
         checkpoint,
         "_endpoint_selector",
-        DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306)),
+        DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
     )
 
     class FakeContext:
@@ -297,7 +296,7 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
 
 
 def test_checkpoint_mysql_failover_raises_non_connection_enter_error(monkeypatch):
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
 
     class BadContext:
@@ -320,7 +319,7 @@ def test_checkpoint_mysql_failover_raises_non_connection_enter_error(monkeypatch
 
 
 def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypatch):
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
 
     class Context:
@@ -353,7 +352,7 @@ def test_checkpoint_context_noop_exit_and_stale_endpoint(monkeypatch):
 
     asyncio.run(exit_without_connection())
 
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     stale_endpoint = selector.current()
     selector.advance()
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
@@ -392,7 +391,7 @@ def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
 def test_database_session_commit_rollback_and_info(monkeypatch):
     database._engine = None
     database._session_factory = None
-    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306", 3306)))
+    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306")))
     monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
     url = database.get_database_url()
     assert url.drivername == "mysql+aiomysql"
@@ -473,7 +472,7 @@ def test_database_dispose_and_close_noop_branches(monkeypatch):
 def test_database_session_connection_error_advances_endpoint(monkeypatch):
     database._engine = None
     database._session_factory = None
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
     class FakeEngine:
@@ -522,7 +521,7 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
 def test_database_session_rollback_connection_error_advances_endpoint(monkeypatch):
     database._engine = None
     database._session_factory = None
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
     class FakeEngine:
@@ -561,7 +560,7 @@ def test_database_session_rollback_connection_error_advances_endpoint(monkeypatc
 
 
 def test_database_failover_does_not_advance_stale_endpoint(monkeypatch):
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
     stale_endpoint = selector.current()
     selector.advance()
@@ -588,7 +587,7 @@ def test_database_connection_error_detection_is_selective():
 
 
 def test_database_probe_reraises_non_connection_error(monkeypatch):
-    endpoint = parse_database_endpoints("127.0.0.1:3306", 3306)[0]
+    endpoint = parse_database_endpoints("127.0.0.1:3306")[0]
     monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
 
     class FakeConn:
@@ -613,7 +612,7 @@ def test_database_probe_reraises_non_connection_error(monkeypatch):
 
 
 def test_database_probe_connection_error_returns_false_and_success(monkeypatch):
-    endpoint = parse_database_endpoints("127.0.0.1:3306", 3306)[0]
+    endpoint = parse_database_endpoints("127.0.0.1:3306")[0]
     monkeypatch.setattr(database, "_get_mysql_password", lambda: "pwd")
 
     class ErrorConn:
@@ -653,7 +652,7 @@ def test_database_probe_connection_error_returns_false_and_success(monkeypatch):
 
 
 def test_select_available_endpoint_reraises_non_connection_error(monkeypatch):
-    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3306", 3306))
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3306"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
     async def fake_probe(_endpoint):
@@ -666,7 +665,7 @@ def test_select_available_endpoint_reraises_non_connection_error(monkeypatch):
 
 
 def test_select_available_endpoint_sets_first_success_and_all_failed(monkeypatch):
-    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307", 3306)
+    endpoints = parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")
     selector = DatabaseEndpointSelector(endpoints)
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 

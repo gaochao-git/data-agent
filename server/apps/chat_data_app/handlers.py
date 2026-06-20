@@ -37,11 +37,19 @@ from .services.datasource_manager import get_datasource_manager
 from .services.data_analyze_context import build_data_analyze_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
+from .services.skill_context_service import build_available_skills_prompt
 
 logger = get_logger(__name__)
 
 AGENT_ID = "chat_data"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
+REASONING_TOOL_DISPLAY_NAMES = {
+    "select_semantic_config_tool": "选择指标集",
+    "dsl2sql_tool": "生成SQL",
+    "semantic_query_tool": "查询数据",
+    "calculator_tool": "计算",
+    "skill_load": "加载技能",
+}
 
 
 def _get_timestamp() -> str:
@@ -101,8 +109,16 @@ def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | No
     return ""
 
 
+def _format_reasoning_for_display(content: str) -> str:
+    """将思考流中的内部工具名替换为更短的展示名，不影响真实工具调用。"""
+    text = str(content or "")
+    for tool_name, display_name in REASONING_TOOL_DISPLAY_NAMES.items():
+        text = text.replace(tool_name, display_name)
+    return text
+
+
 def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str | None:
-    reasoning_content = _extract_reasoning_content(message_chunk, msg_data)
+    reasoning_content = _format_reasoning_for_display(_extract_reasoning_content(message_chunk, msg_data))
     if not reasoning_content:
         return None
     return _format_sse("thinking", {
@@ -112,6 +128,7 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
 
 
 def _append_reasoning_segment(segments: list[dict[str, Any]], content: str, tool_call_count: int) -> None:
+    content = _format_reasoning_for_display(content)
     if not content:
         return
     if segments and segments[-1].get("tool_call_count") == tool_call_count:
@@ -297,6 +314,15 @@ def _semantic_select_required_event_from_tool_payload(payload: Dict[str, Any], u
         "candidates": payload.get("candidates") or [],
     }
     return _build_semantic_select_required_event(selection, user_query)
+
+
+def _should_emit_semantic_select_required(payload: Dict[str, Any]) -> bool:
+    """多指标集 query_plan 由智能体继续拆分执行，不触发前端二选一候选框。"""
+    if payload.get("selected"):
+        return False
+    if isinstance(payload.get("query_plan"), dict):
+        return False
+    return bool(payload.get("candidates"))
 
 
 def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
@@ -501,6 +527,24 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
     return "\n".join(lines)
 
 
+async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
+    """构造智能问数业务知识技能上下文，显式指定的技能必须让模型稳定可见。"""
+    context = await build_available_skills_prompt(user_id=user_id or "")
+    normalized_skill_names = [
+        str(item or "").strip()
+        for item in skill_names or []
+        if str(item or "").strip()
+    ]
+    if not normalized_skill_names:
+        return context
+    requested = "、".join(f"`{name}`" for name in dict.fromkeys(normalized_skill_names))
+    requested_context = (
+        "## 本轮指定业务知识技能\n"
+        f"用户本轮明确指定以下业务知识技能：{requested}。确定唯一指标集后，先调用 `skill_load` 加载对应技能，再继续查询规划。"
+    )
+    return f"{context}\n\n{requested_context}".strip() if context else requested_context
+
+
 async def _stream_sql_generation(
     thread_id: str,
     user_query: str,
@@ -515,10 +559,16 @@ async def _stream_sql_generation(
     model_id: str | None = None,
     semantic_config_selection: dict | None = None,
     enable_thinking: bool | None = None,
+    skill_names: list[str] | None = None,
 ):
     """流式执行 SQL 生成"""
     datasource_id = str(datasource_id or "").strip() or None
     semantic_config_id = str(semantic_config_id or "").strip() or None
+    normalized_skill_names = []
+    for item in skill_names or []:
+        skill_name = str(item or "").strip()
+        if skill_name and skill_name not in normalized_skill_names:
+            normalized_skill_names.append(skill_name)
     logger.info(f"开始执行，thread_id: {thread_id}, mode: {mode}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
 
     # 获取语义配置
@@ -565,6 +615,8 @@ async def _stream_sql_generation(
                 model_id=model_id,
                 mode=mode,
                 enable_thinking=enable_thinking,
+                user_id=user_id,
+                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names) if mode == "query" else "",
             )
 
             # 语义模式不需要表结构，semantic_to_sql_tool 内部已封装
@@ -604,6 +656,8 @@ async def _stream_sql_generation(
             human_message_kwargs = {"timestamp": _get_timestamp()}
             if semantic_selection_event:
                 human_message_kwargs["semantic_config_selection"] = semantic_selection_event
+            if normalized_skill_names:
+                human_message_kwargs["skill_names"] = normalized_skill_names
 
             initial_state = {
                 "messages": [HumanMessage(
@@ -769,7 +823,7 @@ async def _stream_sql_generation(
                         if selection_payload:
                             if selection_payload.get("selected"):
                                 yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                            elif selection_payload.get("candidates"):
+                            elif _should_emit_semantic_select_required(selection_payload):
                                 yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, user_query))
                     yield _format_sse(event_name, msg_data)
                 else:
@@ -824,6 +878,7 @@ async def _continue_execution(
     request: Request | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    user_id: str | None = None,
 ):
     """
     继续执行被 interrupt() 暂停的图
@@ -852,6 +907,8 @@ async def _continue_execution(
                 semantic_config=semantic_config,
                 model_id=model_id,
                 enable_thinking=enable_thinking,
+                user_id=user_id,
+                available_skills_context=await _build_query_skills_context(user_id=user_id) if semantic_config else "",
             )
 
             # 构建恢复数据
@@ -1044,6 +1101,13 @@ async def sql_completion_handler(
     enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
     member_datasource_ids = options_data.get("member_datasource_ids") or []
     semantic_config_selection = options_data.get("semantic_config_selection")
+    raw_skill_names = options_data.get("skill_names") or []
+    if isinstance(raw_skill_names, str):
+        skill_names = [raw_skill_names]
+    elif isinstance(raw_skill_names, list):
+        skill_names = [str(item or "").strip() for item in raw_skill_names if str(item or "").strip()]
+    else:
+        skill_names = []
 
     # 确保 thread 记录存在
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
@@ -1062,6 +1126,7 @@ async def sql_completion_handler(
             model_id=model_id,
             semantic_config_selection=semantic_config_selection,
             enable_thinking=enable_thinking,
+            skill_names=skill_names,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
@@ -1293,7 +1358,7 @@ async def data_analyze_completion_handler(
                             if selection_payload:
                                 if selection_payload.get("selected"):
                                     yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                                elif selection_payload.get("candidates"):
+                                elif _should_emit_semantic_select_required(selection_payload):
                                     yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, query))
                         yield _format_sse("tool", msg_data)
                     else:
@@ -1352,6 +1417,7 @@ async def sql_resume_handler(
     datasource_id = data.get("datasource_id")
     semantic_config_id = data.get("semantic_config_id")
     enable_thinking = _normalize_enable_thinking(data.get("enable_thinking"))
+    user_id = str(data.get("user_id") or "system").strip() or "system"
 
     # 获取语义配置（如果有）
     semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id)
@@ -1367,6 +1433,7 @@ async def sql_resume_handler(
             action=effective_action,
             semantic_config=semantic_config,
             enable_thinking=enable_thinking,
+            user_id=user_id,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}

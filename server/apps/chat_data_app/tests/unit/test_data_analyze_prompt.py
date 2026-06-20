@@ -5,7 +5,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
@@ -80,7 +79,8 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "相近、简称、口语化表达或存在多个可能解释" in prompt
     assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
     assert "输出可见内容约束（最高优先级）" in prompt
-    assert "不要在正文中输出 `<thinking>` 标签或人工编写的思考块" in prompt
+    assert "不要在正文中输出任何思考标签、伪造思考块或内部推理内容" in prompt
+    assert "不要输出内部执行步骤说明，包括技能加载、系统规则依据、工具选择理由、工具调用顺序和配置选择过程" in prompt
     assert "思考过程由模型原生推理流展示" in prompt
     assert "禁止输出工具名、配置名、配置 ID、工具调用计划" in prompt
     assert "不要在正文中说明“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt

@@ -162,6 +162,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], selected_con
         and not selection.get("cross_config_required")
     )
     candidates = selection.get("candidates") if isinstance(selection.get("candidates"), list) else []
+    query_plan = selection.get("query_plan") if isinstance(selection.get("query_plan"), dict) else None
     payload = {
         "success": True,
         "selected": can_select,
@@ -176,12 +177,41 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], selected_con
         "cross_config_required": bool(selection.get("cross_config_required")),
         "candidates": candidates,
     }
+    if query_plan:
+        payload["query_plan"] = dict(query_plan)
+        task_summaries = []
+        for task in query_plan.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task_config_id = str(task.get("semantic_config_id") or "").strip()
+            task_config = next(
+                (item for item in candidates if str(item.get("id") or "").strip() == task_config_id),
+                None,
+            )
+            task_summaries.append({
+                "task_id": task.get("task_id") or "",
+                "semantic_config_id": task_config_id,
+                "semantic_config_name": task.get("semantic_config_name") or (task_config or {}).get("name") or task_config_id,
+                "question": task.get("question") or "",
+                "intent": task.get("intent") or "",
+                "reason": task.get("reason") or "",
+            })
+        payload["query_plan"]["tasks"] = task_summaries
+        if query_plan.get("type") in {"multi_config_independent", "multi_config_calculation"}:
+            payload["message"] = "该问题需要拆分为多个指标集子任务；请按 query_plan.tasks 逐个调用 dsl2sql_tool 和 semantic_query_tool，每次传入对应 semantic_config_id"
+            return payload
+        if query_plan.get("type") == "cross_join_required":
+            payload["cross_config_required"] = True
+            payload["message"] = "当前智能问数不支持跨指标集 JOIN、混合维度分组或自动拼宽表；请向用户说明无法继续执行，并给出可拆分为独立查询的建议"
+            return payload
     if can_select:
         payload["message"] = "已选择指标集，请后续调用 dsl2sql_tool 时将 selected_config_id 作为 semantic_config_id 传入"
         if selected_config:
             payload["semantic_config"] = _summarize_semantic_config(selected_config)
-    elif payload["ambiguous"] or payload["cross_config_required"]:
-        payload["message"] = "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询"
+    elif payload["cross_config_required"]:
+        payload["message"] = "当前智能问数不支持跨指标集 JOIN、混合维度分组或自动拼宽表；请向用户说明无法继续执行，并给出可拆分为独立查询的建议"
+    elif payload["ambiguous"]:
+        payload["message"] = "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询"
     else:
         payload["message"] = "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
     return payload
@@ -215,6 +245,7 @@ def create_semantic_config_selection_tools(
         从当前数据源组的指标集中选择最适合回答用户问题的指标集。
 
         仅在用户提出业务数据查询、且当前会话没有选择指标集时调用。
+        如已加载只读业务知识技能的路由 reference，query 可包含原问题和简短业务限定。
         普通对话、概念解释、使用帮助不要调用。
         """
         datasource_id = bound_datasource_id or extract_datasource_id(state)
@@ -231,7 +262,20 @@ def create_semantic_config_selection_tools(
             )
             selected_config_id = str((selection or {}).get("selected_config_id") or "").strip()
             selected_config = await load_runtime_semantic_config(datasource_id, selected_config_id) if selected_config_id else None
-            return "[select_semantic_config_tool]\n" + json.dumps(_selection_to_tool_payload(selection, selected_config), ensure_ascii=False, indent=2)
+            payload = _selection_to_tool_payload(selection, selected_config)
+            query_plan = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else None
+            if query_plan and query_plan.get("tasks"):
+                task_summaries = {}
+                for task in query_plan.get("tasks") or []:
+                    config_id = str(task.get("semantic_config_id") or "").strip()
+                    if not config_id or config_id in task_summaries:
+                        continue
+                    task_config = await load_runtime_semantic_config(datasource_id, config_id)
+                    if task_config:
+                        task_summaries[config_id] = _summarize_semantic_config(task_config)
+                if task_summaries:
+                    payload["query_plan"]["semantic_configs"] = task_summaries
+            return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
         except Exception as exc:
             logger.error("select_semantic_config_tool 执行失败: %s", exc, exc_info=True)
             return f"select_semantic_config_tool 执行失败: {exc}"

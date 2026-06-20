@@ -41,7 +41,12 @@ const extractThinkingText = (content: string): string[] => {
 }
 
 const stripThinkingContent = (content: string): string => {
-  return String(content || '').replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
+  return String(content || '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trim()
 }
 
 const appendAssistantHistoryMessage = (target: Message, source: Message) => {
@@ -259,6 +264,7 @@ const normalizeSemanticConfigSelectionFromTool = (payload: Record<string, unknow
 
 const normalizeSemanticConfigSelectRequiredFromTool = (payload: Record<string, unknown>, query: string): SemanticConfigSelectRequiredInfo | null => {
   if (payload.selected) return null
+  if (payload.query_plan && typeof payload.query_plan === 'object') return null
   const rawCandidates = Array.isArray(payload.candidates) ? payload.candidates : []
   type Candidate = SemanticConfigSelectRequiredInfo['candidates'][number]
   const candidates = rawCandidates
@@ -467,19 +473,6 @@ export function useConversationHistory({
           // 更新每个 assistant 消息中的 toolCalls
           formattedMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls) {
-              // 先收集 dsl2sql_tool 的语义参数，作为旧消息的顺序兜底
-              const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
-              msg.toolCalls.forEach((tc) => {
-                if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
-                  dsl2sqlTools.push({
-                    semanticParams: extractSemanticParamsFromArgs(tc.args),
-                  })
-                }
-              })
-
-              // 用于追踪 semantic_query_tool 索引（与 dsl2sql_tool 对应）
-              let executeSqlIndex = 0
-
               msg.toolCalls = msg.toolCalls.map((tc) => {
                 const result = toolResultMap.get(tc.tool_call_id)
                 if (!result) return tc
@@ -495,11 +488,6 @@ export function useConversationHistory({
                     renderType = 'queryResult'
                   }
                   semanticParams = extractSemanticParamsFromArgs(tc.args)
-                  // 从对应的 dsl2sql_tool 获取语义参数作为旧历史兜底
-                  if (!semanticParams && executeSqlIndex < dsl2sqlTools.length) {
-                    semanticParams = dsl2sqlTools[executeSqlIndex]?.semanticParams
-                  }
-                  executeSqlIndex++
                 } else if (tc.tool_name === 'generate_chart_tool') {
                   const chartMatch = result.match(/<chart_config>([^<]+)<\/chart_config>/)
                   if (chartMatch?.[1]) {
@@ -545,38 +533,21 @@ export function useConversationHistory({
             }
           }
 
-          // 合并后重新关联 dsl2sql_tool 和 semantic_query_tool 的语义参数
-          // 因为它们原本在不同的 assistant 消息中，合并前无法正确关联
+          // 合并后只使用 semantic_query_tool 自身 DSL 参数重建展示信息。
           displayMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-              // 收集合并后消息中所有 dsl2sql_tool 的参数，作为旧消息的顺序兜底
-              const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
-              msg.toolCalls.forEach((tc) => {
-                if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
-                  dsl2sqlTools.push({
-                    semanticParams: extractSemanticParamsFromArgs(tc.args),
-                  })
-                }
-              })
-
-              // 重新关联 semantic_query_tool 的语义参数
-              if (dsl2sqlTools.length > 0) {
-                let executeSqlIndex = 0
-                msg.toolCalls = msg.toolCalls.map((tc) => {
-                  if (tc.tool_name === 'semantic_query_tool') {
-                    const dslTool = dsl2sqlTools[executeSqlIndex]
-                    executeSqlIndex++
-                    const semanticParams = extractSemanticParamsFromArgs(tc.args) || dslTool?.semanticParams
-                    if (semanticParams) {
-                      return {
-                        ...tc,
-                        semanticParams,
-                      }
+              msg.toolCalls = msg.toolCalls.map((tc) => {
+                if (tc.tool_name === 'semantic_query_tool') {
+                  const semanticParams = extractSemanticParamsFromArgs(tc.args)
+                  if (semanticParams) {
+                    return {
+                      ...tc,
+                      semanticParams,
                     }
                   }
-                  return tc
-                })
-              }
+                }
+                return tc
+              })
             }
           })
 

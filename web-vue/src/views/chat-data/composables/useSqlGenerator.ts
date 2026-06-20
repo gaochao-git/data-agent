@@ -85,7 +85,7 @@ export function useSqlGenerator() {
     modelId?: string | null,
     memberDatasourceIds?: string[],
     agentId: string = 'chat_data',
-    _skillName?: string | null,
+    skillName?: string | null,
     onDashboardSpec?: (payload: DashboardSpecPayload) => void,
     onTaskStage?: (payload: TaskStageInfo) => void,
     onMessageEnd?: (usage: ChatDataTokenUsage | null) => void,
@@ -127,6 +127,9 @@ export function useSqlGenerator() {
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {
         options.member_datasource_ids = memberDatasourceIds
+      }
+      if (skillName) {
+        options.skill_names = [skillName]
       }
 
       const response = await streamCompletion(conversationId, {

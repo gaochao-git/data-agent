@@ -46,7 +46,10 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
     if mode != "query":
         return ""
     if not semantic_config:
-        return "## 当前指标集\n当前未选择指标集。业务数据查询必须先调用 `select_semantic_config_tool`。\n"
+        return (
+            "## 当前指标集\n"
+            "当前未选择指标集。业务数据查询如果与可用业务知识技能明显同域，必须先调用 `skill_load` 加载路由知识，再调用 `select_semantic_config_tool`；没有明显同域技能时直接调用 `select_semantic_config_tool`。\n"
+        )
     from .tools import build_semantic_prompt
     config_id = str(semantic_config.get("id") or "").strip()
     config_name = str(semantic_config.get("name") or semantic_config.get("config_name") or config_id or "").strip()
@@ -55,7 +58,10 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         header += f"：{config_name}"
     if config_id:
         header += f"（semantic_config_id: {config_id}）"
-    header += "。业务数据查询不要调用 `select_semantic_config_tool`。\n\n"
+    header += (
+        "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
+        "如当前指标集或用户问题与可用业务知识技能明显同域，必须先调用 `skill_load` 加载主说明；最终回答不要提及技能加载过程。\n\n"
+    )
     return header + build_semantic_prompt(semantic_config, mode)
 
 
@@ -64,6 +70,7 @@ def create_agent_node(
     semantic_config: dict | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    available_skills_context: str | None = None,
 ) -> Callable:
     """
     创建 agent 节点的工厂函数
@@ -100,6 +107,7 @@ def create_agent_node(
             "tables_ddl_info": tables_ddl_info,
             "current_time": current_time,
             "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
+            "available_skills_context": available_skills_context or "",
         }
 
         prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)

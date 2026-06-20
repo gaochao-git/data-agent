@@ -13,8 +13,7 @@ SQLite 配置：
 - 使用 DATA_ROOT/checkpoints.db
 
 MySQL 配置：
-- CHECKPOINTER_HOST: 数据库主机
-- CHECKPOINTER_PORT: 数据库端口
+- CHECKPOINTER_HOST: 数据库节点，格式 host:port，多个节点用逗号分隔
 - CHECKPOINTER_DB: 数据库名
 - CHECKPOINTER_USER: 用户名
 - CHECKPOINTER_PASSWORD: 密码
@@ -36,12 +35,11 @@ CHECKPOINTER_TYPE = os.getenv("CHECKPOINTER_TYPE", "sqlite").lower()
 DB_PATH = os.path.join(DATA_ROOT, "checkpoints.db")
 
 # MySQL 配置
-MYSQL_PORT = int(os.getenv("CHECKPOINTER_PORT", "3306"))
-MYSQL_HOST = os.getenv("CHECKPOINTER_HOST") or f"localhost:{MYSQL_PORT}"
+MYSQL_HOST = os.getenv("CHECKPOINTER_HOST", "")
 MYSQL_DB = os.getenv("CHECKPOINTER_DB", "langgraph_memory")
 MYSQL_USER = os.getenv("CHECKPOINTER_USER", "root")
-MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST, MYSQL_PORT)
-_endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS)
+MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST) if CHECKPOINTER_TYPE == "mysql" else []
+_endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS) if MYSQL_ENDPOINTS else None
 
 
 def _get_mysql_password() -> str:
@@ -145,6 +143,8 @@ class _MySQLCheckpointerFailoverContext:
 
 
 def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:
+    if _endpoint_selector is None:
+        raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
     previous, current, advanced = _endpoint_selector.advance_if_current(failed_endpoint)
     if not advanced:
         logger.warning(
@@ -172,6 +172,8 @@ def _get_mysql_checkpointer():
         )
 
     password = _get_mysql_password()
+    if _endpoint_selector is None:
+        raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
 
     def context_factory(endpoint):
         conn_string = (
@@ -221,6 +223,16 @@ def get_checkpoint_info() -> dict:
             "path": DB_PATH,
         }
     elif CHECKPOINTER_TYPE == "mysql":
+        if _endpoint_selector is None:
+            return {
+                "type": "mysql",
+                "host": "",
+                "port": None,
+                "endpoints": [],
+                "database": MYSQL_DB,
+                "user": MYSQL_USER,
+                "password": "(已设置)",
+            }
         endpoint = _endpoint_selector.current()
         return {
             "type": "mysql",

@@ -521,7 +521,10 @@ OrFilter.model_rebuild()
 
 class SelectSemanticConfigInput(BaseModel):
     """指标集选择工具的输入参数"""
-    query: Optional[str] = Field(default=None, description="用户问题；不传时使用当前会话最近一条用户消息")
+    query: Optional[str] = Field(
+        default=None,
+        description="用户问题；可包含只读技能路由后追加的简短业务限定、查询类型或粒度要求；不传时使用当前会话最近一条用户消息",
+    )
 
 
 class ExecuteSemanticInput(BaseModel):

@@ -7,16 +7,17 @@ from contextlib import asynccontextmanager
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.handlers import (
     _build_execution_target_info_async,
+    _build_query_skills_context,
     _build_semantic_selection_error,
     _build_semantic_select_required_event,
     _extract_reasoning_content,
+    _format_reasoning_for_display,
     _continue_execution,
     _extract_select_semantic_config_payload,
     _format_sse,
@@ -115,6 +116,10 @@ def test_reasoning_and_thinking_helper_branches():
     thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
     assert thinking_event.startswith("event: thinking")
     assert "正在分析" in thinking_event
+    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 select_semantic_config_tool"}))
+    assert "选择指标集" in tool_thinking_event
+    assert "select_semantic_config_tool" not in tool_thinking_event
+    assert _format_reasoning_for_display("调用 semantic_query_tool") == "调用 查询数据"
 
     segments = []
     _append_reasoning_segment(segments, "", 0)
@@ -122,10 +127,26 @@ def test_reasoning_and_thinking_helper_branches():
     _append_reasoning_segment(segments, "a", 0)
     _append_reasoning_segment(segments, "b", 0)
     _append_reasoning_segment(segments, "c", 1)
+    _append_reasoning_segment(segments, "调用 select_semantic_config_tool", 1)
     assert segments == [
         {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
-        {"id": "reasoning-1", "content": "c", "tool_call_count": 1},
+        {"id": "reasoning-1", "content": "c调用 选择指标集", "tool_call_count": 1},
     ]
+
+
+def test_build_query_skills_context_appends_requested_skills(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.build_available_skills_prompt",
+        lambda **_kwargs: asyncio.sleep(0, result="## 可用业务知识技能\n- business-query"),
+    )
+
+    context = asyncio.run(_build_query_skills_context("u1", ["business-query", "business-query", "custom-query"]))
+
+    assert "## 可用业务知识技能" in context
+    assert "## 本轮指定业务知识技能" in context
+    assert "`business-query`、`custom-query`" in context
 
 
 def test_normalize_enable_thinking_branches():
@@ -535,6 +556,8 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     assert "5+5=10" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
     assert fake_graph.initial_state["tables_ddl_info"] == ""
+    human_message = fake_graph.initial_state["messages"][0]
+    assert "skill_names" not in human_message.additional_kwargs
     assert called["tables"] is False
 
 
@@ -621,6 +644,32 @@ def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(mon
     assert selection["matched_metrics"] == ["商品数量"]
     assert selection["user_selected"] is True
     assert selection["auto_selected"] is False
+    assert "skill_names" not in human_message.additional_kwargs
+
+
+def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
+    import asyncio
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "agent"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_skill_names",
+        user_query="查询金额",
+        datasource_id="ds_a",
+        mode="query",
+        skill_names=["business-query", "custom-query-skill"],
+    )))
+
+    assert "完成" in "".join(events)
+    human_message = fake_graph.initial_state["messages"][0]
+    assert human_message.additional_kwargs["skill_names"] == ["business-query", "custom-query-skill"]
 
 
 def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch):
@@ -636,7 +685,7 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
             {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -664,6 +713,98 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
     assert '"query": "查询金额"' in joined
     assert "订单分析" in joined
     assert "支付汇总" in joined
+
+
+def test_stream_sql_generation_does_not_emit_select_required_for_query_plan(monkeypatch):
+    import asyncio
+
+    payload = {
+        "selected": False,
+        "coverage": "partial",
+        "query_plan": {
+            "type": "multi_config_independent",
+            "tasks": [
+                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
+                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户数"},
+            ],
+            "final_action": "summarize",
+        },
+        "message": "该问题需要拆分为多个指标集子任务",
+    }
+    fake_graph = _FakeGraph(
+        events=[
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="已按多个指标集完成查询"), {"langgraph_node": "agent"}),
+        ],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_plan_tool_event",
+        user_query="查询订单金额和用户数",
+        datasource_id="ds_a",
+        mode="query",
+        semantic_config_id=None,
+    )))
+
+    joined = "".join(events)
+    assert "event: semantic_config_select_required" not in joined
+    assert "multi_config_independent" in joined
+    assert "已按多个指标集完成查询" in joined
+
+
+def test_stream_sql_generation_does_not_emit_select_required_for_cross_join_plan(monkeypatch):
+    import asyncio
+
+    payload = {
+        "selected": False,
+        "coverage": "partial",
+        "cross_config_required": True,
+        "query_plan": {
+            "type": "cross_join_required",
+            "tasks": [
+                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
+                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户等级"},
+            ],
+            "final_action": "unsupported",
+            "reason": "需要跨指标集 JOIN",
+        },
+        "candidates": [
+            {"id": "cfg_order", "name": "订单分析"},
+            {"id": "cfg_user", "name": "用户分析"},
+        ],
+        "message": "该问题需要跨指标集 JOIN，当前智能问数不支持",
+    }
+    fake_graph = _FakeGraph(
+        events=[
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="这个问题需要跨指标集合并，当前不支持。"), {"langgraph_node": "agent"}),
+        ],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_cross_join_required_plan",
+        user_query="按用户等级关联订单金额",
+        datasource_id="ds_a",
+        mode="query",
+        semantic_config_id=None,
+    )))
+
+    joined = "".join(events)
+    assert "event: semantic_config_select_required" not in joined
+    assert "cross_join_required" in joined
+    assert "这个问题需要跨指标集合并，当前不支持。" in joined
 
 
 def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch):
@@ -789,7 +930,7 @@ def test_stream_sql_generation_blocks_ambiguous_semantic_configs(monkeypatch):
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
             {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -832,7 +973,7 @@ def test_stream_sql_generation_blocks_cross_config_required(monkeypatch):
             {"id": "cfg_order", "name": "订单分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖订单金额"},
             {"id": "cfg_product", "name": "商品分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖商品库存"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -1268,7 +1409,7 @@ def test_data_analyze_completion_handler_requires_semantic_config_selection(monk
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
             {"id": "cfg_sales", "name": "销售分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
 
     async def fake_build_context(*_args, **_kwargs):

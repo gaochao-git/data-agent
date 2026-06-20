@@ -14,16 +14,20 @@ if str(SERVER_ROOT) not in sys.path:
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("SERVICE_AUTH_TOKEN", "test-service-token")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
+import auth  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
+from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
+
+auth.SERVICE_AUTH_TOKEN = os.environ["SERVICE_AUTH_TOKEN"]
 
 
 app = FastAPI(title="ChatData API Contract Test")
 app.include_router(chat_data_router)
+app.include_router(conversation_router)
 
 
 @pytest.fixture()

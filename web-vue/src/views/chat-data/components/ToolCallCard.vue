@@ -76,6 +76,7 @@ const PARAM_LABELS: Record<string, string> = {
   y_field: 'Y轴字段',
   series_field: '分组字段',
   skill_name: '技能名称',
+  reference_names: '参考文档',
   file_path: '文件路径',
   source_path: '源路径',
   target_path: '目标路径',
@@ -99,11 +100,19 @@ type SemanticSelectionResult = {
   selected_config_name?: string
   confidence?: string
   reason?: string
+  message?: string
   matched_metrics?: string[]
   matched_dimensions?: string[]
   ambiguous?: boolean
   cross_config_required?: boolean
   candidates?: Array<{ id?: string; name?: string; reason?: string; coverage?: string; confidence?: string }>
+  query_plan?: {
+    type?: string
+    tasks?: Array<Record<string, unknown>>
+    final_action?: string
+    calculation?: string
+    reason?: string
+  }
 }
 
 // DSL 参数标签颜色
@@ -324,6 +333,17 @@ const semanticSelectionCandidates = computed(() => {
   if (!result || result.selected) return []
   return result.candidates || []
 })
+const semanticSelectionHeader = computed(() => {
+  const result = semanticSelectionResult.value
+  if (!result) return ''
+  if (result.selected && semanticSelectionTitle.value) return `自动选择：${semanticSelectionTitle.value}`
+  const planType = result.query_plan?.type || ''
+  if (planType === 'multi_config_independent' || planType === 'multi_config_calculation') return '需要拆分多个指标集查询'
+  if (planType === 'cross_join_required' || result.cross_config_required) return '需要跨指标集处理'
+  if (result.ambiguous) return '需要选择指标集'
+  if ((result.candidates || []).length > 0) return '未找到单一可覆盖指标集'
+  return '未匹配到可用指标集'
+})
 
 // 解析结果内容，将 SQL 代码块与普通文本分离
 function parseResultContent(result: string): Array<{ type: 'text' | 'sql'; content: string }> {
@@ -499,8 +519,8 @@ function getSqlTokenClass(type: string): string {
           <div class="p-3 rounded-lg bg-white border border-black/[0.06]">
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
-              <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 grid grid-cols-[72px_minmax(0,1fr)] items-start gap-2 last:mb-0">
-                <span class="pt-0.5 text-xs text-gray-400">{{ PARAM_LABELS[key] || key }}</span>
+              <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -532,9 +552,9 @@ function getSqlTokenClass(type: string): string {
                 <pre class="max-h-40 overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><template v-if="key === 'sql'"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatParamValue(key, value))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></template><code v-else class="text-emerald-600">{{ formatParamValue(key, value) }}</code></pre>
               </div>
               <!-- 普通类型 -->
-              <div v-else class="mb-3 grid grid-cols-[72px_minmax(0,1fr)] items-start gap-2 last:mb-0">
-                <span class="pt-0.5 text-xs text-gray-400">{{ PARAM_LABELS[key] || key }}</span>
-                <span class="min-w-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
+              <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>
           </div>
@@ -562,10 +582,7 @@ function getSqlTokenClass(type: string): string {
           <div v-if="semanticSelectionResult" class="p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
             <div class="flex items-center gap-2 font-medium text-slate-800">
               <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
-              <span v-if="semanticSelectionResult.selected && semanticSelectionTitle">自动选择：{{ semanticSelectionTitle }}</span>
-              <span v-else-if="semanticSelectionResult.ambiguous">需要选择指标集</span>
-              <span v-else-if="semanticSelectionResult.cross_config_required">需要跨指标集处理</span>
-              <span v-else>未匹配到可用指标集</span>
+              <span>{{ semanticSelectionHeader }}</span>
             </div>
             <div v-if="semanticSelectionResult.reason" class="mt-1.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-600">
               {{ semanticSelectionResult.reason }}

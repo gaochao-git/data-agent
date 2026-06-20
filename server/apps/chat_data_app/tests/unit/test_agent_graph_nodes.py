@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -43,8 +42,11 @@ def test_mode_config_and_prompt_formatters():
     assert nodes.format_execution_target_info_for_llm("") == ""
     assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
     assert "当前未选择指标集" in nodes.build_semantic_layer_context(None, "query")
+    assert "必须先调用 `skill_load` 加载路由知识" in nodes.build_semantic_layer_context(None, "query")
+    assert "没有明显同域技能时直接调用 `select_semantic_config_tool`" in nodes.build_semantic_layer_context(None, "query")
     assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"}, "query")
     assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
+    assert "必须先调用 `skill_load` 加载主说明" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
     assert "当前未选择指标集" in nodes.build_semantic_layer_context({}, "query")
     assert "semantic_config_id" not in nodes.build_semantic_layer_context({"name": "订单分析"}, "query")
     assert "当前已选择指标集。" in nodes.build_semantic_layer_context({"id": "", "name": ""}, "query")
@@ -81,7 +83,12 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
     monkeypatch.setattr("apps.chat_data_app.agent.tools.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
 
-    agent_node = nodes.create_agent_node(["dsl2sql_tool"], semantic_config={"id": "sc_a"}, model_id=None)
+    agent_node = nodes.create_agent_node(
+        ["dsl2sql_tool"],
+        semantic_config={"id": "sc_a"},
+        model_id=None,
+        available_skills_context="## 可用业务知识技能\n- business-query: 业务问数知识技能",
+    )
     result = await agent_node({
         "messages": [HumanMessage(content="查询销售额")],
         "tables_ddl_info": "CREATE TABLE orders(id int)",
@@ -100,6 +107,15 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "semantic_config_id: sc_a" in system_prompt
     assert "当前机构A" in system_prompt
     assert "可用的查询结果" in system_prompt
+    assert "business-query" in system_prompt
+    assert "先调用 `skill_load` 读取该技能主说明" in system_prompt
+    assert "再调用 `select_semantic_config_tool`" in system_prompt
+    assert "必须在生成 DSL 前调用 `skill_load`" in system_prompt
+    assert "没有明显匹配时不要硬加载" in system_prompt
+    assert "四层职责边界" in system_prompt
+    assert "Workflow 技能只用于看板、图表、智能分析等复杂产物任务" in system_prompt
+    assert "必须先调用 `skill_load` 加载主说明" in system_prompt
+    assert "最终回答不要提及技能加载过程" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -257,19 +273,21 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(
         chat_data_graph,
         "create_agent_node",
-        lambda tools, semantic_config=None, model_id=None, enable_thinking=None: (
+        lambda tools, semantic_config=None, model_id=None, enable_thinking=None, available_skills_context=None: (
             "agent",
             tools,
             semantic_config,
             model_id,
             enable_thinking,
+            available_skills_context,
         ),
     )
 
     compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1")
 
     assert compiled["nodes"][0][0] == "agent"
-    assert compiled["nodes"][0][1][1] == ["select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool"]
+    tool_names = [getattr(item, "name", item) for item in compiled["nodes"][0][1][1]]
+    assert tool_names == ["skill_load", "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]
     assert compiled["checkpointer"] == "ckpt"
 
