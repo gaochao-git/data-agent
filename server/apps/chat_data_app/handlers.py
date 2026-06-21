@@ -552,8 +552,20 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
         lines.append(f"本次查询会在 {len(execution_targets)} 个执行对象上分别运行，同一条 SQL 会返回多份结果：")
 
     for index, target in enumerate(execution_targets, start=1):
-        member_name = target.get("member_name") or target.get("member_datasource_id") or f"执行对象{index}"
-        lines.append(f"{index}. {member_name}")
+        source_config = target.get("source_config") or {}
+        member_name = (
+            target.get("member_name")
+            or target.get("org_name")
+            or source_config.get("org_name")
+            or target.get("member_datasource_id")
+            or f"执行对象{index}"
+        )
+        org_code = str(target.get("org_code") or source_config.get("org_code") or "").strip()
+        if org_code and org_code != str(member_name).strip():
+            lines.append(f"{index}. 机构名称：{member_name}")
+            lines.append(f"   机构编码：{org_code}")
+        else:
+            lines.append(f"{index}. {member_name}")
 
     return "\n".join(lines)
 

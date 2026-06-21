@@ -303,8 +303,8 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     class FakeDatasourceManager:
         async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
             targets = [
-                {"member_datasource_id": "m1", "member_name": "杭州库"},
-                {"member_datasource_id": "m2", "member_name": "宁波库"},
+                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
+                {"member_datasource_id": "m2", "member_name": "宁波库", "source_config": {"org_code": "ORG_NB"}},
             ]
             if member_datasource_ids == ["m1"]:
                 return targets[:1]
@@ -318,9 +318,11 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     multi = asyncio.run(_build_execution_target_info_async("ds_a", None))
 
     assert "仅在 1 个执行对象" in single
-    assert "1. 杭州库" in single
+    assert "1. 机构名称：杭州库" in single
+    assert "机构编码：ORG_HZ" in single
     assert "2 个执行对象" in multi
-    assert "2. 宁波库" in multi
+    assert "2. 机构名称：宁波库" in multi
+    assert "机构编码：ORG_NB" in multi
 
 
 def test_build_execution_target_info_async_empty_and_error(monkeypatch):

@@ -1385,6 +1385,7 @@ interface MetricExpandOption {
 const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
+const showFieldPhysicalDetails = ref(false)
 const showAddFieldDialog = ref(false)
 const autoPrefillLoading = ref(false)
 const showAutoPrefillModeDialog = ref(false)
@@ -3904,6 +3905,15 @@ const saveOntologyRules = () => {
                     <div class="text-xs font-medium text-gray-600">字段配置</div>
                     <div class="flex items-center gap-2">
                       <button
+                        :class="[
+                          'h-7 px-2.5 rounded border bg-white text-[11px] transition-all duration-150',
+                          showFieldPhysicalDetails ? 'border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100' : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'
+                        ]"
+                        @click="showFieldPhysicalDetails = !showFieldPhysicalDetails"
+                      >
+                        <i class="fa-regular fa-eye mr-1"></i>字段详情
+                      </button>
+                      <button
                         class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
                         :disabled="autoPrefillLoading || fieldRows.length === 0"
                         @click="openAutoPrefillModeDialog"
@@ -3934,13 +3944,13 @@ const saveOntologyRules = () => {
                     请先在左侧选择数据表
                   </div>
                   <div v-else class="flex-1 overflow-auto rounded-md border border-gray-200 bg-white">
-                    <table class="min-w-[1820px] w-full border-collapse text-[12px]">
+                    <table :class="[showFieldPhysicalDetails ? 'min-w-[1820px]' : 'min-w-[1420px]', 'w-full border-collapse text-[12px]']">
                       <thead class="bg-gray-50 text-gray-600">
                         <tr>
                           <th class="text-left px-3 py-2 border border-gray-200">表</th>
                           <th class="text-left px-3 py-2 border border-gray-200">字段</th>
-                          <th class="text-left px-3 py-2 border border-gray-200">类型</th>
-                          <th class="text-left px-3 py-2 border border-gray-200">列备注</th>
+                          <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">类型</th>
+                          <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">列备注</th>
                           <th class="text-center px-3 py-2 border border-gray-200">维度</th>
                           <th class="text-center px-3 py-2 border border-gray-200">指标</th>
                           <th class="text-left px-3 py-2 border border-gray-200">表达式</th>
@@ -3964,8 +3974,8 @@ const saveOntologyRules = () => {
                               <span v-if="row.isMissingPhysical" class="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-600">字段已删除</span>
                             </div>
                           </td>
-                          <td class="px-3 py-2 border border-gray-200 text-gray-500">{{ row.columnType || '-' }}</td>
-                          <td class="px-3 py-2 border border-gray-200 text-gray-500">
+                          <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">{{ row.columnType || '-' }}</td>
+                          <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">
                             <div class="max-w-[220px] truncate" :title="row.columnComment || '-'">{{ row.columnComment || '-' }}</div>
                           </td>
                           <td class="px-3 py-2 border border-gray-200 text-center">
