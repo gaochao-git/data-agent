@@ -1,9 +1,9 @@
 ---
 name: business-query
 title: 业务问数知识技能
-description: 用于订单销售分析、备付金非现场监管等业务领域的问数理解、查询类型判断、数据来源选择和追问策略；只提供业务判断方法，不替代语义配置。
+description: 用于业务数据查询中的领域理解、查询类型判断、指标集路由和追问策略；只提供业务判断方法，不替代语义配置。
 metadata:
-  domain: 订单销售分析、备付金非现场监管、智能问数
+  domain: 业务数据查询、智能问数
   category: business_query
   output_type: text
 ---
@@ -28,14 +28,9 @@ metadata:
 
 ## 领域组织
 
-本技能用一个主入口管理多个业务领域。领域知识放在 `references/<domain>/` 二级目录下，通用问数规则放在 `references/common/` 下。
+本技能用一个主入口管理多个业务领域。领域知识放在 `references/<domain>/` 二级目录下，指标集选择前的路由知识放在 `references/common/` 下。
 
-当前内置领域：
-
-- `prepaid-fund-supervision`：备付金非现场监管领域。
-- `order-analysis`：订单、商品、销售和用户成交分析领域。
-
-后续新增业务领域时，优先新增二级目录，不新增默认技能名。
+每个业务领域使用一个二级目录，目录下保留 `business-context.md`。后续新增业务领域时，只新增领域目录、领域业务背景和必要路由规则，不需要修改主技能说明或新增默认技能名。
 
 ## 两阶段加载
 
@@ -51,13 +46,7 @@ metadata:
 
 获得唯一指标集后，再根据指标集名称、描述、指标和维度判断业务领域，按需加载：
 
-- `common/query-policy`：通用问数策略，用于 DSL 规划前的业务检查。
-- `prepaid-fund-supervision/business-context`：备付金非现场监管业务背景。
-- `prepaid-fund-supervision/data-sources`：该领域数据来源、口径层级和同名指标处理。
-- `prepaid-fund-supervision/examples` 只在需要参考典型问法时按需加载。
-- `order-analysis/business-context`：订单销售分析业务背景。
-- `order-analysis/data-sources`：订单、商品、类目、用户和销售指标的数据来源与口径。
-- `order-analysis/examples` 只在需要参考典型问法时按需加载。
+- `<domain>/business-context`：当前领域的业务对象、术语和时间概念。
 
 ## 知识检查项
 

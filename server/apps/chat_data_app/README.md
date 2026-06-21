@@ -241,7 +241,7 @@ START → [agent节点] → [tools_condition] → [tools执行] → [agent节点
 | 阶段 | 典型 reference | 作用 |
 |---|---|---|
 | 选择指标集前 | `common/query-routing` | 理解业务领域、明细/汇总/预聚合方向，并辅助构造选择工具 query |
-| 选择指标集后 | `common/query-policy`、领域 `business-context`、领域 `data-sources` | 在当前指标集事实约束下做 DSL 规划和口径检查 |
+| 选择指标集后 | 领域 `business-context` | 补充业务对象、术语和时间概念理解 |
 
 指标集选择分两层：
 

@@ -39,7 +39,7 @@ def test_readonly_skill_tool_accepts_json_string_reference_names():
 def test_readonly_skill_context_loads_skill_and_selected_references():
     payload = asyncio.run(skill_context_service.load_readonly_skill_context(
         "business-query",
-        reference_names=["common/query-policy", "prepaid-fund-supervision/data-sources.md"],
+        reference_names=["prepaid-fund-supervision/business-context"],
     ))
     formatted = skill_context_service.format_readonly_skill_context(payload)
 
@@ -51,29 +51,27 @@ def test_readonly_skill_context_loads_skill_and_selected_references():
         "sandbox": False,
     }
     assert "common/query-routing" in payload["available_references"]
-    assert "common/query-policy" in payload["available_references"]
-    assert "prepaid-fund-supervision/data-sources" in payload["available_references"]
+    assert "common/query-policy" not in payload["available_references"]
+    assert "prepaid-fund-supervision/data-sources" not in payload["available_references"]
+    assert "prepaid-fund-supervision/examples" not in payload["available_references"]
     assert "order-analysis/business-context" in payload["available_references"]
-    assert [item["name"] for item in payload["loaded_references"]] == ["common/query-policy", "prepaid-fund-supervision/data-sources"]
+    assert [item["name"] for item in payload["loaded_references"]] == ["prepaid-fund-supervision/business-context"]
     assert "runtime-skills" not in formatted
     assert "no_scripts" in formatted
-    assert "# references/common/query-policy.md" in formatted
+    assert "# references/prepaid-fund-supervision/business-context.md" in formatted
 
 
 def test_readonly_skill_context_loads_order_analysis_references():
     payload = asyncio.run(skill_context_service.load_readonly_skill_context(
         "business-query",
-        reference_names=["common/query-policy", "order-analysis/business-context", "order-analysis/data-sources"],
+        reference_names=["order-analysis/business-context"],
     ))
     formatted = skill_context_service.format_readonly_skill_context(payload)
 
     assert [item["name"] for item in payload["loaded_references"]] == [
-        "common/query-policy",
         "order-analysis/business-context",
-        "order-analysis/data-sources",
     ]
     assert "订单销售分析业务背景" in formatted
-    assert "订单销售分析数据来源" in formatted
 
 
 def test_readonly_skill_context_rejects_invalid_reference_name():
