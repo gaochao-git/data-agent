@@ -113,8 +113,9 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "再调用 `select_semantic_config_tool`" in system_prompt
     assert "必须在生成 DSL 前调用 `skill_load`" in system_prompt
     assert "没有明显匹配时不要硬加载" in system_prompt
-    assert "四层职责边界" in system_prompt
-    assert "Workflow 技能只用于看板、图表、智能分析等复杂产物任务" in system_prompt
+    assert "职责边界" in system_prompt
+    assert "当前指标集是可执行事实源" in system_prompt
+    assert "业务知识技能只补充业务术语" in system_prompt
     assert "必须先调用 `skill_load` 加载主说明" in system_prompt
     assert "最终回答不要提及技能加载过程" in system_prompt
 

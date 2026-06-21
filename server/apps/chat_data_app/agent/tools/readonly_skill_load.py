@@ -51,7 +51,7 @@ def create_readonly_skill_load_tool(user_id: str = ""):
         """
         只读加载业务技能说明。
 
-        本工具只返回 SKILL.md 和指定 references/*.md 的文本内容，不支持 file_read，不支持脚本，不支持 assets，不挂载 runtime-skills。
+        本工具只返回 SKILL.md 和指定 references/*.md 的文本内容。
         未选择指标集时，如果用户问题与可用技能明确匹配，可先调用本工具加载路由知识，再选择指标集。
         已选择指标集后，如果当前指标集名称、描述、指标或维度与可用技能明确匹配，生成 DSL 前必须调用本工具补充业务上下文。
         多领域入口技能可以先只传 skill_name 加载主说明；读取主说明后再按需传 reference_names。
