@@ -1433,7 +1433,7 @@ const addFieldToDimension = (field: any) => {
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
     return
   }
   // 支持指标 -> 维度：自动转换为非聚合字段
@@ -1474,7 +1474,7 @@ const addFieldToAggregation = (field: any) => {
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
     return
   }
   const targetFunc = aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })
@@ -2362,7 +2362,7 @@ const handleDropToFilter = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2398,7 +2398,7 @@ const handleDropToOrder = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -3362,7 +3362,7 @@ const executeQuery = async () => {
     return
   }
   if (!props.semanticConfigId) {
-    ElMessage.warning('请先选择数据集')
+    ElMessage.warning('请先选择指标集')
     return
   }
   if (executionTargets.value.length > 0 && selectedMemberDatasourceIds.value.length === 0) {
@@ -4020,7 +4020,7 @@ watch(
   { immediate: true }
 )
 
-// 切换语义数据集时，自动清空上一个数据集的构建配置
+// 切换语义指标集时，自动清空上一个指标集的构建配置
 watch(() => props.semanticConfigId, (nextId, prevId) => {
   if (!prevId || nextId === prevId) return
   clearAll()

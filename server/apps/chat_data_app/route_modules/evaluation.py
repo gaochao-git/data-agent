@@ -836,7 +836,7 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
 
 @router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
-    """读取当前数据集场景的评测测试集。"""
+    """读取当前指标集场景的评测测试集。"""
     try:
         scene_paths = _scene_case_paths(datasource_id, config_id)
         loaded = await _load_scene_case_set(datasource_id, config_id)
@@ -853,7 +853,7 @@ async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
 
 @router.put("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
-    """保存当前数据集场景的评测测试集。"""
+    """保存当前指标集场景的评测测试集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(getattr(current_user, "user_id", "") or "").strip()

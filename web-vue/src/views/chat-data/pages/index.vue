@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * ChatData 智能问数主页面
- * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、数据集配置
+ * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -49,7 +49,7 @@ const DEFAULT_MODE_LABELS: Record<ViewMode, string> = {
   builder: '可视化查询',
   editor: 'SQL查询',
   dashboard: '数据看板',
-  metricConfig: '数据集配置',
+  metricConfig: '指标集配置',
 }
 
 const resolveModeLabels = (): Record<ViewMode, string> => {
@@ -304,7 +304,7 @@ const builderMounted = ref(viewMode.value === 'builder')
 const editorMounted = ref(viewMode.value === 'editor')
 const dashboardMounted = ref(viewMode.value === 'dashboard')
 
-// 选中的数据集 ID
+// 选中的指标集 ID
 const selectedSemanticConfigId = ref<string | null>(null)
 const conversationSelectedSemanticConfigId = ref<string | null>(null)
 const semanticConfigs = ref<SemanticConfigItem[]>([])
@@ -354,11 +354,11 @@ const activeSidebarTab = ref<string>('metrics')
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
-    tabs.push({ key: 'metrics', label: '数据集', icon: 'fa-bullseye' })
+    tabs.push({ key: 'metrics', label: '指标集', icon: 'fa-bullseye' })
   } else if (viewMode.value === 'dashboard') {
     tabs.push({ key: 'dashboard', label: '数据看板', icon: 'fa-chart-pie' })
   } else if (viewMode.value === 'builder') {
-    tabs.push({ key: 'tables', label: '数据集', icon: 'fa-database' })
+    tabs.push({ key: 'tables', label: '指标集', icon: 'fa-database' })
   } else if (viewMode.value === 'editor') {
     tabs.push({ key: 'tables', label: '数据表', icon: 'fa-database' })
   }
@@ -926,7 +926,7 @@ const loadSemanticConfigs = async () => {
       }
     }
   } catch (err) {
-    console.error('加载数据集失败:', err)
+    console.error('加载指标集失败:', err)
     semanticConfigs.value = []
     selectedSemanticConfigId.value = null
     conversationSelectedSemanticConfigId.value = null
@@ -939,11 +939,11 @@ const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入数据集名称', '新建数据集', {
+    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入数据集名称',
+      inputPlaceholder: '请输入指标集名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -1435,7 +1435,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 数据集配置：全宽内容区，不占用左侧栏空间 -->
+    <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
     <div v-if="!noMatchedDatasource && viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="text-[13px] font-medium text-slate-700">数据源组</span>
@@ -1448,16 +1448,16 @@ onUnmounted(() => {
             {{ ds.group_name }}
           </option>
         </select>
-        <span class="ml-4 text-[13px] font-medium text-slate-700">数据集</span>
+        <span class="ml-4 text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           v-model="selectedSemanticConfigId"
           class="min-w-[260px] max-w-[460px]"
           filterable
           :loading="loadingSemanticConfigs"
           :disabled="loadingSemanticConfigs || semanticConfigs.length === 0"
-          placeholder="请选择数据集"
+          placeholder="请选择指标集"
           loading-text="加载中"
-          no-data-text="暂无数据集"
+          no-data-text="暂无指标集"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
         >
@@ -1470,7 +1470,7 @@ onUnmounted(() => {
         </el-select>
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg border-none bg-blue-500 text-white text-[13px] transition-all hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建数据集"
+          title="新建指标集"
           :disabled="!selectedDatasourceId || creatingMetricConfig"
           @click="handleCreateMetricConfig"
         >

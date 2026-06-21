@@ -38,7 +38,7 @@ server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py \
 当前示例对应：
 
 - 数据源：`hive-localhost` / `ds_20260116115851_95505`
-- 数据集：`订单分析基线` / `sc_order_operating_baseline_v1`
+- 指标集：`订单分析基线` / `sc_order_operating_baseline_v1`
 - 服务令牌：默认读取 `server/.env` 中的 `SERVICE_AUTH_TOKEN`
 - 模型：默认读取 `server/.env` 中的 `CHAT_DATA_MODEL`，当前为 `kimi-k2.5`
 

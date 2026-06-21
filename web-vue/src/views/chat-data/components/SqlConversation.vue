@@ -50,7 +50,7 @@ interface Props {
   isLoadingConversations?: boolean
   // 懒创建会话
   ensureConversationId?: (agentId?: string) => Promise<string | null>
-  // 语义配置（数据集）ID
+  // 语义配置（指标集）ID
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   // 是否显示分析面板（由外层切换控制）

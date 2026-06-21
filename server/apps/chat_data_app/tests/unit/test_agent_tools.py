@@ -59,14 +59,14 @@ def test_calculator_tool_rejects_unsafe_expression():
 
 def test_build_semantic_prompt_includes_ontology_rules():
     prompt = agent_tools.build_semantic_prompt({
-        "description": "订单数据集",
+        "description": "订单指标集",
         "ontology_rules": "有效订单仅统计已支付且未退款订单",
         "metrics": [{"name": "订单金额", "expression": "SUM(pay_amount)", "description": "实付金额"}],
         "dimensions": [{"name": "订单状态", "expression": "orders.status", "description": "状态枚举"}],
         "relationships": [],
     })
 
-    assert "**配置说明**: 订单数据集" in prompt
+    assert "**配置说明**: 订单指标集" in prompt
     assert "**业务描述**: 有效订单仅统计已支付且未退款订单" in prompt
     assert "订单金额" in prompt
     assert "订单状态" in prompt

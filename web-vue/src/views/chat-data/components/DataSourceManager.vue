@@ -1317,7 +1317,7 @@ defineExpose({
               </el-popover>
               <button
                 class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200"
-                title="数据集管理"
+                title="指标集管理"
                 @click.stop="handleOpenSemanticConfig(ds.id)"
               >
                 <i class="fa-solid fa-sitemap text-xs"></i>

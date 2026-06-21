@@ -5,7 +5,7 @@
 ## 目录边界
 
 - `load_test/`：压测真实接口，覆盖登录、会话、SSE、LLM、DSL2SQL、数据库执行链路。
-- `accuracy/`：准确率评估，覆盖 NL -> DSL -> SQL -> 执行结果，按数据集维护 golden cases。
+- `accuracy/`：准确率评估，覆盖 NL -> DSL -> SQL -> 执行结果，按指标集维护 golden cases。
 
 ## 与 tests/ 的区别
 

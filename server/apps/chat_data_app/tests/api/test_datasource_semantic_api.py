@@ -51,7 +51,7 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
     monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
     body = {
         "name": "个人订单分析",
-        "description": "个人数据集",
+        "description": "个人指标集",
         "enabled": True,
         "metrics": [
             {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}

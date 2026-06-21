@@ -354,7 +354,7 @@ class SemanticConfig(BaseModel):
     """单个语义配置（支持多配置）"""
     id: str = Field(..., description="配置ID")
     name: str = Field(..., description="配置名称，如'数据库集群分析'")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
@@ -365,7 +365,7 @@ class SemanticConfig(BaseModel):
 class SemanticConfigCreateRequest(BaseModel):
     """创建语义配置请求"""
     name: str = Field(..., description="配置名称")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
@@ -376,7 +376,7 @@ class SemanticConfigCreateRequest(BaseModel):
 class SemanticConfigUpdateRequest(BaseModel):
     """更新语义配置请求"""
     name: Optional[str] = Field(default=None, description="配置名称")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: Optional[bool] = Field(default=None, description="是否启用")
     metrics: Optional[List[SemanticMetric]] = Field(default=None, description="指标列表")
@@ -433,7 +433,7 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
 
 class SemanticAutoPrefillRequest(BaseModel):
     """语义字段自动预填请求"""
-    selected_tables: List[str] = Field(default_factory=list, description="当前数据集已选择的数据表")
+    selected_tables: List[str] = Field(default_factory=list, description="当前指标集已选择的数据表")
     table_model_type: Literal["detail", "aggregated"] = Field(default="detail", description="表建模类型：detail 明细表，aggregated 预聚合表")
     generate_business_flow: bool = Field(default=False, description="是否生成业务运转说明")
     business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
@@ -451,7 +451,7 @@ class SemanticPrefillColumn(BaseModel):
 class SemanticPrefillTable(BaseModel):
     """语义预填表信息"""
     table_name: str = Field(..., description="表名")
-    table_alias: Optional[str] = Field(default=None, description="当前数据集中的表角色别名")
+    table_alias: Optional[str] = Field(default=None, description="当前指标集中的表角色别名")
     description: Optional[str] = Field(default=None, description="表描述")
     columns: List[SemanticPrefillColumn] = Field(default_factory=list, description="字段列表")
 
