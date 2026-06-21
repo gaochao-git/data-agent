@@ -124,6 +124,21 @@ const handleSave = async () => {
   }
 }
 
+const handleCopySql = async () => {
+  const text = props.sql || ''
+  if (!text.trim()) {
+    ElMessage.warning('暂无可复制的 SQL')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('SQL 已复制')
+  } catch (err) {
+    ElMessage.error('复制 SQL 失败')
+    console.error(err)
+  }
+}
+
 // 关闭弹窗
 const handleClose = () => {
   emit('update:visible', false)
@@ -132,7 +147,7 @@ const handleClose = () => {
 </script>
 
 <template>
-  <el-dialog :model-value="visible" title="保存到看板" width="640px" append-to-body :z-index="4000" @close="handleClose">
+  <el-dialog :model-value="visible" title="保存到看板" width="720px" append-to-body :z-index="4000" @close="handleClose">
     <!-- 选择看板 -->
     <div class="mb-4 last:mb-0">
       <label class="block text-sm font-medium text-gray-700 mb-2">目标看板</label>
@@ -165,21 +180,32 @@ const handleClose = () => {
           <button
             v-for="ct in chartTypeOptions"
             :key="ct.value"
-            class="flex min-h-[72px] flex-col items-center justify-center gap-1 px-2 py-2 border border-gray-200 rounded-lg bg-white text-gray-500 text-xs cursor-pointer transition-all duration-200 hover:border-[#1f82d9] hover:bg-[#f0f7ff] hover:text-[#1f82d9]"
+            class="flex min-h-[58px] flex-col items-center justify-center gap-0.5 px-2 py-1.5 border border-gray-200 rounded-md bg-white text-gray-500 text-xs cursor-pointer transition-all duration-200 hover:border-[#1f82d9] hover:bg-[#f0f7ff] hover:text-[#1f82d9]"
             :class="{ 'border-[#1f82d9] bg-gradient-to-br from-[#e0f0ff] to-[#f0f7ff] text-[#1f82d9]': chartType === ct.value }"
             @click="chartType = ct.value"
           >
-            <i :class="['fa-solid', ct.icon, 'text-base']"></i>
-            <span class="text-center leading-4">{{ ct.label }}</span>
+            <i :class="['fa-solid', ct.icon, 'text-sm']"></i>
+            <span class="text-center leading-4 text-[11px]">{{ ct.label }}</span>
           </button>
         </div>
       </div>
 
       <!-- SQL 预览 -->
       <div v-if="!hideSql" class="mb-4 last:mb-0">
-        <label class="block text-sm font-medium text-gray-700 mb-2">SQL 查询</label>
-        <div class="max-h-24 overflow-auto p-3 bg-gray-50 border border-gray-200 rounded-lg">
-          <pre class="m-0 text-xs font-mono text-gray-700 whitespace-pre-wrap break-all">{{ sql }}</pre>
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <label class="block text-sm font-medium text-gray-700">SQL 查询</label>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 border-none bg-transparent p-0 text-xs text-gray-500 cursor-pointer transition-colors duration-150 hover:text-[#1f82d9]"
+            title="复制 SQL"
+            @click="handleCopySql"
+          >
+            <i class="fa-regular fa-copy"></i>
+            <span>复制SQL</span>
+          </button>
+        </div>
+        <div class="max-h-[220px] min-h-[180px] overflow-auto p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          <pre class="m-0 text-xs font-mono leading-relaxed text-gray-700 whitespace-pre-wrap break-all">{{ sql }}</pre>
         </div>
       </div>
     </template>

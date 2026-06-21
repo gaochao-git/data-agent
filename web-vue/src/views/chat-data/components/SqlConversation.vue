@@ -1994,10 +1994,10 @@ const handleViewAnalysis = (msg: Message) => {
               <button
                 v-if="shouldShowMessageAnalysisButton(msg)"
                 :class="[
-                  'inline-flex h-[26px] min-w-[62px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[11px] transition-all duration-200',
+                  'inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] transition-all duration-200',
                   isAnalysisPanelOpen && currentAnalysisRoundId === msg.id
-                    ? 'border-blue-500 bg-blue-500/10 text-blue-500'
-                    : 'border-gray-300 bg-white text-gray-600 hover:border-blue-500 hover:bg-blue-500/5 hover:text-blue-500'
+                    ? 'bg-blue-500/10 text-blue-500'
+                    : 'text-gray-500 hover:bg-blue-500/5 hover:text-blue-500'
                 ]"
                 @click="handleViewAnalysis(msg)"
               >
