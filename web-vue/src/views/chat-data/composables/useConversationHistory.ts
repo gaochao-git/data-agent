@@ -9,6 +9,12 @@ import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
 
+const parseHistoryTimestamp = (value: unknown): Date | null => {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value.trim().replace(' ', 'T'))
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 const buildAssistantHistorySegments = (message: Message, stageOffset = 0): MessageSegment[] => {
   const segments: MessageSegment[] = []
   for (const [_index, stage] of (message.taskStages || []).entries()) {
@@ -50,6 +56,9 @@ const stripThinkingContent = (content: string): string => {
 }
 
 const appendAssistantHistoryMessage = (target: Message, source: Message) => {
+  if (source.timestamp) {
+    target.timestamp = source.timestamp
+  }
   if (source.content) {
     target.content = (target.content || '') + (target.content ? '\n' : '') + source.content
   }
@@ -350,22 +359,13 @@ export function useConversationHistory({
 
         if (historyMessages.length > 0) {
           const formattedMessages: Message[] = historyMessages.map((msg: any) => {
-            // 解析时间戳
-            let timestamp: Date
-            if (msg.timestamp && typeof msg.timestamp === 'string' && msg.timestamp.trim()) {
-              timestamp = new Date(msg.timestamp.replace(' ', 'T'))
-              if (isNaN(timestamp.getTime())) {
-                timestamp = new Date()
-              }
-            } else {
-              timestamp = new Date()
-            }
+            const parsedTimestamp = parseHistoryTimestamp(msg.timestamp)
 
             const message: Message = {
               id: msg.id,
               role: msg.role,
               content: stripThinkingContent(msg.content || ''),
-              timestamp,
+              timestamp: parsedTimestamp || undefined,
             }
 
             const existingThinkingTexts = extractThinkingText(msg.content || '')

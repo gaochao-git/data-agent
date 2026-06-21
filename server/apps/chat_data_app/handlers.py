@@ -87,6 +87,37 @@ def _format_sse(event: str, data: dict | str) -> str:
     return f"event: {event}\ndata: {data_str}\n\n"
 
 
+def _message_end_payload(usage: Any | None = None) -> dict[str, Any]:
+    """构造消息结束事件，timestamp 表示服务端确认完成的时间。"""
+    payload: dict[str, Any] = {"timestamp": _get_timestamp()}
+    if usage:
+        payload["usage"] = usage
+    return payload
+
+
+def _latest_assistant_timestamp(state: Any) -> str:
+    """从 checkpoint state 中读取最后一条 AI 消息的持久化时间。"""
+    messages = (getattr(state, "values", None) or {}).get("messages") or []
+    for message in reversed(messages):
+        if getattr(message, "type", None) != "ai":
+            continue
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        timestamp = str(additional_kwargs.get("timestamp") or "").strip()
+        if timestamp:
+            return timestamp
+        break
+    return ""
+
+
+def _message_end_payload_from_state(state: Any, usage: Any | None = None) -> dict[str, Any]:
+    """构造消息结束事件，优先使用已随 AIMessage 持久化的完成时间。"""
+    payload = _message_end_payload(usage)
+    persisted_timestamp = _latest_assistant_timestamp(state)
+    if persisted_timestamp:
+        payload["timestamp"] = persisted_timestamp
+    return payload
+
+
 def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str:
     """从 OpenAI compatible 流式 chunk 中提取思考内容。"""
     candidates: list[Any] = []
@@ -854,14 +885,14 @@ async def _stream_sql_generation(
                     args=interrupt_info.get("args"),
                     message=interrupt_info.get("message"),
                 )
-                if token_usage:
-                    yield _format_sse("message_end", {"usage": token_usage})
+                end_payload = _message_end_payload_from_state(state, token_usage)
+                yield _format_sse("message_end", end_payload)
                 yield _format_sse("done", "[DONE]")
                 return
 
         # 正常结束
-        if token_usage:
-            yield _format_sse("message_end", {"usage": token_usage})
+        end_payload = _message_end_payload_from_state(state, token_usage)
+        yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
     except Exception as e:
@@ -1067,13 +1098,13 @@ async def _continue_execution(
                     args=interrupt_info.get("args"),
                     message=interrupt_info.get("message"),
                 )
-                if token_usage:
-                    yield _format_sse("message_end", {"usage": token_usage})
+                end_payload = _message_end_payload_from_state(state, token_usage)
+                yield _format_sse("message_end", end_payload)
                 yield _format_sse("done", "[DONE]")
                 return
 
-        if token_usage:
-            yield _format_sse("message_end", {"usage": token_usage})
+        end_payload = _message_end_payload_from_state(state, token_usage)
+        yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
     except Exception as e:
@@ -1371,8 +1402,9 @@ async def data_analyze_completion_handler(
                     as_node="execute",
                     persisted_count=persisted_reasoning_count,
                 )
-                if latest_token_usage:
-                    yield _format_sse("message_end", {"usage": latest_token_usage})
+                state = await agent.aget_state(config) if hasattr(agent, "aget_state") else None
+                end_payload = _message_end_payload_from_state(state, latest_token_usage)
+                yield _format_sse("message_end", end_payload)
             yield _format_sse("done", "[DONE]")
         except Exception as e:
             logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)

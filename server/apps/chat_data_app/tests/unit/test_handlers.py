@@ -1037,7 +1037,9 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "已查询订单数据" in joined
     assert "内部工具模型输出" not in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 12}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 12}' in joined
+    assert '"timestamp":' in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
     assert fake_graph.initial_state["datasource_id"] == "ds_a"
     assert fake_graph.initial_state["operator_name"] == "测试用户"
@@ -1073,7 +1075,9 @@ def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
     assert '"status": "pending"' in joined
     assert '"tool_call_id": "call_pending"' in joined
     assert '"message": "确认执行"' in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 8}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 8}' in joined
+    assert '"timestamp":' in joined
 
 
 def test_stream_sql_generation_emits_error_when_graph_fails(monkeypatch):
@@ -1230,7 +1234,10 @@ def test_continue_execution_pending_interrupt_error_and_disconnect(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: pending_graph)
     pending_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_pending", modified_sql=None, action="approve")))
     assert '"status": "pending"' in "".join(pending_events)
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 7}}' in "".join(pending_events)
+    pending_text = "".join(pending_events)
+    assert 'event: message_end' in pending_text
+    assert '"usage": {"total_tokens": 7}' in pending_text
+    assert '"timestamp":' in pending_text
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: _FakeGraph(raise_on_stream=True))
     error_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_error")))
@@ -1333,7 +1340,9 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert '"tool_name": "semantic_query_tool"' in joined
     assert '"accumulated_args": {"dsl": {"metrics": ["销售额"]}}' in joined
     assert "分析完成" in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 9}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 9}' in joined
+    assert '"timestamp":' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
 
 
@@ -1550,7 +1559,8 @@ def test_data_analyze_completion_handler_falls_back_when_skill_list_fails(monkey
     human_message = captured["initial_state"]["messages"][0]
     assert human_message.additional_kwargs["semantic_config_selection"]["semantic_config_id"] == "cfg_a"
     assert "fallback ok" in joined
-    assert "message_end" not in joined
+    assert "message_end" in joined
+    assert '"timestamp":' in joined
 
 
 def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monkeypatch):

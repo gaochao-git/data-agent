@@ -38,6 +38,7 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_THINKING_PROMPT,
 )
 from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware, invoke_with_token_usage
+from .nodes import timestamp_message
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -359,8 +360,15 @@ async def execute_data_analyze_agent(
     )
     get_stream_writer()({"type": "token_usage", "usage": token_usage})
     if isinstance(result, dict):
-        return dict(result)
-    return {"messages": [result]}
+        payload = dict(result)
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            payload["messages"] = [
+                timestamp_message(message) if getattr(message, "type", None) == "ai" else message
+                for message in messages
+            ]
+        return payload
+    return {"messages": [timestamp_message(result)]}
 
 
 def create_data_analyze_flow_graph(

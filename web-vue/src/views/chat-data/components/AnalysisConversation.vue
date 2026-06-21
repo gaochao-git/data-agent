@@ -1924,8 +1924,8 @@ const submitAnalysisQuery = async (
       options.skillName || null,
       undefined,
       (stage) => upsertTaskStage(stage),
-      (usage) => {
-        tokenUsage.value = usage
+      (payload) => {
+        tokenUsage.value = payload.usage || null
       },
       (payload) => handleSemanticConfigSelected(payload),
       (payload) => handleSemanticConfigSelectRequired(payload),

@@ -138,7 +138,7 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
         if not hasattr(msg, 'type'):
             continue
 
-        # 提取时间戳
+        # 时间戳只使用 checkpoint 中真实保存的消息时间，避免历史刷新时显示推导出来的假时间。
         timestamp = _extract_timestamp(msg)
 
         if msg.type == 'human':

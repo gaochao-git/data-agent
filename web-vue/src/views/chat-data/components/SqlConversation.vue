@@ -912,7 +912,7 @@ const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequire
     const msg = messages.value[msgIndex]!
     msg.semanticConfigSelectRequired = payload
     msg.error = undefined
-    msg.isStreaming = false
+    finishAssistantMessage(msg)
     syncAnalysisPanelFromMessage(msg, true)
   }
 }
@@ -1031,7 +1031,7 @@ const submitQuery = async (
         const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
         if (msgIndex >= 0 && messages.value[msgIndex]) {
           const msg = messages.value[msgIndex]!
-          msg.isStreaming = false
+          finishAssistantMessage(msg)
           // 发送最终的分析数据并标记流式结束
           syncAnalysisPanelFromMessage(msg, false)
           handleAnalysisStreamEnd()
@@ -1044,8 +1044,9 @@ const submitQuery = async (
       (error) => {
         const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
         if (msgIndex >= 0 && messages.value[msgIndex]) {
-          messages.value[msgIndex]!.error = error
-          messages.value[msgIndex]!.isStreaming = false
+          const msg = messages.value[msgIndex]!
+          msg.error = error
+          finishAssistantMessage(msg)
         }
         handleAnalysisStreamEnd()
       },
@@ -1081,8 +1082,9 @@ const submitQuery = async (
       skillName,
       (payload) => handleDashboardSpec(payload, assistantMessageId),
       undefined,
-      (usage) => {
-        tokenUsage.value = usage
+      (payload) => {
+        tokenUsage.value = payload.usage || null
+        updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
       },
       (payload) => handleSemanticConfigSelected(payload, assistantMessageId),
       (payload) => handleSemanticConfigSelectRequired(payload, assistantMessageId),
@@ -1093,8 +1095,9 @@ const submitQuery = async (
     console.error('生成失败:', err)
     const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
     if (msgIndex >= 0 && messages.value[msgIndex]) {
-      messages.value[msgIndex]!.error = '生成失败，请重试'
-      messages.value[msgIndex]!.isStreaming = false
+      const msg = messages.value[msgIndex]!
+      msg.error = '生成失败，请重试'
+      finishAssistantMessage(msg)
     }
     handleAnalysisStreamEnd()
   } finally {
@@ -1139,7 +1142,7 @@ const handleStop = () => {
   // 标记当前流式消息为结束
   const streamingMsg = messages.value.find(m => m.isStreaming)
   if (streamingMsg) {
-    streamingMsg.isStreaming = false
+    finishAssistantMessage(streamingMsg)
   }
   isGenerating.value = false
   resetSemanticQuestionDraft()
@@ -1468,6 +1471,97 @@ const shouldShowStreamingProgress = (msg: Message): boolean => {
   )
 }
 
+const padDatePart = (value: number): string => String(value).padStart(2, '0')
+
+const parseMessageDateTime = (value?: Date | string | null): Date | null => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = new Date(value.trim().replace(' ', 'T'))
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  return null
+}
+
+const formatMessageDateTime = (value?: Date | string | null): string => {
+  const date = parseMessageDateTime(value)
+  if (!date) return ''
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join('-') + ' ' + [
+    padDatePart(date.getHours()),
+    padDatePart(date.getMinutes()),
+    padDatePart(date.getSeconds()),
+  ].join(':')
+}
+
+const finishAssistantMessage = (msg: Message) => {
+  msg.isStreaming = false
+}
+
+const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
+  const finishedAt = parseMessageDateTime(timestamp)
+  if (!finishedAt) return
+  const msg = messages.value.find(item => item.id === messageId)
+  if (msg?.role === 'assistant') {
+    msg.timestamp = finishedAt
+  }
+}
+
+const shouldShowMessageAnalysisButton = (msg: Message): boolean => {
+  return Boolean(createAnalysisData(msg))
+}
+
+const getCopyableAssistantContent = (msg: Message): string => {
+  const orderedText = getOrderedMessageSegments(msg)
+    .filter((segment): segment is { type: 'text'; content: string } => segment.type === 'text')
+    .map(segment => getConversationDisplayContent(segment.content))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+  return orderedText || getSummaryText(msg.content)
+}
+
+const shouldShowMessageCopyButton = (msg: Message): boolean => {
+  return Boolean(getCopyableAssistantContent(msg))
+}
+
+const handleCopyAssistantMessage = async (msg: Message) => {
+  const text = getCopyableAssistantContent(msg)
+  if (!text) {
+    ElMessage.info('暂无可复制内容')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch (err) {
+    console.error('复制回复失败:', err)
+    ElMessage.error('复制失败，请稍后重试')
+  }
+}
+
+const getPreviousUserQuestion = (messageId: string): string => {
+  const index = messages.value.findIndex(item => item.id === messageId)
+  if (index < 0) return ''
+  for (let currentIndex = index - 1; currentIndex >= 0; currentIndex -= 1) {
+    const message = messages.value[currentIndex]
+    if (message?.role === 'user') return message.content || ''
+  }
+  return ''
+}
+
+const shouldShowMessageFavoriteButton = (msg: Message): boolean => {
+  return Boolean(getPreviousUserQuestion(msg.id).trim())
+}
+
+const handleFavoriteAssistantMessage = (msg: Message) => {
+  openFavoriteModalFromQuestion(getPreviousUserQuestion(msg.id))
+}
+
 // 打开分析面板
 const handleViewAnalysis = (msg: Message) => {
   const analysisData = createAnalysisData(msg)
@@ -1704,16 +1798,10 @@ const handleViewAnalysis = (msg: Message) => {
       <div v-else class="max-w-[774px] mx-auto w-[90%]">
         <div v-for="msg in messages" :key="msg.id" class="mb-5">
           <!-- 用户消息 -->
-          <div v-if="msg.role === 'user'" class="group flex flex-col items-end gap-1">
+          <div v-if="msg.role === 'user'" class="flex flex-col items-end gap-1">
             <div class="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-md bg-[#1677FF]/10 text-[#1F3A56] text-sm leading-relaxed shadow-[0_2px_8px_rgba(59,130,246,0.12)]">{{ msg.content }}</div>
-            <button
-              class="h-6 px-2.5 border border-[#dbe7f5] rounded bg-white text-[12px] text-[#4b5563] cursor-pointer opacity-0 transition-all duration-150 -mt-0.5 group-hover:opacity-100 hover:text-[#1f82d9] hover:border-[#bfdbfe]"
-              @click="openFavoriteModalFromQuestion(msg.content)"
-            >
-              <i class="fa-regular fa-star mr-1"></i>收藏
-            </button>
             <div class="text-[10px] text-gray-400 mr-1">
-              {{ msg.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
+              {{ formatMessageDateTime(msg.timestamp) }}
             </div>
           </div>
 
@@ -1764,8 +1852,6 @@ const handleViewAnalysis = (msg: Message) => {
                       :result-data="segment.toolCall.renderId!"
                       :sql="extractGeneratedSqlFromToolCall(segment.toolCall)"
                       :semantic-params="segment.toolCall.semanticParams"
-                      :on-view-analysis="() => handleViewAnalysis(msg)"
-                      :is-analysis-active="isAnalysisPanelOpen && currentAnalysisRoundId === msg.id"
                       :on-save="handleSaveToDashboard"
                     />
                     <div
@@ -1883,6 +1969,44 @@ const handleViewAnalysis = (msg: Message) => {
                 <i class="fa-solid fa-circle-exclamation"></i>
                 <span>{{ msg.error }}</span>
               </div>
+            </div>
+
+            <div
+              v-if="!msg.isStreaming && (shouldShowMessageCopyButton(msg) || shouldShowMessageFavoriteButton(msg) || shouldShowMessageAnalysisButton(msg))"
+              class="flex items-center gap-2 px-1"
+            >
+              <button
+                v-if="shouldShowMessageCopyButton(msg)"
+                class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+                @click="handleCopyAssistantMessage(msg)"
+              >
+                <i class="fa-regular fa-copy text-[11px]"></i>
+                <span>复制</span>
+              </button>
+              <button
+                v-if="shouldShowMessageFavoriteButton(msg)"
+                class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+                @click="handleFavoriteAssistantMessage(msg)"
+              >
+                <i class="fa-regular fa-star text-[11px]"></i>
+                <span>收藏</span>
+              </button>
+              <button
+                v-if="shouldShowMessageAnalysisButton(msg)"
+                :class="[
+                  'inline-flex h-[26px] min-w-[62px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[11px] transition-all duration-200',
+                  isAnalysisPanelOpen && currentAnalysisRoundId === msg.id
+                    ? 'border-blue-500 bg-blue-500/10 text-blue-500'
+                    : 'border-gray-300 bg-white text-gray-600 hover:border-blue-500 hover:bg-blue-500/5 hover:text-blue-500'
+                ]"
+                @click="handleViewAnalysis(msg)"
+              >
+                <i class="fa-solid fa-diagram-project text-[11px]"></i>
+                <span>分析</span>
+              </button>
+              <span class="ml-auto whitespace-nowrap text-[11px] text-gray-400">
+                {{ formatMessageDateTime(msg.timestamp) }}
+              </span>
             </div>
 
             <!-- 生成状态 -->

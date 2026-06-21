@@ -123,6 +123,21 @@ async def test_persist_reasoning_segments_only_writes_delta():
     ]
 
 
+def test_message_end_payload_prefers_persisted_ai_timestamp():
+    state = SimpleNamespace(values={"messages": [
+        AIMessage(content="中间回复", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
+        ToolMessage(content="工具", tool_call_id="tc", id="tool_1"),
+        AIMessage(content="最终回复", id="ai_2", additional_kwargs={"timestamp": "2026-06-21 07:14:44"}),
+    ]})
+
+    payload = handlers._message_end_payload_from_state(state, {"total_tokens": 7})
+
+    assert payload == {
+        "timestamp": "2026-06-21 07:14:44",
+        "usage": {"total_tokens": 7},
+    }
+
+
 @pytest.mark.asyncio
 async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeypatch):
     class Graph:
@@ -543,7 +558,9 @@ async def test_continue_execution_chunk_creates_buffer_and_finishes_without_toke
     text = "".join(chunks)
 
     assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in text
-    assert "message_end" not in text
+    assert "message_end" in text
+    assert '"timestamp":' in text
+    assert '"usage"' not in text
     assert text.rstrip().endswith("data: [DONE]")
 
 
@@ -606,7 +623,9 @@ async def test_continue_execution_forced_missing_buffer_interrupt_without_usage(
 
     assert '"accumulated_args": {"forced": true}' in text
     assert '"status": "pending"' in text
-    assert "message_end" not in text
+    assert "message_end" in text
+    assert '"timestamp":' in text
+    assert '"usage"' not in text
 
 
 @pytest.mark.asyncio
@@ -781,7 +800,9 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
     text = "".join(chunks)
 
     assert '"status": "pending"' in text
-    assert "message_end" not in text
+    assert "message_end" in text
+    assert '"timestamp":' in text
+    assert '"usage"' not in text
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,31 @@ def test_selector_prompt_treats_compare_rate_as_basic_queries_when_metric_and_ti
     assert "coverage=full" in prompt
 
 
+def test_selector_prompt_forbids_guessing_metric_dimension_business_definition():
+    prompt = _build_selector_prompt("统计订单数量、用户数量、转化率和学生平均成绩", [
+        {"id": "sc_order", "name": "订单业务", "metrics": [{"name": "订单数量"}, {"name": "用户数量"}], "dimensions": []},
+        {"id": "sc_student", "name": "学生选课", "metrics": [{"name": "学生平均成绩"}], "dimensions": []},
+    ])
+    reducer_prompt = selector._build_reducer_prompt(
+        "统计订单数量、用户数量、转化率和学生平均成绩",
+        chunk_results=[],
+        candidates=[
+            {"id": "sc_order", "name": "订单业务", "coverage": "partial", "confidence": "medium"},
+            {"id": "sc_student", "name": "学生选课", "coverage": "partial", "confidence": "medium"},
+        ],
+    )
+
+    for text in (prompt, reducer_prompt):
+        assert "不能编造指标集、指标、维度、业务口径或派生公式" in text
+        assert "只有名称和口径都明确匹配，才算覆盖" in text
+        assert "即使指标或维度名称看上去一样" in text
+        assert "不能判为 full" in text
+        assert "只有在用户原问题明确给出计算公式" in text
+        assert "语义配置中存在同名且口径明确的计算指标" in text or "候选中存在同名且口径明确的计算指标" in text
+        assert "不要推断公式" in text
+        assert "缺少明确业务口径" in text
+
+
 def test_selector_prompt_prefers_warehouse_layer_order_for_multiple_full_matches():
     prompt = _build_selector_prompt("查询销售额", [
         {"id": "ads_order", "name": "ADS订单指标", "metrics": [{"name": "销售额"}], "dimensions": []},

@@ -41,6 +41,19 @@ def format_execution_target_info_for_llm(execution_target_info: str) -> str:
     return f"\n{text}\n"
 
 
+def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
+    """给 LangChain 消息补充服务端时间戳，随 checkpoint 一起持久化。"""
+    if not message:
+        return message
+    additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+    additional_kwargs["timestamp"] = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        message.additional_kwargs = additional_kwargs
+    except Exception:
+        logger.warning("消息时间戳写入失败: message=%r", message, exc_info=True)
+    return message
+
+
 def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str:
     """构建统一语义层上下文。"""
     if mode != "query":
@@ -167,7 +180,7 @@ def create_agent_node(
             else:
                 response = await llm.ainvoke(llm_messages)
 
-        return {"messages": [response], "token_usage": token_usage}
+        return {"messages": [timestamp_message(response)], "token_usage": token_usage}
 
     return agent_node
 

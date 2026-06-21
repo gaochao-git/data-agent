@@ -69,6 +69,9 @@ def test_state_reducers_cover_empty_merge_append_dedupe_and_window():
     assert len(windowed) == 10
     assert windowed[0]["id"] == "item_2"
 
+    assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
+    assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
+
 
 def test_serialize_semantic_config_selection_keeps_refresh_payload():
     payload = conversation._serialize_semantic_config_selection({

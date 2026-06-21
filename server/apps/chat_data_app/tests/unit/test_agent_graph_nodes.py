@@ -98,6 +98,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     })
 
     assert result["messages"][0].content == "SQL 已生成"
+    assert result["messages"][0].additional_kwargs["timestamp"]
     assert result["token_usage"]["input_tokens"] == 15
     assert result["token_usage"]["context_window"] == 100
     assert fake_llm.bound_tools == ["dsl2sql_tool"]
@@ -143,6 +144,7 @@ async def test_create_agent_node_falls_back_when_explicit_model_fails(monkeypatc
     })
 
     assert result["messages"][0].content == "默认模型完成"
+    assert result["messages"][0].additional_kwargs["timestamp"]
     assert calls == ["bad_model", "default_model"]
 
 

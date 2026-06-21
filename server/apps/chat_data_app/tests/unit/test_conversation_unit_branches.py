@@ -93,6 +93,8 @@ def test_conversation_serializers_and_helpers():
     assert serialized[1]["tool_calls"][0]["name"] == "tool_a"
     assert serialized[2]["role"] == "tool"
     assert serialized[2]["tool_call_id"] == "tc1"
+    assert serialized[1]["timestamp"] == "t2"
+    assert serialized[2]["timestamp"] == "t3"
 
     stages = conversation_module._serialize_task_stages([
         {"run_id": "old", "stage": "s1", "status": "done"},
@@ -104,6 +106,38 @@ def test_conversation_serializers_and_helpers():
     assert conversation_module._serialize_task_stages("bad") == []
     assert conversation_module._serialize_semantic_config_selection(None) is None
     assert conversation_module._serialize_semantic_config_selection({"semantic_config_id": ""}) is None
+
+
+def test_serialize_messages_does_not_infer_missing_assistant_timestamps():
+    human = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "2026-06-21 07:14:24"})
+    ai = AIMessage(content="回答", id="a1")
+    tool = ToolMessage(content="工具结果", tool_call_id="tc1", name="tool_a", id="tool1")
+    followup_ai = AIMessage(content="总结", id="a2")
+
+    serialized = conversation_module._serialize_messages([human, ai, tool, followup_ai])
+
+    assert serialized[0]["timestamp"] == "2026-06-21 07:14:24"
+    assert serialized[1]["timestamp"] == ""
+    assert serialized[2]["timestamp"] == ""
+    assert serialized[3]["timestamp"] == ""
+
+
+def test_serialize_messages_uses_message_own_timestamp():
+    human = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "2026-06-21 07:30:27"})
+    ai = AIMessage(content="回答", id="a1", additional_kwargs={"timestamp": "2026-06-21 07:30:59"})
+    tool = ToolMessage(
+        content="工具结果",
+        tool_call_id="tc1",
+        name="tool_a",
+        id="tool1",
+        additional_kwargs={"timestamp": "2026-06-21 07:30:50"},
+    )
+
+    serialized = conversation_module._serialize_messages([human, ai, tool])
+
+    assert serialized[0]["timestamp"] == "2026-06-21 07:30:27"
+    assert serialized[1]["timestamp"] == "2026-06-21 07:30:59"
+    assert serialized[2]["timestamp"] == "2026-06-21 07:30:50"
 
 
 def test_conversation_serializer_object_tool_calls_and_stage_edges():

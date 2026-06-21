@@ -13,6 +13,7 @@ import type {
   DashboardSpecPayload,
   TaskStageInfo,
   ChatDataTokenUsage,
+  ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
   SemanticConfigSelectRequiredInfo,
 } from '../types'
@@ -88,7 +89,7 @@ export function useSqlGenerator() {
     skillName?: string | null,
     onDashboardSpec?: (payload: DashboardSpecPayload) => void,
     onTaskStage?: (payload: TaskStageInfo) => void,
-    onMessageEnd?: (usage: ChatDataTokenUsage | null) => void,
+    onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
     onSemanticConfigSelected?: (payload: SemanticConfigSelectionInfo) => void,
     onSemanticConfigSelectRequired?: (payload: SemanticConfigSelectRequiredInfo) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
@@ -210,14 +211,13 @@ export function useSqlGenerator() {
             try {
               const data = JSON.parse(dataStr)
               const usage = data?.usage
-              if (usage && typeof usage.used === 'number' && typeof usage.total === 'number') {
-                onMessageEnd?.(usage as ChatDataTokenUsage)
-              } else {
-                onMessageEnd?.(null)
-              }
+              onMessageEnd?.({
+                usage: usage && typeof usage === 'object' ? usage as ChatDataTokenUsage : null,
+                timestamp: typeof data?.timestamp === 'string' ? data.timestamp : undefined,
+              })
             } catch (err) {
               console.error('解析 message_end 数据失败:', err, dataStr)
-              onMessageEnd?.(null)
+              onMessageEnd?.({})
             }
             continue
           }

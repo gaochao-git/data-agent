@@ -309,6 +309,7 @@ async def test_execute_data_analyze_agent_returns_message_for_non_dict(monkeypat
     result = await data_analyze_graph.execute_data_analyze_agent(agent=object(), state={"messages": []}, system_prompt="system", model_id=None)
 
     assert result["messages"][0].content == "完成"
+    assert result["messages"][0].additional_kwargs["timestamp"]
     assert emitted == [{"type": "token_usage", "usage": {"total_tokens": 3}}]
 
 

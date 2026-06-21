@@ -75,8 +75,8 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
 
     assert "上下文未提供可用语义配置" in prompt
     assert "业务数据查询必须先调用 `select_semantic_config_tool(query=用户原问题)`" in prompt
-    assert "获得唯一语义配置后，仍必须核对用户表述是否能明确匹配" in prompt
-    assert "相近、简称、口语化表达或存在多个可能解释" in prompt
+    assert "获得唯一语义配置后，仍必须核对用户表述是否能高置信唯一匹配" in prompt
+    assert "相近、简称、口语化表达、名称相同但口径不明，或存在多个可能解释" in prompt
     assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
     assert "输出可见内容约束（最高优先级）" in prompt
     assert "不要在正文中输出任何思考标签、伪造思考块或内部推理内容" in prompt
@@ -91,6 +91,24 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "返回唯一指标集后，不要输出" not in prompt
     assert "只能使用已维护的真实指标、维度、枚举和口径" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
+
+
+def test_chat_data_query_prompt_enforces_clarification_gate_before_query_tools():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "澄清优先门禁（最高优先级）" in prompt
+    assert "只有信息完整、口径唯一、且已高置信匹配当前指标集真实指标/维度时，数据查询场景才能调用 `dsl2sql_tool` 和 `semantic_query_tool`" in prompt
+    assert "只要任一条件不满足，禁止调用 `dsl2sql_tool`、`semantic_query_tool`、`calculator_tool`" in prompt
+    assert "“看起来像”“可能是”“通常指”“可以理解为”“与某字段相近”“名称一样但口径不明”都不算高置信匹配" in prompt
+    assert "指标和维度必须有明确业务口径" in prompt
+    assert "即使名称看起来一样，只要口径、单位、时间范围、枚举含义、统计粒度或业务限定不明确或不一致，也必须先澄清" in prompt
+    assert "若只是工具或模型推断出的比例、差值、转化率等公式，必须先向用户澄清" in prompt
+    assert "澄清问题必须面向业务用户，只问一个最关键问题" in prompt
+    assert "允许为了获得上下文调用 `skill_load` 或 `select_semantic_config_tool`" in prompt
+    assert "信息不完整 / 口径不唯一 / 只是相近匹配 / 多个合理解释" in prompt
+    assert "类型A" not in prompt
+    assert "类型B" not in prompt
+    assert "类型C" not in prompt
 
 
 def test_data_analyze_prompt_defines_sql_dialect_and_compare_boundaries():

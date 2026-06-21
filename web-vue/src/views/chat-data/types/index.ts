@@ -195,6 +195,11 @@ export interface ChatDataTokenUsage {
   breakdown?: ChatDataTokenUsageBreakdown[]
 }
 
+export interface ChatDataMessageEndPayload {
+  usage?: ChatDataTokenUsage | null
+  timestamp?: string
+}
+
 export interface ChatDataTokenUsageBreakdown {
   key: string
   label: string
@@ -283,7 +288,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
-  timestamp: Date
+  timestamp?: Date
   result?: unknown
   toolCalls?: ToolCallInfo[]
   thinkingSegments?: ThinkingSegment[]
