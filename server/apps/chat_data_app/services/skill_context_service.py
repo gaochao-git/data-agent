@@ -170,7 +170,6 @@ def format_readonly_skill_context(payload: Dict[str, Any]) -> str:
         f"skill_name={payload.get('name') or ''}",
         f"title={payload.get('title') or ''}",
         "mode=readonly",
-        "capabilities=references_only,no_scripts,no_assets,no_file_read,no_sandbox",
         f"available_references={', '.join(payload.get('available_references') or [])}",
         f"loaded_references={', '.join(loaded_names)}",
     ]

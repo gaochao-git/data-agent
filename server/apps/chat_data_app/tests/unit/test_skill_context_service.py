@@ -57,7 +57,7 @@ def test_readonly_skill_context_loads_skill_and_selected_references():
     assert "order-analysis/business-context" in payload["available_references"]
     assert [item["name"] for item in payload["loaded_references"]] == ["prepaid-fund-supervision/business-context"]
     assert "runtime-skills" not in formatted
-    assert "no_scripts" in formatted
+    assert "capabilities=" not in formatted
     assert "# references/prepaid-fund-supervision/business-context.md" in formatted
 
 
@@ -79,6 +79,12 @@ def test_readonly_skill_context_rejects_invalid_reference_name():
         asyncio.run(skill_context_service.load_readonly_skill_context(
             "business-query",
             reference_names=["../secret"],
+        ))
+
+    with pytest.raises(ValueError, match="reference 名称无效"):
+        asyncio.run(skill_context_service.load_readonly_skill_context(
+            "business-query",
+            reference_names=["/tmp/secret"],
         ))
 
 
