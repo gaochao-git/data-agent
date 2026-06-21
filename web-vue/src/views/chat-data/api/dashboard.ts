@@ -35,6 +35,7 @@ export interface Panel {
   sql: string
   chart_type: ChartType
   chart_config?: Record<string, unknown>
+  member_datasource_id?: string
   layout: {
     i: string
     x: number
@@ -191,6 +192,7 @@ export async function addPanel(
     refresh_interval?: number
     source_thread_id?: string
     datasource_id?: string
+    member_datasource_id?: string
   }
 ): Promise<Panel> {
   const res = await request({
@@ -227,6 +229,7 @@ export async function updatePanel(
     layout_w?: number
     layout_h?: number
     refresh_interval?: number
+    member_datasource_id?: string
   }
 ): Promise<Panel> {
   const res = await request({

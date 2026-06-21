@@ -262,9 +262,11 @@ const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref('table')
-const handleSaveToDashboard = (sql: string, chartType: string) => {
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = chartType
+  saveMemberDatasourceId.value = String(memberDatasourceId || selectedMemberDatasourceIds.value[0] || '').trim()
   showSaveModal.value = true
 }
 
@@ -2259,6 +2261,7 @@ const handleViewAnalysis = (msg: Message) => {
       :sql="saveSql"
       :chart-type="saveChartType"
       :datasource-id="selectedDatasource"
+      :member-datasource-id="saveMemberDatasourceId"
     />
     <QueryFavoriteModal
       v-model:visible="showFavoriteModal"

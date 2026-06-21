@@ -358,6 +358,9 @@ ALTER TABLE `chat_data_dashboard_panel`
   ADD COLUMN `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称' AFTER `create_by`,
   ADD COLUMN `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称' AFTER `update_by`;
 
+ALTER TABLE `chat_data_dashboard_panel`
+  ADD COLUMN `member_datasource_id` varchar(128) NOT NULL DEFAULT '' COMMENT '成员数据源ID' AFTER `datasource_id`;
+
 ALTER TABLE `chat_data_eval_case`
   ADD COLUMN `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称' AFTER `create_by`,
   ADD COLUMN `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称' AFTER `update_by`;

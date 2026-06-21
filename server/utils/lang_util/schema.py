@@ -88,6 +88,7 @@ CREATE TABLE `chat_data_dashboard_panel` (
   `chart_type` varchar(50) DEFAULT 'table' COMMENT '图表类型: table-表格, bar-柱状图, line-折线图, pie-饼图, kpi-KPI卡片',
   `chart_config` varchar(2000) DEFAULT NULL COMMENT '图表配置(JSON)',
   `datasource_id` varchar(255) DEFAULT NULL COMMENT '数据源ID',
+  `member_datasource_id` varchar(128) NOT NULL DEFAULT '' COMMENT '成员数据源ID',
   `layout_x` int DEFAULT '0' COMMENT '布局X坐标',
   `layout_y` int DEFAULT '0' COMMENT '布局Y坐标',
   `layout_w` int DEFAULT '6' COMMENT '布局宽度',

@@ -55,6 +55,7 @@ from apps.chat_data_app.schema import (
     DatasourceUpdateRequest,
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
+    PanelCreateRequest,
     PanelUpdateRequest,
     PanelExecuteRequest,
     QuickSqlRequest,
@@ -528,6 +529,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
             "panel_b": {
                 "id": "panel_b",
@@ -537,6 +539,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
             "panel_c": {
                 "id": "panel_c",
@@ -546,6 +549,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
         }
         self.created_dashboard_id = "dash_created"
@@ -597,6 +601,7 @@ class _FakeDashboardService:
         refresh_interval: int = None,
         source_thread_id: str = None,
         datasource_id: str = None,
+        member_datasource_id: str = "",
         user_id: str = None,
         operator_name: str = "",
     ):
@@ -615,6 +620,7 @@ class _FakeDashboardService:
                 "h": layout_h,
             },
             "datasource_id": datasource_id,
+            "member_datasource_id": member_datasource_id,
             "source_thread_id": source_thread_id,
             "user_id": user_id,
             "create_by_name": operator_name,
@@ -636,7 +642,9 @@ class _FakeDashboardService:
         layout_w: int = None,
         layout_h: int = None,
         refresh_interval: int = None,
+        member_datasource_id: str = None,
         user_id: str = None,
+        operator_name: str = "",
     ):
         panel = self.panels.get(panel_id)
         if not panel or panel.get("dashboard_id") != dashboard_id:
@@ -649,6 +657,8 @@ class _FakeDashboardService:
             panel["chart_type"] = chart_type
         if chart_config is not None:
             panel["chart_config"] = chart_config
+        if member_datasource_id is not None:
+            panel["member_datasource_id"] = member_datasource_id
         return copy.deepcopy(panel)
 
     async def update_panels_layout(self, dashboard_id: str, layouts: list[dict], user_id: str = None, operator_name: str = ""):
@@ -2287,6 +2297,58 @@ def test_execute_panel_uses_selected_member_datasource(monkeypatch):
         "panel_a",
         SimpleNamespace(),
         PanelExecuteRequest(member_datasource_id="phy_b"),
+    ))
+    data = _payload(resp)
+    assert data["status"] == "success"
+    assert data["data"]["member_datasource_id"] == "phy_b"
+    assert data["data"]["result"]["member_name"] == "成员B"
+
+
+def test_add_panel_persists_member_datasource_id(monkeypatch):
+    service = _FakeDashboardService()
+    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
+    _mock_authenticated_user(monkeypatch)
+
+    resp = asyncio.run(dashboard_routes.add_panel(
+        "dash_a",
+        PanelCreateRequest(
+            name="成员B订单数",
+            sql="select count(*) from orders",
+            chart_type="table",
+            datasource_id="ds_a",
+            member_datasource_id="phy_b",
+        ),
+        SimpleNamespace(),
+    ))
+    data = _payload(resp)
+    assert data["status"] == "success"
+    assert data["data"]["member_datasource_id"] == "phy_b"
+    assert service.panels[data["data"]["id"]]["member_datasource_id"] == "phy_b"
+
+
+def test_execute_panel_uses_saved_member_datasource_when_not_overridden(monkeypatch):
+    from apps.chat_data_app import routes
+
+    manager = _FakeDatasourceManager()
+    manager.datasources["ds_a"]["member_sources"] = [
+        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
+        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
+    ]
+    service = _FakeDashboardService()
+    service.panels["panel_a"]["member_datasource_id"] = "phy_b"
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    _mock_authenticated_user(monkeypatch)
+    _mock_query_tracking(monkeypatch)
+    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+
+    resp = asyncio.run(dashboard_routes.execute_panel(
+        "dash_a",
+        "panel_a",
+        SimpleNamespace(),
+        None,
     ))
     data = _payload(resp)
     assert data["status"] == "success"

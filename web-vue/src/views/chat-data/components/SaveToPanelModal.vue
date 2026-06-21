@@ -16,6 +16,7 @@ interface Props {
   defaultName?: string
   sourceThreadId?: string
   datasourceId?: string
+  memberDatasourceId?: string
   hideSql?: boolean
   hideChartType?: boolean
 }
@@ -112,7 +113,8 @@ const handleSave = async () => {
       chart_type: chartType.value,
       chart_config: props.chartConfig,
       source_thread_id: props.sourceThreadId,
-      datasource_id: props.datasourceId
+      datasource_id: props.datasourceId,
+      member_datasource_id: props.memberDatasourceId
     })
     ElMessage.success('面板添加成功')
     handleClose()

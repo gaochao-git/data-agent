@@ -686,6 +686,7 @@ class PanelCreateRequest(BaseModel):
     refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
     source_thread_id: Optional[str] = Field(default=None, description="来源会话ID")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID")
+    member_datasource_id: Optional[str] = Field(default=None, description="成员数据源ID")
 
 
 class DashboardFromSpecRequest(BaseModel):
@@ -734,6 +735,7 @@ class PanelUpdateRequest(BaseModel):
     layout_w: Optional[int] = Field(default=None, description="布局宽度")
     layout_h: Optional[int] = Field(default=None, description="布局高度")
     refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
+    member_datasource_id: Optional[str] = Field(default=None, description="成员数据源ID")
 
 
 class LayoutUpdateRequest(BaseModel):

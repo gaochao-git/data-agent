@@ -34,6 +34,15 @@ const emit = defineEmits<{
 
 // 保存到看板弹窗
 const showSaveModal = ref(false)
+const saveSql = ref('')
+const saveChartType = ref('table')
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
+  saveSql.value = sql
+  saveChartType.value = chartType
+  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
+  showSaveModal.value = true
+}
 
 
 // 折叠状态
@@ -657,7 +666,7 @@ function getSqlTokenClass(type: string): string {
               :semantic-params="toolCall.semanticParams"
               :on-view-analysis="onViewAnalysis"
               :is-analysis-active="isAnalysisActive"
-              :on-save="canSaveToPanel ? () => (showSaveModal = true) : undefined"
+              :on-save="canSaveToPanel ? handleSaveToDashboard : undefined"
             />
           </div>
           <div v-else-if="toolCall.renderId && toolCall.renderType === 'chart'" class="flex items-center gap-2.5 p-5 text-center text-gray-500 text-[13px] bg-[linear-gradient(135deg,#fafbfc_0%,#f5f7fa_100%)] rounded-xl border border-dashed border-black/10">
@@ -688,8 +697,10 @@ function getSqlTokenClass(type: string): string {
     <SaveToPanelModal
       v-if="canSaveToPanel"
       v-model:visible="showSaveModal"
-      :sql="generatedSql"
+      :sql="saveSql || generatedSql"
+      :chart-type="saveChartType"
       :datasource-id="datasourceId"
+      :member-datasource-id="saveMemberDatasourceId"
     />
   </div>
 </template>

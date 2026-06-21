@@ -198,6 +198,7 @@ async def test_dashboard_service_panel_explicit_layout_and_no_user_branches(dash
         refresh_interval=30,
         source_thread_id="thread_a",
         datasource_id="ds_a",
+        member_datasource_id="member_a",
     )
     updated_panel = await service.update_panel(
         dashboard_id=dashboard["id"],
@@ -225,6 +226,7 @@ async def test_dashboard_service_panel_explicit_layout_and_no_user_branches(dash
     assert explicit_panel["chart_config"] is None
     assert explicit_panel["refresh_interval"] == 30
     assert explicit_panel["source_thread_id"] == "thread_a"
+    assert explicit_panel["member_datasource_id"] == "member_a"
     assert updated_panel["sql"] == "select order_id from orders"
     assert updated_panel["chart_type"] == "bar"
     assert updated_panel["chart_config"] == {"x": "order_id"}

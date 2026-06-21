@@ -416,9 +416,11 @@ const favoriteBuilderConfig = ref<Record<string, unknown> | null>(null)
 const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref<ChartType>('table')
-const handleSaveToDashboard = (sql: string, chartType: string) => {
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = (chartType as ChartType) || selectedChartType.value
+  saveMemberDatasourceId.value = String(memberDatasourceId || resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId || '').trim()
   showSaveModal.value = true
 }
 
@@ -3420,11 +3422,15 @@ const executeQuery = async () => {
               cache_hit: result.cache_hit,
               cache_age_seconds: result.cache_age_seconds,
               cache_expires_in_seconds: result.cache_expires_in_seconds,
+              member_datasource_id: result.member_datasource_id,
+              member_name: result.member_name,
             }
           : {
               success: false,
               sql: result.sql || sqlText,
-              error: result.error || '查询失败'
+              error: result.error || '查询失败',
+              member_datasource_id: result.member_datasource_id,
+              member_name: result.member_name,
             }
         return {
           title: memberLabel,
@@ -5114,6 +5120,7 @@ defineExpose({
     :sql="saveSql"
     :chart-type="saveChartType"
     :datasource-id="datasourceId"
+    :member-datasource-id="saveMemberDatasourceId"
   />
 
   <QueryFavoriteModal
