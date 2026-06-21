@@ -42,8 +42,10 @@ def test_mode_config_and_prompt_formatters():
     assert nodes.format_execution_target_info_for_llm("") == ""
     assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
     assert "当前未选择指标集" in nodes.build_semantic_layer_context(None, "query")
-    assert "必须先调用 `skill_load` 加载路由知识" in nodes.build_semantic_layer_context(None, "query")
+    assert "业务数据查询、数据目录询问或“所有订单/订单数/用户数/销售额”等短问法，必须先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None, "query")
+    assert "先调用 `skill_load` 加载路由知识" in nodes.build_semantic_layer_context(None, "query")
     assert "没有明显同域技能时直接调用 `select_semantic_config_tool`" in nodes.build_semantic_layer_context(None, "query")
+    assert "只有搜索后未找到、候选不唯一或口径不清时，才向用户澄清" in nodes.build_semantic_layer_context(None, "query")
     assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"}, "query")
     assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
     assert "必须先调用 `skill_load` 加载主说明" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")

@@ -75,6 +75,11 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
 
     assert "上下文未提供可用语义配置" in prompt
     assert "业务数据查询必须先调用 `select_semantic_config_tool(query=用户原问题)`" in prompt
+    assert "未选择指标集时，业务数据查询、指标/维度询问、以及“所有订单/订单数/用户数/销售额”等短问法，都必须先调用指标集选择工具获取真实可用配置" in prompt
+    assert "用户问“有哪些指标/维度可以查”“所有订单”“订单数”“用户数”“销售额”等看似笼统但属于业务数据或数据目录的问题时，也应先搜索真实指标集" in prompt
+    assert "只有搜索后未找到、口径不唯一或无法高置信匹配时，才向用户澄清或说明配置缺口" in prompt
+    assert "业务数据目录问题不属于普通对话" in prompt
+    assert "不要在搜索前凭常识列举或澄清" in prompt
     assert "获得唯一语义配置后，仍必须核对用户表述是否能高置信唯一匹配" in prompt
     assert "相近、简称、口语化表达、名称相同但口径不明，或存在多个可能解释" in prompt
     assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
@@ -96,8 +101,9 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
 def test_chat_data_query_prompt_enforces_clarification_gate_before_query_tools():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "澄清优先门禁（最高优先级）" in prompt
-    assert "只有信息完整、口径唯一、且已高置信匹配当前指标集真实指标/维度时，数据查询场景才能调用 `dsl2sql_tool` 和 `semantic_query_tool`" in prompt
+    assert "指标集选择优先门禁（最高优先级）" in prompt
+    assert "查询执行澄清门禁（最高优先级）" in prompt
+    assert "只有信息完整、口径唯一、且已高置信匹配当前指标集真实指标/维度时，才能调用 `dsl2sql_tool` 和 `semantic_query_tool`" in prompt
     assert "只要任一条件不满足，禁止调用 `dsl2sql_tool`、`semantic_query_tool`、`calculator_tool`" in prompt
     assert "“看起来像”“可能是”“通常指”“可以理解为”“与某字段相近”“名称一样但口径不明”都不算高置信匹配" in prompt
     assert "指标和维度必须有明确业务口径" in prompt

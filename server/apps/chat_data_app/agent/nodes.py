@@ -61,7 +61,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
     if not semantic_config:
         return (
             "## 当前指标集\n"
-            "当前未选择指标集。业务数据查询如果与可用业务知识技能明显同域，必须先调用 `skill_load` 加载路由知识，再调用 `select_semantic_config_tool`；没有明显同域技能时直接调用 `select_semantic_config_tool`。\n"
+            "当前未选择指标集。业务数据查询、数据目录询问或“所有订单/订单数/用户数/销售额”等短问法，必须先搜索当前数据源组中的真实指标集；如果与可用业务知识技能明显同域，先调用 `skill_load` 加载路由知识，再调用 `select_semantic_config_tool`；没有明显同域技能时直接调用 `select_semantic_config_tool`。只有搜索后未找到、候选不唯一或口径不清时，才向用户澄清。\n"
         )
     from .tools import build_semantic_prompt
     config_id = str(semantic_config.get("id") or "").strip()
