@@ -241,15 +241,13 @@ class _SaveStore:
             "ds_description": "",
             "source_type": "hive",
             "query_executor_type": "http",
-            "source_config": {"host": "127.0.0.1", "port": 10000, "database": "dw"},
+            "source_config": {"database": "dw"},
             "member_sources": [
                 {
                     "member_datasource_id": "ORG_A",
                     "org_name": "机构A",
                     "org_code": "ORG_A",
                     "source_type": "hive",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
                 {
@@ -257,8 +255,6 @@ class _SaveStore:
                     "org_name": "机构B",
                     "org_code": "ORG_B",
                     "source_type": "hive",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
             ],
@@ -764,15 +760,11 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
             {
                 "org_name": "机构A",
                 "org_code": "ORG_A",
-                "host": "127.0.0.1",
-                "port": 10000,
                 "database": "dw",
             },
             {
                 "org_name": "机构B",
                 "org_code": "ORG_B",
-                "host": "127.0.0.1",
-                "port": 10000,
                 "database": "dw",
             },
         ],
@@ -784,7 +776,7 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|127.0.0.1:10000:dw\n机构B|ORG_B|http|127.0.0.1:10000:dw"
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw"
     assert [item["member_datasource_id"] for item in saved["member_sources"]] == ["ORG_A", "ORG_B"]
 
 
@@ -803,15 +795,11 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
             {
                 "org_name": "机构A",
                 "org_code": "ORG_A",
-                "host": "127.0.0.1",
-                "port": 3306,
                 "database": "test_db",
             },
             {
                 "org_name": "机构B",
                 "org_code": "ORG_B",
-                "host": "127.0.0.1",
-                "port": 3306,
                 "database": "test_db",
             },
         ],
@@ -823,7 +811,7 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|127.0.0.1:3306:test_db\n机构B|ORG_B|http|127.0.0.1:3306:test_db"
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|test_db\n机构B|ORG_B|http|test_db"
 
 
 def test_save_datasource_rejects_duplicate_hive_http_names():
@@ -843,15 +831,11 @@ def test_save_datasource_rejects_duplicate_hive_http_names():
                 {
                     "org_name": "机构A",
                     "org_code": "ORG_A",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
                 {
                     "org_name": "机构A重名",
                     "org_code": "ORG_A",
-                    "host": "127.0.0.2",
-                    "port": 10000,
                     "database": "dw_b",
                 },
             ],
@@ -909,17 +893,19 @@ def test_update_datasource_preserves_template_member_name_when_refreshing_tables
     asyncio.run(manager.update_datasource_async(
         "ds_refresh",
         tables=[{"table_name": "orders", "description": "orders", "columns": []}],
-        source_config={"host": "127.0.0.1", "port": 10000, "database": "dw"},
+        source_config={"database": "dw"},
     ))
 
-    assert fake_store.saved_kwargs["template_source"] == "机构A|ORG_A|http|127.0.0.1:10000:dw"
-    assert fake_store.saved_kwargs["member_sources_text"].splitlines()[0] == "机构A|ORG_A|http|127.0.0.1:10000:dw"
+    assert fake_store.saved_kwargs["template_source"] == "机构A|ORG_A|http|dw"
+    assert fake_store.saved_kwargs["member_sources_text"].splitlines()[0] == "机构A|ORG_A|http|dw"
+    with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
+        _normalize_member_source_config("hive", {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "database": "dw"})
 
 
 def test_validate_member_source_configs_rejects_duplicate_org_code():
     configs = [
         {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-        {"org_name": "机构A2", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.2", "port": 3306, "database": "demo"},
+        {"org_name": "机构A2", "org_code": "ORG_A", "query_executor_type": "http", "database": "demo"},
     ]
 
     with pytest.raises(ValueError, match="机构编码重复"):
@@ -931,7 +917,7 @@ def test_merge_member_source_lines_keeps_new_template_first_and_existing_members
         "template_datasource_id": "ORG_OLD",
         "member_sources": [
             {"org_name": "旧机构", "org_code": "ORG_OLD", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-            {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "host": "127.0.0.2", "port": 3306, "database": "demo"},
+            {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "demo"},
         ],
     }
     template = {"org_name": "新机构", "org_code": "ORG_NEW", "query_executor_type": "direct", "host": "127.0.0.3", "port": 3306, "database": "demo"}
@@ -1201,7 +1187,7 @@ def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypa
         "ds_refresh",
         name="新名称",
         description="新描述",
-        source_config={"host": "127.0.0.2", "port": 10000, "database": "dw2"},
+        source_config={"database": "dw2"},
         semantic_config={"deprecated": True},
         semantic_configs=[{"deprecated": True}],
         mapped_modules=["执法检查"],
@@ -1211,7 +1197,7 @@ def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypa
     assert result == {"id": "ds_refresh", "updated": True}
     assert store.saved_kwargs["group_name"] == "新名称"
     assert store.updated_kwargs["mapped_modules"] == ["执法检查"]
-    assert store.saved_kwargs["member_sources_text"].startswith("机构A|ORG_A|http|127.0.0.2:10000:dw2")
+    assert store.saved_kwargs["member_sources_text"].startswith("机构A|ORG_A|http|dw2")
 
 
 def test_datasource_manager_async_crud_paths(monkeypatch):
@@ -1444,8 +1430,8 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
         "异步新组",
         "描述",
         "mysql",
-        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "port": 3306, "database": "d"},
-        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "host": "h2", "port": 3306, "database": "d2"}],
+        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "database": "d"},
+        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "d2"}],
         create_by="u1",
     ))
     assert created["id"] == "ds_20260602101112_345678"

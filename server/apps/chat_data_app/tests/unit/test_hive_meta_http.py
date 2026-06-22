@@ -18,8 +18,6 @@ def test_hive_meta_payload_uses_internal_org_fields():
     payload = _build_payload({
         "org_code": "Z2002131000014",
         "org_name": "机构名称xx",
-        "host": "localhost",
-        "port": 10000,
         "database": "default",
     }, ["orders"], user_id="user_a", username="测试用户")
 
@@ -27,13 +25,20 @@ def test_hive_meta_payload_uses_internal_org_fields():
         "source_type": "hive",
         "orgCode": "Z2002131000014",
         "orgName": "机构名称xx",
-        "host": "localhost",
-        "port": 10000,
         "database": "default",
         "userId": "user_a",
         "username": "测试用户",
         "table_names": ["orders"],
     }
+    legacy_payload = _build_payload({
+        "org_code": "Z2002131000014",
+        "org_name": "机构名称xx",
+        "host": "localhost",
+        "port": 10000,
+        "database": "default",
+    })
+    assert legacy_payload["host"] == "localhost"
+    assert legacy_payload["port"] == 10000
 
 
 def test_hive_meta_payload_requires_internal_org_code():

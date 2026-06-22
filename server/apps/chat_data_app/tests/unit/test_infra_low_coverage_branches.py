@@ -770,6 +770,20 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
         payload[field] = value
         with pytest.raises(ValueError, match=message):
             DatasourceSourceItem(**payload)
+    assert DatasourceSourceItem(
+        org_name="机构",
+        org_code="ORG",
+        query_executor_type="http",
+        database="demo",
+    ).host == ""
+    with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
+        DatasourceSourceItem(
+            org_name="机构",
+            org_code="ORG",
+            query_executor_type="http",
+            host="127.0.0.1",
+            database="demo",
+        )
 
 
 def test_skills_loader_frontmatter_metadata_and_activation(tmp_path, monkeypatch):

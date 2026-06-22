@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -4133,7 +4135,6 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
     hive_http_response = asyncio.run(routes.get_db_tables(DbConnectionRequest(
         source_type="hive",
         query_executor_type="http",
-        host="127.0.0.1",
         database="default",
         org_code="ORG_A",
         org_name="机构A",
@@ -4141,7 +4142,9 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
     hive_http_body = _payload(hive_http_response)
     assert hive_http_body["status"] == "success"
     assert hive_http_body["data"]["tables"][0] == "http_orders"
-    assert hive_http_calls[-1]["source_config"]["port"] == 10000
+    assert "port" not in hive_http_calls[-1]["source_config"]
+    assert "host" not in hive_http_calls[-1]["source_config"]
+    assert hive_http_calls[-1]["source_config"]["database"] == "default"
     assert hive_http_calls[-1]["source_config"]["org_code"] == "ORG_A"
     assert hive_http_calls[-1]["source_config"]["org_name"] == "机构A"
     assert hive_http_calls[-1]["source_config"]["query_executor_type"] == "http"
@@ -4362,19 +4365,27 @@ def test_routes_helper_branches_for_user_params_and_source_config(monkeypatch):
     assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" rt1 ")) is True
     assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" ")) is False
 
-    normalized = routes._normalize_source_item(
-        "mysql",
-        " 127.0.0.1 ",
+    with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
+        routes._normalize_source_item(
+            "mysql",
+            " 127.0.0.1 ",
+            None,
+            " demo ",
+            " 机构A ",
+            " ORG_A ",
+            " HTTP ",
+        )
+    http_without_endpoint = routes._normalize_source_item(
+        "hive",
+        "",
         None,
-        " demo ",
-        " 机构A ",
-        " ORG_A ",
-        " HTTP ",
+        "default",
+        "机构A",
+        "ORG_A",
+        "http",
     )
-    assert normalized == {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "database": "demo",
+    assert http_without_endpoint == {
+        "database": "default",
         "query_executor_type": "http",
         "org_name": "机构A",
         "org_code": "ORG_A",
@@ -4384,7 +4395,7 @@ def test_routes_helper_branches_for_user_params_and_source_config(monkeypatch):
         ({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构名称不能为空"),
         ({"org_name": "机构A", "org_code": "", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构编码不能为空"),
         ({"org_name": "机构A", "org_code": "ORG_A", "host": "", "database": "demo", "query_executor_type": "direct"}, "数据源连接信息不完整"),
-        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "", "query_executor_type": "direct"}, "数据源连接信息不完整"),
+        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "", "query_executor_type": "direct"}, "数据库名不能为空"),
         ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "jdbc"}, "不支持的查询执行方式"),
     ]:
         try:

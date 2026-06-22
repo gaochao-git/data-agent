@@ -457,8 +457,8 @@ export function getDbTables(data: {
   query_executor_type?: 'direct' | 'http'
   org_code?: string
   org_name?: string
-  host: string
-  port: number
+  host?: string
+  port?: number
   database: string
 }): Promise<ApiResponse<{ tables: string[] }>> {
   return request({
@@ -663,7 +663,7 @@ export function createDatasourceGroup(data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }
@@ -672,7 +672,7 @@ export function createDatasourceGroup(data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }>
@@ -693,7 +693,7 @@ export function updateDatasourceGroup(datasourceId: string, data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }
@@ -702,7 +702,7 @@ export function updateDatasourceGroup(datasourceId: string, data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }>

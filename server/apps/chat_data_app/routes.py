@@ -292,7 +292,6 @@ def _normalize_source_item(
     """标准化数据源连接项。"""
     normalized_host = str(host or "").strip()
     normalized_database = str(database or "").strip()
-    normalized_port = int(port or SOURCE_DEFAULT_PORTS[source_type])
     normalized_org_name = str(org_name or "").strip()
     normalized_org_code = str(org_code or "").strip()
     normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
@@ -300,16 +299,26 @@ def _normalize_source_item(
         raise ValueError("机构名称不能为空")
     if not normalized_org_code:
         raise ValueError("机构编码不能为空")
-    if not normalized_host or not normalized_database:
-        raise ValueError("数据源连接信息不完整")
     if normalized_executor_type not in {"direct", "http"}:
         raise ValueError(f"不支持的查询执行方式: {normalized_executor_type}")
-    result = {
-        "host": normalized_host,
-        "port": normalized_port,
-        "database": normalized_database,
-        "query_executor_type": normalized_executor_type,
-    }
+    if not normalized_database:
+        raise ValueError("数据库名不能为空")
+    if normalized_executor_type == "direct" and not normalized_host:
+        raise ValueError("数据源连接信息不完整")
+    if normalized_executor_type == "http" and (normalized_host or port is not None):
+        raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
+    if normalized_executor_type == "direct":
+        result = {
+            "host": normalized_host,
+            "port": int(port or SOURCE_DEFAULT_PORTS[source_type]),
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
+    else:
+        result = {
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
     result["org_name"] = normalized_org_name
     result["org_code"] = normalized_org_code
     return result
@@ -317,6 +326,8 @@ def _normalize_source_item(
 
 async def _load_tables_from_source(source_type: str, source_item: Dict[str, Any], table_names: Optional[List[str]] = None, user_id: Optional[str] = None, username: Optional[str] = None) -> List[Dict[str, Any]]:
     """从模板数据源拉取表结构。"""
+    if _is_http_query_executor(source_item) and source_type != "hive":
+        raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
     if source_type == "hive":
         if _is_http_query_executor(source_item):
             return await get_hive_meta_schema_async(source_item, table_names, user_id=user_id, username=username)
@@ -1848,17 +1859,22 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
         user_params = _get_optional_request_user_http_params(http_request)
         source_type = request.source_type
 
-        # 设置默认端口
         port = request.port
-        if port is None:
+        if request.query_executor_type == "direct" and port is None:
             port = 10000 if source_type == "hive" else 3306
 
-        logger.info(f"获取 {source_type.upper()} 表列表: {request.host}:{port}/{request.database}")
+        logger.info(
+            "获取 %s 表列表: executor=%s host=%s port=%s database=%s org_code=%s",
+            source_type.upper(),
+            request.query_executor_type,
+            request.host,
+            port,
+            request.database,
+            request.org_code,
+        )
 
         if source_type == "hive":
             source_config = {
-                "host": request.host,
-                "port": port,
                 "database": request.database,
                 "org_code": request.org_code,
                 "org_name": request.org_name,
@@ -1867,6 +1883,8 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
             if request.query_executor_type == "http":
                 tables = await get_hive_meta_tables_async(source_config, **user_params)
             else:
+                source_config["host"] = request.host
+                source_config["port"] = port
                 hive_credentials = resolve_hive_credentials(source_config)
                 service = HiveSyncService(
                     host=request.host,
@@ -1880,6 +1898,8 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
                     timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
                 )
         else:
+            if request.query_executor_type == "http":
+                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
             mysql_credentials = resolve_mysql_credentials({})
             service = MySQLSyncService(
                 host=request.host,

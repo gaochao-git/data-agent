@@ -157,8 +157,8 @@ interface DataSource {
     org_name?: string
     org_code?: string
     source_type?: string
-    host: string
-    port: number
+    host?: string
+    port?: number
     database: string
   }>
 }

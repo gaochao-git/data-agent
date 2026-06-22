@@ -50,8 +50,8 @@ export interface DataSource {
     org_code?: string
     source_type?: string
     query_executor_type?: 'direct' | 'http'
-    host: string
-    port: number
+    host?: string
+    port?: number
     database: string
   }>
   template_datasource_id?: string

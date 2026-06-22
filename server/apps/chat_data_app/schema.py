@@ -151,11 +151,28 @@ class DbConnectionRequest(BaseModel):
     """数据库连接请求（用于获取表列表）"""
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     query_executor_type: QueryExecutorType = Field(default="direct", description="查询执行方式: direct | http")
-    host: str = Field(..., description="服务器地址")
+    host: str = Field(default="", description="服务器地址")
     port: Optional[int] = Field(default=None, description="端口（Hive默认10000，MySQL默认3306）")
     database: str = Field(..., description="数据库名")
     org_code: Optional[str] = Field(default=None, description="机构编码")
     org_name: Optional[str] = Field(default=None, description="机构名称")
+
+    @model_validator(mode="after")
+    def validate_connection_fields(self):
+        self.host = str(self.host or "").strip()
+        self.database = str(self.database or "").strip()
+        self.org_code = str(self.org_code or "").strip() or None
+        self.org_name = str(self.org_name or "").strip() or None
+        if self.query_executor_type == "direct":
+            if not self.host:
+                raise ValueError("host 不能为空")
+        elif not self.org_code:
+            raise ValueError("HTTP 模式缺少机构编码")
+        elif self.host or self.port is not None:
+            raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
+        if not self.database:
+            raise ValueError("database 不能为空")
+        return self
 
 
 class DatasourceUpdateRequest(BaseModel):
@@ -242,7 +259,7 @@ class DatasourceSourceItem(BaseModel):
     org_name: str = Field(..., min_length=1, max_length=128, description="机构名称")
     org_code: str = Field(..., min_length=1, max_length=128, description="机构编码")
     query_executor_type: QueryExecutorType = Field(..., description="查询执行方式: direct | http")
-    host: str = Field(..., min_length=1, description="主机地址")
+    host: str = Field(default="", description="主机地址")
     port: Optional[int] = Field(default=None, description="端口")
     database: str = Field(..., min_length=1, description="数据库名")
 
@@ -256,8 +273,10 @@ class DatasourceSourceItem(BaseModel):
             raise ValueError("org_name 不能为空")
         if not self.org_code:
             raise ValueError("org_code 不能为空")
-        if not self.host:
+        if self.query_executor_type == "direct" and not self.host:
             raise ValueError("host 不能为空")
+        if self.query_executor_type == "http" and (self.host or self.port is not None):
+            raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
         if not self.database:
             raise ValueError("database 不能为空")
         return self

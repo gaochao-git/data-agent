@@ -526,7 +526,7 @@ const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
         host: String(member.host || ''),
         port: Number(member.port || 0),
         database: String(member.database || ''),
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
+        label: member.org_name || member.org_code || String(member.database || '') || String(member.member_datasource_id),
       }))
   }
   if (!selectedDatasource.value || !datasource) return []
