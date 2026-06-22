@@ -179,7 +179,7 @@ async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> li
     )
 
     # 调用 LLM 选择表（非流式，快速返回）
-    llm = get_chat_data_llm(streaming=False, temperature=0)
+    llm = get_chat_data_llm(streaming=False)
     response = await llm.ainvoke([HumanMessage(content=system_prompt)])
 
     # 解析返回的表名列表

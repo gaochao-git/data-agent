@@ -140,7 +140,7 @@ def create_agent_node(
         llm_messages = [SystemMessage(content=system_prompt)] + messages
 
         # 调用 LLM（指定模型失败时回退默认模型）
-        llm = get_chat_data_llm(model=model_id, streaming=True, temperature=0, enable_thinking=enable_thinking)
+        llm = get_chat_data_llm(model=model_id, streaming=True, enable_thinking=enable_thinking)
 
         # 统计上下文 tokens
         message_tokens = count_messages_tokens(llm_messages)
@@ -174,7 +174,7 @@ def create_agent_node(
                 raise
             fallback_model = get_default_chat_data_model()
             logger.warning(f"[agent] 指定模型调用失败，回退默认模型: model_id={model_id}, fallback={fallback_model}, err={err}")
-            llm = get_chat_data_llm(model=fallback_model, streaming=True, temperature=0, enable_thinking=enable_thinking)
+            llm = get_chat_data_llm(model=fallback_model, streaming=True, enable_thinking=enable_thinking)
             if active_tools:
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)
             else:

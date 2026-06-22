@@ -307,7 +307,6 @@ def create_data_analyze_agent(
         model=model_id,
         streaming=True,
         stream_usage=True,
-        temperature=0.2,
         enable_thinking=enable_thinking,
     )
     token_usage_middleware = create_request_token_usage_middleware(model_id)
@@ -318,7 +317,6 @@ def create_data_analyze_agent(
             model=fallback_model,
             streaming=True,
             stream_usage=True,
-            temperature=0.2,
             enable_thinking=enable_thinking,
         )
         middleware.append(ModelFallbackMiddleware(fallback_llm))
@@ -390,7 +388,6 @@ def create_data_analyze_flow_graph(
         model=model_id,
         streaming=True,
         stream_usage=True,
-        temperature=0.1,
         enable_thinking=enable_thinking,
     )
     execution_session_ref = SandboxExecutionSessionRef()

@@ -34,6 +34,7 @@ def test_chat_data_thinking_disabled_by_default(monkeypatch):
     llm_config.get_chat_data_llm()
 
     assert captured["model"] == "qwen3.6-35b-a3b"
+    assert captured["temperature"] == 0.2
     _assert_thinking_extra_body(captured["extra_body"], False)
 
 
@@ -159,10 +160,36 @@ def test_chat_data_llm_uses_first_configured_model(monkeypatch):
     assert captured["model"] == "qwen3.5-35b-a3b"
 
 
+def test_chat_data_llm_temperature_reads_single_env(monkeypatch):
+    captured = {}
+
+    def fake_get_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
+    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "0.35")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
+    llm_config.get_chat_data_llm()
+    assert captured["temperature"] == 0.35
+
+    llm_config.get_chat_data_llm(temperature=0)
+    assert captured["temperature"] == 0
+
+    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "bad")
+    assert llm_config.get_chat_data_temperature() == 0.2
+    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "-0.1")
+    assert llm_config.get_chat_data_temperature() == 0.2
+    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "2.1")
+    assert llm_config.get_chat_data_temperature() == 0.2
+
+
 def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
     from apps.chat_data_app.agent import data_analyze_graph
 
     created_models = []
+    created_temperatures = []
     captured = {}
 
     class FakeLLM:
@@ -170,6 +197,7 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
 
     def fake_get_chat_data_llm(**kwargs):
         created_models.append(kwargs.get("model"))
+        created_temperatures.append(kwargs.get("temperature"))
         return FakeLLM()
 
     def fake_create_agent(**kwargs):
@@ -188,6 +216,7 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
     )
 
     assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507", "qwen3.6-35b-a3b"]
+    assert created_temperatures == [None, None]
     assert len(captured["middleware"]) == 2
     assert captured["state_schema"] is data_analyze_graph.DataAnalyzeAgentState
     assert any(isinstance(item, data_analyze_graph.ModelFallbackMiddleware) for item in captured["middleware"])

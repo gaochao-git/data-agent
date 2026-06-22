@@ -687,7 +687,7 @@ async def select_semantic_config_for_query(
         chunk_tokens,
         max(chunk_tokens) if chunk_tokens else 0,
     )
-    llm = get_chat_data_llm(model=model_id, streaming=False, temperature=0, max_tokens=1200)
+    llm = get_chat_data_llm(model=model_id, streaming=False, max_tokens=1200)
     if len(chunks) == 1:
         selection = await _select_semantic_config_chunk(llm, normalized_query, chunks[0])
     else:

@@ -442,7 +442,7 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         existing_questions=payload.existing_questions,
         semantic_config_payload=_semantic_config_prompt_payload(config),
     )
-    llm = get_chat_data_llm(streaming=False, temperature=0.2, max_tokens=2000)
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)

@@ -1599,7 +1599,7 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
                 status="error"
             )
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
-        llm = get_chat_data_llm(streaming=False, temperature=0, max_tokens=1200)
+        llm = get_chat_data_llm(streaming=False, max_tokens=1200)
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         content = response.content if hasattr(response, "content") else str(response)
         column_dict = _parse_column_dict_generate_response(str(content))

@@ -11,6 +11,7 @@ from utils.lang_util.llm import get_llm
 
 DEFAULT_CHAT_DATA_MAX_TOKENS = 20000
 DEFAULT_CHAT_DATA_MODEL = "gpt-4o-mini"
+DEFAULT_CHAT_DATA_TEMPERATURE = 0.2
 
 
 def _get_default_max_tokens() -> int:
@@ -23,6 +24,18 @@ def _get_default_max_tokens() -> int:
     except ValueError:
         return DEFAULT_CHAT_DATA_MAX_TOKENS
     return value if value > 0 else DEFAULT_CHAT_DATA_MAX_TOKENS
+
+
+def get_chat_data_temperature() -> float:
+    """读取智能问数和智能分析默认模型温度。"""
+    raw = str(os.getenv("CHAT_DATA_TEMPERATURE") or "").strip()
+    if not raw:
+        return DEFAULT_CHAT_DATA_TEMPERATURE
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_CHAT_DATA_TEMPERATURE
+    return value if 0 <= value <= 2 else DEFAULT_CHAT_DATA_TEMPERATURE
 
 
 def _split_model_names(raw_value: str | None) -> list[str]:
@@ -90,7 +103,7 @@ def get_chat_data_llm(
     model: str | None = None,
     streaming: bool = False,
     stream_usage: bool | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     max_tokens: int | None = None,
     timeout: int | None = None,
     enable_thinking: bool | None = None,
@@ -101,7 +114,7 @@ def get_chat_data_llm(
         model=selected_model,
         streaming=streaming,
         stream_usage=stream_usage,
-        temperature=temperature,
+        temperature=get_chat_data_temperature() if temperature is None else temperature,
         max_tokens=max_tokens or _get_default_max_tokens(),
         timeout=timeout,
         api_key=_get_chat_data_api_key(),

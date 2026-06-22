@@ -51,7 +51,7 @@ TITLE_GENERATION_PROMPT = """你是一个对话标题生成助手。根据用户
 
 def _get_title_llm():
     """获取标题生成用的LLM"""
-    return get_chat_data_llm(streaming=False, temperature=0.3, max_tokens=30)
+    return get_chat_data_llm(streaming=False, max_tokens=30)
 
 
 def _format_thread(t: UserThread) -> Dict[str, Any]:
