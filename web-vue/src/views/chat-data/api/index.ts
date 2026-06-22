@@ -1149,18 +1149,6 @@ export function getQueryHistoryResult(executionId: string): Promise<ApiResponse<
   })
 }
 
-/** 编译可视化查询 DSL 为 SQL（不执行） */
-export function compileBuilderSql(params: {
-  builder_config: Record<string, unknown>
-  datasource_id?: string
-}): Promise<ApiResponse<{ sql: string }>> {
-  return request({
-    url: `/agents/api/chatdata/compile-builder-sql`,
-    method: 'post',
-    data: params
-  })
-}
-
 /** 编译语义可视化查询 DSL 为 SQL（不执行） */
 export function compileSemanticBuilderSql(params: {
   datasource_id: string

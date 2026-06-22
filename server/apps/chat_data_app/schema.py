@@ -86,12 +86,6 @@ class QueryTaskCreateRequest(BaseModel):
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
 
-class CompileBuilderSqlRequest(BaseModel):
-    """编译 Builder DSL 请求（仅生成 SQL，不执行）"""
-    builder_config: dict = Field(..., description="辅助查询模式的 DSL 配置")
-    datasource_id: Optional[str] = Field(default=None, description="数据源ID（用于选择 SQL 方言）")
-
-
 class CompileSemanticBuilderSqlRequest(BaseModel):
     """编译语义可视化 DSL 请求（仅生成 SQL，不执行）。"""
     datasource_id: str = Field(..., description="数据源ID")

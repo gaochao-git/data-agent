@@ -176,6 +176,12 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_builder_config={"dimensions": []},
     )
+    builder_without_semantic_config = ExecuteSqlRequest(
+        sql="select bad",
+        datasource_id="ds_a",
+        query_type="builder",
+        builder_config={"mainTable": "orders"},
+    )
     semantic_builder = ExecuteSqlRequest(
         sql="select bad",
         datasource_id="ds_a",
@@ -193,6 +199,8 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
     monkeypatch.setattr(query_runtime, "compile_semantic_builder_sql", fake_compile_semantic_builder_sql)
 
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(normal)) is normal
+    with pytest.raises(ValueError, match="必须基于指标集"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(no_semantic_config))
 

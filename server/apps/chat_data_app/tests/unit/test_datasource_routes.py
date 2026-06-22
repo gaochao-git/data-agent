@@ -3663,45 +3663,6 @@ def test_execute_sql_direct_value_error_and_runtime_error(monkeypatch):
     assert _payload(asyncio.run(routes.execute_sql_direct(SimpleNamespace(), routes.ExecuteSqlRequest(sql="select 1", datasource_id="ds_a"))))["code"] == 50010
 
 
-def test_compile_builder_sql_endpoint_error_branches(monkeypatch):
-    class MissingManager:
-        async def get_datasource_async(self, _datasource_id):
-            return None
-
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: MissingManager())
-    missing = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(
-        datasource_id="missing",
-        builder_config={"table": "orders"},
-    )))
-    assert _payload(missing)["code"] == 40404
-
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid dsl")))
-    invalid = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(builder_config={"table": "orders"})))
-    assert _payload(invalid)["code"] == 40001
-
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compiler down")))
-    failed = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(builder_config={"table": "orders"})))
-    assert _payload(failed)["code"] == 50010
-
-
-def test_compile_builder_sql_endpoint_uses_datasource_dialect(monkeypatch):
-    class HiveManager:
-        async def get_datasource_async(self, _datasource_id):
-            return {"source_type": "hive"}
-
-    captured = {}
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: HiveManager())
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda builder_config, dialect="mysql": captured.update({"dialect": dialect}) or "select 1")
-
-    response = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(
-        datasource_id="ds_hive",
-        builder_config={"mainTable": "orders", "dimensions": [{"table": "orders", "column": "id"}]},
-    )))
-
-    assert _payload(response)["data"]["sql"] == "select 1"
-    assert captured["dialect"] == "hive"
-
-
 def test_routes_query_runtime_wrapper_functions(monkeypatch):
     calls = []
 

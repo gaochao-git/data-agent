@@ -928,8 +928,11 @@ async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
 
 async def prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None):
     """保留 SQL 原文；语义可视化查询在服务端重新编译，安全校验统一在执行器边界完成。"""
+    query_type = str(getattr(request, "query_type", "") or "").strip().lower()
     semantic_builder_config = getattr(request, "semantic_builder_config", None)
     semantic_config_id = str(getattr(request, "semantic_config_id", "") or "").strip()
+    if query_type == "builder" and not semantic_builder_config:
+        raise ValueError("可视化查询必须基于指标集，请先选择指标集")
     if not semantic_builder_config:
         return request
     if not semantic_config_id:

@@ -1049,8 +1049,8 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
         sql="select * from orders -- 注释",
         query_type="builder",
     )
-    unchanged = asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
-    assert unchanged is builder_request
+    with pytest.raises(ValueError, match="必须基于指标集"):
+        asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
 
     sql_request = QueryTaskCreateRequest(
         task_type="sql",

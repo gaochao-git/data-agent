@@ -21,7 +21,6 @@ from .schema import (
     QuickSqlRequest,
     ExecuteSqlRequest,
     QueryTaskCreateRequest,
-    CompileBuilderSqlRequest,
     CompileSemanticBuilderSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
@@ -46,7 +45,6 @@ from .services.hive_meta_http import get_hive_meta_tables_async, get_hive_meta_s
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
 from .services import query_runtime
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
-from .semantic.compiler import compile_builder_sql
 from .semantic.utils import parse_llm_json
 from .services.llm_config import get_chat_data_llm
 from .handlers import _stream_sql_generation, _build_execution_target_info_async
@@ -2747,26 +2745,6 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
             code=50010,
             status="error"
         )
-
-
-@router.post("/compile-builder-sql")
-async def compile_builder_sql_endpoint(request: CompileBuilderSqlRequest):
-    """编译 Builder DSL 为 SQL（仅预览，不执行）。"""
-    try:
-        dialect = "mysql"
-        if request.datasource_id:
-            ds_manager = get_datasource_manager()
-            datasource = await ds_manager.get_datasource_async(request.datasource_id)
-            if not datasource:
-                return business_response(msg=f"数据源不存在: {request.datasource_id}", code=40404, status="error")
-            dialect = datasource.get("source_type", "mysql")
-        sql = compile_builder_sql(request.builder_config, dialect=dialect)
-        return business_response(data={"sql": sql}, msg="编译成功")
-    except ValueError as err:
-        return business_response(msg=str(err), code=40001, status="error")
-    except Exception as err:
-        logger.error(f"Builder DSL 编译失败: {err}", exc_info=True)
-        return business_response(msg="Builder DSL 编译失败，请检查配置", code=50010, status="error")
 
 
 @router.post("/compile-semantic-builder-sql")

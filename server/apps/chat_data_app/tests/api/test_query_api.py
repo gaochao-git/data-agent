@@ -112,86 +112,6 @@ def _patch_execute_sql_runtime(monkeypatch):
     return captured
 
 
-def test_compile_builder_sql_api_contract(client, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda builder_config, dialect="mysql": "select city, sum(amount) from orders group by city")
-
-    response = client.post(
-        "/api/chatdata/compile-builder-sql",
-        json={
-            "datasource_id": "ds_a",
-            "builder_config": {
-                "metrics": [{"name": "销售额", "expression": "SUM(amount)", "table": "orders"}],
-                "dimensions": [{"name": "城市", "column": "city", "table": "orders"}],
-                "limit": 10,
-                "offset": 0,
-            },
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "success"
-    assert payload["data"]["sql"].startswith("select city")
-
-
-def test_compile_builder_sql_uses_datasource_dialect(client, fake_datasource_manager, monkeypatch):
-    captured = {}
-
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
-        captured["builder_config"] = builder_config
-        captured["dialect"] = dialect
-        return "select * from orders"
-
-    fake_datasource_manager.datasources["ds_a"]["source_type"] = "hive"
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr(routes, "compile_builder_sql", fake_compile_builder_sql)
-
-    response = client.post(
-        "/api/chatdata/compile-builder-sql",
-        json={
-            "datasource_id": "ds_a",
-            "builder_config": {
-                "mainTable": "orders",
-                "dimensions": [{"table": "orders", "column": "id"}],
-            },
-        },
-    )
-
-    payload = response.json()
-    assert payload["status"] == "success"
-    assert captured["dialect"] == "hive"
-    assert captured["builder_config"]["mainTable"] == "orders"
-
-
-def test_compile_builder_sql_returns_datasource_not_found(client, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
-
-    response = client.post(
-        "/api/chatdata/compile-builder-sql",
-        json={"datasource_id": "missing_ds", "builder_config": {"mainTable": "orders"}},
-    )
-
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["code"] == 40404
-    assert "数据源不存在" in payload["msg"]
-
-
-def test_compile_builder_sql_returns_value_error(client, monkeypatch):
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("缺少主表")))
-
-    response = client.post(
-        "/api/chatdata/compile-builder-sql",
-        json={"builder_config": {"dimensions": []}},
-    )
-
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["code"] == 40001
-    assert payload["msg"] == "缺少主表"
-
-
 def _add_semantic_join_fixture(fake_datasource_manager):
     datasource = fake_datasource_manager.datasources["ds_a"]
     datasource["ds_tables"].append(
@@ -734,7 +654,7 @@ def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monke
     assert captured["updates"][-1]["status"] == "succeeded"
 
 
-def test_execute_sql_api_runs_sql_and_builder_through_query_runtime(client, auth_headers, monkeypatch):
+def test_execute_sql_api_runs_sql_through_query_runtime(client, auth_headers, monkeypatch):
     captured = _patch_execute_sql_runtime(monkeypatch)
 
     sql_response = client.post(
@@ -748,7 +668,23 @@ def test_execute_sql_api_runs_sql_and_builder_through_query_runtime(client, auth
         },
         headers=auth_headers,
     )
-    builder_response = client.post(
+
+    sql_payload = sql_response.json()
+    assert sql_payload["status"] == "success"
+    assert captured["created_tasks"][0]["query_type"] == "sql"
+    assert captured["created_tasks"][0]["body"].user_id == "user_a"
+    assert [item["member_datasource_id"] for item in captured["executor_calls"]] == ["member_a"]
+    assert captured["executor_calls"][0]["username"] == "测试用户"
+    assert captured["closed_targets"] == ["member_a"]
+    assert captured["task_updates"][0]["status"] == "running"
+    assert captured["task_updates"][1]["status"] == "succeeded"
+    assert sql_payload["data"]["data"][0]["sql_text"] == "select * from orders LIMIT 5"
+
+
+def test_execute_sql_api_rejects_builder_without_semantic_config(client, auth_headers, monkeypatch):
+    captured = _patch_execute_sql_runtime(monkeypatch)
+
+    response = client.post(
         "/api/chatdata/execute-sql",
         json={
             "datasource_id": "ds_a",
@@ -761,24 +697,12 @@ def test_execute_sql_api_runs_sql_and_builder_through_query_runtime(client, auth
         headers=auth_headers,
     )
 
-    sql_payload = sql_response.json()
-    builder_payload = builder_response.json()
-    assert sql_payload["status"] == "success"
-    assert builder_payload["status"] == "success"
-    assert captured["created_tasks"][0]["query_type"] == "sql"
-    assert captured["created_tasks"][1]["query_type"] == "builder"
-    assert captured["created_tasks"][0]["body"].user_id == "user_a"
-    assert captured["created_tasks"][1]["body"].builder_config == {"mainTable": "orders"}
-    assert [item["member_datasource_id"] for item in captured["executor_calls"]] == ["member_a", "member_b"]
-    assert captured["executor_calls"][0]["username"] == "测试用户"
-    assert captured["executor_calls"][1]["limit"] == 7
-    assert captured["closed_targets"] == ["member_a", "member_b"]
-    assert captured["task_updates"][0]["status"] == "running"
-    assert captured["task_updates"][1]["status"] == "succeeded"
-    assert captured["task_updates"][2]["status"] == "running"
-    assert captured["task_updates"][3]["status"] == "succeeded"
-    assert sql_payload["data"]["data"][0]["sql_text"] == "select * from orders LIMIT 5"
-    assert builder_payload["data"]["data"][0]["member_datasource_id"] == "member_b"
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40001
+    assert "必须基于指标集" in payload["msg"]
+    assert captured["created_tasks"] == []
+    assert captured["executor_calls"] == []
 
 
 def test_execute_sql_api_blocks_dangerous_sql_at_executor_boundary(client, auth_headers, monkeypatch):

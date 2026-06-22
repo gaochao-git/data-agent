@@ -62,7 +62,6 @@
 #### 智能问数接口
 - `POST /api/chatdata/nl2sql`              # SQL 编辑器中的 AI 辅助生成 SQL 能力
 - `POST /api/chatdata/semantic/prefill`    # 是语义字段自动预填，本质是字段语义识别
-- `POST /api/chatdata/compile-builder-sql` # 拖拽调用后端产出SQL
 - `POST /api/chatdata/panel-name-generate` # 生成卡片标题
 
 

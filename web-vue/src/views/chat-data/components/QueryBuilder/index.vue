@@ -6,7 +6,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, useAttrs } from 'vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileBuilderSql, compileSemanticBuilderSql } from '../../api'
+import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
 import AsyncQueryResult from '../AsyncQueryResult.vue'
 import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
@@ -357,13 +357,8 @@ const activateResultTab = (index: number) => {
 }
 
 const buildBuilderConfigSnapshot = () => JSON.stringify(buildBuilderConfigPayload())
-const isBuilderConfigured = computed(() => {
-  if (props.semanticConfigId) {
-    return dimensions.value.length > 0 || aggregations.value.length > 0
-  }
-  const payload = buildBuilderConfigPayload()
-  return Boolean(payload.mainTable) && (payload.dimensions.length > 0 || payload.aggregations.length > 0)
-})
+const hasSemanticConfigSelected = computed(() => !!props.semanticConfigId)
+const isBuilderConfigured = computed(() => hasSemanticConfigSelected.value && (dimensions.value.length > 0 || aggregations.value.length > 0))
 const hasSqlChanged = computed(() => buildBuilderConfigSnapshot() !== savedBuilderConfigSnapshot.value)
 const hasRawResult = computed(() => !!rawResultData.value)
 const hasAnalyzedResult = computed(() => !!analyzedResultData.value)
@@ -373,9 +368,18 @@ const isCompareAnalysisDisabled = computed(() => {
   return transform === 'week'
 })
 
+const ensureSemanticConfigSelected = () => {
+  if (hasSemanticConfigSelected.value) return true
+  ElMessage.warning('请先选择指标集')
+  return false
+}
+
 const handleSaveSql = async () => {
   const cb = props.onSqlChange
   if (!cb) return
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!isBuilderConfigured.value) {
     ElMessage.warning('请先配置查询条件')
     return
@@ -2670,6 +2674,9 @@ const buildSemanticBuilderConfigPayload = () => {
 const builderConfigSnapshot = computed(() => buildBuilderConfigSnapshot())
 
 const openFavoriteModal = () => {
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!validateQueryPagination()) {
     return
   }
@@ -2706,17 +2713,14 @@ const compileCurrentBuilderSql = async (force = false): Promise<string> => {
   if (!force && compiledSql.value && compiledSqlSnapshot.value === snapshot) {
     return compiledSql.value
   }
-  const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
-  const response = props.semanticConfigId
-    ? await compileSemanticBuilderSql({
-      datasource_id: props.datasourceId,
-      semantic_config_id: props.semanticConfigId,
-      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
-    })
-    : await compileBuilderSql({
-      builder_config: builderConfigPayload,
-      datasource_id: props.datasourceId || undefined
-    })
+  if (!ensureSemanticConfigSelected()) {
+    return ''
+  }
+  const response = await compileSemanticBuilderSql({
+    datasource_id: props.datasourceId,
+    semantic_config_id: props.semanticConfigId as string,
+    semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
+  })
   const sqlText = String(response.data?.sql || '').trim()
   compiledSql.value = sqlText
   compiledSqlSnapshot.value = snapshot
@@ -3315,6 +3319,9 @@ const handlePreviewSql = async () => {
   if (!validateAggregationModeBeforeRun()) {
     return
   }
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!isBuilderConfigured.value) {
     ElMessage.warning('请先配置查询条件')
     return
@@ -3329,6 +3336,9 @@ const handlePreviewSql = async () => {
   previewSqlLoading.value = true
   try {
     previewSql.value = await compileCurrentBuilderSql()
+    if (!previewSql.value) {
+      return
+    }
     showSqlPreview.value = true
   } catch (err) {
     const apiMsg = (err as any)?.response?.data?.msg
@@ -3359,12 +3369,11 @@ const executeQuery = async () => {
   if (!validateAggregationModeBeforeRun()) {
     return
   }
-  if (!isBuilderConfigured.value) {
-    ElMessage.warning('请先配置查询条件')
+  if (!ensureSemanticConfigSelected()) {
     return
   }
-  if (!props.semanticConfigId) {
-    ElMessage.warning('请先选择指标集')
+  if (!isBuilderConfigured.value) {
+    ElMessage.warning('请先配置查询条件')
     return
   }
   if (executionTargets.value.length > 0 && selectedMemberDatasourceIds.value.length === 0) {
@@ -3395,10 +3404,8 @@ const executeQuery = async () => {
       member_datasource_ids: selectedMemberDatasourceIds.value,
       sql: sqlText,
       query_type: 'builder',
-      ...(props.semanticConfigId
-        ? { semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown> }
-        : { builder_config: buildBuilderConfigPayload() as Record<string, unknown> }),
-      semantic_config_id: props.semanticConfigId || undefined,
+      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>,
+      semantic_config_id: props.semanticConfigId as string,
       query_text: '可视化查询',
       skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
     }, {
