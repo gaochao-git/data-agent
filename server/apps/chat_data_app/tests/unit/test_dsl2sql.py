@@ -1072,6 +1072,89 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
     assert generator._build_builder_joins("orders", {"orders", "categories"}) == []
 
 
+def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT branch coverage"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    config = {
+        "source_type": "mysql",
+        "metrics": [
+            {"name": "总数", "expression": "COUNT(*)", "table": "orders"},
+            {"name": "状态原始值", "expression": "", "table": "orders", "column": "status"},
+        ],
+        "dimensions": [
+            {"name": "用户等级", "table": "users", "column": "level"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_type": "left",
+                "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
+            }
+        ],
+    }
+    generator = SemanticSQLGenerator(config)
+    monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
+    monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
+
+    joins = generator._build_builder_joins("orders", {"orders", "users"})
+    assert joins[0]["joinConditions"][0]["leftColumn"] == "user_id"
+
+    result = generator.generate_sql(
+        metrics=["总数"],
+        dimensions=["用户等级"],
+        filters=[],
+        having=[{"metric": "总数", "operator": ">", "value": 1}],
+        order_by=[{"field": "总数", "direction": "DESC"}, {"field": "用户等级", "direction": "ASC"}],
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert builder_config["aggregations"][0]["column"] == "*"
+    having_node = next(item for item in builder_config["filters"] if item.get("id") == "having-总数")
+    assert having_node["column"] == "*"
+    assert builder_config["orderBy"][0]["column"] == "*"
+    assert builder_config["orderBy"][1]["column"] == "level"
+
+
+def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypatch):
+    import apps.chat_data_app.semantic.compiler.semantic_sql_generator as generator_module
+
+    captured = {}
+
+    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+        captured["builder_config"] = builder_config
+        return "SELECT duplicate"
+
+    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    config = {
+        "source_type": "mysql",
+        "metrics": [{"name": "状态原始值", "expression": "", "table": "orders", "column": "status"}],
+        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
+        "relationships": [],
+    }
+    generator = SemanticSQLGenerator(config)
+
+    result = generator.generate_sql(
+        metrics=["状态原始值"],
+        dimensions=["订单状态"],
+        filters=[],
+        having=[],
+        order_by=[],
+    )
+
+    assert result["success"] is True
+    builder_config = captured["builder_config"]
+    assert [item["column"] for item in builder_config["dimensions"]] == ["status"]
+
+
 class TestSemanticToolInput:
     """测试语义工具入参模型（mode 已废弃）。"""
 

@@ -113,9 +113,16 @@ const isFullscreen = ref(false)
 const updateMenuPosition = () => {
   if (viewBtnRef.value) {
     const rect = viewBtnRef.value.getBoundingClientRect()
+    const safeGap = 8
+    const estimatedMenuHeight = Math.min(viewModes.length * 40 + 8, window.innerHeight - safeGap * 2)
+    const openUpTop = rect.top - estimatedMenuHeight - safeGap
+    const openDownTop = rect.bottom + safeGap
+    const top = openUpTop >= safeGap
+      ? openUpTop
+      : Math.min(openDownTop, window.innerHeight - estimatedMenuHeight - safeGap)
     menuStyle.value = {
-      top: `${rect.top - 8}px`,
-      left: `${rect.right - 120}px`
+      top: `${Math.max(safeGap, top)}px`,
+      left: `${Math.max(safeGap, rect.right - 120)}px`
     }
   }
 }
@@ -336,11 +343,12 @@ const graphAvailable = computed(() => {
 // 视图模式配置
 const unsupportedResultViewTypes = new Set<ChartType>(['kpi', 'map', 'combo'])
 const viewModes: Array<{ key: ViewMode; icon: string; label: string }> = [
+  { key: 'table', icon: 'fa-table', label: '表格' },
+  { key: 'vertical', icon: 'fa-align-left', label: '文本' },
   ...CHART_TYPES
-    .filter(item => !unsupportedResultViewTypes.has(item.key))
+    .filter(item => item.key !== 'table' && !unsupportedResultViewTypes.has(item.key))
     .map(item => ({ key: item.key as ViewMode, icon: item.icon, label: item.label })),
   { key: 'card', icon: 'fa-id-card', label: '指标卡' },
-  { key: 'vertical', icon: 'fa-align-left', label: '文本' },
 ]
 const chartViewModes = new Set<ResultChartType>(
   CHART_TYPES
@@ -385,10 +393,6 @@ const handleSave = () => {
 const openFullscreen = () => {
   showChartMenu.value = false
   isFullscreen.value = true
-}
-
-const toggleVerticalView = () => {
-  viewMode.value = viewMode.value === 'vertical' ? 'table' : 'vertical'
 }
 
 // 获取维度名称（处理字符串和对象两种格式）
@@ -572,15 +576,6 @@ const getDimensionKey = (dim: string | { name: string }): string => {
             <span>分析</span>
           </button>
 
-          <button
-            class="shrink-0 whitespace-nowrap h-[26px] min-w-[62px] px-2.5 flex items-center justify-center gap-1.5 border border-black/10 rounded-md bg-white text-gray-600 text-[11px] cursor-pointer transition-all duration-200 hover:border-[#1f82d9]/40 hover:bg-gradient-to-br hover:from-[#1f82d9]/10 hover:to-[#1f82d9]/5 hover:text-[#1f82d9]"
-            :title="viewMode === 'vertical' ? '切回表格视图' : '切换到文本，适合查看长字段结果'"
-            @click="toggleVerticalView"
-          >
-            <i :class="`fa-solid ${viewMode === 'vertical' ? 'fa-table' : 'fa-align-left'}`"></i>
-            <span>{{ viewMode === 'vertical' ? '表格' : '文本' }}</span>
-          </button>
-
           <!-- 视图切换下拉 -->
           <div class="relative">
             <button
@@ -600,7 +595,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
                 <div class="fixed inset-0 pointer-events-auto" @click="showChartMenu = false"></div>
                 <div
                   ref="chartMenuRef"
-                  class="fixed -translate-y-full min-w-[100px] p-1 bg-white border border-black/10 rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.15)] pointer-events-auto"
+                  class="fixed min-w-[100px] p-1 bg-white border border-black/10 rounded-lg shadow-[0_4px_16px_rgba(0,0,0,0.15)] pointer-events-auto"
                   :style="menuStyle"
                 >
                   <button

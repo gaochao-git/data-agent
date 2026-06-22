@@ -118,6 +118,27 @@ def test_selection_to_tool_payload_keeps_multi_config_query_plan():
     assert "逐个调用 dsl2sql_tool" in payload["message"]
 
 
+def test_selection_to_tool_payload_skips_invalid_query_plan_tasks_and_uses_candidate_name():
+    payload = _selection_to_tool_payload({
+        "coverage": "partial",
+        "query_plan": {
+            "type": "multi_config_independent",
+            "tasks": [
+                "skip",
+                {"task_id": "t1", "semantic_config_id": "cfg_order", "question": "查订单金额", "intent": "aggregate", "reason": "覆盖订单"},
+                {"task_id": "t2", "semantic_config_id": "cfg_missing", "question": "查未知指标"},
+            ],
+        },
+        "candidates": [
+            {"id": "cfg_order", "name": "订单分析"},
+        ],
+    })
+
+    tasks = payload["query_plan"]["tasks"]
+    assert [item["semantic_config_name"] for item in tasks] == ["订单分析", "cfg_missing"]
+    assert tasks[0]["reason"] == "覆盖订单"
+
+
 def test_selection_to_tool_payload_blocks_cross_join_query_plan():
     payload = _selection_to_tool_payload({
         "coverage": "partial",
@@ -140,11 +161,32 @@ def test_selection_to_tool_payload_blocks_cross_join_query_plan():
     assert "不支持跨指标集 JOIN" in payload["message"]
 
 
+def test_selection_to_tool_payload_keeps_unsupported_query_plan_message_fallback():
+    payload = _selection_to_tool_payload({
+        "coverage": "none",
+        "reason": "缺少明确业务口径",
+        "query_plan": {
+            "type": "unsupported",
+            "tasks": [
+                {"task_id": "skip", "semantic_config_id": "", "question": "无效任务"},
+            ],
+            "final_action": "ask_user",
+        },
+    })
+
+    assert payload["selected"] is False
+    assert payload["query_plan"]["type"] == "unsupported"
+    assert payload["query_plan"]["tasks"] == [{"task_id": "skip", "semantic_config_id": "", "semantic_config_name": "", "question": "无效任务", "intent": "", "reason": ""}]
+    assert payload["message"] == "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
+
+
 def test_load_runtime_semantic_config_branches(monkeypatch):
     class RuntimeManager:
         async def get_datasource_async(self, datasource_id):
             if datasource_id == "missing":
                 return None
+            if datasource_id == "no_type":
+                return {"id": datasource_id}
             return {"id": datasource_id, "source_type": "hive"}
 
         async def get_runtime_semantic_config_async(self, datasource_id, semantic_config_id):
@@ -175,10 +217,12 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
 
     enabled = asyncio.run(load_runtime_semantic_config("ds", "enabled"))
     plain = asyncio.run(load_runtime_semantic_config("ds", "plain"))
+    no_source_type = asyncio.run(load_runtime_semantic_config("no_type", "plain"))
     no_id = asyncio.run(load_runtime_semantic_config("ds", "no_id"))
     assert enabled["joins"] == [{"left_table": "orders"}]
     assert enabled["source_type"] == "hive"
     assert "joins" not in plain
+    assert "source_type" not in no_source_type
     assert no_id["id"] == "no_id"
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: FallbackManager())
@@ -261,6 +305,65 @@ def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monke
     assert payload["query_plan"]["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
 
 
+def test_select_semantic_config_tool_skips_duplicate_and_missing_task_summaries(monkeypatch):
+    loaded = []
+
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+        return {
+            "coverage": "partial",
+            "query_plan": {
+                "type": "multi_config_independent",
+                "tasks": [
+                    {"task_id": "order_1", "semantic_config_id": "sc_order", "question": "查询订单金额"},
+                    {"task_id": "order_2", "semantic_config_id": "sc_order", "question": "重复订单金额"},
+                    {"task_id": "blank", "semantic_config_id": "", "question": "无效"},
+                    {"task_id": "missing", "semantic_config_id": "sc_missing", "question": "缺失"},
+                ],
+            },
+            "candidates": [{"id": "sc_order", "name": "订单分析"}],
+        }
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        loaded.append(semantic_config_id)
+        if semantic_config_id == "sc_missing":
+            return None
+        return {"id": semantic_config_id, "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []}
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(include_query_tools=False, datasource_id="ds_bound")[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert loaded == ["sc_order", "sc_missing"]
+    assert list(payload["query_plan"]["semantic_configs"]) == ["sc_order"]
+
+
+def test_select_semantic_config_tool_omits_empty_query_plan_semantic_summaries(monkeypatch):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+        return {
+            "coverage": "partial",
+            "query_plan": {
+                "type": "multi_config_independent",
+                "tasks": [{"task_id": "missing", "semantic_config_id": "sc_missing", "question": "缺失"}],
+            },
+            "candidates": [{"id": "sc_missing", "name": "缺失指标集"}],
+        }
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(include_query_tools=False, datasource_id="ds_bound")[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询缺失指标"}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert "semantic_configs" not in payload["query_plan"]
+
+
 def test_select_semantic_config_tool_error_branches(monkeypatch):
     tools = create_semantic_config_selection_tools(include_query_tools=False)
     select_tool = tools[0]
@@ -277,6 +380,26 @@ def test_select_semantic_config_tool_error_branches(monkeypatch):
     assert "未绑定数据源" in missing_datasource
     assert "缺少用户问题" in missing_query
     assert "selector failed" in failed
+
+
+def test_semantic_tool_resolve_uses_bound_config_for_matching_id():
+    tools = create_semantic_config_selection_tools(
+        include_query_tools=True,
+        datasource_id="ds_bound",
+        semantic_config={"id": "sc_bound", "metrics": [{"name": "订单数", "expression": "COUNT(orders.id)", "table": "orders"}], "dimensions": []},
+    )
+
+    assert [item.name for item in tools] == ["select_semantic_config_tool", "dsl2sql_tool"]
+    dsl_tool = tools[1]
+    sql_text = asyncio.run(dsl_tool.ainvoke({
+        "semantic_config_id": "sc_bound",
+        "metrics": ["订单数"],
+        "dimensions": [],
+        "filters": [],
+        "state": {"datasource_id": "ignored"},
+    }))
+
+    assert "COUNT(id)" in sql_text
 
 
 def test_generate_sql_uses_semantic_params_only(monkeypatch):

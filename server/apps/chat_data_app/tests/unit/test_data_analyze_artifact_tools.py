@@ -85,7 +85,13 @@ def test_chart_artifact_payload_supports_graph_and_rejects_incomplete_specs(tmp_
         "nodes": [{"id": "a"}],
         "links": [{"source": "a", "target": "b"}],
     })
+    graph_empty_nodes = _write_json(tmp_path / "outputs" / "graph-empty-nodes.json", {
+        "version": "1.0",
+        "chart_type": "graph",
+        "data": {"nodes": [], "links": [{"source": "a", "target": "b"}]},
+    })
     assert artifact_payloads.parse_chart_spec_payload(graph_top_level)["chart_type"] == "graph"
+    assert artifact_payloads.parse_chart_spec_payload(graph_empty_nodes) is None
 
 
 def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(tmp_path):

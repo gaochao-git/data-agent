@@ -589,6 +589,7 @@ def test_semantic_models_relationship_and_indexes():
     assert config.get_dimension("订单状态").validate_value("已支付") is True
     assert config.get_dimension("订单状态").validate_value("unknown") is False
     assert config.get_dimension("订单状态").normalize_value("已支付") == "paid"
+    assert config.get_dimension("订单状态").normalize_value("已支付".upper()) == "paid"
     assert config.get_dimension("订单状态").normalize_value("unknown") == "unknown"
     assert config.get_dimension("下单时间").is_time_dimension() is True
     assert config.get_dimension("下单时间").validate_value("任意时间") is True
@@ -610,6 +611,20 @@ def test_semantic_models_relationship_and_indexes():
     assert rel.get_other_table("missing") is None
     assert rel.get_join_keyword() == "LEFT JOIN"
     assert config.to_dict()["id"] == "cfg_orders"
+
+    multi_rel = SemanticRelationship(
+        left_table="orders",
+        right_table="items",
+        left_column="order_id",
+        right_column="order_id",
+        join_conditions=[
+            {"left_column": "order_id", "right_column": "order_id"},
+            {"left_column": "tenant_id"},
+            {"right_column": "missing_left"},
+            {"left_column": "sku_id", "right_column": "sku_id"},
+        ],
+    )
+    assert multi_rel.get_join_condition("o", "i") == "o.order_id = i.order_id AND o.sku_id = i.sku_id"
 
     custom_rel = SemanticRelationship(
         left_table="a",

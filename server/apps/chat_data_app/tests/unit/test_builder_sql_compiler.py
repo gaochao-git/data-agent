@@ -1946,3 +1946,51 @@ def test_compile_builder_sql_unselected_transformed_dimension_order_fallbacks():
         "orderBy": [{"table": "orders", "tableAlias": "o", "column": "created_at", "direction": "ASC"}],
     })
     assert "ORDER BY `下单月_month` ASC" in dimension_expr_sql
+
+
+def test_compile_builder_sql_having_and_order_expression_remaining_branches():
+    having_tree_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "filters": [
+            {
+                "and": [
+                    {
+                        "table": "orders",
+                        "tableAlias": "o",
+                        "column": "amount",
+                        "aggFunc": "SUM",
+                        "operator": "IN",
+                        "valueType": "expression",
+                        "rightExpression": "select amount from threshold",
+                    }
+                ]
+            }
+        ],
+    })
+    assert "HAVING SUM(`amount`) IN (select amount from threshold)" in having_tree_sql
+
+    order_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [
+            {"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态", "expression": "UPPER(o.status)"},
+        ],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "status", "direction": "ASC"}],
+    })
+    assert "ORDER BY `状态` ASC" in order_sql
+
+    dimension_expr_order_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [
+            {"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态", "expression": "UPPER(o.status)"},
+            {"table": "orders", "tableAlias": "o", "column": "amount", "alias": "金额"},
+        ],
+        "aggregations": [],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "status", "direction": "DESC"}],
+    })
+    assert "ORDER BY `状态` DESC" in dimension_expr_order_sql

@@ -279,6 +279,33 @@ def test_retrieve_semantic_config_candidates_uses_directory_name_and_description
     assert all("metrics" not in item for item in retrieval)
 
 
+def test_retrieval_terms_and_directory_score_edge_paths():
+    assert selector._retrieval_terms("") == set()
+    assert selector._directory_entry_score("", {"id": "sc_empty", "name": "", "description": ""}) == 0
+
+    entry = {"id": "sc_order", "name": "订单分析", "description": "订单经营分析"}
+    score = selector._directory_entry_score("订单分析 经营", entry)
+
+    assert score > 0
+    assert selector._directory_entry_score("完全无关", {"id": "sc_a", "name": "ABC", "description": ""}) == 0
+
+
+def test_retrieve_semantic_config_candidates_small_and_fallback_paths():
+    small_configs = [
+        {"id": "sc_a", "name": "A"},
+        {"id": "sc_b", "name": "B"},
+    ]
+    candidates, retrieval = _retrieve_semantic_config_candidates(small_configs, "任意", top_k=5)
+    assert candidates == small_configs
+    assert [item["selected"] for item in retrieval] == [True, True]
+
+    configs = [{"id": f"sc_{i}", "name": f"英文{i}", "description": "plain"} for i in range(6)]
+    candidates, retrieval = _retrieve_semantic_config_candidates(configs, "备付金监管", top_k=2)
+    assert candidates == configs
+    assert len(retrieval) == 6
+    assert all(item["score"] == 0 and item["selected"] is True for item in retrieval)
+
+
 def test_summarize_semantic_config_truncates_business_fields():
     config = {
         "id": "sc_a",
@@ -599,6 +626,79 @@ def test_selector_low_level_normalizers_and_candidate_edges(monkeypatch):
         config_names,
     )
     assert [item["id"] for item in limited] == ["sc_a"]
+
+
+def test_selector_multi_intent_and_query_plan_normalization_edges(monkeypatch):
+    assert selector._has_multi_intent_query("") is False
+    assert selector._has_multi_intent_query("查询订单数和用户数") is True
+    assert selector._has_multi_intent_query("查询订单数") is False
+    assert selector._normalize_query_plan([], {"sc_a": "指标集A"}) is None
+
+    config_names = {f"sc_{i}": f"指标集{i}" for i in range(8)}
+    plan = selector._normalize_query_plan(
+        {
+            "type": "bad_type",
+            "tasks": [
+                "skip",
+                {"task_id": "same", "semantic_config_id": "missing", "question": "非法"},
+                {"task_id": "same", "semantic_config_id": "sc_0", "question": "q0", "intent": "aggregate", "reason": "r0"},
+                {"task_id": "same", "semantic_config_id": "sc_1", "question": "q1", "intent": "detail", "reason": "r1"},
+                {"semantic_config_id": "sc_2"},
+                {"semantic_config_id": "sc_3"},
+                {"semantic_config_id": "sc_4"},
+                {"semantic_config_id": "sc_5"},
+            ],
+            "final_action": "summarize",
+            "calculation": "x" * 400,
+            "reason": "r" * 600,
+        },
+        config_names,
+    )
+
+    assert plan["type"] == "multi_config_independent"
+    assert len(plan["tasks"]) == selector.SELECTOR_MAX_QUERY_PLAN_TASKS
+    assert plan["tasks"][0]["task_id"] == "same"
+    assert plan["tasks"][1]["task_id"] == "task_4"
+    assert plan["tasks"][1]["semantic_config_name"] == "指标集1"
+    assert len(plan["calculation"]) == 300
+    assert len(plan["reason"]) == 500
+
+    assert selector._normalize_query_plan({"type": "multi_config_independent", "tasks": [{"semantic_config_id": "sc_0"}]}, config_names) is None
+    assert selector._normalize_query_plan({"type": "single_config", "tasks": []}, config_names) is None
+    single = selector._normalize_query_plan({"type": "", "tasks": [{"semantic_config_id": "sc_0"}]}, config_names)
+    assert single["type"] == "single_config"
+
+
+def test_selector_ambiguous_selection_helpers_edge_paths():
+    multi_plan_selection = {
+        "selected_config_id": "sc_a",
+        "selected_config_name": "A",
+        "confidence": "high",
+        "query_plan": {"type": "multi_config_independent"},
+    }
+    normalized = selector._normalize_ambiguous_selection(multi_plan_selection)
+    assert normalized["selected_config_id"] == ""
+    assert normalized["ambiguous"] is False
+
+    no_candidate = {"selected_config_id": "", "candidates": [{"id": "sc_a", "coverage": "partial"}]}
+    assert selector._normalize_ambiguous_selection(no_candidate) is no_candidate
+
+    ambiguous = selector._normalize_ambiguous_selection({
+        "selected_config_id": "",
+        "candidates": [
+            {"id": "sc_a", "name": "A", "coverage": "full"},
+            {"id": "sc_b", "name": "B", "coverage": "full"},
+        ],
+    })
+    assert ambiguous["ambiguous"] is True
+    assert ambiguous["ambiguity_reason"] == "多个指标集都能完整覆盖该问题：A、B"
+
+    built = selector._build_ambiguous_selection_from_full_candidates([
+        {"id": "sc_a", "name": "A", "coverage": "full"},
+        {"id": "sc_b", "name": "B", "coverage": "full"},
+    ])
+    assert built["ambiguous"] is True
+    assert built["coverage"] == "full"
 
 
 def test_selector_chunking_and_empty_parse_edges(monkeypatch):

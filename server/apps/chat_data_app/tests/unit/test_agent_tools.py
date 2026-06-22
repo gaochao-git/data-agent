@@ -57,6 +57,23 @@ def test_calculator_tool_rejects_unsafe_expression():
     }
 
 
+def test_calculator_tool_covers_empty_division_and_unary_branches():
+    result = asyncio.run(calculator_tool.ainvoke({
+        "calculations": [
+            {"expression": "   "},
+            {"name": "除零", "expression": "1 / 0"},
+            {"name": "一元运算", "expression": "-1 + +2", "decimal_places": 0},
+        ],
+    }))
+
+    payload = json.loads(result)
+
+    assert payload["success"] is False
+    assert payload["results"][0] == {"expression": "", "success": False, "error": "expression 不能为空"}
+    assert payload["results"][1]["error"] == "除数不能为 0"
+    assert payload["results"][2]["result"] == "1"
+
+
 def test_build_semantic_prompt_includes_ontology_rules():
     prompt = agent_tools.build_semantic_prompt({
         "description": "订单指标集",
@@ -563,6 +580,113 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_payload(mon
 
     legacy_sql_result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"sql": "select 1"}, "state": state}))
     assert legacy_sql_result == "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+
+
+def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
+    assert agent_tools._state_semantic_config_matches({}, "cfg_a") is False
+    assert agent_tools._state_semantic_config_matches({"id": "cfg_a"}, None) is True
+    assert agent_tools._state_semantic_config_matches({"id": ""}, "cfg_a") is True
+    assert agent_tools._state_semantic_config_matches({"id": "other"}, "cfg_a") is False
+    assert agent_tools._latest_human_query([type("Msg", (), {"type": "human", "content": "伪用户消息"})()]) == "伪用户消息"
+
+    missing_config = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": {}}))
+    bad_dsl = asyncio.run(agent_tools.semantic_query_tool.coroutine(["bad"], {"semantic_config": {}}))
+
+    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+    assert bad_dsl == "semantic_query_tool 执行失败: dsl 必须是对象"
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    class FakeGenerator:
+        def __init__(self, _config):
+            pass
+
+        def generate_sql(self, **kwargs):
+            metrics = kwargs.get("metrics") or []
+            if metrics == ["bad"]:
+                return {"success": False, "error": "指标不存在"}
+            return {"success": True, "sql": "   "}
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+
+    compile_error = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["bad"]},
+        "state": {"semantic_config_id": "cfg_a"},
+    }))
+    empty_sql = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["empty"]},
+        "state": {"semantic_config_id": "cfg_a"},
+    }))
+
+    assert compile_error == "semantic_query_tool 执行失败: 指标不存在"
+    assert empty_sql == "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+
+
+def test_resolve_semantic_query_config_injects_missing_state_config_id(monkeypatch):
+    async def fail_load_config(*_args, **_kwargs):
+        raise AssertionError("state semantic_config should be reused")
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
+
+    config = asyncio.run(agent_tools._resolve_semantic_query_config(
+        {"semantic_config": {"metrics": [], "dimensions": []}},
+        datasource_id="ds_a",
+        semantic_config_id="cfg_a",
+    ))
+
+    assert config["id"] == "cfg_a"
+
+
+def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
+    class FakeGenerator:
+        def __init__(self, _config):
+            pass
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select generated"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fake_execute_sql_real(*_args, **_kwargs):
+        return {
+            "success": True,
+            "sql": "",
+            "columns": ["content"],
+            "data": [{"content": "x" * 200}],
+            "total_count": 1,
+        }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_blank_sql")
+    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["内容"]},
+        "state": {"semantic_config_id": "cfg_a"},
+    }))
+    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+
+    assert payload["artifact_id"] == "artifact_blank_sql"
+    assert payload["sql"] == "select generated"
+
+
+def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
+    async def fake_load_config(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "state": {"datasource_id": "ds_a", "semantic_config_id": "cfg_missing"},
+    }))
+
+    assert result == "semantic_query_tool 执行失败: 未找到可用指标集 cfg_missing"
 
 
 def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
