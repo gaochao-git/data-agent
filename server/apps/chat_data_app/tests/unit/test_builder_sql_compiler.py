@@ -1994,3 +1994,53 @@ def test_compile_builder_sql_having_and_order_expression_remaining_branches():
         "orderBy": [{"table": "orders", "tableAlias": "o", "column": "status", "direction": "DESC"}],
     })
     assert "ORDER BY `状态` DESC" in dimension_expr_order_sql
+
+
+def test_compile_builder_sql_remaining_branch_edges():
+    where_expression_in_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
+        "filters": [
+            {
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "status",
+                "operator": "IN",
+                "valueType": "expression",
+                "rightExpression": "select status from valid_status",
+            }
+        ],
+    })
+    assert "`status` IN (select status from valid_status)" in where_expression_in_sql
+
+    having_expression_in_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [],
+        "aggregations": [{"id": "a1", "func": "RAW", "table": "orders", "tableAlias": "o", "column": "score", "alias": "分数"}],
+        "filters": [
+            {
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "score",
+                "operator": "IN",
+                "aggFunc": "RAW",
+                "valueType": "expression",
+                "rightExpression": "select score from whitelist",
+            }
+        ],
+    })
+    assert "HAVING `score` IN (select score from whitelist)" in having_expression_in_sql
+
+    order_by_group_expr_sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [
+            {"table": "orders", "tableAlias": "o", "column": "created_at", "alias": "下单月", "transform": "month"},
+            {"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"},
+        ],
+        "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "amount", "alias": "销售额"}],
+        "orderBy": [{"table": "orders", "tableAlias": "o", "column": "created_at", "direction": "DESC"}],
+    })
+    assert "ORDER BY `下单月_month` DESC" in order_by_group_expr_sql

@@ -75,6 +75,20 @@ def test_stage_context_empty_and_multimodal_message_edges():
     assert no_history_prompt == "当前用户目标：\n当前问题"
 
 
+def test_data_analyze_reasoning_merge_and_default_skill_prompt(monkeypatch, tmp_path):
+    assert data_analyze_graph.merge_reasoning_segments([{"id": "old"}], [{"id": "new"}]) == [{"id": "old"}, {"id": "new"}]
+
+    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
+    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+        skill={},
+        data_context={},
+        workspace_root=str(tmp_path),
+        available_skills_xml=None,
+    )
+
+    assert "<skills>默认</skills>" in prompt
+
+
 def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
     assert data_analyze_graph._message_text([{"text": ""}, {"content": None}]) == ""
     assert data_analyze_graph._message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"

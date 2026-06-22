@@ -278,6 +278,12 @@ def test_prefill_parse_and_alias_helpers_cover_edge_cases():
     assert semantic_config._normalize_prefill_display_name("订单金额，越长越好", "amount") == "订单金额"
     assert semantic_config._normalize_prefill_display_name("关联 orders.amount 的金额", "amount") == "关联ordersamount的"
     assert semantic_config._normalize_prefill_display_name("", "amount") == "amount"
+    deduped_long_name = semantic_config._dedupe_prefill_display_names([
+        {"table_alias": "long_alias", "name": "字段名很长很长很长很长很长很长很长很长很长"},
+        {"table_alias": "other_alias", "name": "字段名很长很长很长很长很长很长很长很长很长"},
+    ])
+    assert len(deduped_long_name[0]["name"]) == semantic_config.PREFILL_DISPLAY_NAME_MAX_LENGTH
+    assert deduped_long_name[0]["name"] != deduped_long_name[1]["name"]
     assert semantic_config._build_prefill_alias_map(tables) == {"orders": ["buyer_orders", "seller_orders"]}
     assert table_payload == [{"table": "orders", "description": "", "columns": [{"name": "amount", "type": "decimal", "description": ""}]}]
     assert semantic_config._parse_prefill_dimension_name_map({"fields": "bad"}, table_payload) == {}
@@ -298,6 +304,7 @@ def test_prefill_parse_and_alias_helpers_cover_edge_cases():
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "role": "bad"}) is None
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_metric": True})["role"] == "metric"
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_dimension": True})["role"] == "dimension"
+    assert semantic_config._extract_expression_columns("SUM(.amount) + ` ` + t.price + orders.") == {"amount", "price"}
 
 
 def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
@@ -1302,12 +1309,24 @@ def test_semantic_route_exception_branches(monkeypatch):
         table_model_type="detail",
     ))))
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
-
     assert list_error["code"] == 50010
     assert create_error["code"] == 50010
     assert prefill_error["code"] == 50010
     assert short_prefill_error["code"] == 50010
     assert update_error["code"] == 50010
+
+    class RaisingMutationManager(_FakeSemanticManager):
+        async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
+            raise RuntimeError("delete failed")
+
+        async def update_semantic_config_async(self, **kwargs):
+            raise RuntimeError("toggle failed")
+
+    _patch_semantic_route_user_and_manager(monkeypatch, RaisingMutationManager())
+    delete_error = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
+    toggle_error = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
+    assert delete_error["code"] == 50010
+    assert toggle_error["code"] == 50010
 
 
 def test_history_learning_route_skip_and_auth_branches(monkeypatch):

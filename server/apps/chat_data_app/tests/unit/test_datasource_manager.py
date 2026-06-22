@@ -440,6 +440,22 @@ def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():
     assert "allowed_values" not in configs[0]["dimensions"][0]
 
 
+def test_runtime_semantic_configs_empty_and_missing_group_fallbacks():
+    empty_store = _FakeStore()
+    empty_store.semantic_configs["group_ds_a"] = []
+    empty_manager = _build_manager(empty_store)
+
+    no_group_store = _FakeStore()
+    no_group_store.datasources["ds_a"]["group_id"] = ""
+    no_group_store.semantic_configs[""] = [{"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": []}]
+    no_group_manager = _build_manager(no_group_store)
+
+    assert asyncio.run(empty_manager.get_runtime_semantic_configs_async("ds_a")) == []
+    assert asyncio.run(no_group_manager.get_runtime_semantic_configs_async("ds_a")) == [
+        {"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": [], "source_type": "mysql", "tables": []}
+    ]
+
+
 def test_datasource_manager_column_dict_helper_branches():
     manager = DataSourceManager.__new__(DataSourceManager)
 

@@ -548,7 +548,8 @@ class ExecuteSemanticInput(BaseModel):
         default=[],
         description='''WHERE 过滤条件，支持两种格式：
 1. 平铺格式（简单场景）: [{"dimension": "维度名", "operator": "=", "value": "值"}]
-2. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]'''
+2. 结构化表达式（字段间比较，不传 SQL 字符串）: [{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"dimension","name":"字段B"},"right":{"type":"literal","value":10}}}]
+3. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]'''
     )
     having: List[Dict] = Field(
         default=[],

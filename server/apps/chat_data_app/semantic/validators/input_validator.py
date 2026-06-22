@@ -12,6 +12,18 @@ from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
 logger = logging.getLogger(__name__)
 
 
+FILTER_OPERATORS = {
+    '=', '!=', '<>', '>', '<', '>=', '<=', 'IN', 'NOT IN', 'LIKE',
+    'NOT LIKE', 'STARTS WITH', 'ENDS WITH', 'IS NULL', 'IS NOT NULL',
+    'BETWEEN', 'EMPTY STRING',
+}
+EXPRESSION_OPERATORS = {'=', '!=', '<>', '>', '<', '>=', '<='}
+BINARY_OPERATORS = {'+', '-', '*', '/'}
+LIKE_OPERATORS = {'LIKE', 'NOT LIKE', 'STARTS WITH', 'ENDS WITH'}
+BUILDER_ONLY_FILTER_FIELDS = {'valueType', 'rightExpression', 'rightTable', 'rightTableAlias', 'rightColumn'}
+FILTER_VALUE_TYPES = {'literal', 'sql_function'}
+
+
 class InputValidator:
     """
     输入参数验证器
@@ -112,14 +124,10 @@ class InputValidator:
         # 平铺格式：逐个验证叶子节点
         validated_filters = []
         for f in filters:
-            dim_name = f.get('dimension')
-            if dim_name and dim_name in self.dimensions_map:
-                err = self._validate_filter_allowed_value(f)
-                if err:
-                    return [], err
-                validated_filters.append(self._normalize_filter_allowed_value(f))
-            elif dim_name:
-                return [], f"错误：过滤条件中的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+            err = self._validate_filter_leaf(f)
+            if err:
+                return [], err
+            validated_filters.append(self._normalize_filter_leaf(f))
 
         return validated_filters, None
 
@@ -155,17 +163,123 @@ class InputValidator:
                     return err
             return None
 
-        # 叶子节点
+        err = self._validate_filter_leaf(filter_node)
+        if err:
+            return err
+        return None
+
+    def _validate_filter_leaf(self, filter_node: Dict) -> Optional[str]:
+        """验证普通过滤叶子或结构化表达式过滤叶子。"""
+        if not isinstance(filter_node, dict):
+            return "错误：无效的过滤条件格式，必须是对象"
+        builder_only_fields = BUILDER_ONLY_FILTER_FIELDS & set(filter_node.keys())
+        if builder_only_fields:
+            return f"错误：语义 DSL 过滤条件不支持字段 {', '.join(sorted(builder_only_fields))}；字段间比较请使用结构化 left/right 表达"
+        if self._is_expression_filter(filter_node):
+            return self._validate_expression_filter(filter_node)
         if 'dimension' in filter_node:
             dim_name = filter_node.get('dimension')
             if dim_name not in self.dimensions_map:
                 return f"错误：过滤条件中的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+            operator = str(filter_node.get('operator', '=')).upper()
+            if operator not in FILTER_OPERATORS:
+                return f"错误：过滤条件操作符 '{operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
+            err = self._validate_filter_value_type(filter_node)
+            if err:
+                return err
             err = self._validate_filter_allowed_value(filter_node)
             if err:
                 return err
             return None
-
         return "错误：无效的过滤条件格式，必须是叶子节点或 and/or 组合节点"
+
+    @staticmethod
+    def _validate_filter_value_type(filter_node: Dict) -> Optional[str]:
+        if 'value_type' not in filter_node:
+            return None
+        value_type = filter_node.get('value_type')
+        values = value_type if isinstance(value_type, list) else [value_type]
+        if not values:
+            return "错误：value_type 仅支持 literal 或 sql_function"
+        for item in values:
+            if not isinstance(item, str) or item.strip().lower() not in FILTER_VALUE_TYPES:
+                return "错误：value_type 仅支持 literal 或 sql_function"
+        return None
+
+    @staticmethod
+    def _is_expression_filter(filter_node: Dict) -> bool:
+        return isinstance(filter_node, dict) and isinstance(filter_node.get('left'), dict) and 'right' in filter_node
+
+    def _validate_expression_filter(self, filter_node: Dict) -> Optional[str]:
+        operator = str(filter_node.get('operator', '=')).upper()
+        if operator not in EXPRESSION_OPERATORS:
+            return f"错误：表达式过滤暂不支持操作符 '{operator}'。可选值：{', '.join(sorted(EXPRESSION_OPERATORS))}"
+
+        left = filter_node.get('left')
+        right = filter_node.get('right')
+        if not isinstance(left, dict) or left.get('type') != 'dimension':
+            return "错误：表达式过滤 left 只支持 dimension"
+        left_name = str(left.get('name') or '').strip()
+        if left_name not in self.dimensions_map:
+            return f"错误：过滤条件中的维度 '{left_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+
+        err = self._validate_expression_operand(right, path='right')
+        if err:
+            return err
+        return self._validate_expression_allowed_value(left_name, operator, right)
+
+    def _validate_expression_operand(self, operand: Any, path: str) -> Optional[str]:
+        if not isinstance(operand, dict):
+            return f"错误：表达式过滤 {path} 必须是对象"
+        operand_type = str(operand.get('type') or '').strip().lower()
+        if operand_type == 'dimension':
+            dim_name = str(operand.get('name') or '').strip()
+            if dim_name not in self.dimensions_map:
+                return f"错误：表达式过滤引用的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+            return None
+        if operand_type == 'literal':
+            value = operand.get('value')
+            if isinstance(value, (dict, list)):
+                return f"错误：表达式过滤 {path}.value 只支持字符串、数字、布尔值或空值"
+            return None
+        if operand_type == 'binary':
+            operator = str(operand.get('operator') or '').strip()
+            if operator not in BINARY_OPERATORS:
+                return f"错误：表达式过滤二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
+            left = operand.get('left')
+            right = operand.get('right')
+            err = self._validate_expression_operand(left, path=f'{path}.left')
+            if err:
+                return err
+            err = self._validate_expression_operand(right, path=f'{path}.right')
+            if err:
+                return err
+            if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
+                return "错误：表达式过滤不允许除以 0"
+            return None
+        return f"错误：表达式过滤 {path}.type 只支持 dimension、literal、binary"
+
+    @staticmethod
+    def _is_zero_literal(value: Any) -> bool:
+        try:
+            return float(value) == 0
+        except Exception:
+            return False
+
+    def _validate_expression_allowed_value(self, left_dim_name: str, operator: str, right: Dict) -> Optional[str]:
+        """结构化过滤右侧为 literal 时，沿用枚举维度值校验。"""
+        dim_config = self.dimensions_map.get(left_dim_name) or {}
+        allowed_values = dim_config.get('allowed_values') or []
+        if not allowed_values or not isinstance(right, dict) or right.get('type') != 'literal':
+            return None
+        value = right.get('value')
+        if value is None:
+            return None
+        allowed_set = {str(item) for item in allowed_values}
+        normalized_value = self._normalize_allowed_value(dim_config, value)
+        if str(normalized_value) not in allowed_set:
+            return f"错误：维度 '{left_dim_name}' 的值 '{value}' 不在允许值范围内。可用值：{', '.join(allowed_set)}"
+        return None
 
     def _validate_filter_allowed_value(self, filter_node: Dict) -> Optional[str]:
         """校验枚举维度过滤值是否在 allowed_values 范围内。"""
@@ -177,7 +291,7 @@ class InputValidator:
 
         operator = str(filter_node.get('operator', '=')).upper()
         value = filter_node.get('value')
-        if value is None or operator in ('IS NULL', 'IS NOT NULL'):
+        if value is None or operator in ('IS NULL', 'IS NOT NULL') or operator in LIKE_OPERATORS:
             return None
 
         values = value if isinstance(value, list) else [value]
@@ -190,6 +304,25 @@ class InputValidator:
         if invalid_values:
             return f"错误：维度 '{dim_name}' 的值 '{invalid_values[0]}' 不在允许值范围内。可用值：{', '.join(allowed_set)}"
         return None
+
+    def _normalize_filter_leaf(self, filter_node: Dict) -> Dict:
+        if self._is_expression_filter(filter_node):
+            return self._normalize_expression_filter_allowed_value(filter_node)
+        return self._normalize_filter_allowed_value(filter_node)
+
+    def _normalize_expression_filter_allowed_value(self, filter_node: Dict) -> Dict:
+        left = filter_node.get('left') or {}
+        right = filter_node.get('right')
+        left_dim_name = left.get('name')
+        dim_config = self.dimensions_map.get(left_dim_name) or {}
+        if not dim_config.get('mapping') or not isinstance(right, dict) or right.get('type') != 'literal':
+            return filter_node
+        normalized = dict(filter_node)
+        normalized_right = dict(right)
+        if normalized_right.get('value') is not None:
+            normalized_right['value'] = self._normalize_allowed_value(dim_config, normalized_right.get('value'))
+        normalized['right'] = normalized_right
+        return normalized
 
     @staticmethod
     def _normalize_allowed_value(dim_config: Dict, value: Any) -> Any:
@@ -223,7 +356,7 @@ class InputValidator:
             return {'and': [self._normalize_tree_filter_allowed_values(child) for child in filter_node.get('and', [])]}
         if 'or' in filter_node:
             return {'or': [self._normalize_tree_filter_allowed_values(child) for child in filter_node.get('or', [])]}
-        return self._normalize_filter_allowed_value(filter_node)
+        return self._normalize_filter_leaf(filter_node)
 
     def validate_having(self, having: List[Dict]) -> Tuple[List[Dict], Optional[str]]:
         """

@@ -138,6 +138,21 @@ def test_message_end_payload_prefers_persisted_ai_timestamp():
     }
 
 
+def test_message_end_payload_ignores_empty_latest_ai_timestamp():
+    state = SimpleNamespace(values={"messages": [
+        AIMessage(content="上一条", id="ai_1", additional_kwargs={"timestamp": "2026-06-21 07:14:40"}),
+        AIMessage(content="最新", id="ai_2", additional_kwargs={}),
+    ]})
+
+    assert handlers._latest_assistant_timestamp(state) == ""
+
+
+def test_semantic_select_required_skips_selected_or_query_plan_payloads():
+    assert handlers._should_emit_semantic_select_required({"selected": True, "candidates": [{"id": "sc"}]}) is False
+    assert handlers._should_emit_semantic_select_required({"query_plan": {}, "candidates": [{"id": "sc"}]}) is False
+    assert handlers._should_emit_semantic_select_required({"candidates": [{"id": "sc"}]}) is True
+
+
 @pytest.mark.asyncio
 async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeypatch):
     class Graph:
