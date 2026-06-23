@@ -40,24 +40,26 @@ def test_mode_config_and_prompt_formatters():
     assert nodes.format_query_results_for_llm([]) == ""
     assert nodes.format_execution_target_info_for_llm("  机构A  ") == "\n机构A\n"
     assert nodes.format_execution_target_info_for_llm("") == ""
+    assert nodes.format_semantic_config_directory_info_for_llm("  ## 当前可见指标集目录  ") == "\n## 当前可见指标集目录\n"
+    assert nodes.format_semantic_config_directory_info_for_llm("") == ""
     assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
-    assert "当前未选择指标集" in nodes.build_semantic_layer_context(None, "query")
-    assert "业务数据查询、数据目录询问或“所有订单/订单数/用户数/销售额”等短问法，必须先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None, "query")
-    assert "先调用 `skill_load` 加载路由知识" in nodes.build_semantic_layer_context(None, "query")
-    assert "没有明显同域技能时直接调用 `select_semantic_config_tool`" in nodes.build_semantic_layer_context(None, "query")
-    assert "只有搜索后未找到、候选不唯一或口径不清时，才向用户澄清" in nodes.build_semantic_layer_context(None, "query")
+    assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context(None, "query")
+    assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None, "query")
+    assert "指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答" in nodes.build_semantic_layer_context(None, "query")
+    assert "搜索后仍未找到、候选不唯一或口径不清时再澄清" in nodes.build_semantic_layer_context(None, "query")
     assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"}, "query")
     assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
-    assert "必须先调用 `skill_load` 加载主说明" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
-    assert "当前未选择指标集" in nodes.build_semantic_layer_context({}, "query")
+    assert "可先加载技能补充业务判断" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
+    assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context({}, "query")
     assert "semantic_config_id" not in nodes.build_semantic_layer_context({"name": "订单分析"}, "query")
     assert "当前已选择指标集。" in nodes.build_semantic_layer_context({"id": "", "name": ""}, "query")
 
 
 class FakeLLM:
-    def __init__(self, content="完成", fail_once=False):
+    def __init__(self, content="完成", fail_once=False, response=None):
         self.content = content
         self.fail_once = fail_once
+        self.response = response
         self.calls = 0
         self.bound_tools = None
         self.messages = None
@@ -71,6 +73,8 @@ class FakeLLM:
         self.messages = messages
         if self.fail_once and self.calls == 1:
             raise RuntimeError("模型不可用")
+        if self.response is not None:
+            return self.response
         return AIMessage(content=self.content)
 
 
@@ -97,6 +101,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
         "query_results": [{"id": "r1", "sql": "select 1", "columns": ["c1"], "row_count": 1}],
         "mode": "query",
         "execution_target_info": "当前机构A",
+        "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析",
     })
 
     assert result["messages"][0].content == "SQL 已生成"
@@ -109,17 +114,91 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "当前已选择指标集" in system_prompt
     assert "semantic_config_id: sc_a" in system_prompt
     assert "当前机构A" in system_prompt
+    assert "当前可见指标集目录" in system_prompt
+    assert "1. 名称：订单分析" in system_prompt
     assert "可用的查询结果" in system_prompt
     assert "business-query" in system_prompt
-    assert "先调用 `skill_load` 读取该技能主说明" in system_prompt
-    assert "再调用 `select_semantic_config_tool`" in system_prompt
-    assert "必须在生成 DSL 前调用 `skill_load`" in system_prompt
     assert "没有明显匹配时不要硬加载" in system_prompt
-    assert "职责边界" in system_prompt
-    assert "当前指标集是可执行事实源" in system_prompt
-    assert "业务知识技能只补充业务术语" in system_prompt
-    assert "必须先调用 `skill_load` 加载主说明" in system_prompt
+    assert "基本边界" in system_prompt
+    assert "当前指标集是唯一可执行事实源" in system_prompt
+    assert "业务知识技能只补充领域路由和业务判断方法" in system_prompt
+    assert "可先加载技能补充业务判断" in system_prompt
     assert "最终回答不要提及技能加载过程" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_create_agent_node_normalizes_repeated_tool_call_name(monkeypatch):
+    repeated_tool_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_select",
+            "name": "select_semantic_config_toolselect_semantic_config_tool",
+            "args": {"query": "查询入金金额"},
+        }],
+    )
+    fake_tool = SimpleNamespace(name="select_semantic_config_tool")
+    fake_llm = FakeLLM(response=repeated_tool_message)
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
+    monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 1)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
+    monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
+    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
+
+    result = await nodes.create_agent_node([fake_tool], semantic_config=None)({
+        "messages": [HumanMessage(content="查询入金金额")],
+        "mode": "query",
+    })
+
+    assert result["messages"][0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert result["messages"][0].tool_calls[0]["args"] == {"query": "查询入金金额"}
+
+
+def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
+    unknown_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_bad",
+            "name": "unknown_toolunknown_tool",
+            "args": {},
+        }],
+    )
+
+    normalized = nodes.normalize_response_tool_call_names(
+        unknown_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+
+    assert normalized.tool_calls[0]["name"] == "unknown_toolunknown_tool"
+
+    repeated_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_select",
+            "name": "select_semantic_config_toolselect_semantic_config_toolselect_semantic_config_tool",
+            "args": {},
+        }],
+    )
+    normalized = nodes.normalize_response_tool_call_names(
+        repeated_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool"
+
+    similar_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_similar",
+            "name": "select_semantic_config_tool_extra",
+            "args": {},
+        }],
+    )
+    normalized = nodes.normalize_response_tool_call_names(
+        similar_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool_extra"
 
 
 @pytest.mark.asyncio
@@ -274,7 +353,13 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(chat_data_graph, "ToolNode", FakeToolNode)
     monkeypatch.setattr(chat_data_graph, "START", "__start__")
     monkeypatch.setattr(chat_data_graph, "TOOLS", ["semantic_query_tool"])
-    monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", lambda model_id=None, semantic_config=None: ["select_semantic_config_tool", "dsl2sql_tool"])
+    selection_tool_kwargs = {}
+
+    def fake_create_semantic_config_selection_tools(model_id=None, semantic_config=None, user_id=None):
+        selection_tool_kwargs.update({"model_id": model_id, "semantic_config": semantic_config, "user_id": user_id})
+        return ["select_semantic_config_tool", "dsl2sql_tool"]
+
+    monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", fake_create_semantic_config_selection_tools)
     monkeypatch.setattr(
         chat_data_graph,
         "create_agent_node",
@@ -288,9 +373,10 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
         ),
     )
 
-    compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1")
+    compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1", user_id="u1")
 
     assert compiled["nodes"][0][0] == "agent"
+    assert selection_tool_kwargs == {"model_id": "m1", "semantic_config": {"id": "sc_a"}, "user_id": "u1"}
     tool_names = [getattr(item, "name", item) for item in compiled["nodes"][0][1][1]]
     assert tool_names == ["skill_load", "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]

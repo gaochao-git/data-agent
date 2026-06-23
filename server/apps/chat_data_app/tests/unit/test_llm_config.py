@@ -217,6 +217,7 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
 
     assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507", "qwen3.6-35b-a3b"]
     assert created_temperatures == [None, None]
-    assert len(captured["middleware"]) == 2
+    assert len(captured["middleware"]) == 3
+    assert captured["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
     assert captured["state_schema"] is data_analyze_graph.DataAnalyzeAgentState
     assert any(isinstance(item, data_analyze_graph.ModelFallbackMiddleware) for item in captured["middleware"])

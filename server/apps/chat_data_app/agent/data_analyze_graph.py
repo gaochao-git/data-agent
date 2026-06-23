@@ -5,7 +5,7 @@ import json
 from typing import Annotated, Any
 
 from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware
+from langchain.agents.middleware import ModelFallbackMiddleware, wrap_model_call
 from langgraph.config import get_stream_writer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
@@ -38,7 +38,7 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_THINKING_PROMPT,
 )
 from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware, invoke_with_token_usage
-from .nodes import timestamp_message
+from .nodes import normalize_response_tool_call_names, timestamp_message
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -242,7 +242,7 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
-        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id),
+        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id, user_id=user_id),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
         create_exec_sql_tool(
             datasource_id=datasource_id,
@@ -287,6 +287,26 @@ def build_data_analyze_system_prompt(
     )
 
 
+def create_tool_call_name_normalizer_middleware(tools: list[Any]):
+    """创建模型工具调用名称归一化 middleware。"""
+    @wrap_model_call(name="ToolCallNameNormalizerMiddleware")
+    async def normalize_tool_call_name_middleware(request, handler):
+        response = await handler(request)
+        if isinstance(response, AIMessage):
+            return normalize_response_tool_call_names(response, tools)
+        result = list(getattr(response, "result", []) or [])
+        if not result:
+            return response
+        normalized_result = [
+            normalize_response_tool_call_names(message, tools)
+            for message in result
+        ]
+        response.result = normalized_result
+        return response
+
+    return normalize_tool_call_name_middleware
+
+
 def create_data_analyze_agent(
     *,
     workspace_root: str,
@@ -309,8 +329,19 @@ def create_data_analyze_agent(
         stream_usage=True,
         enable_thinking=enable_thinking,
     )
+    tools = create_data_analyze_tools(
+        workspace_root,
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        conversation_id=conversation_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        operator_name=operator_name,
+        execution_session_ref=execution_session_ref,
+        model_id=model_id,
+    )
     token_usage_middleware = create_request_token_usage_middleware(model_id)
-    middleware = [token_usage_middleware]
+    middleware = [token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)]
     fallback_model = get_default_chat_data_model()
     if model_id and fallback_model and fallback_model != model_id:
         fallback_llm = get_chat_data_llm(
@@ -322,17 +353,7 @@ def create_data_analyze_agent(
         middleware.append(ModelFallbackMiddleware(fallback_llm))
     agent = create_agent(
         model=llm,
-        tools=create_data_analyze_tools(
-            workspace_root,
-            datasource_id=datasource_id,
-            semantic_config_id=semantic_config_id,
-            conversation_id=conversation_id,
-            member_datasource_ids=member_datasource_ids,
-            user_id=user_id,
-            operator_name=operator_name,
-            execution_session_ref=execution_session_ref,
-            model_id=model_id,
-        ),
+        tools=tools,
         system_prompt=system_prompt,
         middleware=middleware,
         state_schema=DataAnalyzeAgentState,

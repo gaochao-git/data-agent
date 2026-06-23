@@ -253,7 +253,8 @@ async def _resolve_semantic_query_config(
 async def semantic_query_tool(
     dsl: dict,
     state: Annotated[dict, InjectedState],
-    semantic_config_id: str | None = None
+    semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] | None = None,
 ) -> str:
     """
     执行语义查询并返回结果。
@@ -321,10 +322,31 @@ async def semantic_query_tool(
     # 获取数据源ID
     user_id = str(state.get("user_id") or "").strip() or None
     operator_name = str(state.get("operator_name") or "").strip() or None
-    member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
-    logger.info("chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s", user_id, operator_name, datasource_id, member_datasource_ids)
+    requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
+    state_member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
+    if requested_member_datasource_ids:
+        if state_member_datasource_ids:
+            invalid_member_ids = [
+                member_id
+                for member_id in requested_member_datasource_ids
+                if member_id not in state_member_datasource_ids
+            ]
+            if invalid_member_ids:
+                return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
+        effective_member_datasource_ids = requested_member_datasource_ids
+    elif state.get("require_explicit_member_selection") and len(state_member_datasource_ids) > 1:
+        return "semantic_query_tool 执行失败: 多个可用执行对象时必须传入本次要查询的 member_datasource_ids；如果用户未明确机构范围，请先确认查询哪个机构或是否查询全部"
+    else:
+        effective_member_datasource_ids = state_member_datasource_ids
+    logger.info(
+        "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
+        user_id,
+        operator_name,
+        datasource_id,
+        effective_member_datasource_ids,
+    )
     conversation_id = str(state.get("conversation_id") or "").strip() or None
-    query_result = await _execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
     query_result["sql"] = query_result.get("sql") or sql
 
     if query_result["success"]:
@@ -386,14 +408,15 @@ def _build_multi_member_query_result(sql: str, member_results: list[dict]) -> di
     if primary_result is None:
         primary_result = member_results[0] if member_results else {}
     has_success = any(item.get("success") for item in member_results)
+    has_running = any(str(item.get("status") or "").strip().lower() in {"pending", "running"} for item in member_results)
     return {
-        "success": has_success,
+        "success": has_success and not has_running,
         "sql": sql,
         "columns": primary_result.get("columns", []),
         "data": primary_result.get("data", []),
         "total_count": primary_result.get("total_count", 0),
         "execution_time_ms": primary_result.get("execution_time_ms"),
-        "error": None if has_success else (primary_result.get("error") or "查询失败"),
+        "error": "部分执行对象仍在查询中" if has_running else (None if has_success else (primary_result.get("error") or "查询失败")),
         "member_datasource_id": primary_result.get("member_datasource_id"),
         "member_name": primary_result.get("member_name"),
         "results": member_results,

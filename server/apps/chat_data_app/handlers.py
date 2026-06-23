@@ -38,6 +38,10 @@ from .services.data_analyze_context import build_data_analyze_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
 from .services.skill_context_service import build_available_skills_prompt
+from .services.semantic_tools import (
+    format_semantic_config_directory_for_prompt,
+    list_runtime_semantic_config_directory,
+)
 
 logger = get_logger(__name__)
 
@@ -531,7 +535,7 @@ async def _get_semantic_config_async(
 
 
 async def _build_execution_target_info_async(datasource_id: str | None, member_datasource_ids: list[str] | None = None) -> str:
-    """异步构造执行对象说明，避免同步读取数据源配置。"""
+    """异步构造可用执行对象说明，避免同步读取数据源配置。"""
     if not datasource_id:
         return ""
 
@@ -545,11 +549,11 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
     if not execution_targets:
         return ""
 
-    lines = ["## 当前执行对象"]
+    lines = ["## 可用执行对象"]
     if len(execution_targets) == 1:
-        lines.append("本次查询仅在 1 个执行对象上运行：")
+        lines.append("当前可用范围只有 1 个可用执行对象：")
     else:
-        lines.append(f"本次查询会在 {len(execution_targets)} 个执行对象上分别运行，同一条 SQL 会返回多份结果：")
+        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象。请根据用户问题选择本次要查询的机构；如果用户未指定机构，默认查询第 1 个机构，不要默认全部执行：")
 
     for index, target in enumerate(execution_targets, start=1):
         source_config = target.get("source_config") or {}
@@ -561,13 +565,36 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
             or f"执行对象{index}"
         )
         org_code = str(target.get("org_code") or source_config.get("org_code") or "").strip()
+        member_datasource_id = str(target.get("member_datasource_id") or target.get("id") or "").strip()
         if org_code and org_code != str(member_name).strip():
-            lines.append(f"{index}. 机构名称：{member_name}")
+            line = f"{index}. 机构名称：{member_name}"
+            if member_datasource_id:
+                line += f"；成员数据源ID：{member_datasource_id}"
+            lines.append(line)
             lines.append(f"   机构编码：{org_code}")
         else:
-            lines.append(f"{index}. {member_name}")
+            line = f"{index}. 机构名称：{member_name}"
+            if member_datasource_id:
+                line += f"；成员数据源ID：{member_datasource_id}"
+            lines.append(line)
 
     return "\n".join(lines)
+
+
+async def _build_semantic_config_directory_info_async(
+    datasource_id: str | None,
+    user_id: str | None = None,
+    enabled: bool = True,
+) -> str:
+    """异步构造当前可见指标集轻量目录说明。"""
+    if not enabled or not datasource_id:
+        return ""
+    try:
+        directory = await list_runtime_semantic_config_directory(datasource_id, user_id)
+        return format_semantic_config_directory_for_prompt(directory)
+    except Exception as err:
+        logger.warning(f"构造指标集目录说明失败: {err}")
+        return ""
 
 
 async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
@@ -702,6 +729,10 @@ async def _stream_sql_generation(
             if normalized_skill_names:
                 human_message_kwargs["skill_names"] = normalized_skill_names
 
+            semantic_config_directory_info = ""
+            if mode == "query" and not semantic_config:
+                semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
+
             initial_state = {
                 "messages": [HumanMessage(
                     content=user_query,
@@ -717,7 +748,9 @@ async def _stream_sql_generation(
                 "operator_name": username or "",
                 "conversation_id": thread_id,
                 "member_datasource_ids": member_datasource_ids or [],
+                "require_explicit_member_selection": mode == "query",
                 "execution_target_info": await _build_execution_target_info_async(datasource_id, member_datasource_ids),
+                "semantic_config_directory_info": semantic_config_directory_info,
             }
 
             # 用于跟踪已发送 running 状态的工具

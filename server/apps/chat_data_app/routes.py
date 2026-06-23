@@ -2200,12 +2200,13 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
         ]
         error_message = "；".join(error_messages) if error_messages else "所有执行对象均执行失败"
 
+    result_success = bool(successful_results) and task_status != "running"
     return {
         "status": task_status,
         "progress_text": progress_text,
         "error_message": error_message,
         "result_payload": {
-            "success": bool(successful_results),
+            "success": result_success,
             "sql": primary_result.get("sql") or ((response_data.get("request_payload") or {}).get("sql") or ""),
             "columns": primary_result.get("columns") or [],
             "data": primary_result.get("data") or [],

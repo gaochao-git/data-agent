@@ -599,6 +599,10 @@ class SemanticQueryInput(BaseModel):
         description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset",
     )
     semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
+    member_datasource_ids: List[str] = Field(
+        default_factory=list,
+        description="本次查询要执行的成员数据源 ID 列表；仅使用系统提示词中当前可用范围列出的执行对象",
+    )
 
     @model_validator(mode="before")
     @classmethod

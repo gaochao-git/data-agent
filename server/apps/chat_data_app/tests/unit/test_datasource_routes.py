@@ -2748,7 +2748,7 @@ def test_build_execution_target_info_contains_selected_members(monkeypatch):
 
     info = asyncio.run(_build_execution_target_info_async("ds_a", ["phy_a", "phy_b"]))
 
-    assert "当前执行对象" in info
+    assert "可用执行对象" in info
     assert "投诉举报1" in info
     assert "投诉举报2" in info
 
@@ -2814,7 +2814,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     async def _fake_build_execution_target_info(_datasource_id, _member_ids):
-        return "## 当前执行对象\n1. 成员B"
+        return "## 可用执行对象\n1. 成员B"
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
@@ -2840,7 +2840,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     assert captured["agent_id"] == routes.SQL_ASSIST_AGENT_ID
     assert captured["conversation_id"] == "conv_sql_assist"
     assert captured["config"]["configurable"]["thread_id"] == "conv_sql_assist"
-    assert captured["initial_state"]["execution_target_info"] == "## 当前执行对象\n1. 成员B"
+    assert captured["initial_state"]["execution_target_info"] == "## 可用执行对象\n1. 成员B"
     assert captured["initial_state"]["member_datasource_ids"] == ["phy_b"]
 
 

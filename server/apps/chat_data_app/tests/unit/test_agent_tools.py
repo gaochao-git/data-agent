@@ -530,15 +530,137 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": state}))
+    success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["m1"],
+        "state": state,
+    }))
 
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
-    failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": state}))
+    failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["m1"],
+        "state": state,
+    }))
 
     assert success.startswith("<query_result>")
     assert '"data": [{"id": 1}]' in success
     assert '"sql": "select 1"' in success
     assert failed == "查询失败: 表不存在"
+
+
+def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    captured = {}
+
+    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, *_args, **_kwargs):
+        captured["sql"] = sql
+        captured["datasource_id"] = datasource_id
+        captured["member_datasource_ids"] = member_datasource_ids
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": ["org_b", "org_c"],
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查指定机构订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": [" org_b ", "org_b", "", "org_c"],
+        "state": state,
+    }))
+
+    assert result.startswith("<query_result>")
+    assert captured["member_datasource_ids"] == ["org_b", "org_c"]
+
+
+def test_semantic_query_tool_rejects_member_ids_outside_available_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fail_execute_sql_real(*_args, **_kwargs):
+        raise AssertionError("should not execute unavailable member id")
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": ["org_a", "org_b"],
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查指定机构订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["org_b", "org_c"],
+        "state": state,
+    }))
+
+    assert "本次查询包含不可用的执行对象 org_c" in result
+
+
+def test_semantic_query_tool_requires_explicit_member_ids_when_multiple_available(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fail_execute_sql_real(*_args, **_kwargs):
+        raise AssertionError("should not execute without explicit member ids")
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": ["m1", "m2"],
+        "require_explicit_member_selection": True,
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "state": state,
+    }))
+
+    assert "多个可用执行对象时必须传入本次要查询的 member_datasource_ids" in result
 
 
 def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_payload(monkeypatch):

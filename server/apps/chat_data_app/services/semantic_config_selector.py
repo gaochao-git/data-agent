@@ -653,18 +653,20 @@ async def select_semantic_config_for_query(
     datasource_id: str | None,
     user_query: str,
     model_id: str | None = None,
+    user_id: str | None = None,
 ) -> Optional[Dict[str, Any]]:
     """用大模型从当前数据源组可用指标集中选择最匹配项。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_query = str(user_query or "").strip()
+    normalized_user_id = str(user_id or "").strip()
     if not normalized_datasource_id or not normalized_query:
         return None
 
     ds_manager = get_datasource_manager()
     if hasattr(ds_manager, "get_runtime_semantic_configs_async"):
-        configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id)
+        configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id, normalized_user_id)
     else:
-        configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
+        configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id, normalized_user_id)
     enabled_configs = [
         config for config in configs or []
         if _config_id(config) and bool(config.get("enabled", True))

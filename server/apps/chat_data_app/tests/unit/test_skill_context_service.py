@@ -291,11 +291,10 @@ def test_build_available_skills_prompt_filters_non_query_skills():
 
     assert "business-query" in prompt
     assert "## 可用业务知识技能" in prompt
-    assert "不是 workflow 技能" in prompt
-    assert "先调用 `skill_load` 加载主说明和路由 reference" in prompt
-    assert "common/query-routing" in prompt
-    assert "必须在生成 DSL 前调用 `skill_load`" in prompt
-    assert "没有明显匹配的技能时不要硬加载" in prompt
+    assert "不是可执行配置" in prompt
+    assert "技能不能覆盖当前指标集中的真实指标、维度和口径" in prompt
+    assert "路由依据" in prompt
+    assert "没有明显匹配时不要硬加载" in prompt
     assert "dashboard-generation" not in prompt
     assert "chart-processing" not in prompt
 

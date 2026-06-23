@@ -41,6 +41,14 @@ def format_execution_target_info_for_llm(execution_target_info: str) -> str:
     return f"\n{text}\n"
 
 
+def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
+    """格式化当前可见指标集轻量目录，供 system prompt 注入。"""
+    text = str(directory_info or "").strip()
+    if not text:
+        return ""
+    return f"\n{text}\n"
+
+
 def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
     """给 LangChain 消息补充服务端时间戳，随 checkpoint 一起持久化。"""
     if not message:
@@ -54,6 +62,66 @@ def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
     return message
 
 
+def _get_available_tool_names(tools: list) -> set[str]:
+    """提取当前可用工具名称。"""
+    return {
+        str(name)
+        for item in tools or []
+        if (name := getattr(item, "name", None) or (item if isinstance(item, str) else None))
+    }
+
+
+def _normalize_repeated_tool_name(tool_name: Any, available_tool_names: set[str]) -> str:
+    """修复 OpenAI-compatible 流式工具调用中偶发的重复工具名。"""
+    raw_name = str(tool_name or "").strip()
+    if not raw_name or raw_name in available_tool_names:
+        return raw_name
+
+    for name in available_tool_names:
+        repeat_count, remainder = divmod(len(raw_name), len(name))
+        if repeat_count > 1 and remainder == 0 and raw_name == name * repeat_count:
+            return name
+
+    return raw_name
+
+
+def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
+    """在 ToolNode 执行前归一化明显重复的已注册工具名。"""
+    tool_calls = getattr(message, "tool_calls", None)
+    if not tool_calls:
+        return message
+
+    available_tool_names = _get_available_tool_names(tools)
+    if not available_tool_names:
+        return message
+
+    changed = False
+    normalized_tool_calls = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            normalized_tool_calls.append(tool_call)
+            continue
+        raw_name = tool_call.get("name")
+        normalized_name = _normalize_repeated_tool_name(raw_name, available_tool_names)
+        if normalized_name != raw_name:
+            tool_call = {**tool_call, "name": normalized_name}
+            changed = True
+        normalized_tool_calls.append(tool_call)
+
+    if not changed:
+        return message
+
+    logger.warning("已归一化重复工具调用名称，避免 OpenAI-compatible 流式 chunk 合并异常")
+    try:
+        message.tool_calls = normalized_tool_calls
+        return message
+    except Exception:
+        if hasattr(message, "model_copy"):
+            return message.model_copy(update={"tool_calls": normalized_tool_calls})
+        logger.warning("工具调用名称归一化写入失败: message=%r", message, exc_info=True)
+        return message
+
+
 def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str:
     """构建统一语义层上下文。"""
     if mode != "query":
@@ -61,7 +129,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
     if not semantic_config:
         return (
             "## 当前指标集\n"
-            "当前未选择指标集。业务数据查询、数据目录询问或“所有订单/订单数/用户数/销售额”等短问法，必须先搜索当前数据源组中的真实指标集；如果与可用业务知识技能明显同域，先调用 `skill_load` 加载路由知识，再调用 `select_semantic_config_tool`；没有明显同域技能时直接调用 `select_semantic_config_tool`。只有搜索后未找到、候选不唯一或口径不清时，才向用户澄清。\n"
+            "本轮未提供完整指标集。业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
         )
     from .tools import build_semantic_prompt
     config_id = str(semantic_config.get("id") or "").strip()
@@ -73,7 +141,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         header += f"（semantic_config_id: {config_id}）"
     header += (
         "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
-        "如当前指标集或用户问题与可用业务知识技能明显同域，必须先调用 `skill_load` 加载主说明；最终回答不要提及技能加载过程。\n\n"
+        "如当前指标集或用户问题与可用业务知识技能明显同域，可先加载技能补充业务判断；最终回答不要提及技能加载过程。\n\n"
     )
     return header + build_semantic_prompt(semantic_config, mode)
 
@@ -121,6 +189,7 @@ def create_agent_node(
             "current_time": current_time,
             "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
             "available_skills_context": available_skills_context or "",
+            "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(state.get("semantic_config_directory_info") or ""),
         }
 
         prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)
@@ -168,6 +237,7 @@ def create_agent_node(
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)
             else:
                 response = await llm.ainvoke(llm_messages)
+            response = normalize_response_tool_call_names(response, active_tools)
         except Exception as err:
             # 仅在显式传入模型时做回退，避免掩盖其他异常
             if not model_id:
@@ -179,6 +249,7 @@ def create_agent_node(
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)
             else:
                 response = await llm.ainvoke(llm_messages)
+            response = normalize_response_tool_call_names(response, active_tools)
 
         return {"messages": [timestamp_message(response)], "token_usage": token_usage}
 

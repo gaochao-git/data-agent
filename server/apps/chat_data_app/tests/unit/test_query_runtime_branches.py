@@ -137,6 +137,17 @@ def test_persistent_query_task_result_payload_local_success_and_error_fallback()
     assert success["cache_age_seconds"] == 10
 
 
+def test_has_running_member_result_detects_unfinished_members():
+    assert query_runtime.has_running_member_result([
+        {"member_datasource_id": "m1", "success": True, "status": "succeeded"},
+        {"member_datasource_id": "m2", "success": False, "status": "running"},
+    ]) is True
+    assert query_runtime.has_running_member_result([
+        {"member_datasource_id": "m1", "success": True, "status": "succeeded"},
+        {"member_datasource_id": "m2", "success": False, "status": "failed"},
+    ]) is False
+
+
 def test_runtime_task_operator_and_execution_id_helpers():
     assert query_runtime.get_task_operator_name({"request_payload": "{bad"}) == ""
     assert query_runtime.get_task_operator_name({"request_payload": json.dumps({"operator_name": "测试用户"})}) == "测试用户"

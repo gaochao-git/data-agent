@@ -290,6 +290,11 @@ def get_execution_id_by_member(execution_map: Dict[str, str], execution_target: 
     return execution_map.get("")
 
 
+def has_running_member_result(results: List[Dict[str, Any]]) -> bool:
+    """判断成员结果中是否仍有未完成任务。"""
+    return any(str((item or {}).get("status") or "").strip().lower() in {"pending", "running"} for item in results or [])
+
+
 async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Dict[str, str]:
     """为任务预创建每个成员数据源的 SQL 执行记录。"""
     ds_manager = get_datasource_manager()
@@ -601,6 +606,7 @@ async def execute_sql_for_member(
         "member_name": member_name,
         "sql": effective_sql,
         "success": bool(result.get("success")),
+        "status": result.get("status"),
         "columns": result.get("columns") or [],
         "data": result.get("data") or [],
         "total_count": int(result.get("total_count") or 0),
@@ -651,9 +657,12 @@ async def build_execute_sql_result_data(
     execution_time_ms = int((time.time() - start_time) * 1000)
     primary_result = next((item for item in results if item.get("success")), results[0] if results else {})
     successful_results = [item for item in results if item.get("success")]
-    overall_success = bool(successful_results)
+    has_running_results = has_running_member_result(results)
+    overall_success = bool(successful_results) and not has_running_results
     if overall_success:
         error_message = None
+    elif has_running_results:
+        error_message = "部分执行对象仍在查询中"
     else:
         error_messages = [
             str(item.get("error") or "").strip()
@@ -1194,14 +1203,15 @@ async def execute_agent_sql(
         else:
             primary_result = next((item for item in member_results if item.get("success")), member_results[0] if member_results else {})
             successful_results = [item for item in member_results if item.get("success")]
+            has_running_results = has_running_member_result(member_results)
             final_result = {
-                "success": bool(successful_results),
+                "success": bool(successful_results) and not has_running_results,
                 "sql": primary_result.get("sql") or sql,
                 "columns": primary_result.get("columns") or [],
                 "data": primary_result.get("data") or [],
                 "total_count": primary_result.get("total_count") or 0,
                 "execution_time_ms": primary_result.get("execution_time_ms"),
-                "error": None if successful_results else (primary_result.get("error") or "查询失败"),
+                "error": "部分执行对象仍在查询中" if has_running_results else (None if successful_results else (primary_result.get("error") or "查询失败")),
                 "member_datasource_id": primary_result.get("member_datasource_id"),
                 "member_name": primary_result.get("member_name"),
                 "results": member_results,

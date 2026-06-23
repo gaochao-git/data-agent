@@ -414,8 +414,10 @@ def test_collect_selection_candidates_keeps_more_than_legacy_five():
 class _FakeDatasourceManager:
     def __init__(self, configs):
         self.configs = configs
+        self.user_id = None
 
-    async def get_semantic_configs_async(self, _datasource_id):
+    async def get_semantic_configs_async(self, _datasource_id, user_id=""):
+        self.user_id = user_id
         return self.configs
 
 
@@ -446,12 +448,14 @@ def test_select_semantic_config_for_query_retrieves_directory_candidates(monkeyp
     configs[36]["description"] = "订单经营分析评估用语义配置"
     fake_llm = _FakeLLM()
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_datasource_manager", lambda: _FakeDatasourceManager(configs))
+    fake_manager = _FakeDatasourceManager(configs)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_datasource_manager", lambda: fake_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_chat_data_llm", lambda **_kwargs: fake_llm)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector._chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [summaries])
 
-    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单金额"))
+    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单金额", user_id="u1"))
 
+    assert fake_manager.user_id == "u1"
     assert selection["selected_config_id"] == "sc_36"
     assert len(fake_llm.prompts) == 1
     prompt_payload = json.loads(fake_llm.prompts[0].split("输入：\n", 1)[1])
@@ -463,8 +467,9 @@ def test_select_semantic_config_for_query_retrieves_directory_candidates(monkeyp
 
 def test_select_semantic_config_for_query_uses_runtime_configs_with_column_dict(monkeypatch):
     class RuntimeManager:
-        async def get_runtime_semantic_configs_async(self, datasource_id):
+        async def get_runtime_semantic_configs_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_a"
+            assert user_id == "u1"
             return [{
                 "id": "sc_order",
                 "name": "订单分析",
@@ -482,7 +487,7 @@ def test_select_semantic_config_for_query_uses_runtime_configs_with_column_dict(
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector.get_chat_data_llm", lambda **_kwargs: fake_llm)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_config_selector._chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [summaries])
 
-    asyncio.run(select_semantic_config_for_query("ds_a", "查询有效订单销售额"))
+    asyncio.run(select_semantic_config_for_query("ds_a", "查询有效订单销售额", user_id="u1"))
 
     prompt_payload = json.loads(fake_llm.prompts[0].split("输入：\n", 1)[1])
     summary = prompt_payload["semantic_configs"][0]

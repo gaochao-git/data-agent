@@ -14,6 +14,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.handlers import (
     _build_execution_target_info_async,
     _build_query_skills_context,
+    _build_semantic_config_directory_info_async,
     _build_semantic_selection_error,
     _build_semantic_select_required_event,
     _extract_reasoning_content,
@@ -317,11 +318,13 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     single = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"]))
     multi = asyncio.run(_build_execution_target_info_async("ds_a", None))
 
-    assert "仅在 1 个执行对象" in single
-    assert "1. 机构名称：杭州库" in single
+    assert "当前可用范围只有 1 个可用执行对象" in single
+    assert "1. 机构名称：杭州库；成员数据源ID：m1" in single
     assert "机构编码：ORG_HZ" in single
-    assert "2 个执行对象" in multi
-    assert "2. 机构名称：宁波库" in multi
+    assert "2 个可用执行对象" in multi
+    assert "用户未指定机构，默认查询第 1 个机构" in multi
+    assert "不要默认全部执行" in multi
+    assert "2. 机构名称：宁波库；成员数据源ID：m2" in multi
     assert "机构编码：ORG_NB" in multi
 
 
@@ -343,6 +346,39 @@ def test_build_execution_target_info_async_empty_and_error(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: ErrorManager())
     assert asyncio.run(_build_execution_target_info_async("ds_a", None)) == ""
+
+
+def test_build_semantic_config_directory_info_async(monkeypatch):
+    import asyncio
+    captured = {}
+
+    async def fake_directory(datasource_id, user_id=None):
+        assert datasource_id == "ds_a"
+        captured["user_id"] = user_id
+        return [{
+            "id": "sc_order",
+            "name": "订单分析",
+            "description": "订单经营分析",
+            "metrics_total": 2,
+            "dimensions_total": 4,
+        }]
+
+    async def failing_directory(_datasource_id, _user_id=None):
+        raise RuntimeError("directory failed")
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", fake_directory)
+
+    prompt = asyncio.run(_build_semantic_config_directory_info_async("ds_a", user_id="u1"))
+
+    assert captured["user_id"] == "u1"
+    assert "当前可见指标集目录" in prompt
+    assert "名称：订单分析" in prompt
+    assert "描述：订单经营分析" in prompt
+    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a", enabled=False)) == ""
+    assert asyncio.run(_build_semantic_config_directory_info_async(None)) == ""
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", failing_directory)
+    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a")) == ""
 
 
 def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):
@@ -545,6 +581,7 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", fail_get_all_tables)
     monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="## 当前可见指标集目录\n1. 名称：订单分析"))
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_auto_semantic_tool",
@@ -558,6 +595,7 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     assert "5+5=10" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
     assert fake_graph.initial_state["tables_ddl_info"] == ""
+    assert fake_graph.initial_state["semantic_config_directory_info"] == "## 当前可见指标集目录\n1. 名称：订单分析"
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
     assert called["tables"] is False
@@ -1121,6 +1159,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
     monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="对象"))
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="不应注入目录"))
     temp_events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_temp",
         user_query="查订单",
@@ -1133,6 +1172,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     assert "语义查询完成" in joined
     assert fake_graph.initial_state["tables_ddl_info"] == ""
     assert fake_graph.initial_state["execution_target_info"] == "对象"
+    assert fake_graph.initial_state["semantic_config_directory_info"] == ""
 
 
 def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch):

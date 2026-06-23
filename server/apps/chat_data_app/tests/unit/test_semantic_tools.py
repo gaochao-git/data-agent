@@ -18,7 +18,10 @@ from apps.chat_data_app.services.semantic_tools import (
     extract_datasource_id,
     extract_semantic_config_id,
     extract_user_query,
+    format_semantic_config_directory_for_prompt,
+    list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
+    _is_semantic_config_directory_query,
     _selection_to_tool_payload,
 )
 
@@ -39,6 +42,35 @@ def test_extract_user_query_reads_last_human_message():
     assert extract_user_query({}) is None
     assert extract_user_query({"messages": [HumanMessage(content="第一次"), AIMessage(content="回复"), HumanMessage(content="第二次")]}) == "第二次"
     assert extract_user_query({"messages": [AIMessage(content="没有用户消息")]}) is None
+
+
+def test_semantic_config_directory_query_detection():
+    assert _is_semantic_config_directory_query("你现在能看到哪些指标集") is True
+    assert _is_semantic_config_directory_query("当前可用数据集有哪些") is True
+    assert _is_semantic_config_directory_query("查询订单数") is False
+    assert _is_semantic_config_directory_query("有哪些指标可以查") is False
+
+
+def test_format_semantic_config_directory_for_prompt_keeps_full_description():
+    long_description = "订单经营分析" * 40
+    prompt = format_semantic_config_directory_for_prompt([
+        {
+            "id": "sc_order",
+            "name": "订单分析",
+            "description": long_description,
+            "metrics_total": 3,
+            "dimensions_total": 5,
+        },
+        {"name": "", "description": "无名称会跳过"},
+        "invalid",
+    ])
+
+    assert "## 当前可见指标集目录" in prompt
+    assert "名称：订单分析" in prompt
+    assert f"描述：{long_description}" in prompt
+    assert "指标数：3；维度数：5" in prompt
+    assert "无名称会跳过" not in prompt
+    assert format_semantic_config_directory_for_prompt([]) == ""
 
 
 def test_selection_to_tool_payload_branches():
@@ -180,6 +212,62 @@ def test_selection_to_tool_payload_keeps_unsupported_query_plan_message_fallback
     assert payload["message"] == "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
 
 
+def test_select_semantic_config_tool_returns_full_directory_for_directory_query(monkeypatch):
+    captured = {}
+
+    class FakeDatasourceManager:
+        async def get_runtime_semantic_configs_async(self, datasource_id, user_id=""):
+            assert datasource_id == "ds_bound"
+            captured["user_id"] = user_id
+            return [
+                {"id": "sc_order", "name": "订单分析", "description": "订单经营分析", "enabled": True, "metrics": [{"name": "订单数"}], "dimensions": [{"name": "城市"}]},
+                {"id": "sc_disabled", "name": "停用指标集", "enabled": False, "metrics": [{"name": "停用指标"}], "dimensions": []},
+                {"id": "sc_student", "name": "学生课程选课分析", "description": "选课与成绩分析", "enabled": True, "metrics": [{"name": "平均成绩"}], "dimensions": [{"name": "课程"}, {"name": "学生"}]},
+            ]
+
+    async def fail_select_semantic_config_for_query(*_args, **_kwargs):
+        raise AssertionError("directory query should not call selector llm")
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: FakeDatasourceManager())
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fail_select_semantic_config_for_query)
+
+    tool = create_semantic_config_selection_tools(include_query_tools=False, datasource_id="ds_bound", user_id="u1")[0]
+    result = asyncio.run(tool.ainvoke({"query": "你现在能看到哪些指标集"}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert captured["user_id"] == "u1"
+    assert payload["directory"] is True
+    assert payload["selected"] is False
+    assert [item["name"] for item in payload["semantic_configs"]] == ["订单分析", "学生课程选课分析"]
+    assert payload["semantic_configs"][0]["metrics_total"] == 1
+    assert payload["semantic_configs"][1]["dimensions_total"] == 2
+
+
+def test_list_runtime_semantic_config_directory_falls_back_to_legacy_manager(monkeypatch):
+    captured = {}
+
+    class LegacyDatasourceManager:
+        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+            assert datasource_id == "ds_legacy"
+            captured["user_id"] = user_id
+            return [
+                {"semantic_config_id": "sc_legacy", "semantic_config_name": "历史指标集", "semantic_config_desc": "历史描述", "enabled": True},
+            ]
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: LegacyDatasourceManager())
+
+    directory = asyncio.run(list_runtime_semantic_config_directory("ds_legacy", "u2"))
+
+    assert captured["user_id"] == "u2"
+    assert directory == [{
+        "id": "sc_legacy",
+        "name": "历史指标集",
+        "description": "历史描述",
+        "metrics_total": 0,
+        "dimensions_total": 0,
+    }]
+
+
 def test_load_runtime_semantic_config_branches(monkeypatch):
     class RuntimeManager:
         async def get_datasource_async(self, datasource_id):
@@ -234,8 +322,8 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
 def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     captured = {}
 
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
-        captured.update({"datasource_id": datasource_id, "user_query": user_query, "model_id": model_id})
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
+        captured.update({"datasource_id": datasource_id, "user_query": user_query, "model_id": model_id, "user_id": user_id})
         return {
             "selected_config_id": "sc_a",
             "selected_config_name": "订单分析",
@@ -255,6 +343,7 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
         model_id="model_a",
         include_query_tools=False,
         datasource_id="ds_bound",
+        user_id="u1",
     )[0]
     result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
     payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
@@ -262,12 +351,13 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     assert captured["datasource_id"] == "ds_bound"
     assert captured["user_query"] == "查询订单金额"
     assert captured["model_id"] == "model_a"
+    assert captured["user_id"] == "u1"
     assert captured["load_args"] == ("ds_bound", "sc_a")
     assert payload["selected"] is True
 
 
 def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monkeypatch):
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
         assert datasource_id == "ds_bound"
         return {
             "coverage": "partial",
@@ -308,7 +398,7 @@ def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monke
 def test_select_semantic_config_tool_skips_duplicate_and_missing_task_summaries(monkeypatch):
     loaded = []
 
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
         return {
             "coverage": "partial",
             "query_plan": {
@@ -341,7 +431,7 @@ def test_select_semantic_config_tool_skips_duplicate_and_missing_task_summaries(
 
 
 def test_select_semantic_config_tool_omits_empty_query_plan_semantic_summaries(monkeypatch):
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
         return {
             "coverage": "partial",
             "query_plan": {

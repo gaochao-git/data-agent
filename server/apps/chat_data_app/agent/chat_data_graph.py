@@ -54,7 +54,7 @@ def get_chat_data_graph(
     if effective_mode == "query":
         tools = [
             create_readonly_skill_load_tool(user_id=user_id or ""),
-            *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config),
+            *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config, user_id=user_id),
             *TOOLS,
         ]
     else:

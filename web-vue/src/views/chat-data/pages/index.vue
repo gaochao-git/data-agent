@@ -1079,15 +1079,15 @@ const buildExecutionTargets = (datasource: DataSource | null): ExecutionTargetOp
 }
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
-const executionTargetMultiple = ref(false)
-
 const selectedMemberDatasourceIds = ref<string[]>([])
+const conversationMemberDatasourceIds = ref<string[]>([])
 
 const resolveSelectedExecutionTargetIds = (
   targets: ExecutionTargetOption[],
   currentIds: string[],
   templateId?: string,
-  multiple = true
+  multiple = true,
+  defaultAll = false
 ): string[] => {
   const availableIds = targets.map(item => item.member_datasource_id)
   if (availableIds.length === 0) {
@@ -1097,6 +1097,10 @@ const resolveSelectedExecutionTargetIds = (
   const retainedIds = currentIds.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
     return multiple ? retainedIds : [retainedIds[0]!]
+  }
+
+  if (multiple && defaultAll) {
+    return [...availableIds]
   }
 
   if (templateId && availableIds.includes(templateId)) {
@@ -1116,10 +1120,23 @@ const syncSelectedExecutionTargets = () => {
     executionTargets.value,
     selectedMemberDatasourceIds.value,
     currentDatasource.value?.template_datasource_id,
-    executionTargetMultiple.value
+    true,
+    false
   )
   if (isSameStringArray(nextIds, selectedMemberDatasourceIds.value)) return
   selectedMemberDatasourceIds.value = nextIds
+}
+
+const syncConversationExecutionTargets = () => {
+  const nextIds = resolveSelectedExecutionTargetIds(
+    executionTargets.value,
+    conversationMemberDatasourceIds.value,
+    currentDatasource.value?.template_datasource_id,
+    true,
+    true
+  )
+  if (isSameStringArray(nextIds, conversationMemberDatasourceIds.value)) return
+  conversationMemberDatasourceIds.value = nextIds
 }
 
 watch(
@@ -1130,12 +1147,18 @@ watch(
   ],
   () => {
     syncSelectedExecutionTargets()
+    syncConversationExecutionTargets()
   },
   { immediate: true }
 )
 
+const isConversationContextMode = computed(() => viewMode.value === 'conversation')
+const activeMemberDatasourceIds = computed(() => (
+  isConversationContextMode.value ? conversationMemberDatasourceIds.value : selectedMemberDatasourceIds.value
+))
+
 const selectedExecutionTargetSummary = computed(() => {
-  const selectedTargets = executionTargets.value.filter(item => selectedMemberDatasourceIds.value.includes(item.member_datasource_id))
+  const selectedTargets = executionTargets.value.filter(item => activeMemberDatasourceIds.value.includes(item.member_datasource_id))
   if (selectedTargets.length === 0) return '未选择执行对象'
   if (selectedTargets.length === 1) return selectedTargets[0]?.label || '已选择 1 个执行对象'
   return `${selectedTargets[0]?.label || '已选择'} 等 ${selectedTargets.length} 个`
@@ -1143,8 +1166,8 @@ const selectedExecutionTargetSummary = computed(() => {
 
 const showContextSelectorDialog = ref(false)
 const draftDatasourceId = ref('')
-const draftExecutionTargetMultiple = ref(false)
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
+const draftDefaultAllExecutionTargets = ref(false)
 
 const draftDatasource = computed(() => {
   return datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
@@ -1154,8 +1177,8 @@ const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecu
 
 const openContextSelector = () => {
   draftDatasourceId.value = selectedDatasourceId.value
-  draftExecutionTargetMultiple.value = executionTargetMultiple.value
-  draftSelectedMemberDatasourceIds.value = [...selectedMemberDatasourceIds.value]
+  draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
+  draftDefaultAllExecutionTargets.value = isConversationContextMode.value
   showContextSelectorDialog.value = true
 }
 
@@ -1166,7 +1189,8 @@ watch(
       draftExecutionTargets.value,
       draftSelectedMemberDatasourceIds.value,
       draftDatasource.value?.template_datasource_id,
-      draftExecutionTargetMultiple.value
+      true,
+      draftDefaultAllExecutionTargets.value
     )
     if (isSameStringArray(nextIds, draftSelectedMemberDatasourceIds.value)) return
     draftSelectedMemberDatasourceIds.value = nextIds
@@ -1178,16 +1202,21 @@ const handleConfirmContextSelector = () => {
     ElMessage.warning('请选择执行对象')
     return
   }
-  executionTargetMultiple.value = draftExecutionTargetMultiple.value
   selectedDatasourceId.value = draftDatasourceId.value
   const nextDatasource = datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
   const nextTargets = buildExecutionTargets(nextDatasource)
-  selectedMemberDatasourceIds.value = resolveSelectedExecutionTargetIds(
+  const nextIds = resolveSelectedExecutionTargetIds(
     nextTargets,
     draftSelectedMemberDatasourceIds.value,
     nextDatasource?.template_datasource_id,
-    draftExecutionTargetMultiple.value
+    true,
+    draftDefaultAllExecutionTargets.value
   )
+  if (isConversationContextMode.value) {
+    conversationMemberDatasourceIds.value = nextIds
+  } else {
+    selectedMemberDatasourceIds.value = nextIds
+  }
   showContextSelectorDialog.value = false
 }
 
@@ -1230,17 +1259,6 @@ watch(
   },
   { immediate: true }
 )
-
-watch(draftExecutionTargetMultiple, () => {
-  const nextIds = resolveSelectedExecutionTargetIds(
-    draftExecutionTargets.value,
-    draftSelectedMemberDatasourceIds.value,
-    draftDatasource.value?.template_datasource_id,
-    draftExecutionTargetMultiple.value
-  )
-  if (isSameStringArray(nextIds, draftSelectedMemberDatasourceIds.value)) return
-  draftSelectedMemberDatasourceIds.value = nextIds
-})
 
 watch(
   [viewMode, activeSidebarTab, isSidebarVisible, selectedDatasourceId, selectedSemanticConfigId, conversationSelectedSemanticConfigId],
@@ -1659,8 +1677,8 @@ onUnmounted(() => {
                   :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
                   :execution-targets="executionTargets"
-                  :execution-target-multiple="executionTargetMultiple"
-                  :selected-member-datasource-ids="selectedMemberDatasourceIds"
+                  :execution-target-multiple="true"
+                  :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   hide-header
                   hide-datasource-selector
                   hide-execution-target-selector
@@ -1668,7 +1686,7 @@ onUnmounted(() => {
                   class="h-full"
                   @first-message-complete="handleFirstMessageComplete"
                   @datasource-change="handleDatasourceChange"
-                  @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+                  @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @analysis-panel-change="handleAnalysisPanelChange"
                   @agent-change="handleAgentChange"
                   @switch-to-conversation="switchToConversationPanel"
@@ -1687,12 +1705,12 @@ onUnmounted(() => {
                     :semantic-config-selection="conversationSemanticConfigSelection"
                     :ensure-conversation-id="ensureConversationId"
                     :execution-targets="executionTargets"
-                    :execution-target-multiple="executionTargetMultiple"
-                    :selected-member-datasource-ids="selectedMemberDatasourceIds"
+                    :execution-target-multiple="true"
+                    :selected-member-datasource-ids="conversationMemberDatasourceIds"
                     class="h-full"
                     @first-message-complete="handleFirstMessageComplete"
                     @agent-change="handleAgentChange"
-                    @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+                    @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                     @dashboard-created="handleDashboardCreatedFromConversation"
                     @semantic-config-selected="handleConversationSemanticConfigSelected"
                   />
@@ -1712,7 +1730,7 @@ onUnmounted(() => {
                 :semantic-config="currentSemanticConfig"
                 :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
                 :execution-targets="executionTargets"
-                :execution-target-multiple="executionTargetMultiple"
+                :execution-target-multiple="true"
                 :selected-member-datasource-ids="selectedMemberDatasourceIds"
                 :on-sql-change="options?.onSqlChange"
                 :hide-chart-panel="!!options?.hideBuilderChartPanel"
@@ -1733,7 +1751,7 @@ onUnmounted(() => {
                 :table-schema="tableSchema"
                 :initial-sql="options?.initialSql"
                 :execution-targets="executionTargets"
-                :execution-target-multiple="executionTargetMultiple"
+                :execution-target-multiple="true"
                 :selected-member-datasource-ids="selectedMemberDatasourceIds"
                 :on-sql-change="options?.onSqlChange"
                 hide-execution-target-selector
@@ -1764,7 +1782,7 @@ onUnmounted(() => {
 
     <el-dialog v-model="showContextSelectorDialog" width="520px" title="切换数据源组与执行对象">
       <div class="space-y-4">
-        <div class="flex items-end gap-3">
+        <div>
           <div class="min-w-0 flex-1">
             <div class="mb-2 text-[13px] font-medium text-slate-700">数据源组</div>
             <select
@@ -1777,30 +1795,6 @@ onUnmounted(() => {
               </option>
             </select>
           </div>
-
-          <div class="shrink-0">
-            <div class="mb-2 text-[13px] font-medium text-slate-700">选择模式</div>
-            <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-              <button
-                :class="[
-                  'h-8 px-3 rounded-md text-[12px] transition-all',
-                  !draftExecutionTargetMultiple ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                ]"
-                @click="draftExecutionTargetMultiple = false"
-              >
-                单选
-              </button>
-              <button
-                :class="[
-                  'h-8 px-3 rounded-md text-[12px] transition-all',
-                  draftExecutionTargetMultiple ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                ]"
-                @click="draftExecutionTargetMultiple = true"
-              >
-                多选
-              </button>
-            </div>
-          </div>
         </div>
 
         <div>
@@ -1809,7 +1803,7 @@ onUnmounted(() => {
             v-if="draftExecutionTargets.length > 0"
             v-model="draftSelectedMemberDatasourceIds"
             :targets="draftExecutionTargets"
-            :multiple="draftExecutionTargetMultiple"
+            :multiple="true"
             inline
           />
           <div
