@@ -775,7 +775,7 @@ def test_semantic_helper_edge_cases():
     class FakeManager:
         async def get_semantic_configs_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_a"
-            assert user_id == ""
+            assert user_id == "user_a"
             return [{"id": "cfg_a", "create_by": "user_a"}, {"id": "cfg_b", "create_by": "user_b"}]
 
     configs = asyncio.run(semantic_config._get_semantic_configs_for_user(FakeManager(), "ds_a", "user_a"))
@@ -794,6 +794,28 @@ def test_semantic_helper_edge_cases():
     assert semantic_config._extract_history_task_conversation_id({"conversation_id": " conv "}) == "conv"
     assert semantic_config._semantic_scope_tables({"metrics": [{}], "dimensions": [{"table": ""}], "relationships": [{"left_table": "a", "right_table": "b"}]}) == {"a", "b"}
     assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg", {"metrics": [], "dimensions": []}, "mysql")[:2] == (False, "empty_scope")
+
+
+def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
+    captured = {}
+
+    class FakeManager:
+        async def has_datasource_async(self, datasource_id):
+            assert datasource_id == "ds_a"
+            return True
+
+        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+            captured["datasource_id"] = datasource_id
+            captured["user_id"] = user_id
+            return [{"id": "public", "scope_type": "public"}, {"id": "mine", "scope_type": "private", "create_by": "user_a"}]
+
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+
+    payload = _response_payload(asyncio.run(semantic_config.list_semantic_configs("ds_a", object())))
+
+    assert captured == {"datasource_id": "ds_a", "user_id": "user_a"}
+    assert [item["id"] for item in payload["data"]["configs"]] == ["public", "mine"]
 
 
 def test_history_context_loader_branches(monkeypatch):

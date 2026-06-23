@@ -70,7 +70,7 @@ def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, user
 
 async def _get_semantic_configs_for_user(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
     """读取当前用户可见的指标集。"""
-    configs = await ds_manager.get_semantic_configs_async(datasource_id)
+    configs = await ds_manager.get_semantic_configs_async(datasource_id, user_id)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
 
 
