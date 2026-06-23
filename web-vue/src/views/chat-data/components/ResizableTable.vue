@@ -2,7 +2,7 @@
 /**
  * 可调整列宽的数据表格组件
  */
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 
 interface Column {
   key: string
@@ -17,13 +17,21 @@ interface Props {
   showIndex?: boolean
   autoWrap?: boolean
   rowIndexStart?: number
+  virtual?: boolean
+  virtualThreshold?: number
+  rowHeight?: number
+  overscan?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   maxHeight: '100%',
   showIndex: false,
   autoWrap: false,
-  rowIndexStart: 1
+  rowIndexStart: 1,
+  virtual: true,
+  virtualThreshold: 200,
+  rowHeight: 42,
+  overscan: 8
 })
 
 // 列宽状态
@@ -36,6 +44,12 @@ const dragStartX = ref(0)
 const dragStartWidth = ref(0)
 
 const INDEX_COLUMN_KEY = '__row_index__'
+const tableRef = ref<HTMLElement | null>(null)
+const headerRef = ref<HTMLElement | null>(null)
+const scrollTop = ref(0)
+const viewportHeight = ref(0)
+const headerHeight = ref(0)
+let resizeObserver: ResizeObserver | null = null
 
 const displayColumns = computed<Column[]>(() => {
   if (!props.showIndex) return props.columns
@@ -56,6 +70,12 @@ const initColumnWidths = () => {
 
 onMounted(() => {
   initColumnWidths()
+  updateVirtualMeasurements()
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateVirtualMeasurements)
+    if (tableRef.value) resizeObserver.observe(tableRef.value)
+    if (headerRef.value) resizeObserver.observe(headerRef.value)
+  }
 })
 
 watch(displayColumns, () => {
@@ -101,7 +121,77 @@ const onMouseUp = () => {
 onUnmounted(() => {
   document.removeEventListener('mousemove', onMouseMove)
   document.removeEventListener('mouseup', onMouseUp)
+  resizeObserver?.disconnect()
 })
+
+const normalizedRowHeight = computed(() => Math.max(28, Number(props.rowHeight) || 42))
+const normalizedOverscan = computed(() => Math.max(0, Number(props.overscan) || 0))
+const shouldUseVirtual = computed(() => {
+  return Boolean(props.virtual && !props.autoWrap && props.data.length > props.virtualThreshold)
+})
+
+const updateVirtualMeasurements = () => {
+  viewportHeight.value = tableRef.value?.clientHeight || 0
+  headerHeight.value = headerRef.value?.offsetHeight || 0
+  scrollTop.value = tableRef.value?.scrollTop || 0
+}
+
+const handleScroll = () => {
+  scrollTop.value = tableRef.value?.scrollTop || 0
+}
+
+watch(
+  () => [props.data.length, props.maxHeight, shouldUseVirtual.value],
+  () => {
+    nextTick(updateVirtualMeasurements)
+  }
+)
+
+const virtualViewportHeight = computed(() => {
+  return Math.max(normalizedRowHeight.value, viewportHeight.value - headerHeight.value)
+})
+
+const virtualStartIndex = computed(() => {
+  if (!shouldUseVirtual.value) return 0
+  return Math.max(0, Math.floor(scrollTop.value / normalizedRowHeight.value) - normalizedOverscan.value)
+})
+
+const virtualEndIndex = computed(() => {
+  if (!shouldUseVirtual.value) return props.data.length
+  const visibleEnd = Math.ceil((scrollTop.value + virtualViewportHeight.value) / normalizedRowHeight.value)
+  return Math.min(props.data.length, visibleEnd + normalizedOverscan.value)
+})
+
+const renderedRows = computed(() => {
+  if (!shouldUseVirtual.value) {
+    return props.data.map((row, rowIndex) => ({ row, rowIndex }))
+  }
+  return props.data
+    .slice(virtualStartIndex.value, virtualEndIndex.value)
+    .map((row, index) => ({ row, rowIndex: virtualStartIndex.value + index }))
+})
+
+const virtualBodyHeight = computed(() => props.data.length * normalizedRowHeight.value)
+
+const getBodyStyle = () => {
+  return shouldUseVirtual.value ? { height: `${virtualBodyHeight.value}px` } : undefined
+}
+
+const getRowClass = () => {
+  const base = 'flex w-fit min-w-full even:bg-white odd:bg-slate-50 hover:bg-blue-50'
+  if (shouldUseVirtual.value) {
+    return `${base} absolute left-0 transition-colors duration-150`
+  }
+  return `${base} transition-all duration-200`
+}
+
+const getRowStyle = (rowIndex: number) => {
+  if (!shouldUseVirtual.value) return undefined
+  return {
+    height: `${normalizedRowHeight.value}px`,
+    transform: `translateY(${rowIndex * normalizedRowHeight.value}px)`
+  }
+}
 
 // 格式化单元格值
 const formatCellValue = (value: unknown): string => {
@@ -159,9 +249,14 @@ const copyCellValue = (value: unknown, col: Column) => {
 </script>
 
 <template>
-  <div class="flex flex-col overflow-auto text-[13px] rounded-xl bg-slate-50" :style="{ maxHeight }">
+  <div
+    ref="tableRef"
+    class="flex flex-col overflow-auto text-[13px] rounded-xl bg-slate-50"
+    :style="{ maxHeight }"
+    @scroll="handleScroll"
+  >
     <!-- 表头 -->
-    <div class="flex w-fit min-w-full sticky top-0 z-[1] bg-slate-50 border-b-2 border-[#1f82d9]/10">
+    <div ref="headerRef" class="flex w-fit min-w-full sticky top-0 z-[1] bg-slate-50 border-b-2 border-[#1f82d9]/10">
       <div
         v-for="(col, index) in displayColumns"
         :key="col.key"
@@ -177,11 +272,12 @@ const copyCellValue = (value: unknown, col: Column) => {
     </div>
 
     <!-- 表体 -->
-    <div class="flex-1">
+    <div :class="shouldUseVirtual ? 'relative shrink-0 min-w-full' : 'flex-1'" :style="getBodyStyle()">
       <div
-        v-for="(row, rowIndex) in data"
+        v-for="{ row, rowIndex } in renderedRows"
         :key="rowIndex"
-        class="flex w-fit min-w-full transition-all duration-200 even:bg-white odd:bg-slate-50 hover:bg-blue-50"
+        :class="getRowClass()"
+        :style="getRowStyle(rowIndex)"
       >
         <div
           v-for="(col, colIndex) in displayColumns"
