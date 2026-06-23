@@ -58,7 +58,7 @@ const toggleExpand = (id: string) => {
 </script>
 
 <template>
-  <div v-if="toolCalls.length > 0" class="flex flex-col gap-2">
+  <div v-if="toolCalls.length > 0" class="flex min-w-0 max-w-full flex-col gap-2">
     <ToolCallCard
       v-for="tc in toolCalls"
       :key="tc.tool_call_id"

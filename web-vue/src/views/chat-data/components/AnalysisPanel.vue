@@ -158,9 +158,9 @@ watch(
 </script>
 
 <template>
-  <div v-if="isOpen && data" class="flex flex-col h-full bg-white">
+  <div v-if="isOpen && data" class="flex h-full w-full min-w-0 flex-col bg-white">
     <!-- 面板头部 -->
-    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+    <div class="flex w-full min-w-0 items-center justify-between px-4 py-3 border-b border-gray-200">
       <h3 class="text-sm font-medium text-gray-900 m-0">分析过程</h3>
       <div class="flex items-center gap-1.5">
         <button
@@ -178,110 +178,135 @@ watch(
     </div>
 
     <!-- 面板内容 - 链路布局 -->
-    <div ref="contentRef" class="flex flex-1 flex-col overflow-y-auto px-4 pt-4 pb-10" @scroll="handleContentScroll">
-      <!-- 等待第一个数据时的占位（面板已打开但还没有内容） -->
-      <div v-if="!hasTimeline && !hasSemanticConfigStep" class="flex items-center gap-2 text-gray-500 text-sm py-2">
-        <i class="fa-solid fa-spinner fa-spin text-blue-500"></i>
-        <span>正在思考...</span>
-      </div>
+    <div ref="contentRef" class="analysis-panel-scroll min-w-0 flex-1 overflow-y-scroll overflow-x-hidden pt-4 pb-10" @scroll="handleContentScroll">
+      <div class="flex w-full min-w-0 flex-col px-4">
+        <!-- 等待第一个数据时的占位（面板已打开但还没有内容） -->
+        <div v-if="!hasTimeline && !hasSemanticConfigStep" class="flex items-center gap-2 text-gray-500 text-sm py-2">
+          <i class="fa-solid fa-spinner fa-spin text-blue-500"></i>
+          <span>正在思考...</span>
+        </div>
 
-      <!-- 需要用户选择指标集的阻塞场景 -->
-      <div v-if="hasSemanticConfigStep" class="flex relative" :style="{ order: semanticConfigStepOrder }">
-        <div class="flex flex-col items-center mr-4">
-          <div :class="[
-            'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
-            'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
-          ]">
-            <i class="fa-solid fa-list-check"></i>
-          </div>
-          <div
-            v-if="semanticConfigHasNext"
-            class="w-px flex-1 min-h-5 mt-2"
-            style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
-          ></div>
-        </div>
-        <div class="flex-1 pb-6">
-          <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">选择指标集</h4>
-          <div v-if="data.semanticConfigSelectRequired" class="rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2 text-sm text-slate-700">
-            <div class="font-medium text-slate-800">{{ data.semanticConfigSelectRequired.message || '需要选择指标集' }}</div>
-            <div v-if="data.semanticConfigSelectRequired.reason" class="mt-1.5 text-xs leading-relaxed text-slate-600">
-              {{ data.semanticConfigSelectRequired.reason }}
+        <!-- 需要用户选择指标集的阻塞场景 -->
+        <div v-if="hasSemanticConfigStep" class="flex min-w-0 relative" :style="{ order: semanticConfigStepOrder }">
+          <div class="flex flex-col items-center mr-4">
+            <div :class="[
+              'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
+              'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
+            ]">
+              <i class="fa-solid fa-list-check"></i>
             </div>
-            <div v-if="data.semanticConfigSelectRequired.candidates.length && !data.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-1.5">
-              <span
-                v-for="candidate in data.semanticConfigSelectRequired.candidates"
-                :key="candidate.id"
-                class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
-                :title="candidate.reason || candidate.coverage || ''"
-              >
-                {{ candidate.name || candidate.id }}
-              </span>
+            <div
+              v-if="semanticConfigHasNext"
+              class="w-px flex-1 min-h-5 mt-2"
+              style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
+            ></div>
+          </div>
+          <div class="min-w-0 flex-1 pb-6">
+            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">选择指标集</h4>
+            <div v-if="data.semanticConfigSelectRequired" class="w-full min-w-0 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2 text-sm text-slate-700">
+              <div class="font-medium text-slate-800">{{ data.semanticConfigSelectRequired.message || '需要选择指标集' }}</div>
+              <div v-if="data.semanticConfigSelectRequired.reason" class="mt-1.5 text-xs leading-relaxed text-slate-600">
+                {{ data.semanticConfigSelectRequired.reason }}
+              </div>
+              <div v-if="data.semanticConfigSelectRequired.candidates.length && !data.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-1.5">
+                <span
+                  v-for="candidate in data.semanticConfigSelectRequired.candidates"
+                  :key="candidate.id"
+                  class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
+                  :title="candidate.reason || candidate.coverage || ''"
+                >
+                  {{ candidate.name || candidate.id }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- 按时序展示思考与工具调用 -->
-      <div
-        v-for="(entry, index) in timelineEntries"
-        :key="entry.key"
-        class="flex relative"
-        :style="{ order: understandingStepOrder }"
-      >
-        <div class="flex flex-col items-center mr-4">
-          <div :class="[
-            'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
-            isTimelineEntryInProgress(entry, index)
-              ? 'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
-              : 'bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 text-emerald-500'
-          ]">
-            <i v-if="isTimelineEntryInProgress(entry, index)" class="fa-solid fa-spinner fa-spin"></i>
-            <i v-else class="fa-solid fa-check"></i>
+        <!-- 按时序展示思考与工具调用 -->
+        <div
+          v-for="(entry, index) in timelineEntries"
+          :key="entry.key"
+          class="flex min-w-0 relative"
+          :style="{ order: understandingStepOrder }"
+        >
+          <div class="flex flex-col items-center mr-4">
+            <div :class="[
+              'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
+              isTimelineEntryInProgress(entry, index)
+                ? 'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
+                : 'bg-gradient-to-br from-emerald-500/15 to-emerald-500/5 text-emerald-500'
+            ]">
+              <i v-if="isTimelineEntryInProgress(entry, index)" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-check"></i>
+            </div>
+            <div
+              v-if="index < timelineEntries.length - 1 || props.isStreaming || hasCompletionStep"
+              class="w-px flex-1 min-h-5 mt-2"
+              style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
+            ></div>
           </div>
-          <div
-            v-if="index < timelineEntries.length - 1 || props.isStreaming || hasCompletionStep"
-            class="w-px flex-1 min-h-5 mt-2"
-            style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
-          ></div>
-        </div>
-        <div class="flex-1 pb-6">
-          <template v-if="entry.type === 'thinking'">
-            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">思考</h4>
-            <div class="text-sm text-gray-600">
-              <StructuredMessage
-                :content="`<thinking>${entry.segment.content}</thinking>`"
-                :is-streaming="isTimelineEntryInProgress(entry, index)"
-                @copy-sql="emit('copySql', $event)"
+          <div class="min-w-0 flex-1 pb-6">
+            <template v-if="entry.type === 'thinking'">
+              <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">思考</h4>
+              <div class="w-full min-w-0 text-sm text-gray-600">
+                <StructuredMessage
+                  :content="`<thinking>${entry.segment.content}</thinking>`"
+                  :is-streaming="isTimelineEntryInProgress(entry, index)"
+                  @copy-sql="emit('copySql', $event)"
+                />
+              </div>
+            </template>
+            <template v-else>
+              <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">工具调用</h4>
+              <ToolCallList
+                :tool-calls="[entry.tool]"
+                :datasource-id="datasourceId"
+                :default-expanded="false"
               />
-            </div>
-          </template>
-          <template v-else>
-            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">工具调用</h4>
-            <ToolCallList
-              :tool-calls="[entry.tool]"
-              :datasource-id="datasourceId"
-              :default-expanded="false"
-            />
-          </template>
-        </div>
-      </div>
-
-      <!-- 步骤 4：任务完成（流式结束且有实际内容后才显示） -->
-      <div v-if="hasCompletionStep" class="flex relative" :style="{ order: 4 }">
-        <div class="flex flex-col items-center mr-4">
-          <div class="w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px] bg-gradient-to-br from-emerald-500 to-emerald-600 text-white">
-            <i class="fa-solid fa-check"></i>
+            </template>
           </div>
         </div>
-        <div class="flex-1 flex min-h-8 items-center pb-4">
-          <span class="text-sm font-medium text-emerald-500">任务完成</span>
-        </div>
-      </div>
 
-      <!-- 其他文字内容 -->
-      <div v-if="data.textContent" class="mt-4 text-sm text-gray-700" :style="{ order: 5 }">
-        {{ data.textContent }}
+        <!-- 步骤 4：任务完成（流式结束且有实际内容后才显示） -->
+        <div v-if="hasCompletionStep" class="flex min-w-0 relative" :style="{ order: 4 }">
+          <div class="flex flex-col items-center mr-4">
+            <div class="w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px] bg-gradient-to-br from-emerald-500 to-emerald-600 text-white">
+              <i class="fa-solid fa-check"></i>
+            </div>
+          </div>
+          <div class="min-w-0 flex-1 flex min-h-8 items-center pb-4">
+            <span class="text-sm font-medium text-emerald-500">任务完成</span>
+          </div>
+        </div>
+
+        <!-- 其他文字内容 -->
+        <div v-if="data.textContent" class="mt-4 text-sm text-gray-700" :style="{ order: 5 }">
+          {{ data.textContent }}
+        </div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.analysis-panel-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.analysis-panel-scroll::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.analysis-panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.58);
+  border: 2px solid rgba(248, 250, 252, 0.95);
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.analysis-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.72);
+  border: 2px solid rgba(248, 250, 252, 0.95);
+  background-clip: content-box;
+}
+</style>

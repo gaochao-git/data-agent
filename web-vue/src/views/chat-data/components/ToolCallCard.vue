@@ -99,7 +99,10 @@ const PARAM_LABELS: Record<string, string> = {
   dsl: '语义DSL',
   dashboard_spec: '看板规格',
   query: '用户问题',
-  user_query: '用户问题'
+  user_query: '用户问题',
+  datasource_id: '数据源',
+  member_datasource_id: '执行机构',
+  member_datasource_ids: '执行机构'
 }
 
 type SemanticSelectionResult = {
@@ -484,25 +487,25 @@ function getSqlTokenClass(type: string): string {
   </div>
   <div
     v-else
-    class="rounded-xl overflow-hidden bg-white/60 border border-black/[0.04] transition-all duration-200 hover:bg-white/80"
+    class="min-w-0 max-w-full rounded-xl overflow-hidden bg-white/60 border border-black/[0.04] transition-all duration-200 hover:bg-white/80"
     :class="{
       'bg-[rgba(31,130,217,0.05)] border-[rgba(31,130,217,0.15)]': isRunning
     }"
   >
     <!-- 标题栏 -->
     <div
-      class="flex items-center justify-between px-3.5 py-2.5 cursor-pointer transition-colors duration-200 hover:bg-black/[0.03]"
+      class="flex min-w-0 items-center justify-between px-3.5 py-2.5 cursor-pointer transition-colors duration-200 hover:bg-black/[0.03]"
       :class="{ 'bg-black/[0.02]': isExpanded }"
       @click="emit('toggleExpand')"
     >
-      <div class="flex items-center gap-3">
+      <div class="flex min-w-0 items-center gap-3">
         <div class="w-6 h-6 flex items-center justify-center rounded-lg bg-black/5 text-[11px] text-gray-500">
           <i class="fa-solid fa-wrench"></i>
         </div>
-        <span class="text-sm font-medium text-gray-700">{{ meta.label }}</span>
+        <span class="min-w-0 truncate text-sm font-medium text-gray-700">{{ meta.label }}</span>
         <i v-if="isRunning" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <i
           class="fa-solid fa-chevron-right text-xs text-gray-400 transition-transform duration-200"
           :class="{ 'rotate-90': isExpanded }"
@@ -511,7 +514,7 @@ function getSqlTokenClass(type: string): string {
     </div>
 
     <!-- 内容区 -->
-    <div v-if="isExpanded" class="px-3.5 py-2.5 border-t border-black/[0.04] bg-black/[0.02]">
+    <div v-if="isExpanded" class="min-w-0 px-3.5 py-2.5 border-t border-black/[0.04] bg-black/[0.02]">
       <!-- 参数区（可折叠） -->
       <div v-if="displayParams.length > 0" class="mb-3 last:mb-0">
         <button
@@ -525,11 +528,11 @@ function getSqlTokenClass(type: string): string {
           <span>参数</span>
         </button>
         <div v-if="paramsExpanded" class="mt-2">
-          <div class="p-3 rounded-lg bg-white border border-black/[0.06]">
+          <div class="min-w-0 p-3 rounded-lg bg-white border border-black/[0.06]">
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
               <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -547,7 +550,7 @@ function getSqlTokenClass(type: string): string {
               <!-- 代码块类型 -->
               <div v-else-if="needsCodeBlock(key, value)" class="mb-3 last:mb-0">
                 <div class="mb-1.5 flex items-center gap-2">
-                  <div class="text-xs text-gray-400 shrink-0">{{ PARAM_LABELS[key] || key }}</div>
+                  <div class="max-w-[160px] shrink-0 truncate text-xs text-gray-400" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</div>
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 border-none bg-transparent p-0 text-[11px] text-gray-400 cursor-pointer hover:text-gray-600"
@@ -558,11 +561,11 @@ function getSqlTokenClass(type: string): string {
                     <span>{{ key === 'sql' ? '复制SQL' : '复制JSON' }}</span>
                   </button>
                 </div>
-                <pre class="max-h-40 overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><template v-if="key === 'sql'"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatParamValue(key, value))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></template><code v-else class="text-emerald-600">{{ formatParamValue(key, value) }}</code></pre>
+                <pre class="max-h-40 max-w-full overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><template v-if="key === 'sql'"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatParamValue(key, value))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></template><code v-else class="text-emerald-600">{{ formatParamValue(key, value) }}</code></pre>
               </div>
               <!-- 普通类型 -->
               <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
                 <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>
@@ -588,7 +591,7 @@ function getSqlTokenClass(type: string): string {
         </button>
         <div v-if="resultsExpanded" class="mt-2">
           <!-- 指标集选择结果 -->
-          <div v-if="semanticSelectionResult" class="p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
+          <div v-if="semanticSelectionResult" class="min-w-0 p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
             <div class="flex items-center gap-2 font-medium text-slate-800">
               <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
               <span>{{ semanticSelectionHeader }}</span>
@@ -634,11 +637,11 @@ function getSqlTokenClass(type: string): string {
                   <span>复制JSON</span>
                 </button>
               </div>
-              <pre class="max-h-48 overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-emerald-600 m-0">{{ semanticSelectionRawJson }}</pre>
+              <pre class="max-h-48 max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-emerald-600 m-0">{{ semanticSelectionRawJson }}</pre>
             </div>
           </div>
           <!-- 文本结果 -->
-          <div v-if="toolCall.result && parseResultContent(toolCall.result).length > 0" class="p-3 rounded-lg bg-white border border-black/[0.06] mb-2 last:mb-0">
+          <div v-if="toolCall.result && parseResultContent(toolCall.result).length > 0" class="min-w-0 p-3 rounded-lg bg-white border border-black/[0.06] mb-2 last:mb-0">
             <template v-for="(part, idx) in parseResultContent(toolCall.result)" :key="idx">
               <div v-if="part.type === 'sql'" class="mb-2 last:mb-0">
                 <div class="mb-1.5 flex items-center justify-start">
@@ -652,13 +655,13 @@ function getSqlTokenClass(type: string): string {
                     <span>复制SQL</span>
                   </button>
                 </div>
-                <pre class="max-h-64 overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatSql(part.content))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></pre>
+                <pre class="max-h-64 max-w-full overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatSql(part.content))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></pre>
               </div>
               <div v-else class="text-sm text-gray-600 whitespace-pre-wrap mb-2 last:mb-0">{{ part.content }}</div>
             </template>
           </div>
           <!-- 渲染结果（表格/图表） -->
-          <div v-if="toolCall.renderId && toolCall.renderType === 'queryResult'">
+          <div v-if="toolCall.renderId && toolCall.renderType === 'queryResult'" class="min-w-0 max-w-full overflow-hidden">
             <AsyncQueryResult
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"

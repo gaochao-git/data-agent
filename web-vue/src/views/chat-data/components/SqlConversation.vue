@@ -1639,7 +1639,7 @@ const handleViewAnalysis = (msg: Message) => {
     <div ref="containerRef" class="flex-1 flex min-w-0 overflow-hidden">
       <div
         class="flex flex-col min-w-0 overflow-hidden bg-gray-50"
-        :style="{ flex: isAnalysisVisible ? `0 0 ${100 - analysisPanelWidth}%` : '1 1 auto' }"
+        :style="{ flex: isAnalysisVisible ? '1 1 0' : '1 1 auto' }"
       >
       <!-- 顶部工具栏 -->
       <div v-if="!hideHeader" class="flex items-center justify-between h-13 px-4 shrink-0">
@@ -2240,7 +2240,7 @@ const handleViewAnalysis = (msg: Message) => {
         </div>
         <!-- 面板内容 -->
         <div
-          class="min-w-[280px] max-w-[60%] border-l border-gray-200 bg-white overflow-hidden"
+          class="h-full min-w-[280px] max-w-[60%] border-l border-gray-200 bg-white overflow-hidden"
           :style="{ flex: `0 0 ${analysisPanelWidth}%` }"
         >
           <AnalysisPanel
