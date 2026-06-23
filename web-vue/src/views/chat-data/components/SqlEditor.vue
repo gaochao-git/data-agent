@@ -2050,10 +2050,10 @@ defineExpose({
             <template v-else>
               <!-- 历史消息 -->
               <div v-for="(msg, idx) in aiMessages" :key="idx" class="mb-3" :class="msg.role === 'user' ? 'flex flex-col items-end' : ''">
-                <div v-if="msg.role === 'assistant'" class="max-w-[85%] px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
+                <div v-if="msg.role === 'assistant'" class="ai-assistant-message max-w-[85%] px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
                   <template v-if="msg.content">
                     <template v-for="(segment, segmentIdx) in splitAiMessageSegments(msg.content)" :key="segmentIdx">
-                      <span v-if="segment.type === 'markdown'" v-html="renderMarkdown(segment.content)"></span>
+                      <div v-if="segment.type === 'markdown'" class="ai-message-markdown" v-html="renderMarkdown(segment.content)"></div>
                       <div v-else class="ai-sql-block">
                         <div class="ai-sql-actions">
                           <button class="ai-sql-action-btn" title="复制 SQL" @click="copyToClipboard(segment.content)">
@@ -2073,8 +2073,8 @@ defineExpose({
                   <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
                     <i class="fa-solid fa-spinner fa-spin"></i>
                     <span>正在思考...</span>
-	        </div>
-	      </div>
+                  </div>
+                </div>
                 <div v-if="msg.role === 'user'" class="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br bg-[#1677FF]/10 text-[#1F3A56] text-[13px] leading-relaxed">{{ msg.content }}</div>
                 <div v-if="msg.role === 'user' && msg.time" class="text-[11px] text-gray-400 mt-1">{{ msg.time }}</div>
                 <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="flex items-center gap-2 mt-2 pl-1">
@@ -2484,8 +2484,22 @@ defineExpose({
 }
 
 /* Markdown 渲染样式 - 需要 :deep() 穿透 */
+.ai-assistant-message {
+  color: #1f2937;
+}
+
+.ai-message-markdown {
+  color: #1f2937;
+}
+
+.ai-message-markdown + .ai-sql-block,
+.ai-sql-block + .ai-message-markdown {
+  margin-top: 10px;
+}
+
 .markdown-body :deep(p) {
   margin: 0 0 8px 0;
+  color: #1f2937;
 }
 .markdown-body :deep(p:last-child) {
   margin-bottom: 0;
@@ -2496,6 +2510,7 @@ defineExpose({
 }
 .markdown-body :deep(em) {
   font-style: italic;
+  color: #374151;
 }
 .markdown-body :deep(code) {
   background-color: #f3f4f6;
@@ -2506,10 +2521,11 @@ defineExpose({
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 .markdown-body :deep(pre) {
-  background-color: #1e293b;
-  color: #e2e8f0;
-  border-radius: 8px;
-  padding: 12px 16px;
+  border: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+  color: #334155;
+  border-radius: 10px;
+  padding: 14px 16px;
   overflow-x: auto;
   margin: 8px 0;
 }
@@ -2664,6 +2680,7 @@ defineExpose({
 }
 .markdown-body :deep(li) {
   margin: 2px 0;
+  color: #1f2937;
 }
 .markdown-body :deep(h1),
 .markdown-body :deep(h2),
