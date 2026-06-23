@@ -44,9 +44,10 @@ def test_mode_config_and_prompt_formatters():
 
 
 class FakeLLM:
-    def __init__(self, content="完成", fail_once=False):
+    def __init__(self, content="完成", fail_once=False, response=None):
         self.content = content
         self.fail_once = fail_once
+        self.response = response
         self.calls = 0
         self.bound_tools = None
         self.messages = None
@@ -60,6 +61,8 @@ class FakeLLM:
         self.messages = messages
         if self.fail_once and self.calls == 1:
             raise RuntimeError("模型不可用")
+        if self.response is not None:
+            return self.response
         return AIMessage(content=self.content)
 
 
@@ -93,6 +96,81 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "semantic_config_id: sc_a" in system_prompt
     assert "当前机构A" in system_prompt
     assert "可用的查询结果" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_create_agent_node_normalizes_repeated_tool_call_name(monkeypatch):
+    repeated_tool_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_select",
+            "name": "select_semantic_config_toolselect_semantic_config_tool",
+            "args": {"query": "查询入金金额"},
+        }],
+    )
+    fake_tool = SimpleNamespace(name="select_semantic_config_tool")
+    fake_llm = FakeLLM(response=repeated_tool_message)
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
+    monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 1)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
+    monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
+    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
+
+    result = await nodes.create_agent_node([fake_tool], semantic_config=None)({
+        "messages": [HumanMessage(content="查询入金金额")],
+        "mode": "query",
+    })
+
+    assert result["messages"][0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert result["messages"][0].tool_calls[0]["args"] == {"query": "查询入金金额"}
+
+
+def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
+    unknown_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_bad",
+            "name": "unknown_toolunknown_tool",
+            "args": {},
+        }],
+    )
+
+    normalized = nodes.normalize_response_tool_call_names(
+        unknown_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+
+    assert normalized.tool_calls[0]["name"] == "unknown_toolunknown_tool"
+
+    repeated_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_select",
+            "name": "select_semantic_config_toolselect_semantic_config_toolselect_semantic_config_tool",
+            "args": {},
+        }],
+    )
+    normalized = nodes.normalize_response_tool_call_names(
+        repeated_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool"
+
+    similar_message = AIMessage(
+        content="",
+        tool_calls=[{
+            "id": "call_similar",
+            "name": "select_semantic_config_tool_extra",
+            "args": {},
+        }],
+    )
+    normalized = nodes.normalize_response_tool_call_names(
+        similar_message,
+        [SimpleNamespace(name="select_semantic_config_tool")],
+    )
+    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool_extra"
 
 
 @pytest.mark.asyncio

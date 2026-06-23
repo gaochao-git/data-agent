@@ -132,9 +132,34 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 2
-    assert isinstance(captured["middleware"][1], FakeFallbackMiddleware)
+    assert len(captured["middleware"]) == 3
+    assert captured["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
+    assert isinstance(captured["middleware"][2], FakeFallbackMiddleware)
     assert bound == [(agent, {"token_model": "primary-model"})]
+
+
+@pytest.mark.asyncio
+async def test_data_analyze_tool_call_name_normalizer_middleware():
+    middleware = data_analyze_graph.create_tool_call_name_normalizer_middleware([
+        SimpleNamespace(name="select_semantic_config_tool"),
+    ])
+
+    async def handler(_request):
+        return SimpleNamespace(result=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": "call_select",
+                    "name": "select_semantic_config_toolselect_semantic_config_tool",
+                    "args": {"query": "查询入金金额"},
+                }],
+            ),
+        ])
+
+    response = await middleware.awrap_model_call(SimpleNamespace(), handler)
+
+    assert response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
 def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, tmp_path):
@@ -158,7 +183,8 @@ def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, t
         model_id="same-model",
     )
 
-    assert len(captured["agent_kwargs"]["middleware"]) == 1
+    assert len(captured["agent_kwargs"]["middleware"]) == 2
+    assert captured["agent_kwargs"]["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
 
 
 @pytest.mark.asyncio
