@@ -77,7 +77,7 @@ const emit = defineEmits<{
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
 }>()
 
-// 数据集列表
+// 指标集列表
 const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
 const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
@@ -247,7 +247,7 @@ const stopSectionResize = () => {
   document.removeEventListener('mouseup', stopSectionResize)
 }
 
-// 选中的数据集 ID
+// 选中的指标集 ID
 const selectedConfigId = ref<string | null>(null)
 const expandedConfigIds = ref<Set<string>>(new Set())
 
@@ -300,7 +300,7 @@ const loadSemanticConfigs = async () => {
   }
 }
 
-// 选择数据集
+// 选择指标集
 const handleSelectConfig = (configId: string | null) => {
   selectedConfigId.value = configId
   emit('selectDataset', configId)
@@ -425,7 +425,7 @@ watch(() => props.semanticConfigs, () => {
   syncSelectedConfig()
 }, { immediate: true, deep: true })
 
-// 父子同步：父层数据集变化时，同步当前选中数据集
+// 父子同步：父层指标集变化时，同步当前选中指标集
 watch(() => props.selectedDatasetId, (newId) => {
   if (newId === selectedConfigId.value) return
   if (!newId) {
@@ -509,7 +509,7 @@ onUnmounted(() => {
 
       <div v-else-if="semanticConfigs.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
         <i class="fa-solid fa-database text-2xl opacity-50"></i>
-        <span>暂无数据集</span>
+        <span>暂无指标集</span>
       </div>
 
       <div v-else class="flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">

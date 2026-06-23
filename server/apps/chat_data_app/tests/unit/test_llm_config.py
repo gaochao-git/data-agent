@@ -3,8 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -168,13 +167,10 @@ def test_chat_data_llm_temperature_reads_single_env(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
-    monkeypatch.delenv("CHAT_DATA_TEMPERATURE", raising=False)
-
-    llm_config.get_chat_data_llm()
-    assert captured["temperature"] == 0.2
-
+    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
     monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "0.35")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
     llm_config.get_chat_data_llm()
     assert captured["temperature"] == 0.35
 

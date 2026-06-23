@@ -6,14 +6,14 @@
 import { ref, computed, watch, nextTick, toRef, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, SemanticParams, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo } from '../types'
 import { createDashboardFromSpec, getChatDataConfig } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
+import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs } from '../utils/semanticTool'
 import StructuredMessage from './StructuredMessage.vue'
-import ToolCallList from './ToolCallList.vue'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
@@ -50,7 +50,7 @@ interface Props {
   isLoadingConversations?: boolean
   // 懒创建会话
   ensureConversationId?: (agentId?: string) => Promise<string | null>
-  // 语义配置（数据集）ID
+  // 语义配置（指标集）ID
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   // 是否显示分析面板（由外层切换控制）
@@ -257,16 +257,16 @@ const tokenUsagePanelOpen = ref(false)
 const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
 const expandedTokenMessageKeys = ref<Set<string>>(new Set())
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
-// 追踪 dsl2sql_tool 调用，用于关联语义参数
-const dsl2sqlToolCalls = ref<ToolCallInfo[]>([])
 
 // 保存到看板弹窗
 const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref('table')
-const handleSaveToDashboard = (sql: string, chartType: string) => {
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = chartType
+  saveMemberDatasourceId.value = String(memberDatasourceId || selectedMemberDatasourceIds.value[0] || '').trim()
   showSaveModal.value = true
 }
 
@@ -526,7 +526,7 @@ const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
         host: String(member.host || ''),
         port: Number(member.port || 0),
         database: String(member.database || ''),
-        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
+        label: member.org_name || member.org_code || String(member.database || '') || String(member.member_datasource_id),
       }))
   }
   if (!selectedDatasource.value || !datasource) return []
@@ -663,16 +663,17 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
       if (msgIndex >= 0) {
         const m = messages.value[msgIndex]
         if (m) {
-          const visibleContent = stripThinkingContent(m.content)
+          const visibleContent = getConversationDisplayContent(m.content)
           const toolCallCount = getVisibleToolCalls(m.toolCalls).length
           const thinkingSegments = [...(m.thinkingSegments || [])]
           const lastSegment = thinkingSegments[thinkingSegments.length - 1]
+          const normalizedReasoningContent = stripModelThinkTags(reasoningContent)
           if (lastSegment && lastSegment.toolCallCount === toolCallCount) {
-            lastSegment.content += reasoningContent
+            lastSegment.content += normalizedReasoningContent
           } else {
             thinkingSegments.push({
               id: `thinking-${Date.now()}-${thinkingSegments.length}`,
-              content: reasoningContent,
+              content: normalizedReasoningContent,
               toolCallCount,
             })
           }
@@ -697,18 +698,10 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         const toolName = tc.name || existingInfo?.tool_name || ''
         if (!toolName) continue
 
-        // 如果是 dsl2sql_tool，提取语义参数
+        // 如果是语义工具，提取 DSL 参数用于结果展示
         let semanticParams = existingInfo?.semanticParams
-        if (toolName === 'dsl2sql_tool' && mergedArgs) {
-          semanticParams = {
-            metrics: mergedArgs.metrics as string[] | undefined,
-            dimensions: mergedArgs.dimensions as SemanticParams['dimensions'],
-            filters: mergedArgs.filters as SemanticParams['filters'],
-            having: mergedArgs.having as SemanticParams['having'],
-            order_by: mergedArgs.order_by as SemanticParams['order_by'],
-            limit: mergedArgs.limit as number | undefined,
-            offset: mergedArgs.offset as number | undefined,
-          }
+        if ((toolName === 'dsl2sql_tool' || toolName === 'semantic_query_tool') && mergedArgs) {
+          semanticParams = extractSemanticParamsFromArgs(mergedArgs) || semanticParams
         }
 
         const toolCallInfo: ToolCallInfo = {
@@ -720,11 +713,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
           semanticParams,
         }
         toolCallsMap.value.set(tc.id, toolCallInfo)
-
-        // 追踪 dsl2sql_tool 调用
-        if (toolName === 'dsl2sql_tool') {
-          dsl2sqlToolCalls.value.push(toolCallInfo)
-        }
 
         // 更新消息中的工具调用
         if (!HIDDEN_TOOLS.includes(toolName)) {
@@ -738,7 +726,9 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
                 m.toolCalls = existingToolCalls.map((t) => (t.tool_call_id === tc.id ? toolCallInfo : t))
               } else {
                 m.toolCalls = [...existingToolCalls, toolCallInfo]
+                appendMessageSegment(m, { type: 'toolCall', toolCallId: tc.id })
               }
+              syncAnalysisPanelFromMessage(m, true)
             }
           }
         }
@@ -760,31 +750,14 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
         // 更新工具调用的 args
         toolInfo.args = { ...toolInfo.args, ...accumulatedArgs }
 
-        // 如果是 dsl2sql_tool，从 accumulated_args 提取语义参数
-        if (toolInfo.tool_name === 'dsl2sql_tool') {
-          semanticParams = {
-            metrics: accumulatedArgs.metrics as string[] | undefined,
-            dimensions: accumulatedArgs.dimensions as SemanticParams['dimensions'],
-            filters: accumulatedArgs.filters as SemanticParams['filters'],
-            having: accumulatedArgs.having as SemanticParams['having'],
-            order_by: accumulatedArgs.order_by as SemanticParams['order_by'],
-            limit: accumulatedArgs.limit as number | undefined,
-            offset: accumulatedArgs.offset as number | undefined,
-          }
+        // 从 accumulated_args 提取语义参数。semantic_query_tool 新格式直接携带 dsl。
+        if (toolInfo.tool_name === 'dsl2sql_tool' || toolInfo.tool_name === 'semantic_query_tool') {
+          semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || semanticParams
 
-          // 更新 dsl2sqlToolCalls 中对应的记录
-          const dslIndex = dsl2sqlToolCalls.value.findIndex(t => t.tool_call_id === msg.tool_call_id)
-          if (dslIndex >= 0) {
-            dsl2sqlToolCalls.value[dslIndex] = {
-              ...dsl2sqlToolCalls.value[dslIndex]!,
-              semanticParams,
-              args: toolInfo.args,
-            }
-          }
         }
       }
 
-      if (toolInfo.tool_name === 'execute_sql_tool') {
+      if (toolInfo.tool_name === 'semantic_query_tool') {
         const queryResultMatch = msg.content.match(/<query_result>([\s\S]*?)<\/query_result>/)
         const queryResultId = queryResultMatch?.[1]
         if (queryResultId) {
@@ -792,17 +765,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
           renderType = 'queryResult'
         }
 
-        // 从对应的 dsl2sql_tool 获取语义参数
-        // 策略：按顺序匹配（第 N 个 execute_sql_tool 对应第 N 个 dsl2sql_tool）
-        const executeSqlTools = Array.from(toolCallsMap.value.values())
-          .filter(t => t.tool_name === 'execute_sql_tool')
-        const currentIndex = executeSqlTools.findIndex(t => t.tool_call_id === msg.tool_call_id)
-        if (currentIndex >= 0 && currentIndex < dsl2sqlToolCalls.value.length) {
-          const dsl2sqlTool = dsl2sqlToolCalls.value[currentIndex]
-          if (dsl2sqlTool) {
-            semanticParams = dsl2sqlTool.semanticParams
-          }
-        }
+        semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || semanticParams
+
       } else if (toolInfo.tool_name === 'generate_chart_tool') {
         const chartMatch = msg.content.match(/<chart_config>([^<]+)<\/chart_config>/)
         const chartId = chartMatch?.[1]
@@ -849,6 +813,7 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
       const m = messages.value[msgIndex]
       if (m) {
         m.content += msg.content
+        appendTextSegment(m, msg.content)
       }
     }
   }
@@ -949,7 +914,7 @@ const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequire
     const msg = messages.value[msgIndex]!
     msg.semanticConfigSelectRequired = payload
     msg.error = undefined
-    msg.isStreaming = false
+    finishAssistantMessage(msg)
     syncAnalysisPanelFromMessage(msg, true)
   }
 }
@@ -1026,7 +991,6 @@ const submitQuery = async (
   resetSemanticQuestionDraft()
   isGenerating.value = true
   toolCallsMap.value.clear()
-  dsl2sqlToolCalls.value = []
   resetTokenUsagePanel()
 
   // 新一轮开始，关闭上一轮的分析面板
@@ -1069,7 +1033,7 @@ const submitQuery = async (
         const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
         if (msgIndex >= 0 && messages.value[msgIndex]) {
           const msg = messages.value[msgIndex]!
-          msg.isStreaming = false
+          finishAssistantMessage(msg)
           // 发送最终的分析数据并标记流式结束
           syncAnalysisPanelFromMessage(msg, false)
           handleAnalysisStreamEnd()
@@ -1082,8 +1046,9 @@ const submitQuery = async (
       (error) => {
         const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
         if (msgIndex >= 0 && messages.value[msgIndex]) {
-          messages.value[msgIndex]!.error = error
-          messages.value[msgIndex]!.isStreaming = false
+          const msg = messages.value[msgIndex]!
+          msg.error = error
+          finishAssistantMessage(msg)
         }
         handleAnalysisStreamEnd()
       },
@@ -1119,8 +1084,9 @@ const submitQuery = async (
       skillName,
       (payload) => handleDashboardSpec(payload, assistantMessageId),
       undefined,
-      (usage) => {
-        tokenUsage.value = usage
+      (payload) => {
+        tokenUsage.value = payload.usage || null
+        updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
       },
       (payload) => handleSemanticConfigSelected(payload, assistantMessageId),
       (payload) => handleSemanticConfigSelectRequired(payload, assistantMessageId),
@@ -1131,8 +1097,9 @@ const submitQuery = async (
     console.error('生成失败:', err)
     const msgIndex = messages.value.findIndex((m) => m.id === assistantMessageId)
     if (msgIndex >= 0 && messages.value[msgIndex]) {
-      messages.value[msgIndex]!.error = '生成失败，请重试'
-      messages.value[msgIndex]!.isStreaming = false
+      const msg = messages.value[msgIndex]!
+      msg.error = '生成失败，请重试'
+      finishAssistantMessage(msg)
     }
     handleAnalysisStreamEnd()
   } finally {
@@ -1177,7 +1144,7 @@ const handleStop = () => {
   // 标记当前流式消息为结束
   const streamingMsg = messages.value.find(m => m.isStreaming)
   if (streamingMsg) {
-    streamingMsg.isStreaming = false
+    finishAssistantMessage(streamingMsg)
   }
   isGenerating.value = false
   resetSemanticQuestionDraft()
@@ -1252,6 +1219,43 @@ const getVisibleToolCalls = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
   return toolCalls.filter((tc) => !HIDDEN_TOOLS.includes(tc.tool_name))
 }
 
+const appendMessageSegment = (message: Message, segment: MessageSegment) => {
+  const segments = message.segments || []
+  if (segment.type === 'toolCall') {
+    if (segments.some(item => item.type === 'toolCall' && item.toolCallId === segment.toolCallId)) return
+  }
+  message.segments = [...segments, segment]
+}
+
+const appendTextSegment = (message: Message, content: string) => {
+  const visibleContent = getConversationDisplayContent(content)
+  const segments = [...(message.segments || [])]
+  const lastSegment = segments[segments.length - 1]
+  if (lastSegment?.type === 'text') {
+    if (!visibleContent && !content) return
+    segments[segments.length - 1] = {
+      ...lastSegment,
+      content: `${lastSegment.content}${content}`,
+    }
+    message.segments = segments
+    return
+  }
+  if (!visibleContent) return
+  message.segments = [...segments, { type: 'text', content }]
+}
+
+const getConversationDisplayContent = (content: string): string => {
+  return stripTechnicalContent(content)
+}
+
+const stripModelThinkTags = (content: string): string => {
+  return String(content || '')
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trim()
+}
+
 const buildAnalysisDataFromMessage = (msg: Message): AnalysisData => {
   return {
     roundId: msg.id,
@@ -1316,12 +1320,16 @@ const stripThinkingContent = (content: string): string => {
   return content.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
 }
 
-// 判断是否已输出可见正文，排除思考标签和占位文案。
-const hasVisibleAssistantContent = (content: string): boolean => {
-  const text = stripThinkingContent(content)
+const stripTechnicalContent = (content: string): string => {
+  return stripModelThinkTags(hideSemanticConfigSelectionPayloads(stripThinkingContent(content)))
     .replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
     .replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
     .trim()
+}
+
+// 判断是否已输出可见正文，排除思考标签和占位文案。
+const hasVisibleAssistantContent = (content: string): boolean => {
+  const text = getConversationDisplayContent(content)
   return Boolean(text && text !== '正在思考...')
 }
 
@@ -1334,7 +1342,7 @@ const shouldShowStreamingStatus = (message: Message): boolean => {
 const hasCompletedQueryResult = (toolCalls?: ToolCallInfo[]): boolean => {
   if (!toolCalls) return false
   return toolCalls.some(
-    (tc) => tc.tool_name === 'execute_sql_tool' && tc.status === 'completed' && tc.renderId
+    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
   )
 }
 
@@ -1342,8 +1350,62 @@ const hasCompletedQueryResult = (toolCalls?: ToolCallInfo[]): boolean => {
 const getCompletedQueryResults = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
   if (!toolCalls) return []
   return toolCalls.filter(
-    (tc) => tc.tool_name === 'execute_sql_tool' && tc.status === 'completed' && tc.renderId
+    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
   )
+}
+
+type OrderedMessageSegment =
+  | { type: 'text'; content: string }
+  | { type: 'queryResult'; toolCall: ToolCallInfo }
+  | { type: 'chart'; toolCall: ToolCallInfo }
+
+const getToolCallById = (msg: Message, toolCallId: string): ToolCallInfo | null => {
+  return msg.toolCalls?.find(tc => tc.tool_call_id === toolCallId) || null
+}
+
+const isRenderableToolCall = (toolCall: ToolCallInfo | null | undefined): toolCall is ToolCallInfo => {
+  return Boolean(
+    toolCall?.renderId
+    && (toolCall.renderType === 'queryResult' || toolCall.renderType === 'chart')
+  )
+}
+
+const toOrderedToolSegment = (toolCall: ToolCallInfo): OrderedMessageSegment => {
+  return toolCall.renderType === 'chart'
+    ? { type: 'chart', toolCall }
+    : { type: 'queryResult', toolCall }
+}
+
+const getOrderedMessageSegments = (msg: Message): OrderedMessageSegment[] => {
+  const segments = msg.segments || []
+  const orderedSegments: OrderedMessageSegment[] = []
+  for (const segment of segments) {
+    if (segment.type === 'text') {
+      const content = getConversationDisplayContent(segment.content)
+      if (content) {
+        orderedSegments.push({ type: 'text', content })
+      }
+      continue
+    }
+    if (segment.type === 'toolCall') {
+      const toolCall = getToolCallById(msg, segment.toolCallId)
+      if (isRenderableToolCall(toolCall)) {
+        orderedSegments.push(toOrderedToolSegment(toolCall))
+      }
+    }
+  }
+  if (orderedSegments.length > 0) return orderedSegments
+  const fallbackSegments: OrderedMessageSegment[] = []
+  const summaryText = getSummaryText(msg.content)
+  if (summaryText) {
+    fallbackSegments.push({ type: 'text', content: summaryText })
+  }
+  for (const toolCall of getVisibleToolCalls(msg.toolCalls)) {
+    if (isRenderableToolCall(toolCall)) {
+      fallbackSegments.push(toOrderedToolSegment(toolCall))
+    }
+  }
+  return fallbackSegments
 }
 
 // 判断消息是否应该显示简洁模式（隐藏思考和工具调用，只显示结果）
@@ -1360,7 +1422,7 @@ const shouldShowCompactMode = (msg: Message): boolean => {
 // 提取文字总结（移除技术标签内容）
 const getSummaryText = (content: string): string => {
   if (!content) return ''
-  let text = hideSemanticConfigSelectionPayloads(content)
+  let text = getConversationDisplayContent(content)
   // 移除所有技术标签和内容
   text = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
   text = text.replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
@@ -1390,16 +1452,116 @@ const getStreamingStageText = (msg: Message): string => {
   if (msg.semanticConfigSelection && toolCalls.length === 0) {
     return '已选择指标集，正在生成查询...'
   }
-  if (toolCalls.some(tc => tc.tool_name === 'execute_sql_tool' && tc.status === 'running')) {
+  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool' && tc.status === 'running')) {
     return '正在查询数据...'
   }
-  if (toolCalls.some(tc => tc.tool_name === 'execute_sql_tool')) {
+  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool')) {
     return '正在执行查询...'
   }
   if (toolCalls.length > 0) {
     return '正在生成查询...'
   }
   return '正在理解您的问题...'
+}
+
+const shouldShowStreamingProgress = (msg: Message): boolean => {
+  return Boolean(
+    extractThinkingContent(msg.content)
+    || getVisibleToolCalls(msg.toolCalls).length > 0
+    || msg.semanticConfigSelection
+    || msg.semanticConfigSelectRequired
+  )
+}
+
+const padDatePart = (value: number): string => String(value).padStart(2, '0')
+
+const parseMessageDateTime = (value?: Date | string | null): Date | null => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = new Date(value.trim().replace(' ', 'T'))
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  return null
+}
+
+const formatMessageDateTime = (value?: Date | string | null): string => {
+  const date = parseMessageDateTime(value)
+  if (!date) return ''
+  return [
+    date.getFullYear(),
+    padDatePart(date.getMonth() + 1),
+    padDatePart(date.getDate()),
+  ].join('-') + ' ' + [
+    padDatePart(date.getHours()),
+    padDatePart(date.getMinutes()),
+    padDatePart(date.getSeconds()),
+  ].join(':')
+}
+
+const finishAssistantMessage = (msg: Message) => {
+  msg.isStreaming = false
+}
+
+const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
+  const finishedAt = parseMessageDateTime(timestamp)
+  if (!finishedAt) return
+  const msg = messages.value.find(item => item.id === messageId)
+  if (msg?.role === 'assistant') {
+    msg.timestamp = finishedAt
+  }
+}
+
+const shouldShowMessageAnalysisButton = (msg: Message): boolean => {
+  return Boolean(createAnalysisData(msg))
+}
+
+const getCopyableAssistantContent = (msg: Message): string => {
+  const orderedText = getOrderedMessageSegments(msg)
+    .filter((segment): segment is { type: 'text'; content: string } => segment.type === 'text')
+    .map(segment => getConversationDisplayContent(segment.content))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+  return orderedText || getSummaryText(msg.content)
+}
+
+const shouldShowMessageCopyButton = (msg: Message): boolean => {
+  return Boolean(getCopyableAssistantContent(msg))
+}
+
+const handleCopyAssistantMessage = async (msg: Message) => {
+  const text = getCopyableAssistantContent(msg)
+  if (!text) {
+    ElMessage.info('暂无可复制内容')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch (err) {
+    console.error('复制回复失败:', err)
+    ElMessage.error('复制失败，请稍后重试')
+  }
+}
+
+const getPreviousUserQuestion = (messageId: string): string => {
+  const index = messages.value.findIndex(item => item.id === messageId)
+  if (index < 0) return ''
+  for (let currentIndex = index - 1; currentIndex >= 0; currentIndex -= 1) {
+    const message = messages.value[currentIndex]
+    if (message?.role === 'user') return message.content || ''
+  }
+  return ''
+}
+
+const shouldShowMessageFavoriteButton = (msg: Message): boolean => {
+  return Boolean(getPreviousUserQuestion(msg.id).trim())
+}
+
+const handleFavoriteAssistantMessage = (msg: Message) => {
+  openFavoriteModalFromQuestion(getPreviousUserQuestion(msg.id))
 }
 
 // 打开分析面板
@@ -1638,16 +1800,10 @@ const handleViewAnalysis = (msg: Message) => {
       <div v-else class="max-w-[774px] mx-auto w-[90%]">
         <div v-for="msg in messages" :key="msg.id" class="mb-5">
           <!-- 用户消息 -->
-          <div v-if="msg.role === 'user'" class="group flex flex-col items-end gap-1">
+          <div v-if="msg.role === 'user'" class="flex flex-col items-end gap-1">
             <div class="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-md bg-[#1677FF]/10 text-[#1F3A56] text-sm leading-relaxed shadow-[0_2px_8px_rgba(59,130,246,0.12)]">{{ msg.content }}</div>
-            <button
-              class="h-6 px-2.5 border border-[#dbe7f5] rounded bg-white text-[12px] text-[#4b5563] cursor-pointer opacity-0 transition-all duration-150 -mt-0.5 group-hover:opacity-100 hover:text-[#1f82d9] hover:border-[#bfdbfe]"
-              @click="openFavoriteModalFromQuestion(msg.content)"
-            >
-              <i class="fa-regular fa-star mr-1"></i>收藏
-            </button>
             <div class="text-[10px] text-gray-400 mr-1">
-              {{ msg.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
+              {{ formatMessageDateTime(msg.timestamp) }}
             </div>
           </div>
 
@@ -1681,33 +1837,48 @@ const handleViewAnalysis = (msg: Message) => {
 
               <!-- 简洁模式：查询完成后只显示结果 -->
               <template v-if="shouldShowCompactMode(msg)">
-                <!-- 文字总结（在结果之前） -->
-                <!-- 查询结果 -->
                 <div class="flex flex-col gap-4">
-                  <AsyncQueryResult
-                    v-for="tc in getCompletedQueryResults(msg.toolCalls)"
-                    :key="tc.tool_call_id"
-                    class="max-h-[46vh]"
-                    :result-data="tc.renderId!"
-                    :sql="tc.args?.sql as string"
-                    :semantic-params="tc.semanticParams"
-                    :on-view-analysis="() => handleViewAnalysis(msg)"
-                    :is-analysis-active="isAnalysisPanelOpen && currentAnalysisRoundId === msg.id"
-                    :on-save="handleSaveToDashboard"
-                  />
+                  <template
+                    v-for="(segment, segmentIndex) in getOrderedMessageSegments(msg)"
+                    :key="`${segment.type}-${segmentIndex}-${segment.type !== 'text' ? segment.toolCall.tool_call_id : segmentIndex}`"
+                  >
+                    <div
+                      v-if="segment.type === 'text'"
+                      class="text-sm text-gray-700 leading-relaxed markdown-body"
+                    >
+                      <span v-html="renderSummaryMarkdown(segment.content)"></span>
+                    </div>
+                    <AsyncQueryResult
+                      v-else-if="segment.type === 'queryResult'"
+                      class="max-h-[46vh]"
+                      :result-data="segment.toolCall.renderId!"
+                      :sql="extractGeneratedSqlFromToolCall(segment.toolCall)"
+                      :semantic-params="segment.toolCall.semanticParams"
+                      :on-save="handleSaveToDashboard"
+                    />
+                    <div
+                      v-else
+                      class="flex items-center gap-2.5 rounded-xl border border-dashed border-black/10 bg-[linear-gradient(135deg,#fafbfc_0%,#f5f7fa_100%)] p-5 text-center text-[13px] text-gray-500"
+                    >
+                      <i class="fa-solid fa-chart-column text-lg bg-[linear-gradient(135deg,#1f82d9_0%,#135589_100%)] bg-clip-text text-transparent"></i>
+                      <span>图表配置已生成</span>
+                    </div>
+                  </template>
                 </div>
-                <!-- 文字总结 -->
-                <div v-if="getSummaryText(msg.content) || msg.isStreaming" class="mt-3 text-sm text-gray-700 leading-relaxed markdown-body">
-                  <span v-html="renderSummaryMarkdown(getSummaryText(msg.content))"></span>
-                  <span v-if="msg.isStreaming" class="animate-pulse text-gray-400">▌</span>
-                </div>
+                <span v-if="msg.isStreaming" class="mt-2 inline-block animate-pulse text-gray-400">▌</span>
               </template>
 
               <!-- 流式中：数据查询显示加载状态，普通问答直接流式输出 -->
               <template v-else-if="msg.isStreaming">
+                <StructuredMessage
+                  v-if="getConversationDisplayContent(msg.content)"
+                  :class="shouldShowStreamingProgress(msg) ? 'mb-3' : ''"
+                  :content="getConversationDisplayContent(msg.content)"
+                  :is-streaming="!shouldShowStreamingProgress(msg)"
+                />
                 <!-- 有思考/工具调用 → 数据查询，过程在侧边栏展示 -->
                 <div
-                  v-if="extractThinkingContent(msg.content) || getVisibleToolCalls(msg.toolCalls).length > 0 || msg.semanticConfigSelection || msg.semanticConfigSelectRequired"
+                  v-if="shouldShowStreamingProgress(msg)"
                   class="px-1 py-1"
                 >
                   <div class="flex items-center gap-2 mb-2">
@@ -1741,12 +1912,7 @@ const handleViewAnalysis = (msg: Message) => {
                   </div>
                 </div>
                 <!-- 普通问答 → 直接流式显示文字 -->
-                <StructuredMessage
-                  v-else-if="msg.content"
-                  :content="msg.content"
-                  :is-streaming="true"
-                />
-                <div v-else class="flex items-center gap-2 text-gray-500 text-sm">
+                <div v-else-if="!getConversationDisplayContent(msg.content)" class="flex items-center gap-2 text-gray-500 text-sm">
                   <i class="fa-solid fa-spinner fa-spin"></i>
                   <span>正在思考...</span>
                 </div>
@@ -1755,14 +1921,8 @@ const handleViewAnalysis = (msg: Message) => {
               <!-- 非流式、无查询结果：显示内容（去除思考过程） -->
               <template v-else>
                 <StructuredMessage
-                  v-if="stripThinkingContent(msg.content)"
-                  :content="stripThinkingContent(msg.content)"
-                  :is-streaming="false"
-                />
-                <!-- 全是思考内容、没有正式回复时，显示思考内容作为兜底 -->
-                <StructuredMessage
-                  v-else-if="msg.content"
-                  :content="msg.content"
+                  v-if="getConversationDisplayContent(msg.content)"
+                  :content="getConversationDisplayContent(msg.content)"
                   :is-streaming="false"
                 />
 
@@ -1797,15 +1957,13 @@ const handleViewAnalysis = (msg: Message) => {
                   </div>
                 </div>
 
-                <!-- 工具调用列表（在气泡内） -->
-                <ToolCallList
-                  v-if="getVisibleToolCalls(msg.toolCalls).length > 0"
-                  :tool-calls="getVisibleToolCalls(msg.toolCalls)"
-                  :datasource-id="selectedDatasource"
-                  :on-view-analysis="hasCompletedQueryResult(msg.toolCalls) ? () => handleViewAnalysis(msg) : undefined"
-                  :is-analysis-active="isAnalysisPanelOpen && currentAnalysisRoundId === msg.id"
-                  class="mt-3 pt-3 border-t border-black/[0.06]"
-                />
+                <button
+                  v-if="getVisibleToolCalls(msg.toolCalls).length > 0 && !getConversationDisplayContent(msg.content)"
+                  class="mt-2 h-7 px-2.5 rounded-md border border-blue-100 bg-blue-50 text-xs text-blue-600 hover:bg-blue-100"
+                  @click="handleViewAnalysis(msg)"
+                >
+                  查看工具调用
+                </button>
               </template>
 
               <!-- 错误消息 -->
@@ -1813,6 +1971,44 @@ const handleViewAnalysis = (msg: Message) => {
                 <i class="fa-solid fa-circle-exclamation"></i>
                 <span>{{ msg.error }}</span>
               </div>
+            </div>
+
+            <div
+              v-if="!msg.isStreaming && (shouldShowMessageCopyButton(msg) || shouldShowMessageFavoriteButton(msg) || shouldShowMessageAnalysisButton(msg))"
+              class="flex items-center gap-2 px-1"
+            >
+              <button
+                v-if="shouldShowMessageCopyButton(msg)"
+                class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+                @click="handleCopyAssistantMessage(msg)"
+              >
+                <i class="fa-regular fa-copy text-[11px]"></i>
+                <span>复制</span>
+              </button>
+              <button
+                v-if="shouldShowMessageFavoriteButton(msg)"
+                class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+                @click="handleFavoriteAssistantMessage(msg)"
+              >
+                <i class="fa-regular fa-star text-[11px]"></i>
+                <span>收藏</span>
+              </button>
+              <button
+                v-if="shouldShowMessageAnalysisButton(msg)"
+                :class="[
+                  'inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] transition-all duration-200',
+                  isAnalysisPanelOpen && currentAnalysisRoundId === msg.id
+                    ? 'bg-blue-500/10 text-blue-500'
+                    : 'text-gray-500 hover:bg-blue-500/5 hover:text-blue-500'
+                ]"
+                @click="handleViewAnalysis(msg)"
+              >
+                <i class="fa-solid fa-diagram-project text-[11px]"></i>
+                <span>分析</span>
+              </button>
+              <span class="ml-auto whitespace-nowrap text-[11px] text-gray-400">
+                {{ formatMessageDateTime(msg.timestamp) }}
+              </span>
             </div>
 
             <!-- 生成状态 -->
@@ -2065,6 +2261,7 @@ const handleViewAnalysis = (msg: Message) => {
       :sql="saveSql"
       :chart-type="saveChartType"
       :datasource-id="selectedDatasource"
+      :member-datasource-id="saveMemberDatasourceId"
     />
     <QueryFavoriteModal
       v-model:visible="showFavoriteModal"

@@ -4,8 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
@@ -45,33 +44,73 @@ def test_nl2sql_prompt_does_not_require_visible_fake_thinking():
 def test_chat_data_query_prompt_avoids_repeating_tool_result_tables():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "查询结果明细已经由 `execute_sql_tool` 返回并由前端表格/图表展示" in prompt
+    assert "查询结果明细已经由 `semantic_query_tool` 返回并由前端表格/图表展示" in prompt
     assert "不要重复输出结果表格" in prompt
     assert "禁止在最终回复中使用 markdown 表格、逐行明细列表、完整结果清单" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
     assert "超过 5 位的数字" in prompt
 
 
+def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expression():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "日期/时间维度过滤时" in prompt
+    assert "筛选值必须和该维度当前查询使用的表达式口径一致" in prompt
+    assert "value` 必须使用转换后的展示格式" in prompt
+    assert "value` 必须使用数据库原始存储格式" in prompt
+
+
+def test_chat_data_query_prompt_stops_when_question_exceeds_current_capability():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "超出当前智能问数能力" in prompt
+    assert "必须停止该查询分支" in prompt
+    assert "不要继续反复调用工具" in prompt
+    assert "当前指标体系不支持 / 当前可用指标集暂不支持 / 缺少指标集ID / 未找到可用指标集 / DSL2SQL 不支持" in prompt
+    assert "不要继续使用相同参数反复调用" in prompt
+
+
 def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "上下文未提供可用语义配置" in prompt
-    assert "业务数据查询必须先调用 `select_semantic_config_tool(query=用户原问题)`" in prompt
-    assert "获得唯一语义配置后，仍必须核对用户表述是否能明确匹配" in prompt
-    assert "相近、简称、口语化表达或存在多个可能解释" in prompt
-    assert "当用户表述与某个指标或维度只是相近但不能明确等同" in prompt
-    assert "输出可见内容约束（最高优先级）" in prompt
-    assert "不要在正文中输出 `<thinking>` 标签或人工编写的思考块" in prompt
+    assert "当前未提供完整指标集时，从当前数据源组中搜索真实可用指标集" in prompt
+    assert "业务数据查询、具体指标/维度询问" in prompt
+    assert "必须先搜索真实指标集，再决定查询、澄清或说明缺口" in prompt
+    assert "不要在搜索前凭常识澄清" in prompt
+    assert "当前可见指标集、业务域或可查询范围概览" in prompt
+    assert "直接基于目录回答名称、描述、指标数和维度数" in prompt
+    assert "选择工具返回唯一指标集后，仍必须按澄清门禁核对具体指标、维度、筛选对象和业务口径" in prompt
+    assert "名称一样但口径不明" in prompt
+    assert "可见输出约束" in prompt
+    assert "不要输出思考标签、伪造思考块或内部推理内容" in prompt
+    assert "不要输出内部执行步骤说明，包括技能加载、系统规则依据、工具选择理由、工具调用顺序和配置选择过程" in prompt
     assert "思考过程由模型原生推理流展示" in prompt
-    assert "禁止输出工具名、配置名、配置 ID、工具调用计划" in prompt
-    assert "不要在正文中说明“先选择配置”“先调用工具”“需要确定可用配置”等内部动作" in prompt
-    assert "“当前未选择指标集”“已选择指标集”“已选择配置”“指标集名称”“候选指标集”等内部选择过程" in prompt
-    assert "不要推荐示例中的指标，不要推荐与当前问题无关的具体指标" in prompt
-    assert "除非能确认同一语义配置里存在真实相近项，否则只给“请先维护口径后再查询”的通用建议" in prompt
-    assert "对复购率、转化率、留存率、占比、客单价、有效率等依赖业务定义的比例/率类问题" in prompt
+    assert "禁止出现工具名、配置 ID、工具调用计划" in prompt
+    assert "除用户明确询问当前可见指标集目录或业务范围外，不要输出配置名或指标集名称" in prompt
+    assert "禁止把这些内部选择过程写给用户" in prompt
+    assert "对复购率、转化率、留存率、占比、客单价、有效率等比例/率类问题" in prompt
     assert "返回唯一指标集后，不要输出" not in prompt
-    assert "只能使用已维护的真实指标、维度、枚举和口径" in prompt
+    assert "当前指标集是唯一可执行事实源" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
+    assert "用户未指定机构，本次默认查询第 1 个机构" in prompt
+    assert "不要默认查询全部" in prompt
+
+
+def test_chat_data_query_prompt_enforces_clarification_gate_before_query_tools():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "查询执行澄清门禁" in prompt
+    assert "调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，必须同时满足" in prompt
+    assert "只要任一条件不满足，禁止调用 `dsl2sql_tool`、`semantic_query_tool`、`calculator_tool`" in prompt
+    assert "“看起来像”“可能是”“通常指”“可以理解为”“与某字段相近”“名称一样但口径不明”都不算高置信匹配" in prompt
+    assert "指标和维度必须有明确业务口径" in prompt
+    assert "即使名称看起来一样，只要口径、单位、时间范围、枚举含义、统计粒度或业务限定不明确或不一致，也必须先澄清" in prompt
+    assert "若只是工具或模型推断出的比例、差值、转化率等公式，必须先向用户澄清" in prompt
+    assert "澄清问题必须面向业务用户，只问一个最关键问题" in prompt
+    assert "信息不完整、口径不唯一、只是相近匹配或多个合理解释" in prompt
+    assert "类型A" not in prompt
+    assert "类型B" not in prompt
+    assert "类型C" not in prompt
 
 
 def test_data_analyze_prompt_defines_sql_dialect_and_compare_boundaries():

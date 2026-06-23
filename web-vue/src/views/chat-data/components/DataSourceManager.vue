@@ -58,6 +58,15 @@ const groupForm = ref({
   datasource_sources_text: '',
 })
 
+type GroupDatasourceSource = {
+  org_name: string
+  org_code: string
+  query_executor_type: 'direct' | 'http'
+  host?: string
+  port?: number
+  database: string
+}
+
 // 设置默认
 const settingDefaultId = ref<string | null>(null)
 // 重命名
@@ -671,9 +680,9 @@ const groupSelectAllButtonText = computed(() => hasGroupTableSearchKeyword.value
 const groupDeselectAllButtonText = computed(() => hasGroupTableSearchKeyword.value ? '清空筛选结果' : '清空')
 const groupSourcePlaceholder = computed(() => {
   if (groupForm.value.source_type === 'hive') {
-    return '每行一个数据源，格式：机构名称|机构编码|连接方式|ip:port:db_name\n连接方式填写 direct 或 http，机构编码用于权限匹配和 HTTP 执行标识\n第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|http|localhost:10000:default\n机构名称yy|机构编码yy|direct|10.0.0.10:10000:dw_prod'
+    return '每行一个数据源，格式：\nHTTP：机构名称|机构编码|http|db_name\n直连：机构名称|机构编码|direct|ip:port:db_name\n机构编码用于权限匹配和 HTTP 执行标识，第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|http|default\n机构名称yy|机构编码yy|direct|10.0.0.10:10000:dw_prod'
   }
-  return '每行一个数据源，格式：机构名称|机构编码|连接方式|ip:port:db_name\n连接方式填写 direct 或 http，机构编码用于权限匹配和 HTTP 执行标识\n第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|direct|db-host-1:3306:database_a\n机构名称yy|机构编码yy|http|db-host-2:3306:database_b'
+  return '每行一个数据源，格式：\nHTTP：机构名称|机构编码|http|db_name\n直连：机构名称|机构编码|direct|ip:port:db_name\n机构编码用于权限匹配和 HTTP 执行标识，第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|direct|db-host-1:3306:database_a\n机构名称yy|机构编码yy|http|database_b'
 })
 
 const parseTemplateSourceForSnapshot = () => {
@@ -687,8 +696,14 @@ const parseTemplateSourceForSnapshot = () => {
   if (segments.length !== 4) {
     return ''
   }
+  const executorType = segments[2] || ''
   const sourceText = segments[3] || ''
 
+  if (executorType === 'http') {
+    const database = sourceText.trim()
+    return database ? `${groupForm.value.source_type}|http|${segments[1] || ''}|${database}` : ''
+  }
+  if (executorType !== 'direct') return ''
   const parts = sourceText.split(':')
   if (parts.length !== 3) return ''
   const host = parts[0]?.trim() || ''
@@ -844,19 +859,26 @@ const openGroupModal = () => {
   showGroupModal.value = true
 }
 
+const formatGroupSourceLine = (item: Partial<GroupDatasourceSource>) => {
+  const executorType = item.query_executor_type || 'direct'
+  const database = String(item.database || '').trim()
+  if (executorType === 'http') {
+    return `${item.org_name || ''}|${item.org_code || ''}|http|${database}`
+  }
+  return `${item.org_name || ''}|${item.org_code || ''}|direct|${item.host || ''}:${item.port || ''}:${database}`
+}
+
 const openEditGroupModal = (ds: DataSource) => {
   editingGroupId.value = ds.id
   const sourceType = ((ds.source_type || 'mysql') as 'mysql' | 'hive')
+  const memberSourcesText = String((ds as DataSource & { member_sources_text?: string }).member_sources_text || '').trim()
   groupForm.value = {
     group_name: ds.group_name || '',
     group_desc: ds.ds_description || '',
     source_type: sourceType,
-    datasource_sources_text: String((ds as DataSource & { member_sources_text?: string }).member_sources_text || '').trim() || (ds.member_sources || [])
-      .map((item) => {
-        const executorType = item.query_executor_type || 'direct'
-        return `${item.org_name || ''}|${item.org_code || ''}|${executorType}|${item.host}:${item.port}:${item.database}`
-      })
-      .join('\n'),
+    datasource_sources_text: memberSourcesText
+      ? memberSourcesText
+      : (ds.member_sources || []).map(formatGroupSourceLine).join('\n'),
   }
   groupDbTables.value = (ds.ds_tables || []).map(table => table.table_name).filter(Boolean)
   selectedGroupTables.value = new Set(groupDbTables.value)
@@ -879,7 +901,7 @@ const parseMemberSources = () => {
     .map(line => line.trim())
     .filter(Boolean)
 
-  const members: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  const members: GroupDatasourceSource[] = []
   const nameSet = new Set<string>()
   const orgCodeSet = new Set<string>()
   const identitySet = new Set<string>()
@@ -893,7 +915,7 @@ const parseMemberSources = () => {
 
     if (groupForm.value.source_type === 'hive' || groupForm.value.source_type === 'mysql') {
       if (segments.length !== 4) {
-        throw new Error(`第 ${index + 1} 行格式错误，请使用固定格式：机构名称|机构编码|direct/http|ip:port:db_name`)
+        throw new Error(`第 ${index + 1} 行格式错误，请使用固定格式：HTTP 为 机构名称|机构编码|http|db_name，直连为 机构名称|机构编码|direct|ip:port:db_name`)
       }
       orgName = segments[0] || ''
       orgCode = segments[1] || ''
@@ -910,17 +932,29 @@ const parseMemberSources = () => {
       }
     }
 
-    const parts = sourceText.split(':')
-    if (parts.length !== 3) {
-      throw new Error(`第 ${index + 1} 行格式错误，请检查连接串`)
+    let host = ''
+    let port: number | undefined
+    let database = ''
+    if (queryExecutorType === 'http') {
+      if (sourceText.includes(':')) {
+        throw new Error(`第 ${index + 1} 行格式错误，HTTP 模式只填写数据库名，不填写 IP 和端口`)
+      }
+      database = sourceText.trim()
+      if (!database) {
+        throw new Error(`第 ${index + 1} 行缺少数据库名`)
+      }
+    } else {
+      const parts = sourceText.split(':')
+      if (parts.length !== 3) {
+        throw new Error(`第 ${index + 1} 行格式错误，请检查直连连接串`)
+      }
+      host = parts[0]?.trim() || ''
+      port = Number(parts[1]?.trim() || '')
+      database = parts[2]?.trim() || ''
+      if (!host || !Number.isInteger(port) || port <= 0 || !database) {
+        throw new Error(`第 ${index + 1} 行格式错误，请检查直连连接串`)
+      }
     }
-    const host = parts[0]?.trim() || ''
-    const port = Number(parts[1]?.trim() || '')
-    const database = parts[2]?.trim() || ''
-    if (!host || !port || !database) {
-      throw new Error(`第 ${index + 1} 行格式错误，请检查连接串`)
-    }
-    const sourceKey = `${host}:${port}:${database}`
     if (orgName) {
       if (nameSet.has(orgName)) {
         throw new Error(`第 ${index + 1} 行名称重复：${orgName}`)
@@ -936,20 +970,23 @@ const parseMemberSources = () => {
       throw new Error(`第 ${index + 1} 行机构编码重复：${orgCode}`)
     }
     identitySet.add(identityKey)
-    members.push({
+    const source: GroupDatasourceSource = {
       org_name: orgName,
       org_code: orgCode,
       query_executor_type: queryExecutorType,
-      host,
-      port,
       database,
-    })
+    }
+    if (queryExecutorType === 'direct') {
+      source.host = host
+      source.port = port
+    }
+    members.push(source)
   }
   return members
 }
 
 const fetchGroupDbTables = async () => {
-  let datasourceSources: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  let datasourceSources: GroupDatasourceSource[] = []
   try {
     datasourceSources = parseMemberSources()
   } catch (error) {
@@ -969,15 +1006,26 @@ const fetchGroupDbTables = async () => {
   loadingGroupTables.value = true
   resetGroupTableSelector()
   try {
-    const res = await getDbTables({
+    const payload: {
+      source_type: 'mysql' | 'hive'
+      query_executor_type: 'direct' | 'http'
+      org_code: string
+      org_name: string
+      database: string
+      host?: string
+      port?: number
+    } = {
       source_type: groupForm.value.source_type,
       query_executor_type: templateSource.query_executor_type || 'direct',
       org_code: templateSource.org_code || '',
       org_name: templateSource.org_name || '',
-      host: templateSource.host,
-      port: templateSource.port,
       database: templateSource.database,
-    })
+    }
+    if ((templateSource.query_executor_type || 'direct') === 'direct') {
+      payload.host = templateSource.host || ''
+      payload.port = templateSource.port
+    }
+    const res = await getDbTables(payload)
     if (res.status === 'success') {
       const tables = res.data.tables || []
       groupDbTables.value = tables
@@ -1018,7 +1066,7 @@ const handleCreateDatasourceGroup = async () => {
     return
   }
 
-  let datasourceSources: Array<{ org_name: string; org_code: string; query_executor_type: 'direct' | 'http'; host: string; port: number; database: string }> = []
+  let datasourceSources: GroupDatasourceSource[] = []
   try {
     datasourceSources = parseMemberSources()
   } catch (error) {
@@ -1317,7 +1365,7 @@ defineExpose({
               </el-popover>
               <button
                 class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200"
-                title="数据集管理"
+                title="指标集管理"
                 @click.stop="handleOpenSemanticConfig(ds.id)"
               >
                 <i class="fa-solid fa-sitemap text-xs"></i>

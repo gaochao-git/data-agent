@@ -1,5 +1,7 @@
 import argparse
 import json
+import runpy
+import sys
 from pathlib import Path
 
 import importlib.util
@@ -73,6 +75,10 @@ def test_compare_period_helpers_cover_rows_numbers_labels_and_rate(tmp_path):
     assert module.to_number("bad") is None
     assert module.to_number("12.5") == 12.5
     assert module.build_value_map([{"month": "01", "sales": 3}, {"sales": 4}], "month", "sales") == {"01": 3.0}
+    assert module.build_aligned_value_map([{"month": None, "sales": 3}, {"month": "2026-01", "sales": 4}], "month", "sales", "exact") == (
+        {"2026-01": 4.0},
+        {"2026-01": "2026-01"},
+    )
     assert module.month_of_year_key("2026-12") == "12"
     assert module.month_of_year_key("bad") == "bad"
     assert module.month_label("02") == "2月"
@@ -189,3 +195,63 @@ def test_compare_period_main_writes_output_from_cli_args(tmp_path, monkeypatch):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["title"] == "销售额对比"
     assert payload["data"][0]["change_rate"] == 1.0
+
+
+def test_compare_period_parse_args_and_script_entrypoint(tmp_path, monkeypatch):
+    script_path = (
+        Path(__file__).resolve().parents[2]
+        / "agent"
+        / "skills"
+        / "chart-processing"
+        / "scripts"
+        / "compare_period_chart.py"
+    )
+    current = tmp_path / "current.json"
+    previous = tmp_path / "previous.json"
+    output = tmp_path / "output.chart.json"
+    current.write_text(json.dumps([{"month": "2026-01", "sales": 10}]), encoding="utf-8")
+    previous.write_text(json.dumps([{"month": "2026-01", "sales": 5}]), encoding="utf-8")
+    argv = [
+        str(script_path),
+        "--current",
+        str(current),
+        "--previous",
+        str(previous),
+        "--output",
+        str(output),
+        "--title",
+        "销售额对比",
+        "--key-field",
+        "month",
+        "--value-field",
+        "sales",
+        "--chart-type",
+        "bar",
+        "--current-field",
+        "本期销售额",
+        "--previous-field",
+        "上期销售额",
+        "--current-label",
+        "本期",
+        "--previous-label",
+        "上期",
+        "--rate-label",
+        "变化率",
+        "--missing-policy",
+        "keep_null",
+        "--align-by",
+        "exact",
+    ]
+
+    module = load_compare_period_chart_module()
+    monkeypatch.setattr(sys, "argv", argv)
+    args = module.parse_args()
+
+    assert args.chart_type == "bar"
+    assert args.current_field == "本期销售额"
+
+    runpy.run_path(str(script_path), run_name="__main__")
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["chart_type"] == "bar"
+    assert payload["series"][0]["field"] == "本期销售额"

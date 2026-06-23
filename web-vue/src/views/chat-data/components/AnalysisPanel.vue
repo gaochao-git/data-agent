@@ -51,7 +51,15 @@ const hasSemanticConfigStep = computed(() => Boolean(props.data?.semanticConfigS
 
 const stripThinkingWrapper = (content: string): string => {
   const match = content.match(/^<thinking>([\s\S]*?)<\/thinking>$/)
-  return match?.[1] ?? content
+  return stripModelThinkTags(match?.[1] ?? content)
+}
+
+const stripModelThinkTags = (content: string): string => {
+  return String(content || '')
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trim()
 }
 
 const thinkingSegments = computed<ThinkingSegment[]>(() => {
@@ -248,11 +256,11 @@ watch(
             </div>
           </template>
           <template v-else>
-            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">执行任务</h4>
+            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">工具调用</h4>
             <ToolCallList
               :tool-calls="[entry.tool]"
               :datasource-id="datasourceId"
-              :default-expanded="true"
+              :default-expanded="false"
             />
           </template>
         </div>

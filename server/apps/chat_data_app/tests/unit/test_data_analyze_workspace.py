@@ -7,8 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -182,6 +181,10 @@ def test_workspace_json_list_read_and_visible_paths():
     visible_path = write_workspace_json(paths["root"], "workspace/context.json", {"用户": "张三"})
 
     assert visible_path == "/workspace/context.json"
+    assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"
+    assert resolve_workspace_path(paths["root"], "") == Path(paths["root"]).resolve()
+    (Path(paths["root"]) / "outputs").rmdir()
+    (Path(paths["workspace"]) / "nested-dir").mkdir()
     files = list_workspace_files(Path(paths["root"]).name)
     assert any(item["path"] == "/workspace/context.json" and item["directory"] == "workspace" for item in files)
 
@@ -407,6 +410,7 @@ def test_present_artifacts_display_name_and_mime_helpers():
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/sales.chart.json") == "sales"
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/dashboard.dashboard.json") == "dashboard"
     assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/report.pdf") == "report"
+    assert present_artifacts_tool_module._artifact_display_name("/mnt/user-data/outputs/README") == "README"
     assert present_artifacts_tool_module._artifact_display_name("") == ""
     assert present_artifacts_tool_module._artifact_mime_type("report.pdf", "file") == "application/pdf"
     assert present_artifacts_tool_module._artifact_mime_type("unknown.bin", "dashboard_spec") == "application/json"
@@ -553,6 +557,27 @@ def test_parse_patch_rejects_malformed_inputs():
         file_edit_tool_module.parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\n+x")
 
 
+def test_parse_patch_accepts_delete_eof_and_multiple_update_hunks():
+    ops = file_edit_tool_module.parse_patch(
+        "*** Begin Patch\n"
+        "*** Delete File: workspace/remove.txt\n"
+        "*** Update File: workspace/demo.txt\n"
+        "@@\n"
+        " old\n"
+        "-a\n"
+        "+b\n"
+        "*** End of File\n"
+        "@@ second\n"
+        " b\n"
+        "+c\n"
+        "*** End Patch"
+    )
+
+    assert isinstance(ops[0], file_edit_tool_module.DeleteOp)
+    assert isinstance(ops[1], file_edit_tool_module.UpdateOp)
+    assert len(ops[1].hunks) == 2
+
+
 def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp_path):
     root = tmp_path
     (root / "workspace").mkdir()
@@ -579,6 +604,61 @@ def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp
             root=str(root),
         )
 
+
+def test_apply_patch_ops_delete_and_update_without_trailing_newline(tmp_path):
+    root = tmp_path
+    workspace = root / "workspace"
+    workspace.mkdir()
+    delete_target = workspace / "remove.txt"
+    update_target = workspace / "exists.txt"
+    delete_target.write_text("remove", encoding="utf-8")
+    update_target.write_text("old", encoding="utf-8")
+
+    actions = file_edit_tool_module.apply_patch_ops(
+        [
+            file_edit_tool_module.DeleteOp(path="workspace/remove.txt"),
+            file_edit_tool_module.UpdateOp(
+                path="workspace/exists.txt",
+                hunks=[file_edit_tool_module.Hunk(lines=["-old", "+new"])],
+            ),
+        ],
+        root=str(root),
+    )
+
+    assert actions == ["delete workspace/remove.txt", "update workspace/exists.txt"]
+    assert not delete_target.exists()
+    assert update_target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_file_edit_private_patch_helpers_cover_remaining_branches():
+    assert file_edit_tool_module._find_hunk_start(["a", "b"], [], 1) == 1
+    assert file_edit_tool_module._ops_to_sandbox_payload([
+        file_edit_tool_module.DeleteOp(path="workspace/remove.txt")
+    ]) == [{"kind": "delete", "path": "workspace/remove.txt", "visible_path": "workspace/remove.txt"}]
+
+
+def test_file_edit_next_action_helpers_cover_path_variants():
+    assert "草稿已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "/workspace/dashboard_draft/demo.json",
+        "write",
+    )
+    assert "看板预览文件已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "/mnt/user-data/outputs/demo.dashboard.json",
+        "write",
+    )
+    assert "文件已 patch 更新" in file_edit_tool_module._dashboard_next_action_for_path(
+        "workspace/notes.txt",
+        "patch",
+    )
+    assert file_edit_tool_module._dashboard_next_action_for_path("workspace/notes.txt", "write") is None
+
+    payload = {}
+    file_edit_tool_module._attach_dashboard_next_action(
+        payload,
+        operation="write",
+        paths=["workspace/notes.txt", "outputs/demo.dashboard.json"],
+    )
+    assert "看板预览文件已更新" in payload["next_required_action"]
 
 @pytest.mark.asyncio
 async def test_file_edit_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):
@@ -768,11 +848,32 @@ async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
+async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
     writes = []
+    input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
+
+    async def fake_get_config(datasource_id, semantic_config_id):
+        assert datasource_id == "ds_1"
+        assert semantic_config_id == "sc_1"
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    def fake_remove_mixed(payload, semantic_config):
+        assert semantic_config["id"] == "sc_1"
+        return payload, ["warn_a"]
+
+    class FakeGenerator:
+        def __init__(self, semantic_config):
+            assert semantic_config["id"] == "sc_1"
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["销售额"]
+            assert kwargs["dimensions"] == ["月份"]
+            return {"success": True, "sql": "select month, sales from t"}
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
+        assert sql == "select month, sales from t"
+        assert kwargs["query_text"] == "统计销售额"
         return {
             "success": True,
             "sql": sql,
@@ -786,20 +887,27 @@ async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
         writes.append({"file_path": file_path, "content": content, "mode": mode})
         return {"file_path": "/mnt/user-data/workspace/current.json"}
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(exec_sql_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
-    result = await tools["execute_sql_tool"].ainvoke({
-        "sql": "select month, sales from t",
+    result = await tools["semantic_query_tool"].ainvoke({
+        "dsl": input_dsl,
         "save_as": "workspace/current.json",
+        "user_query": "统计销售额",
     })
 
-    payload = json.loads(result.replace("[execute_sql_tool]\n", "", 1))
+    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
     assert payload["success"] is True
     assert payload["result_path"] == "/mnt/user-data/workspace/current.json"
     assert payload["columns"] == ["month", "sales"]
     assert payload["row_count"] == 1
+    assert payload["sql"] == "select month, sales from t"
+    assert payload["dsl"] == input_dsl
+    assert payload["warnings"] == ["warn_a"]
     assert not (Path(paths["workspace"]) / "current.json").exists()
     assert writes[0]["file_path"] == "workspace/current.json"
     assert writes[0]["mode"] == "overwrite"
@@ -808,10 +916,23 @@ async def test_execute_sql_tool_save_as_writes_query_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_without_save_as_keeps_full_result(monkeypatch):
+async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
+    input_dsl = {"metrics": ["订单数"]}
+
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    class FakeGenerator:
+        def __init__(self, _semantic_config):
+            pass
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["订单数"]
+            return {"success": True, "sql": "select count(*) cnt from t"}
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
+        assert sql == "select count(*) cnt from t"
         return {
             "success": True,
             "sql": sql,
@@ -820,42 +941,116 @@ async def test_execute_sql_tool_without_save_as_keeps_full_result(monkeypatch):
             "total_count": 1,
         }
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
-    result = await tools["execute_sql_tool"].ainvoke({"sql": "select count(*) cnt from t"})
+    result = await tools["semantic_query_tool"].ainvoke({"dsl": input_dsl})
 
-    payload = json.loads(result.replace("[execute_sql_tool]\n", "", 1))
+    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
     assert "result_path" not in payload
     assert payload["data"] == [{"cnt": 3}]
+    assert payload["sql"] == "select count(*) cnt from t"
+    assert payload["dsl"]["metrics"] == input_dsl["metrics"]
+    assert payload["dsl"]["dimensions"] == []
+
+    blank_save_result = await tools["semantic_query_tool"].ainvoke({"dsl": input_dsl, "save_as": "   "})
+    blank_save_payload = json.loads(blank_save_result.replace("[semantic_query_tool]\n", "", 1))
+    assert "result_path" not in blank_save_payload
+    assert blank_save_payload["data"] == [{"cnt": 3}]
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
+async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
-    tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths)
+    tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths, semantic_config_id="sc_1")
 
-    assert await tools_without_datasource["execute_sql_tool"].ainvoke({"sql": "select 1"}) == "execute_sql_tool 执行失败: 当前会话未绑定数据源"
+    assert await tools_without_datasource["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}}) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
         return {"success": True, "sql": sql, "columns": [], "data": []}
 
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tool_without_workspace = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1")
-    assert await tool_without_workspace.ainvoke({"sql": "select 1", "save_as": "workspace/a.json"}) == "execute_sql_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+    tool_without_workspace = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1", semantic_config_id="sc_1")
+    assert await tool_without_workspace.ainvoke({"dsl": {"metrics": ["订单数"]}, "save_as": "workspace/a.json"}) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
 
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
-    assert await tools["execute_sql_tool"].ainvoke({"sql": "select 1", "save_as": "workspace/a.txt"}) == "execute_sql_tool 执行失败: save_as 只支持 .json 文件"
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}, "save_as": "workspace/a.txt"}) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"sql": "select 1"}}) == "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+
+    tool_without_config = exec_sql_tool_module.create_exec_sql_tool(datasource_id="ds_1")
+    assert await tool_without_config.ainvoke({"dsl": {"metrics": ["订单数"]}}) == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": [{"metrics": ["订单数"]}]}) == "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"cards": []}}) == "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
 
 
 @pytest.mark.asyncio
-async def test_execute_sql_tool_returns_dependency_error(monkeypatch):
+async def test_semantic_query_tool_returns_compile_errors_and_warning_payload(monkeypatch):
+    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_compile_{uuid.uuid4().hex}")
+
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    def fake_remove_mixed(payload, _semantic_config):
+        if payload.get("mixed"):
+            return {"metrics": ["净指标"], "warnings": []}, ["移除了原始字段"]
+        return payload, []
+
+    class FakeGenerator:
+        def __init__(self, _semantic_config):
+            pass
+
+        def generate_sql(self, **kwargs):
+            metrics = kwargs.get("metrics") or []
+            if metrics == ["bad"]:
+                return {"success": False, "error": "指标不存在"}
+            if metrics == ["empty"]:
+                return {"success": True, "sql": "   "}
+            return {"success": True, "sql": "select ok"}
+
+    async def fake_execute_sql_real(sql, *_args, **_kwargs):
+        return {"success": True, "columns": ["ok"], "data": [{"ok": 1}], "total_count": 1}
+
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
+
+    compile_error = await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["bad"]}})
+    empty_sql = await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["empty"]}})
+    compare_error = await tools["semantic_query_tool"].ainvoke({"dsl": {"compare": {"type": "yoy"}, "metrics": ["ok"]}})
+    warning_result = await tools["semantic_query_tool"].ainvoke({"dsl": {"mixed": True, "metrics": ["raw"]}})
+    payload = json.loads(warning_result.replace("[semantic_query_tool]\n", "", 1))
+
+    assert compile_error == "semantic_query_tool 执行失败: 指标不存在"
+    assert empty_sql == "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+    assert compare_error == "semantic_query_tool 执行失败: DSL2SQL 不支持 compare，请拆成基础 DSL 查询"
+    assert payload["sql"] == "select ok"
+    assert payload["warnings"] == ["移除了原始字段"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_error_{uuid.uuid4().hex}")
+
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [], "dimensions": []}
+
+    class FakeGenerator:
+        def __init__(self, _semantic_config):
+            pass
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
 
     async def fake_execute_sql_real(*_args, **_kwargs):
         raise RuntimeError("执行失败")
 
+    monkeypatch.setattr(exec_sql_tool_module, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(exec_sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(exec_sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1")
+    tools = _create_local_sandbox_tools(monkeypatch, paths, datasource_id="ds_1", semantic_config_id="sc_1")
 
-    assert await tools["execute_sql_tool"].ainvoke({"sql": "select 1"}) == "execute_sql_tool 执行失败: 执行失败"
+    assert await tools["semantic_query_tool"].ainvoke({"dsl": {"metrics": ["订单数"]}}) == "semantic_query_tool 执行失败: 执行失败"

@@ -13,8 +13,7 @@ from starlette.requests import Request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -1050,8 +1049,8 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
         sql="select * from orders -- 注释",
         query_type="builder",
     )
-    unchanged = asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
-    assert unchanged is builder_request
+    with pytest.raises(ValueError, match="必须基于指标集"):
+        asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
 
     sql_request = QueryTaskCreateRequest(
         task_type="sql",

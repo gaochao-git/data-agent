@@ -95,10 +95,12 @@ def _build_payload(source_config: Dict[str, Any], table_names: Optional[List[str
         "source_type": "hive",
         "orgCode": org_code,
         "orgName": org_name,
-        "host": source_config.get("host"),
-        "port": int(source_config.get("port") or 10000),
         "database": source_config.get("database") or "default",
     }
+    if source_config.get("host"):
+        payload["host"] = source_config.get("host")
+    if source_config.get("port") is not None:
+        payload["port"] = int(source_config.get("port"))
     _add_user_payload(payload, user_id, username)
     if table_names is not None:
         payload["table_names"] = table_names

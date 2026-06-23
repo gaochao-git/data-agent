@@ -457,8 +457,8 @@ export function getDbTables(data: {
   query_executor_type?: 'direct' | 'http'
   org_code?: string
   org_name?: string
-  host: string
-  port: number
+  host?: string
+  port?: number
   database: string
 }): Promise<ApiResponse<{ tables: string[] }>> {
   return request({
@@ -663,7 +663,7 @@ export function createDatasourceGroup(data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }
@@ -672,7 +672,7 @@ export function createDatasourceGroup(data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }>
@@ -693,7 +693,7 @@ export function updateDatasourceGroup(datasourceId: string, data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }
@@ -702,7 +702,7 @@ export function updateDatasourceGroup(datasourceId: string, data: {
     org_name: string
     org_code: string
     query_executor_type: 'direct' | 'http'
-    host: string
+    host?: string
     port?: number
     database: string
   }>
@@ -1146,18 +1146,6 @@ export function getQueryHistoryResult(executionId: string): Promise<ApiResponse<
   return request({
     url: `/agents/api/chatdata/query-history/${executionId}/result`,
     method: 'get',
-  })
-}
-
-/** 编译可视化查询 DSL 为 SQL（不执行） */
-export function compileBuilderSql(params: {
-  builder_config: Record<string, unknown>
-  datasource_id?: string
-}): Promise<ApiResponse<{ sql: string }>> {
-  return request({
-    url: `/agents/api/chatdata/compile-builder-sql`,
-    method: 'post',
-    data: params
   })
 }
 

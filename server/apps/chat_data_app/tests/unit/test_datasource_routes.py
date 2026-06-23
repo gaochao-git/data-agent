@@ -7,10 +7,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -56,6 +57,7 @@ from apps.chat_data_app.schema import (
     DatasourceUpdateRequest,
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
+    PanelCreateRequest,
     PanelUpdateRequest,
     PanelExecuteRequest,
     QuickSqlRequest,
@@ -529,6 +531,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
             "panel_b": {
                 "id": "panel_b",
@@ -538,6 +541,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
             "panel_c": {
                 "id": "panel_c",
@@ -547,6 +551,7 @@ class _FakeDashboardService:
                 "chart_type": "table",
                 "chart_config": {},
                 "datasource_id": "ds_a",
+                "member_datasource_id": "",
             },
         }
         self.created_dashboard_id = "dash_created"
@@ -598,6 +603,7 @@ class _FakeDashboardService:
         refresh_interval: int = None,
         source_thread_id: str = None,
         datasource_id: str = None,
+        member_datasource_id: str = "",
         user_id: str = None,
         operator_name: str = "",
     ):
@@ -616,6 +622,7 @@ class _FakeDashboardService:
                 "h": layout_h,
             },
             "datasource_id": datasource_id,
+            "member_datasource_id": member_datasource_id,
             "source_thread_id": source_thread_id,
             "user_id": user_id,
             "create_by_name": operator_name,
@@ -637,7 +644,9 @@ class _FakeDashboardService:
         layout_w: int = None,
         layout_h: int = None,
         refresh_interval: int = None,
+        member_datasource_id: str = None,
         user_id: str = None,
+        operator_name: str = "",
     ):
         panel = self.panels.get(panel_id)
         if not panel or panel.get("dashboard_id") != dashboard_id:
@@ -650,6 +659,8 @@ class _FakeDashboardService:
             panel["chart_type"] = chart_type
         if chart_config is not None:
             panel["chart_config"] = chart_config
+        if member_datasource_id is not None:
+            panel["member_datasource_id"] = member_datasource_id
         return copy.deepcopy(panel)
 
     async def update_panels_layout(self, dashboard_id: str, layouts: list[dict], user_id: str = None, operator_name: str = ""):
@@ -2295,6 +2306,58 @@ def test_execute_panel_uses_selected_member_datasource(monkeypatch):
     assert data["data"]["result"]["member_name"] == "成员B"
 
 
+def test_add_panel_persists_member_datasource_id(monkeypatch):
+    service = _FakeDashboardService()
+    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
+    _mock_authenticated_user(monkeypatch)
+
+    resp = asyncio.run(dashboard_routes.add_panel(
+        "dash_a",
+        PanelCreateRequest(
+            name="成员B订单数",
+            sql="select count(*) from orders",
+            chart_type="table",
+            datasource_id="ds_a",
+            member_datasource_id="phy_b",
+        ),
+        SimpleNamespace(),
+    ))
+    data = _payload(resp)
+    assert data["status"] == "success"
+    assert data["data"]["member_datasource_id"] == "phy_b"
+    assert service.panels[data["data"]["id"]]["member_datasource_id"] == "phy_b"
+
+
+def test_execute_panel_uses_saved_member_datasource_when_not_overridden(monkeypatch):
+    from apps.chat_data_app import routes
+
+    manager = _FakeDatasourceManager()
+    manager.datasources["ds_a"]["member_sources"] = [
+        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
+        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
+    ]
+    service = _FakeDashboardService()
+    service.panels["panel_a"]["member_datasource_id"] = "phy_b"
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
+    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
+    _mock_authenticated_user(monkeypatch)
+    _mock_query_tracking(monkeypatch)
+    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+
+    resp = asyncio.run(dashboard_routes.execute_panel(
+        "dash_a",
+        "panel_a",
+        SimpleNamespace(),
+        None,
+    ))
+    data = _payload(resp)
+    assert data["status"] == "success"
+    assert data["data"]["member_datasource_id"] == "phy_b"
+    assert data["data"]["result"]["member_name"] == "成员B"
+
+
 def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
     from apps.chat_data_app import routes
 
@@ -2685,7 +2748,7 @@ def test_build_execution_target_info_contains_selected_members(monkeypatch):
 
     info = asyncio.run(_build_execution_target_info_async("ds_a", ["phy_a", "phy_b"]))
 
-    assert "当前执行对象" in info
+    assert "可用执行对象" in info
     assert "投诉举报1" in info
     assert "投诉举报2" in info
 
@@ -2751,7 +2814,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     async def _fake_build_execution_target_info(_datasource_id, _member_ids):
-        return "## 当前执行对象\n1. 成员B"
+        return "## 可用执行对象\n1. 成员B"
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
@@ -2777,7 +2840,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     assert captured["agent_id"] == routes.SQL_ASSIST_AGENT_ID
     assert captured["conversation_id"] == "conv_sql_assist"
     assert captured["config"]["configurable"]["thread_id"] == "conv_sql_assist"
-    assert captured["initial_state"]["execution_target_info"] == "## 当前执行对象\n1. 成员B"
+    assert captured["initial_state"]["execution_target_info"] == "## 可用执行对象\n1. 成员B"
     assert captured["initial_state"]["member_datasource_ids"] == ["phy_b"]
 
 
@@ -3176,6 +3239,18 @@ def test_semantic_health_helper_branches():
     assert routes._merge_health_status("ok", "warning") == "warning"
     assert routes._merge_health_status("warning", "invalid") == "invalid"
 
+    right_missing = routes._validate_semantic_config_health(datasource, {
+        "id": "cfg_join",
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_conditions": [{"left_column": "id", "right_column": "missing_user_id"}],
+            }
+        ],
+    })
+    assert any("右字段不存在" in item["message"] for item in right_missing["issues"])
+
 
 def test_datasource_route_error_branches(monkeypatch):
     class RaisingManager:
@@ -3445,6 +3520,37 @@ def test_task_endpoint_auth_and_error_branches(monkeypatch):
     assert _payload(asyncio.run(routes.get_query_task("task_001", SimpleNamespace())))["code"] == 50010
 
 
+def test_get_query_task_remote_tasks_without_live_payload(monkeypatch):
+    _mock_authenticated_user(monkeypatch, user_id="10001")
+    monkeypatch.setattr(routes, "_get_query_task", lambda _task_id: asyncio.sleep(0, result={
+        "task_id": "task_remote",
+        "request_payload": json.dumps({"user_id": "10001"}),
+    }))
+    monkeypatch.setattr(routes, "_build_query_task_response_data", lambda _task_data: {
+        "task_id": "task_remote",
+        "task_type": "sql",
+        "datasource_id": "ds_a",
+        "query_type": "sql",
+        "status": "running",
+        "progress_text": "执行中",
+        "remote_tasks": [{"remote_task_id": "remote_1"}],
+        "result_payload": None,
+        "error_message": "",
+        "started_time": None,
+        "finished_time": None,
+        "create_time": None,
+        "update_time": None,
+    })
+    monkeypatch.setattr(routes, "_get_query_executions", lambda _task_id: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(routes, "_build_live_remote_sql_result", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
+
+    payload = _payload(asyncio.run(routes.get_query_task("task_remote", SimpleNamespace())))
+
+    assert payload["status"] == "success"
+    assert payload["data"]["status"] == "running"
+    assert payload["data"]["results"] is None
+
+
 def test_create_query_task_exception_branches(monkeypatch):
     _mock_authenticated_user(monkeypatch)
 
@@ -3524,6 +3630,20 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
     assert _payload(response)["data"]["status"] == "cancelled"
     assert updates[-1][1]["progress_text"] == "已停止"
 
+    no_owner_pending = SimpleNamespace(
+        user_id="",
+        sql_status="pending",
+        to_dict=lambda: {"execution_id": "exec_pending", "sql_status": "pending"},
+    )
+    monkeypatch.setattr(routes, "_get_query_task", lambda _task_id: asyncio.sleep(0, result={
+        "task_id": "task_no_owner",
+        "status": "running",
+        "request_payload": "{}",
+    }))
+    monkeypatch.setattr(routes, "_get_query_execution_models", lambda _task_id: asyncio.sleep(0, result=[no_owner_pending]))
+    no_owner_response = asyncio.run(routes.cancel_query_task("task_no_owner", SimpleNamespace()))
+    assert _payload(no_owner_response)["data"]["status"] == "cancelled"
+
     monkeypatch.setattr(routes, "_get_query_task", lambda _task_id: (_ for _ in ()).throw(RuntimeError("cancel crashed")))
     failed = asyncio.run(routes.cancel_query_task("task_payload_owner", SimpleNamespace()))
     assert _payload(failed)["code"] == 50010
@@ -3543,27 +3663,6 @@ def test_execute_sql_direct_value_error_and_runtime_error(monkeypatch):
     monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare)
     monkeypatch.setattr(query_runtime, "execute_sql_request_with_task", fake_execute)
     assert _payload(asyncio.run(routes.execute_sql_direct(SimpleNamespace(), routes.ExecuteSqlRequest(sql="select 1", datasource_id="ds_a"))))["code"] == 50010
-
-
-def test_compile_builder_sql_endpoint_error_branches(monkeypatch):
-    class MissingManager:
-        async def get_datasource_async(self, _datasource_id):
-            return None
-
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: MissingManager())
-    missing = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(
-        datasource_id="missing",
-        builder_config={"table": "orders"},
-    )))
-    assert _payload(missing)["code"] == 40404
-
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid dsl")))
-    invalid = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(builder_config={"table": "orders"})))
-    assert _payload(invalid)["code"] == 40001
-
-    monkeypatch.setattr(routes, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compiler down")))
-    failed = asyncio.run(routes.compile_builder_sql_endpoint(routes.CompileBuilderSqlRequest(builder_config={"table": "orders"})))
-    assert _payload(failed)["code"] == 50010
 
 
 def test_routes_query_runtime_wrapper_functions(monkeypatch):
@@ -4036,7 +4135,6 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
     hive_http_response = asyncio.run(routes.get_db_tables(DbConnectionRequest(
         source_type="hive",
         query_executor_type="http",
-        host="127.0.0.1",
         database="default",
         org_code="ORG_A",
         org_name="机构A",
@@ -4044,7 +4142,9 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
     hive_http_body = _payload(hive_http_response)
     assert hive_http_body["status"] == "success"
     assert hive_http_body["data"]["tables"][0] == "http_orders"
-    assert hive_http_calls[-1]["source_config"]["port"] == 10000
+    assert "port" not in hive_http_calls[-1]["source_config"]
+    assert "host" not in hive_http_calls[-1]["source_config"]
+    assert hive_http_calls[-1]["source_config"]["database"] == "default"
     assert hive_http_calls[-1]["source_config"]["org_code"] == "ORG_A"
     assert hive_http_calls[-1]["source_config"]["org_name"] == "机构A"
     assert hive_http_calls[-1]["source_config"]["query_executor_type"] == "http"
@@ -4265,19 +4365,27 @@ def test_routes_helper_branches_for_user_params_and_source_config(monkeypatch):
     assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" rt1 ")) is True
     assert routes._is_http_query_execution(SimpleNamespace(remote_task_id=" ")) is False
 
-    normalized = routes._normalize_source_item(
-        "mysql",
-        " 127.0.0.1 ",
+    with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
+        routes._normalize_source_item(
+            "mysql",
+            " 127.0.0.1 ",
+            None,
+            " demo ",
+            " 机构A ",
+            " ORG_A ",
+            " HTTP ",
+        )
+    http_without_endpoint = routes._normalize_source_item(
+        "hive",
+        "",
         None,
-        " demo ",
-        " 机构A ",
-        " ORG_A ",
-        " HTTP ",
+        "default",
+        "机构A",
+        "ORG_A",
+        "http",
     )
-    assert normalized == {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "database": "demo",
+    assert http_without_endpoint == {
+        "database": "default",
         "query_executor_type": "http",
         "org_name": "机构A",
         "org_code": "ORG_A",
@@ -4287,7 +4395,7 @@ def test_routes_helper_branches_for_user_params_and_source_config(monkeypatch):
         ({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构名称不能为空"),
         ({"org_name": "机构A", "org_code": "", "host": "127.0.0.1", "database": "demo", "query_executor_type": "direct"}, "机构编码不能为空"),
         ({"org_name": "机构A", "org_code": "ORG_A", "host": "", "database": "demo", "query_executor_type": "direct"}, "数据源连接信息不完整"),
-        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "", "query_executor_type": "direct"}, "数据源连接信息不完整"),
+        ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "", "query_executor_type": "direct"}, "数据库名不能为空"),
         ({"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "database": "demo", "query_executor_type": "jdbc"}, "不支持的查询执行方式"),
     ]:
         try:
@@ -4625,3 +4733,143 @@ def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
 
     assert pending_result["status"] == "cancelled"
     assert updates[-1][1]["sql_status"] == "cancelled"
+
+
+def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypatch):
+    from apps.chat_data_app import routes
+
+    _mock_authenticated_user(monkeypatch)
+
+    class MissingHealthManager:
+        async def get_datasource_async(self, _datasource_id):
+            return None
+
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: MissingHealthManager())
+    assert _payload(asyncio.run(routes.get_datasource_semantic_health("missing")))["code"] == 40404
+
+    class DictCrashManager(_FakeDatasourceManager):
+        async def get_column_dict_async(self, *_args, **_kwargs):
+            raise RuntimeError("dict read failed")
+
+        async def get_table_column_dicts_async(self, *_args, **_kwargs):
+            raise RuntimeError("dict list failed")
+
+        async def replace_column_dict_async(self, *_args, **_kwargs):
+            raise RuntimeError("dict save failed")
+
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: DictCrashManager())
+    assert _payload(asyncio.run(routes.get_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace())))["code"] == 50006
+    assert _payload(asyncio.run(routes.get_datasource_table_column_dicts("ds_a", "t_a", SimpleNamespace())))["code"] == 50006
+    assert _payload(asyncio.run(routes.update_datasource_column_dict("ds_a", "t_a", "status", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace())))["code"] == 50006
+
+    class GenerateManager(_FakeDatasourceManager):
+        async def get_datasource_async(self, _datasource_id):
+            return {
+                "id": "ds_a",
+                "ds_tables": [
+                    {"table_name": "other", "columns": [{"name": "status"}]},
+                    {"table_name": "t_a", "columns": [{"name": "status"}]},
+                ],
+            }
+
+    class BadLlm:
+        async def ainvoke(self, *_args, **_kwargs):
+            raise RuntimeError("llm failed")
+
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: GenerateManager())
+    monkeypatch.setattr(routes, "get_chat_data_llm", lambda **_kwargs: BadLlm())
+    generated = _payload(asyncio.run(routes.generate_datasource_column_dict(
+        "ds_a",
+        "t_a",
+        "status",
+        DatasourceColumnDictGenerateRequest(text="1 有效"),
+        SimpleNamespace(),
+    )))
+    assert generated["code"] == 50006
+
+    class TargetManager:
+        async def get_execution_datasources_async(self, datasource_id, member_ids=None):
+            return [{"source_type": "mysql", "member_datasource_id": "m1"}]
+
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: TargetManager())
+    target = asyncio.run(routes._resolve_execution_target(SimpleNamespace(datasource_id="ds_a", member_datasource_id="m1")))
+    assert target["source_type"] == "mysql"
+
+    latest = SimpleNamespace(
+        execution_id="ex_wait",
+        sql_status="succeeded",
+        remote_task_id="",
+        db_connection_id="",
+    )
+    waiting = SimpleNamespace(
+        execution_id="ex_wait",
+        sql_status="running",
+        remote_task_id="",
+        db_connection_id="",
+    )
+    monkeypatch.setattr(routes, "CANCEL_TARGET_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(routes, "CANCEL_TARGET_POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(routes, "_get_query_execution_model", lambda _execution_id: asyncio.sleep(0, result=latest))
+    waited = asyncio.run(routes._wait_for_cancel_target(waiting))
+    assert waited.sql_status == "succeeded"
+
+    no_stop = asyncio.run(routes._cancel_query_execution(SimpleNamespace(
+        execution_id="ex_running_to_done",
+        sql_status="running",
+        remote_task_id="",
+        db_connection_id="",
+    )))
+    assert no_stop["message"] == "无需停止"
+
+    async def resolve_error(_execution):
+        raise RuntimeError("resolve failed")
+
+    monkeypatch.setattr(routes, "_resolve_execution_target", resolve_error)
+    monkeypatch.setattr(routes, "stop_http_query_task", lambda *args, **kwargs: asyncio.sleep(0, result={"success": True}))
+    monkeypatch.setattr(routes, "_update_query_execution", lambda *args, **kwargs: asyncio.sleep(0, result=None))
+    http_cancel = asyncio.run(routes._cancel_query_execution(SimpleNamespace(
+        execution_id="ex_http",
+        sql_status="running",
+        remote_task_id="remote_1",
+        db_connection_id="",
+        user_id="u1",
+    ), operator_name="操作员"))
+    assert http_cancel["status"] == "cancelled"
+
+    mysql_cancel = asyncio.run(routes._cancel_query_execution(SimpleNamespace(
+        execution_id="ex_mysql",
+        sql_status="running",
+        remote_task_id="",
+        db_connection_id="123",
+        user_id="u1",
+    )))
+    assert mysql_cancel["status"] == "kill_failed"
+
+    assert asyncio.run(routes._get_query_execution_models("")) == []
+
+    created = []
+
+    async def fake_run(task_id):
+        created.append(task_id)
+
+    monkeypatch.setattr(routes, "_run_query_task", fake_run)
+    async def schedule_and_drain():
+        routes._schedule_query_task("task_bg")
+        await asyncio.sleep(0)
+
+    asyncio.run(schedule_and_drain())
+    assert "task_bg" in created
+
+    monkeypatch.setattr(routes, "_build_live_remote_sql_result", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(routes, "_get_query_task", lambda _task_id: asyncio.sleep(0, result={
+        "task_id": "task_remote",
+        "task_type": "sql",
+        "status": "running",
+        "task_status": "running",
+        "request_payload": json.dumps({"user_id": "10001"}),
+        "remote_task_payload": json.dumps([{"remote_task_id": "remote_1"}]),
+        "result_payload": None,
+    }))
+    monkeypatch.setattr(routes, "_get_query_executions", lambda _task_id: asyncio.sleep(0, result=[]))
+    task_payload = _payload(asyncio.run(routes.get_query_task("task_remote", SimpleNamespace())))
+    assert task_payload["data"]["status"] == "running"

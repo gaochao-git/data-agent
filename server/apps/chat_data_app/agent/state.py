@@ -97,6 +97,8 @@ class SqlGeneratorState(TypedDict):
     datasource_id: str | None
     # 当前语义配置ID（用于查询历史学习按指标集归属过滤）
     semantic_config_id: str | None
+    # 当前轮可直接使用的语义配置（临时配置或已预加载配置）
+    semantic_config: NotRequired[dict[str, Any] | None]
     # 当前登录用户ID（用于 HTTP 执行器透传）
     user_id: str | None
     # 当前登录用户展示名称（用于查询历史执行人员展示）
@@ -105,8 +107,12 @@ class SqlGeneratorState(TypedDict):
     conversation_id: str | None
     # 指定执行的成员数据源ID列表
     member_datasource_ids: list[str]
-    # 当前选中的执行对象说明，供大模型理解执行范围
+    # 是否要求 semantic_query_tool 显式传入本次执行成员，避免把可用范围误当默认执行范围
+    require_explicit_member_selection: NotRequired[bool]
+    # 当前可用执行对象说明，供大模型理解可查询范围
     execution_target_info: str
+    # 当前可见指标集轻量目录说明，供大模型回答指标集范围类问题
+    semantic_config_directory_info: str
     # 当前轮模型上下文 token 占用估算
     token_usage: NotRequired[dict[str, Any] | None]
     # 模型原生思考分段

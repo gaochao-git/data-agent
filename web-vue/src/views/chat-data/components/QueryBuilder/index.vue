@@ -6,7 +6,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, useAttrs } from 'vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileBuilderSql, compileSemanticBuilderSql } from '../../api'
+import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
 import AsyncQueryResult from '../AsyncQueryResult.vue'
 import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
@@ -149,8 +149,8 @@ interface DataSource {
     org_name?: string
     org_code?: string
     source_type?: string
-    host: string
-    port: number
+    host?: string
+    port?: number
     database: string
   }>
 }
@@ -357,13 +357,8 @@ const activateResultTab = (index: number) => {
 }
 
 const buildBuilderConfigSnapshot = () => JSON.stringify(buildBuilderConfigPayload())
-const isBuilderConfigured = computed(() => {
-  if (props.semanticConfigId) {
-    return dimensions.value.length > 0 || aggregations.value.length > 0
-  }
-  const payload = buildBuilderConfigPayload()
-  return Boolean(payload.mainTable) && (payload.dimensions.length > 0 || payload.aggregations.length > 0)
-})
+const hasSemanticConfigSelected = computed(() => !!props.semanticConfigId)
+const isBuilderConfigured = computed(() => hasSemanticConfigSelected.value && (dimensions.value.length > 0 || aggregations.value.length > 0))
 const hasSqlChanged = computed(() => buildBuilderConfigSnapshot() !== savedBuilderConfigSnapshot.value)
 const hasRawResult = computed(() => !!rawResultData.value)
 const hasAnalyzedResult = computed(() => !!analyzedResultData.value)
@@ -373,9 +368,18 @@ const isCompareAnalysisDisabled = computed(() => {
   return transform === 'week'
 })
 
+const ensureSemanticConfigSelected = () => {
+  if (hasSemanticConfigSelected.value) return true
+  ElMessage.warning('请先选择指标集')
+  return false
+}
+
 const handleSaveSql = async () => {
   const cb = props.onSqlChange
   if (!cb) return
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!isBuilderConfigured.value) {
     ElMessage.warning('请先配置查询条件')
     return
@@ -416,9 +420,11 @@ const favoriteBuilderConfig = ref<Record<string, unknown> | null>(null)
 const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref<ChartType>('table')
-const handleSaveToDashboard = (sql: string, chartType: string) => {
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = (chartType as ChartType) || selectedChartType.value
+  saveMemberDatasourceId.value = String(memberDatasourceId || resultTabs.value[activeResultTabIndex.value]?.memberDatasourceId || '').trim()
   showSaveModal.value = true
 }
 
@@ -1433,7 +1439,7 @@ const addFieldToDimension = (field: any) => {
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
     return
   }
   // 支持指标 -> 维度：自动转换为非聚合字段
@@ -1474,7 +1480,7 @@ const addFieldToAggregation = (field: any) => {
   const tableAlias = getTableAlias(field || {})
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
     return
   }
   const targetFunc = aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })
@@ -2362,7 +2368,7 @@ const handleDropToFilter = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2398,7 +2404,7 @@ const handleDropToOrder = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善数据集关系')
+      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2668,6 +2674,9 @@ const buildSemanticBuilderConfigPayload = () => {
 const builderConfigSnapshot = computed(() => buildBuilderConfigSnapshot())
 
 const openFavoriteModal = () => {
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!validateQueryPagination()) {
     return
   }
@@ -2704,17 +2713,14 @@ const compileCurrentBuilderSql = async (force = false): Promise<string> => {
   if (!force && compiledSql.value && compiledSqlSnapshot.value === snapshot) {
     return compiledSql.value
   }
-  const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
-  const response = props.semanticConfigId
-    ? await compileSemanticBuilderSql({
-      datasource_id: props.datasourceId,
-      semantic_config_id: props.semanticConfigId,
-      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
-    })
-    : await compileBuilderSql({
-      builder_config: builderConfigPayload,
-      datasource_id: props.datasourceId || undefined
-    })
+  if (!ensureSemanticConfigSelected()) {
+    return ''
+  }
+  const response = await compileSemanticBuilderSql({
+    datasource_id: props.datasourceId,
+    semantic_config_id: props.semanticConfigId as string,
+    semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
+  })
   const sqlText = String(response.data?.sql || '').trim()
   compiledSql.value = sqlText
   compiledSqlSnapshot.value = snapshot
@@ -3313,6 +3319,9 @@ const handlePreviewSql = async () => {
   if (!validateAggregationModeBeforeRun()) {
     return
   }
+  if (!ensureSemanticConfigSelected()) {
+    return
+  }
   if (!isBuilderConfigured.value) {
     ElMessage.warning('请先配置查询条件')
     return
@@ -3327,6 +3336,9 @@ const handlePreviewSql = async () => {
   previewSqlLoading.value = true
   try {
     previewSql.value = await compileCurrentBuilderSql()
+    if (!previewSql.value) {
+      return
+    }
     showSqlPreview.value = true
   } catch (err) {
     const apiMsg = (err as any)?.response?.data?.msg
@@ -3357,12 +3369,11 @@ const executeQuery = async () => {
   if (!validateAggregationModeBeforeRun()) {
     return
   }
-  if (!isBuilderConfigured.value) {
-    ElMessage.warning('请先配置查询条件')
+  if (!ensureSemanticConfigSelected()) {
     return
   }
-  if (!props.semanticConfigId) {
-    ElMessage.warning('请先选择数据集')
+  if (!isBuilderConfigured.value) {
+    ElMessage.warning('请先配置查询条件')
     return
   }
   if (executionTargets.value.length > 0 && selectedMemberDatasourceIds.value.length === 0) {
@@ -3393,10 +3404,8 @@ const executeQuery = async () => {
       member_datasource_ids: selectedMemberDatasourceIds.value,
       sql: sqlText,
       query_type: 'builder',
-      ...(props.semanticConfigId
-        ? { semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown> }
-        : { builder_config: buildBuilderConfigPayload() as Record<string, unknown> }),
-      semantic_config_id: props.semanticConfigId || undefined,
+      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>,
+      semantic_config_id: props.semanticConfigId as string,
       query_text: '可视化查询',
       skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
     }, {
@@ -3420,11 +3429,15 @@ const executeQuery = async () => {
               cache_hit: result.cache_hit,
               cache_age_seconds: result.cache_age_seconds,
               cache_expires_in_seconds: result.cache_expires_in_seconds,
+              member_datasource_id: result.member_datasource_id,
+              member_name: result.member_name,
             }
           : {
               success: false,
               sql: result.sql || sqlText,
-              error: result.error || '查询失败'
+              error: result.error || '查询失败',
+              member_datasource_id: result.member_datasource_id,
+              member_name: result.member_name,
             }
         return {
           title: memberLabel,
@@ -4020,7 +4033,7 @@ watch(
   { immediate: true }
 )
 
-// 切换语义数据集时，自动清空上一个数据集的构建配置
+// 切换语义指标集时，自动清空上一个指标集的构建配置
 watch(() => props.semanticConfigId, (nextId, prevId) => {
   if (!prevId || nextId === prevId) return
   clearAll()
@@ -5114,6 +5127,7 @@ defineExpose({
     :sql="saveSql"
     :chart-type="saveChartType"
     :datasource-id="datasourceId"
+    :member-datasource-id="saveMemberDatasourceId"
   />
 
   <QueryFavoriteModal

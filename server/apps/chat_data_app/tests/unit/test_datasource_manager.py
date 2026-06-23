@@ -6,8 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -242,15 +241,13 @@ class _SaveStore:
             "ds_description": "",
             "source_type": "hive",
             "query_executor_type": "http",
-            "source_config": {"host": "127.0.0.1", "port": 10000, "database": "dw"},
+            "source_config": {"database": "dw"},
             "member_sources": [
                 {
                     "member_datasource_id": "ORG_A",
                     "org_name": "机构A",
                     "org_code": "ORG_A",
                     "source_type": "hive",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
                 {
@@ -258,8 +255,6 @@ class _SaveStore:
                     "org_name": "机构B",
                     "org_code": "ORG_B",
                     "source_type": "hive",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
             ],
@@ -381,6 +376,82 @@ def test_runtime_semantic_config_merges_column_dict_without_persisting():
     assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
 
 
+def test_runtime_semantic_configs_merge_column_dicts_for_selector_context():
+    class DictStore(_FakeStore):
+        async def get_column_dicts_by_group_id_async(self, group_id: str):
+            assert group_id == "group_ds_a"
+            return {
+                ("orders", "status"): {
+                    "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
+                    "synonyms": [],
+                    "storage_format": "tinyint",
+                    "unit": "",
+                },
+                ("orders", "amount"): {
+                    "enum_values": [],
+                    "synonyms": [],
+                    "storage_format": "",
+                    "unit": "元",
+                },
+            }
+
+    fake_store = DictStore()
+    fake_store.semantic_configs["group_ds_a"] = [{
+        "id": "sc_a",
+        "group_id": "group_ds_a",
+        "enabled": True,
+        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
+        "relationships": [],
+    }]
+    manager = _build_manager(fake_store)
+
+    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
+
+    assert configs[0]["dimensions"][0]["allowed_values"] == ["1", "0"]
+    assert configs[0]["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效；0=无效\n存储格式：tinyint"
+    assert configs[0]["metrics"][0]["metadata_supplement"] == "单位：元"
+    assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
+
+
+def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():
+    class FailingDictStore(_FakeStore):
+        async def get_column_dicts_by_group_id_async(self, group_id: str):
+            raise RuntimeError("dict unavailable")
+
+    fake_store = FailingDictStore()
+    fake_store.semantic_configs["group_ds_a"] = [{
+        "id": "sc_a",
+        "group_id": "group_ds_a",
+        "enabled": True,
+        "metrics": [],
+        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
+        "relationships": [],
+    }]
+    manager = _build_manager(fake_store)
+
+    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
+
+    assert configs == fake_store.semantic_configs["group_ds_a"]
+    assert "allowed_values" not in configs[0]["dimensions"][0]
+
+
+def test_runtime_semantic_configs_empty_and_missing_group_fallbacks():
+    empty_store = _FakeStore()
+    empty_store.semantic_configs["group_ds_a"] = []
+    empty_manager = _build_manager(empty_store)
+
+    no_group_store = _FakeStore()
+    no_group_store.datasources["ds_a"]["group_id"] = ""
+    no_group_store.semantic_configs[""] = [{"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": []}]
+    no_group_manager = _build_manager(no_group_store)
+
+    assert asyncio.run(empty_manager.get_runtime_semantic_configs_async("ds_a")) == []
+    assert asyncio.run(no_group_manager.get_runtime_semantic_configs_async("ds_a")) == [
+        {"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": [], "source_type": "mysql", "tables": []}
+    ]
+
+
 def test_datasource_manager_column_dict_helper_branches():
     manager = DataSourceManager.__new__(DataSourceManager)
 
@@ -416,6 +487,19 @@ def test_datasource_manager_column_dict_helper_branches():
     assert "metadata_supplement" not in merged["dimensions"][1]
     assert merged["metrics"][0]["metadata_supplement"] == "单位：元"
     assert "metadata_supplement" not in merged["metrics"][1]
+
+    empty_supplement_merged = manager._merge_column_dict_into_semantic_config(
+        {
+            "dimensions": [{"table": "orders", "column": "status"}],
+            "metrics": [{"table": "orders", "expression": "SUM(amount)"}],
+        },
+        {
+            ("orders", "status"): {"enum_values": [], "storage_format": "", "unit": ""},
+            ("orders", "amount"): {"enum_values": [], "storage_format": "", "unit": ""},
+        },
+    )
+    assert "metadata_supplement" not in empty_supplement_merged["dimensions"][0]
+    assert "metadata_supplement" not in empty_supplement_merged["metrics"][0]
 
 
 def test_datasource_manager_column_dict_async_boundaries():
@@ -676,15 +760,11 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
             {
                 "org_name": "机构A",
                 "org_code": "ORG_A",
-                "host": "127.0.0.1",
-                "port": 10000,
                 "database": "dw",
             },
             {
                 "org_name": "机构B",
                 "org_code": "ORG_B",
-                "host": "127.0.0.1",
-                "port": 10000,
                 "database": "dw",
             },
         ],
@@ -696,7 +776,7 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|127.0.0.1:10000:dw\n机构B|ORG_B|http|127.0.0.1:10000:dw"
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw"
     assert [item["member_datasource_id"] for item in saved["member_sources"]] == ["ORG_A", "ORG_B"]
 
 
@@ -715,15 +795,11 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
             {
                 "org_name": "机构A",
                 "org_code": "ORG_A",
-                "host": "127.0.0.1",
-                "port": 3306,
                 "database": "test_db",
             },
             {
                 "org_name": "机构B",
                 "org_code": "ORG_B",
-                "host": "127.0.0.1",
-                "port": 3306,
                 "database": "test_db",
             },
         ],
@@ -735,7 +811,7 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
-    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|127.0.0.1:3306:test_db\n机构B|ORG_B|http|127.0.0.1:3306:test_db"
+    assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|test_db\n机构B|ORG_B|http|test_db"
 
 
 def test_save_datasource_rejects_duplicate_hive_http_names():
@@ -755,15 +831,11 @@ def test_save_datasource_rejects_duplicate_hive_http_names():
                 {
                     "org_name": "机构A",
                     "org_code": "ORG_A",
-                    "host": "127.0.0.1",
-                    "port": 10000,
                     "database": "dw",
                 },
                 {
                     "org_name": "机构A重名",
                     "org_code": "ORG_A",
-                    "host": "127.0.0.2",
-                    "port": 10000,
                     "database": "dw_b",
                 },
             ],
@@ -821,17 +893,19 @@ def test_update_datasource_preserves_template_member_name_when_refreshing_tables
     asyncio.run(manager.update_datasource_async(
         "ds_refresh",
         tables=[{"table_name": "orders", "description": "orders", "columns": []}],
-        source_config={"host": "127.0.0.1", "port": 10000, "database": "dw"},
+        source_config={"database": "dw"},
     ))
 
-    assert fake_store.saved_kwargs["template_source"] == "机构A|ORG_A|http|127.0.0.1:10000:dw"
-    assert fake_store.saved_kwargs["member_sources_text"].splitlines()[0] == "机构A|ORG_A|http|127.0.0.1:10000:dw"
+    assert fake_store.saved_kwargs["template_source"] == "机构A|ORG_A|http|dw"
+    assert fake_store.saved_kwargs["member_sources_text"].splitlines()[0] == "机构A|ORG_A|http|dw"
+    with pytest.raises(ValueError, match="HTTP 模式只填写数据库名"):
+        _normalize_member_source_config("hive", {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "database": "dw"})
 
 
 def test_validate_member_source_configs_rejects_duplicate_org_code():
     configs = [
         {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-        {"org_name": "机构A2", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.2", "port": 3306, "database": "demo"},
+        {"org_name": "机构A2", "org_code": "ORG_A", "query_executor_type": "http", "database": "demo"},
     ]
 
     with pytest.raises(ValueError, match="机构编码重复"):
@@ -843,7 +917,7 @@ def test_merge_member_source_lines_keeps_new_template_first_and_existing_members
         "template_datasource_id": "ORG_OLD",
         "member_sources": [
             {"org_name": "旧机构", "org_code": "ORG_OLD", "query_executor_type": "direct", "host": "127.0.0.1", "port": 3306, "database": "demo"},
-            {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "host": "127.0.0.2", "port": 3306, "database": "demo"},
+            {"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "demo"},
         ],
     }
     template = {"org_name": "新机构", "org_code": "ORG_NEW", "query_executor_type": "direct", "host": "127.0.0.3", "port": 3306, "database": "demo"}
@@ -1113,7 +1187,7 @@ def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypa
         "ds_refresh",
         name="新名称",
         description="新描述",
-        source_config={"host": "127.0.0.2", "port": 10000, "database": "dw2"},
+        source_config={"database": "dw2"},
         semantic_config={"deprecated": True},
         semantic_configs=[{"deprecated": True}],
         mapped_modules=["执法检查"],
@@ -1123,7 +1197,7 @@ def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypa
     assert result == {"id": "ds_refresh", "updated": True}
     assert store.saved_kwargs["group_name"] == "新名称"
     assert store.updated_kwargs["mapped_modules"] == ["执法检查"]
-    assert store.saved_kwargs["member_sources_text"].startswith("机构A|ORG_A|http|127.0.0.2:10000:dw2")
+    assert store.saved_kwargs["member_sources_text"].startswith("机构A|ORG_A|http|dw2")
 
 
 def test_datasource_manager_async_crud_paths(monkeypatch):
@@ -1356,8 +1430,8 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
         "异步新组",
         "描述",
         "mysql",
-        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "h", "port": 3306, "database": "d"},
-        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "host": "h2", "port": 3306, "database": "d2"}],
+        {"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "database": "d"},
+        member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "query_executor_type": "http", "database": "d2"}],
         create_by="u1",
     ))
     assert created["id"] == "ds_20260602101112_345678"
@@ -1551,6 +1625,69 @@ def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypa
     assert updated["business_desc"] == "a" * 255
     assert store.calls[0][0][:3] == ("group_a", "orders", "a" * 255)
     assert store.calls[0][1]["update_by"] == "u1"
+
+
+def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
+    manager = DataSourceManager.__new__(DataSourceManager)
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
+        lambda _config: {"username": "", "password": ""},
+    )
+    no_credential_target = manager._build_execution_datasource_targets({
+        "source_type": "hive",
+        "query_executor_type": "direct",
+        "member_sources": [{"member_datasource_id": "hive_a", "host": "h", "port": 10000, "database": "dw"}],
+    })[0]
+    assert "username" not in no_credential_target["source_config"]
+    assert "password" not in no_credential_target["source_config"]
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
+        lambda _config: {"username": "hive_user", "password": ""},
+    )
+    username_only_target = manager._build_execution_datasource_targets({
+        "source_type": "hive",
+        "query_executor_type": "direct",
+        "member_sources": [{"member_datasource_id": "hive_b", "host": "h", "port": 10000, "database": "dw"}],
+    })[0]
+    assert username_only_target["source_config"]["username"] == "hive_user"
+    assert "password" not in username_only_target["source_config"]
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
+        lambda _config: {"username": "", "password": "hive_pwd"},
+    )
+    password_only_target = manager._build_execution_datasource_targets({
+        "source_type": "hive",
+        "query_executor_type": "direct",
+        "member_sources": [{"member_datasource_id": "hive_c", "host": "h", "port": 10000, "database": "dw"}],
+    })[0]
+    assert "username" not in password_only_target["source_config"]
+    assert password_only_target["source_config"]["password"] == "hive_pwd"
+
+    captured = {}
+
+    class GroupStore:
+        async def get_datasource_async(self, datasource_id):
+            return {"group_id": "group_a", "ds_tables": [{"table_name": "orders"}]} if datasource_id == "ds_a" else None
+
+        async def replace_table_group_relations_async(self, group_id, groups, **kwargs):
+            captured.update({"group_id": group_id, "groups": groups, "kwargs": kwargs})
+
+    manager.db_store = GroupStore()
+    assert asyncio.run(manager.replace_table_groups_async("ds_a", [
+        {"table_group_name": "空分组", "table_names": ["missing"]},
+        {"table_group_name": "  ", "table_names": ["orders"]},
+    ])) is True
+    assert captured["groups"] == []
+
+    table = manager._find_table_column(
+        {"ds_tables": [{"table_name": "users", "columns": [{"name": "id"}]}, {"table_name": "orders", "columns": [{"name": "id"}]}]},
+        "orders",
+        "id",
+    )
+    assert table["table_name"] == "orders"
 
 
 def test_datasource_manager_name_scope_and_column_finder_edges():
@@ -1802,3 +1939,14 @@ def test_datasource_manager_semantic_name_scope_helpers():
         assert await manager._semantic_config_name_exists_async("ds_a", "个人分析", scope_type="public") is True
 
     asyncio.run(run_checks())
+
+
+def test_datasource_manager_semantic_name_private_ignores_other_private_until_public():
+    store = _FakeStore()
+    store.semantic_configs["group_ds_a"] = [
+        {"id": "private_other", "name": "同名", "scope_type": "private", "create_by": "u2"},
+        {"id": "public_same", "name": "同名", "scope_type": "public", "create_by": "admin"},
+    ]
+    manager = _build_manager(store)
+
+    assert asyncio.run(manager._semantic_config_name_exists_async("ds_a", "同名", scope_type="private", create_by="u1")) is True

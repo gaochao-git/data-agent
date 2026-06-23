@@ -267,7 +267,7 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板生成场景禁止在卡片中直接写 `sql` 字段。即使模型能够推断物理表和字段，也必须使用当前指标体系中的 `metrics`、`dimensions`、`filters` 生成 DSL，再交给平台工具转换 SQL。
 
-看板生成场景也禁止把 `execute_sql_tool` 返回的数据写入卡片。执行 SQL 只能用于抽样验证，不能替代看板规格。
+看板生成场景也禁止把 `semantic_query_tool` 返回的数据写入卡片。抽样验证必须向 `semantic_query_tool` 传 DSL，由工具内部生成 SQL 并执行，不能替代看板规格。
 
 DSL 字段：
 

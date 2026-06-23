@@ -138,6 +138,17 @@ def _build_source_line(host: Any, port: Any, database: Any) -> str | None:
 
 
 def _build_member_source_text_line(source_config: Dict[str, Any] | None) -> str | None:
+    org_name = str((source_config or {}).get("org_name") or "").strip()
+    org_code = str((source_config or {}).get("org_code") or "").strip()
+    if not org_name or not org_code:
+        return None
+    query_executor_type = str((source_config or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
+    if query_executor_type == "http":
+        database = str((source_config or {}).get("database") or "").strip()
+        if not database:
+            return None
+        return f"{org_name}|{org_code}|http|{database}"
+
     source_line = _build_source_line(
         (source_config or {}).get("host"),
         (source_config or {}).get("port"),
@@ -145,11 +156,6 @@ def _build_member_source_text_line(source_config: Dict[str, Any] | None) -> str 
     )
     if not source_line:
         return None
-    org_name = str((source_config or {}).get("org_name") or "").strip()
-    org_code = str((source_config or {}).get("org_code") or "").strip()
-    if not org_name or not org_code:
-        return None
-    query_executor_type = str((source_config or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
     return f"{org_name}|{org_code}|{query_executor_type}|{source_line}"
 
 
@@ -198,7 +204,7 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
 
     parts = [part.strip() for part in text.split("|")]
     if len(parts) != 4:
-        _warn_parse_once("成员数据源格式无效，仅支持 机构名称|机构编码|direct/http|ip:port:db_name: %s", text)
+        _warn_parse_once("成员数据源格式无效，仅支持 HTTP=机构名称|机构编码|http|db_name 或直连=机构名称|机构编码|direct|ip:port:db_name: %s", text)
         return None
     org_name, org_code, executor_type, source_text = parts
     if not org_name:
@@ -212,9 +218,24 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
         return None
     normalized_query_executor_type = _normalize_query_executor_type_for_parse(source_type, executor_type)
 
-    parsed = _parse_source_line(source_text)
-    if not parsed:
-        return None
+    if normalized_query_executor_type == "http":
+        database = source_text
+        parsed_legacy_source = _parse_source_line(source_text) if ":" in source_text else None
+        if parsed_legacy_source:
+            database = str(parsed_legacy_source.get("database") or "").strip()
+        if not database:
+            _warn_parse_once("HTTP 成员数据源数据库名为空，忽略: %s", text)
+            return None
+        parsed = {
+            "source_line": database,
+            "host": (parsed_legacy_source or {}).get("host"),
+            "port": (parsed_legacy_source or {}).get("port"),
+            "database": database,
+        }
+    else:
+        parsed = _parse_source_line(source_text)
+        if not parsed:
+            return None
     member_identity = _build_member_identity(source_type, normalized_query_executor_type, org_code, parsed.get("source_line"))
     if not member_identity:
         _warn_parse_once("成员执行源缺少唯一标识，忽略: %s", text)
@@ -465,9 +486,9 @@ class DataSourceDBStore:
                 "org_code": org_code,
                 "source_type": source_type,
                 "query_executor_type": member_query_executor_type,
-                "host": parsed["host"],
-                "port": parsed["port"],
-                "database": parsed["database"],
+                "host": parsed.get("host") or "",
+                "port": parsed.get("port"),
+                "database": parsed.get("database") or "",
             })
         return result
 

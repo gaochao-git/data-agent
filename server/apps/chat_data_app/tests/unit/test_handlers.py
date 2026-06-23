@@ -6,24 +6,30 @@ from contextlib import asynccontextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.handlers import (
     _build_execution_target_info_async,
+    _build_query_skills_context,
+    _build_semantic_config_directory_info_async,
     _build_semantic_selection_error,
     _build_semantic_select_required_event,
+    _extract_reasoning_content,
+    _format_reasoning_for_display,
     _continue_execution,
     _extract_select_semantic_config_payload,
     _format_sse,
+    _format_thinking_event,
     _format_tool_event,
     _get_interrupt_info,
     _get_semantic_config_async,
     _is_tool_result_error,
+    _normalize_enable_thinking,
     _normalize_semantic_selection_payload,
+    _append_reasoning_segment,
     _parse_tool_args_buffer,
     _prepare_data_analyze_workspace_sync,
     _stream_sql_generation,
@@ -81,18 +87,81 @@ def test_format_sse_serializes_dict_as_event_payload():
 
 def test_format_tool_event_uses_result_as_content():
     text = _format_tool_event(
-        tool_name="execute_sql_tool",
+        tool_name="semantic_query_tool",
         tool_call_id="call_1",
         status="completed",
-        args={"sql": "select 1"},
+        args={"dsl": {"metrics": ["订单数"]}},
         result="执行完成",
         timestamp="2026-06-02 10:00:00",
     )
 
     assert "event: tool" in text
-    assert '"tool_name": "execute_sql_tool"' in text
+    assert '"tool_name": "semantic_query_tool"' in text
     assert '"content": "执行完成"' in text
     assert '"timestamp": "2026-06-02 10:00:00"' in text
+
+
+def test_reasoning_and_thinking_helper_branches():
+    assert _extract_reasoning_content(SimpleNamespace()) == ""
+    assert _extract_reasoning_content(SimpleNamespace(additional_kwargs={"reasoning_content": "思考A"})) == "思考A"
+    assert _extract_reasoning_content(SimpleNamespace(response_metadata={"reasoning": "思考B"})) == "思考B"
+    assert _extract_reasoning_content(
+        SimpleNamespace(additional_kwargs={}),
+        {"response_metadata": {"reasoning_text": "思考C"}},
+    ) == "思考C"
+    assert _extract_reasoning_content(
+        SimpleNamespace(additional_kwargs={}),
+        {"reasoning_content": "思考D"},
+    ) == "思考D"
+    assert _format_thinking_event(SimpleNamespace(additional_kwargs={})) is None
+    thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
+    assert thinking_event.startswith("event: thinking")
+    assert "正在分析" in thinking_event
+    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 select_semantic_config_tool"}))
+    assert "选择指标集" in tool_thinking_event
+    assert "select_semantic_config_tool" not in tool_thinking_event
+    assert _format_reasoning_for_display("调用 semantic_query_tool") == "调用 查询数据"
+
+    segments = []
+    _append_reasoning_segment(segments, "", 0)
+    assert segments == []
+    _append_reasoning_segment(segments, "a", 0)
+    _append_reasoning_segment(segments, "b", 0)
+    _append_reasoning_segment(segments, "c", 1)
+    _append_reasoning_segment(segments, "调用 select_semantic_config_tool", 1)
+    assert segments == [
+        {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
+        {"id": "reasoning-1", "content": "c调用 选择指标集", "tool_call_count": 1},
+    ]
+
+
+def test_build_query_skills_context_appends_requested_skills(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.build_available_skills_prompt",
+        lambda **_kwargs: asyncio.sleep(0, result="## 可用业务知识技能\n- business-query"),
+    )
+
+    context = asyncio.run(_build_query_skills_context("u1", ["business-query", "business-query", "custom-query"]))
+
+    assert "## 可用业务知识技能" in context
+    assert "## 本轮指定业务知识技能" in context
+    assert "`business-query`、`custom-query`" in context
+
+
+def test_normalize_enable_thinking_branches():
+    assert _normalize_enable_thinking(None) is None
+    assert _normalize_enable_thinking(True) is True
+    assert _normalize_enable_thinking(False) is False
+    assert _normalize_enable_thinking(1) is True
+    assert _normalize_enable_thinking(0) is False
+    assert _normalize_enable_thinking(" true ") is True
+    assert _normalize_enable_thinking("YES") is True
+    assert _normalize_enable_thinking("off") is False
+    assert _normalize_enable_thinking("no") is False
+    assert _normalize_enable_thinking("unknown") is None
+    assert _normalize_enable_thinking(object()) is None
 
 
 def test_semantic_selection_helper_branches():
@@ -212,7 +281,7 @@ def test_get_interrupt_info_reads_task_interrupt_and_tool_call():
         ],
         values={
             "messages": [
-                SimpleNamespace(tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}])
+                SimpleNamespace(tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}])
             ]
         },
     )
@@ -221,7 +290,7 @@ def test_get_interrupt_info_reads_task_interrupt_and_tool_call():
 
     assert info["args"] == {"sql": "select 1"}
     assert info["message"] == "请确认"
-    assert info["tool_name"] == "execute_sql_tool"
+    assert info["tool_name"] == "semantic_query_tool"
     assert info["tool_call_id"] == "call_1"
 
 
@@ -235,8 +304,8 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     class FakeDatasourceManager:
         async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
             targets = [
-                {"member_datasource_id": "m1", "member_name": "杭州库"},
-                {"member_datasource_id": "m2", "member_name": "宁波库"},
+                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
+                {"member_datasource_id": "m2", "member_name": "宁波库", "source_config": {"org_code": "ORG_NB"}},
             ]
             if member_datasource_ids == ["m1"]:
                 return targets[:1]
@@ -249,10 +318,14 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     single = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"]))
     multi = asyncio.run(_build_execution_target_info_async("ds_a", None))
 
-    assert "仅在 1 个执行对象" in single
-    assert "1. 杭州库" in single
-    assert "2 个执行对象" in multi
-    assert "2. 宁波库" in multi
+    assert "当前可用范围只有 1 个可用执行对象" in single
+    assert "1. 机构名称：杭州库；成员数据源ID：m1" in single
+    assert "机构编码：ORG_HZ" in single
+    assert "2 个可用执行对象" in multi
+    assert "用户未指定机构，默认查询第 1 个机构" in multi
+    assert "不要默认全部执行" in multi
+    assert "2. 机构名称：宁波库；成员数据源ID：m2" in multi
+    assert "机构编码：ORG_NB" in multi
 
 
 def test_build_execution_target_info_async_empty_and_error(monkeypatch):
@@ -273,6 +346,39 @@ def test_build_execution_target_info_async_empty_and_error(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: ErrorManager())
     assert asyncio.run(_build_execution_target_info_async("ds_a", None)) == ""
+
+
+def test_build_semantic_config_directory_info_async(monkeypatch):
+    import asyncio
+    captured = {}
+
+    async def fake_directory(datasource_id, user_id=None):
+        assert datasource_id == "ds_a"
+        captured["user_id"] = user_id
+        return [{
+            "id": "sc_order",
+            "name": "订单分析",
+            "description": "订单经营分析",
+            "metrics_total": 2,
+            "dimensions_total": 4,
+        }]
+
+    async def failing_directory(_datasource_id, _user_id=None):
+        raise RuntimeError("directory failed")
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", fake_directory)
+
+    prompt = asyncio.run(_build_semantic_config_directory_info_async("ds_a", user_id="u1"))
+
+    assert captured["user_id"] == "u1"
+    assert "当前可见指标集目录" in prompt
+    assert "名称：订单分析" in prompt
+    assert "描述：订单经营分析" in prompt
+    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a", enabled=False)) == ""
+    assert asyncio.run(_build_semantic_config_directory_info_async(None)) == ""
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", failing_directory)
+    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a")) == ""
 
 
 def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):
@@ -475,6 +581,7 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", fail_get_all_tables)
     monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="## 当前可见指标集目录\n1. 名称：订单分析"))
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_auto_semantic_tool",
@@ -488,6 +595,9 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     assert "5+5=10" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
     assert fake_graph.initial_state["tables_ddl_info"] == ""
+    assert fake_graph.initial_state["semantic_config_directory_info"] == "## 当前可见指标集目录\n1. 名称：订单分析"
+    human_message = fake_graph.initial_state["messages"][0]
+    assert "skill_names" not in human_message.additional_kwargs
     assert called["tables"] is False
 
 
@@ -574,6 +684,32 @@ def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(mon
     assert selection["matched_metrics"] == ["商品数量"]
     assert selection["user_selected"] is True
     assert selection["auto_selected"] is False
+    assert "skill_names" not in human_message.additional_kwargs
+
+
+def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
+    import asyncio
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "agent"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_skill_names",
+        user_query="查询金额",
+        datasource_id="ds_a",
+        mode="query",
+        skill_names=["business-query", "custom-query-skill"],
+    )))
+
+    assert "完成" in "".join(events)
+    human_message = fake_graph.initial_state["messages"][0]
+    assert human_message.additional_kwargs["skill_names"] == ["business-query", "custom-query-skill"]
 
 
 def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch):
@@ -589,7 +725,7 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
             {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -617,6 +753,98 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
     assert '"query": "查询金额"' in joined
     assert "订单分析" in joined
     assert "支付汇总" in joined
+
+
+def test_stream_sql_generation_does_not_emit_select_required_for_query_plan(monkeypatch):
+    import asyncio
+
+    payload = {
+        "selected": False,
+        "coverage": "partial",
+        "query_plan": {
+            "type": "multi_config_independent",
+            "tasks": [
+                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
+                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户数"},
+            ],
+            "final_action": "summarize",
+        },
+        "message": "该问题需要拆分为多个指标集子任务",
+    }
+    fake_graph = _FakeGraph(
+        events=[
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="已按多个指标集完成查询"), {"langgraph_node": "agent"}),
+        ],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_plan_tool_event",
+        user_query="查询订单金额和用户数",
+        datasource_id="ds_a",
+        mode="query",
+        semantic_config_id=None,
+    )))
+
+    joined = "".join(events)
+    assert "event: semantic_config_select_required" not in joined
+    assert "multi_config_independent" in joined
+    assert "已按多个指标集完成查询" in joined
+
+
+def test_stream_sql_generation_does_not_emit_select_required_for_cross_join_plan(monkeypatch):
+    import asyncio
+
+    payload = {
+        "selected": False,
+        "coverage": "partial",
+        "cross_config_required": True,
+        "query_plan": {
+            "type": "cross_join_required",
+            "tasks": [
+                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
+                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户等级"},
+            ],
+            "final_action": "unsupported",
+            "reason": "需要跨指标集 JOIN",
+        },
+        "candidates": [
+            {"id": "cfg_order", "name": "订单分析"},
+            {"id": "cfg_user", "name": "用户分析"},
+        ],
+        "message": "该问题需要跨指标集 JOIN，当前智能问数不支持",
+    }
+    fake_graph = _FakeGraph(
+        events=[
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="这个问题需要跨指标集合并，当前不支持。"), {"langgraph_node": "agent"}),
+        ],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+
+    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_cross_join_required_plan",
+        user_query="按用户等级关联订单金额",
+        datasource_id="ds_a",
+        mode="query",
+        semantic_config_id=None,
+    )))
+
+    joined = "".join(events)
+    assert "event: semantic_config_select_required" not in joined
+    assert "cross_join_required" in joined
+    assert "这个问题需要跨指标集合并，当前不支持。" in joined
 
 
 def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch):
@@ -742,7 +970,7 @@ def test_stream_sql_generation_blocks_ambiguous_semantic_configs(monkeypatch):
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
             {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -785,7 +1013,7 @@ def test_stream_sql_generation_blocks_cross_config_required(monkeypatch):
             {"id": "cfg_order", "name": "订单分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖订单金额"},
             {"id": "cfg_product", "name": "商品分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖商品库存"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -819,8 +1047,8 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": "{\"sql\":\"select 1\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询订单数据"), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="内部工具模型输出"), {"langgraph_node": "tools"}),
@@ -846,10 +1074,12 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
 
     joined = "".join(events)
     assert '"status": "running"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "已查询订单数据" in joined
     assert "内部工具模型输出" not in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 12}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 12}' in joined
+    assert '"timestamp":' in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
     assert fake_graph.initial_state["datasource_id"] == "ds_a"
     assert fake_graph.initial_state["operator_name"] == "测试用户"
@@ -862,7 +1092,7 @@ def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
         values={
             "token_usage": {"total_tokens": 8},
-            "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "execute_sql_tool"}])],
+            "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "semantic_query_tool"}])],
         },
     )
     fake_graph = _FakeGraph(events=[], state=interrupt_state)
@@ -885,7 +1115,9 @@ def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
     assert '"status": "pending"' in joined
     assert '"tool_call_id": "call_pending"' in joined
     assert '"message": "确认执行"' in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 8}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 8}' in joined
+    assert '"timestamp":' in joined
 
 
 def test_stream_sql_generation_emits_error_when_graph_fails(monkeypatch):
@@ -927,6 +1159,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
     monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="对象"))
+    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="不应注入目录"))
     temp_events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_temp",
         user_query="查订单",
@@ -939,6 +1172,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     assert "语义查询完成" in joined
     assert fake_graph.initial_state["tables_ddl_info"] == ""
     assert fake_graph.initial_state["execution_target_info"] == "对象"
+    assert fake_graph.initial_state["semantic_config_directory_info"] == ""
 
 
 def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch):
@@ -979,7 +1213,7 @@ def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_co
             raise RuntimeError("state missing")
 
     fake_graph = StateFailGraph(events=[
-        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": ""}]), {"langgraph_node": "agent"}),
+        (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "agent"}),
         (_FakeMessageChunk(content="完成"), {"langgraph_node": "agent"}),
     ])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1005,8 +1239,8 @@ def test_continue_execution_streams_resume_events(monkeypatch):
 
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": "{\"sql\":\"select 2\"}"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "agent"}),
             (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="继续完成"), {"langgraph_node": "agent"}),
         ],
@@ -1025,7 +1259,7 @@ def test_continue_execution_streams_resume_events(monkeypatch):
 
     joined = "".join(events)
     assert '"status": "running"' in joined
-    assert '"accumulated_args": {"sql": "select 2"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "继续完成" in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
 
@@ -1035,14 +1269,17 @@ def test_continue_execution_pending_interrupt_error_and_disconnect(monkeypatch):
 
     interrupt_state = SimpleNamespace(
         tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 3"}, "message": "继续确认"})])],
-        values={"token_usage": {"total_tokens": 7}, "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "execute_sql_tool"}])]},
+        values={"token_usage": {"total_tokens": 7}, "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "semantic_query_tool"}])]},
     )
     pending_graph = _FakeGraph(events=[], state=interrupt_state)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: pending_graph)
     pending_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_pending", modified_sql=None, action="approve")))
     assert '"status": "pending"' in "".join(pending_events)
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 7}}' in "".join(pending_events)
+    pending_text = "".join(pending_events)
+    assert 'event: message_end' in pending_text
+    assert '"usage": {"total_tokens": 7}' in pending_text
+    assert '"timestamp":' in pending_text
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: _FakeGraph(raise_on_stream=True))
     error_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_error")))
@@ -1116,8 +1353,8 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
             assert config["configurable"]["thread_id"] == "conv_da"
             yield ("updates", {"thinking": {"task_stages": [{"stage": "thinking", "status": "completed", "content": "理解完成"}]}})
             yield ("messages", (_FakeMessageChunk(content="规划中"), {"langgraph_node": "plan"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "execute_sql_tool", "args": {"sql": "select 1"}}]), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "execute_sql_tool", "args": '{"sql":"select 1"}'}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"dsl": {"metrics": ["销售额"]}}}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": '{"dsl":{"metrics":["销售额"]}}'}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content='{"success": true}', type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}))
             yield ("custom", {"type": "token_usage", "usage": {"total_tokens": 9}})
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
@@ -1142,10 +1379,12 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert "event: task_stage" in joined
     assert "理解完成" in joined
     assert "event: task_stage_delta" in joined
-    assert '"tool_name": "execute_sql_tool"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"tool_name": "semantic_query_tool"' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["销售额"]}}' in joined
     assert "分析完成" in joined
-    assert 'event: message_end\ndata: {"usage": {"total_tokens": 9}}' in joined
+    assert 'event: message_end' in joined
+    assert '"usage": {"total_tokens": 9}' in joined
+    assert '"timestamp":' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
 
 
@@ -1221,7 +1460,7 @@ def test_data_analyze_completion_handler_requires_semantic_config_selection(monk
             {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
             {"id": "cfg_sales", "name": "销售分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
         ],
-        "message": "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询",
+        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
     }
 
     async def fake_build_context(*_args, **_kwargs):
@@ -1260,8 +1499,8 @@ def test_data_analyze_completion_handler_covers_subgraph_chunks_and_disconnect(m
     class FakeDataAnalyzeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
             yield (("subgraph",), "messages", (_FakeMessageChunk(content="跳过内部"), {"langgraph_node": "__internal__"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "execute_sql_tool", "args": '{"sql":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"args": '"select 1"}', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "chunk_tool", "name": "semantic_query_tool", "args": '{"dsl":', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
+            yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"args": '{"metrics":["订单数"]}}', "index": 0}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content="执行失败: 表不存在", type_="tool", tool_call_id="chunk_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="", type_="tool", tool_call_id="missing_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="", type_="ai"), {"langgraph_node": "data_analyze_agent"}))
@@ -1281,7 +1520,7 @@ def test_data_analyze_completion_handler_covers_subgraph_chunks_and_disconnect(m
     assert "跳过内部" not in joined
     assert '"status": "running"' in joined
     assert '"status": "error"' in joined
-    assert '"accumulated_args": {"sql": "select 1"}' in joined
+    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
     assert "完成" in joined
 
     class DisconnectRequest:
@@ -1362,7 +1601,8 @@ def test_data_analyze_completion_handler_falls_back_when_skill_list_fails(monkey
     human_message = captured["initial_state"]["messages"][0]
     assert human_message.additional_kwargs["semantic_config_selection"]["semantic_config_id"] == "cfg_a"
     assert "fallback ok" in joined
-    assert "message_end" not in joined
+    assert "message_end" in joined
+    assert '"timestamp":' in joined
 
 
 def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monkeypatch):
@@ -1374,8 +1614,8 @@ def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monke
                 content="",
                 tool_calls=[
                     {"id": "", "name": "skip_missing_id", "index": 99},
-                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0, "args": {"fallback": True}},
-                    {"id": "call_indexed", "name": "execute_sql_tool", "index": 0},
+                    {"id": "call_indexed", "name": "semantic_query_tool", "index": 0, "args": {"fallback": True}},
+                    {"id": "call_indexed", "name": "semantic_query_tool", "index": 0},
                 ],
             ), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(

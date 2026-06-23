@@ -9,8 +9,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -250,14 +249,23 @@ def _patch_store_session(monkeypatch, rows_by_table=None, executed=None):
 
 def test_parse_member_source_entries_keep_valid_members():
     entries = _parse_member_source_entries(
-        "机构A|ORG_A|http|127.0.0.1:10000:dw\n机构B|ORG_B|http|127.0.0.1:10000:dw",
-        "机构A|ORG_A|http|127.0.0.1:10000:dw",
+        "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw",
+        "机构A|ORG_A|http|dw",
         "hive",
         "http",
     )
 
     assert [item["datasource_id"] for item in entries] == ["ORG_A", "ORG_B"]
-    assert [item["source_line"] for item in entries] == ["127.0.0.1:10000:dw", "127.0.0.1:10000:dw"]
+    assert [item["source_line"] for item in entries] == ["dw", "dw"]
+    assert entries[0]["host"] is None
+    legacy_entries = _parse_member_source_entries(
+        "机构A|ORG_A|http|127.0.0.1:10000:dw",
+        "机构A|ORG_A|http|127.0.0.1:10000:dw",
+        "hive",
+        "http",
+    )
+    assert legacy_entries[0]["source_line"] == "dw"
+    assert legacy_entries[0]["host"] == "127.0.0.1"
     assert _parse_member_source_entries("direct|127.0.0.1:3306:test_db", "direct|127.0.0.1:3306:test_db", "mysql", "direct") == []
     duplicate_entries = _parse_member_source_entries(
         "机构A|ORG_A|direct|127.0.0.1:3306:demo\n机构A|ORG_A|direct|127.0.0.1:3306:demo",
@@ -267,7 +275,7 @@ def test_parse_member_source_entries_keep_valid_members():
     )
     fallback_template_entries = _parse_member_source_entries(
         "机构A|ORG_A|direct|127.0.0.1:3306:demo",
-        "机构B|ORG_B|http|127.0.0.2:3306:demo",
+        "机构B|ORG_B|http|demo",
         "mysql",
         "direct",
     )
@@ -289,7 +297,7 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _build_source_line("", 3306, "demo") is None
     assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "host": "", "port": 3306, "database": "demo"}) is None
     assert _build_member_source_text_line({"org_name": "", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"}) is None
-    assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.1", "port": 10000, "database": "dw"}) == "机构A|ORG_A|http|127.0.0.1:10000:dw"
+    assert _build_member_source_text_line({"org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http", "host": "127.0.0.1", "port": 10000, "database": "dw"}) == "机构A|ORG_A|http|dw"
     assert _build_member_identity("mysql", "direct", " ORG_A ", "h:1:d") == "ORG_A"
     assert _build_member_identity("mysql", "direct", "", "h:1:d") is None
     assert _normalize_query_executor_type_for_parse("mysql", "bad") == "direct"

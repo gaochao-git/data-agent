@@ -592,11 +592,11 @@ const createConfig = async () => {
   if (creatingConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入数据集名称', '新建数据集', {
+    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入数据集名称',
+      inputPlaceholder: '请输入指标集名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -1385,6 +1385,7 @@ interface MetricExpandOption {
 const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
+const showFieldPhysicalDetails = ref(false)
 const showAddFieldDialog = ref(false)
 const autoPrefillLoading = ref(false)
 const showAutoPrefillModeDialog = ref(false)
@@ -3506,26 +3507,26 @@ const saveOntologyRules = () => {
         >
           <i class="fa-solid fa-arrow-left"></i>
         </button>
-        <div class="text-sm font-semibold text-gray-800">数据集管理</div>
+        <div class="text-sm font-semibold text-gray-800">指标集管理</div>
       </div>
       <div class="flex min-w-0 flex-1 items-center gap-3">
         <span class="text-[13px] font-medium text-slate-700">数据源组</span>
         <div class="h-9 min-w-[220px] max-w-[360px] flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
           {{ datasourceName || '暂无数据源' }}
         </div>
-        <span class="ml-2 text-[13px] font-medium text-slate-700">数据集</span>
+        <span class="ml-2 text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           :model-value="activeConfig?.id || ''"
           class="min-w-[260px] max-w-[460px]"
           filterable
           :disabled="loading || configs.length === 0"
-          placeholder="请选择数据集"
+          placeholder="请选择指标集"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
           @change="toggleExpand"
         >
           <el-option v-if="loading" value="" label="加载中" />
-          <el-option v-else-if="configs.length === 0" value="" label="暂无数据集" />
+          <el-option v-else-if="configs.length === 0" value="" label="暂无指标集" />
           <el-option
             v-for="config in configs"
             :key="config.id"
@@ -3535,7 +3536,7 @@ const saveOntologyRules = () => {
         </el-select>
         <button
           class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建数据集"
+          title="新建指标集"
           :disabled="creatingConfig"
           @click="createConfig"
         >
@@ -3553,8 +3554,8 @@ const saveOntologyRules = () => {
     <div v-else class="flex-1 min-h-0 p-4">
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
-        <p class="text-sm text-gray-500 m-0 mb-1">暂无数据集</p>
-        <span class="text-xs text-gray-400">点击上方加号创建第一个数据集</span>
+        <p class="text-sm text-gray-500 m-0 mb-1">暂无指标集</p>
+        <span class="text-xs text-gray-400">点击上方加号创建第一个指标集</span>
       </div>
 
       <div v-else class="h-full min-h-0">
@@ -3569,7 +3570,7 @@ const saveOntologyRules = () => {
                   :model-value="activeConfig.id"
                   class="min-w-0 flex-1"
                   filterable
-                  placeholder="请选择数据集"
+                  placeholder="请选择指标集"
                   fit-input-width
                   popper-class="chatdata-semantic-config-select-popper"
                   @change="toggleExpand"
@@ -3583,7 +3584,7 @@ const saveOntologyRules = () => {
                 </el-select>
                 <button
                   class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-md bg-blue-500 text-white text-[12px] cursor-pointer transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="新建数据集"
+                  title="新建指标集"
                   :disabled="creatingConfig"
                   @click="createConfig"
                 >
@@ -3594,14 +3595,14 @@ const saveOntologyRules = () => {
                 type="text"
                 :value="activeConfig.name"
                 class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-700 outline-none focus:border-blue-500"
-                placeholder="数据集名称"
+                placeholder="指标集名称"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { name: ($event.target as HTMLInputElement).value })"
               />
               <input
                 type="text"
                 :value="activeConfig.description"
-                placeholder="数据集描述：简要说明这个数据集是什么"
+                placeholder="指标集描述：简要说明这个指标集是什么"
                 class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-500 outline-none focus:border-blue-500"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { description: ($event.target as HTMLInputElement).value })"
@@ -3657,7 +3658,7 @@ const saveOntologyRules = () => {
                 <button
                   class="px-3 py-2 rounded-md text-xs border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
                   :disabled="!canManageConfig(activeConfig)"
-                  title="删除数据集"
+                  title="删除指标集"
                   @click="handleDeleteConfig(activeConfig.id, activeConfig.name)"
                 >
                   <i class="fa-solid fa-trash mr-1"></i>删除
@@ -3904,6 +3905,15 @@ const saveOntologyRules = () => {
                     <div class="text-xs font-medium text-gray-600">字段配置</div>
                     <div class="flex items-center gap-2">
                       <button
+                        :class="[
+                          'h-7 px-2.5 rounded border bg-white text-[11px] transition-all duration-150',
+                          showFieldPhysicalDetails ? 'border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100' : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'
+                        ]"
+                        @click="showFieldPhysicalDetails = !showFieldPhysicalDetails"
+                      >
+                        <i class="fa-regular fa-eye mr-1"></i>字段详情
+                      </button>
+                      <button
                         class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
                         :disabled="autoPrefillLoading || fieldRows.length === 0"
                         @click="openAutoPrefillModeDialog"
@@ -3934,13 +3944,13 @@ const saveOntologyRules = () => {
                     请先在左侧选择数据表
                   </div>
                   <div v-else class="flex-1 overflow-auto rounded-md border border-gray-200 bg-white">
-                    <table class="min-w-[1820px] w-full border-collapse text-[12px]">
+                    <table :class="[showFieldPhysicalDetails ? 'min-w-[1820px]' : 'min-w-[1420px]', 'w-full border-collapse text-[12px]']">
                       <thead class="bg-gray-50 text-gray-600">
                         <tr>
                           <th class="text-left px-3 py-2 border border-gray-200">表</th>
                           <th class="text-left px-3 py-2 border border-gray-200">字段</th>
-                          <th class="text-left px-3 py-2 border border-gray-200">类型</th>
-                          <th class="text-left px-3 py-2 border border-gray-200">列备注</th>
+                          <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">类型</th>
+                          <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">列备注</th>
                           <th class="text-center px-3 py-2 border border-gray-200">维度</th>
                           <th class="text-center px-3 py-2 border border-gray-200">指标</th>
                           <th class="text-left px-3 py-2 border border-gray-200">表达式</th>
@@ -3964,8 +3974,8 @@ const saveOntologyRules = () => {
                               <span v-if="row.isMissingPhysical" class="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-600">字段已删除</span>
                             </div>
                           </td>
-                          <td class="px-3 py-2 border border-gray-200 text-gray-500">{{ row.columnType || '-' }}</td>
-                          <td class="px-3 py-2 border border-gray-200 text-gray-500">
+                          <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">{{ row.columnType || '-' }}</td>
+                          <td v-if="showFieldPhysicalDetails" class="px-3 py-2 border border-gray-200 text-gray-500">
                             <div class="max-w-[220px] truncate" :title="row.columnComment || '-'">{{ row.columnComment || '-' }}</div>
                           </td>
                           <td class="px-3 py-2 border border-gray-200 text-center">
@@ -4991,7 +5001,7 @@ const saveOntologyRules = () => {
         </div>
         <div>
           <div class="text-xs text-gray-600 mb-1">显示名称</div>
-          <el-input v-model="addFieldForm.displayName" placeholder="请输入显示名称（同数据集内唯一）" />
+          <el-input v-model="addFieldForm.displayName" placeholder="请输入显示名称（同指标集内唯一）" />
         </div>
         <div>
           <div class="text-xs text-gray-600 mb-1">新增类型</div>

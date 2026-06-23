@@ -5,8 +5,15 @@
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
 import type { ToolCallInfo, Message, MessageSegment, PendingTool, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
+
+const parseHistoryTimestamp = (value: unknown): Date | null => {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value.trim().replace(' ', 'T'))
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
 
 const buildAssistantHistorySegments = (message: Message, stageOffset = 0): MessageSegment[] => {
   const segments: MessageSegment[] = []
@@ -40,10 +47,18 @@ const extractThinkingText = (content: string): string[] => {
 }
 
 const stripThinkingContent = (content: string): string => {
-  return String(content || '').replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
+  return String(content || '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trim()
 }
 
 const appendAssistantHistoryMessage = (target: Message, source: Message) => {
+  if (source.timestamp) {
+    target.timestamp = source.timestamp
+  }
   if (source.content) {
     target.content = (target.content || '') + (target.content ? '\n' : '') + source.content
   }
@@ -258,6 +273,7 @@ const normalizeSemanticConfigSelectionFromTool = (payload: Record<string, unknow
 
 const normalizeSemanticConfigSelectRequiredFromTool = (payload: Record<string, unknown>, query: string): SemanticConfigSelectRequiredInfo | null => {
   if (payload.selected) return null
+  if (payload.query_plan && typeof payload.query_plan === 'object') return null
   const rawCandidates = Array.isArray(payload.candidates) ? payload.candidates : []
   type Candidate = SemanticConfigSelectRequiredInfo['candidates'][number]
   const candidates = rawCandidates
@@ -343,22 +359,13 @@ export function useConversationHistory({
 
         if (historyMessages.length > 0) {
           const formattedMessages: Message[] = historyMessages.map((msg: any) => {
-            // 解析时间戳
-            let timestamp: Date
-            if (msg.timestamp && typeof msg.timestamp === 'string' && msg.timestamp.trim()) {
-              timestamp = new Date(msg.timestamp.replace(' ', 'T'))
-              if (isNaN(timestamp.getTime())) {
-                timestamp = new Date()
-              }
-            } else {
-              timestamp = new Date()
-            }
+            const parsedTimestamp = parseHistoryTimestamp(msg.timestamp)
 
             const message: Message = {
               id: msg.id,
               role: msg.role,
               content: stripThinkingContent(msg.content || ''),
-              timestamp,
+              timestamp: parsedTimestamp || undefined,
             }
 
             const existingThinkingTexts = extractThinkingText(msg.content || '')
@@ -466,27 +473,6 @@ export function useConversationHistory({
           // 更新每个 assistant 消息中的 toolCalls
           formattedMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls) {
-              // 先收集 dsl2sql_tool 的语义参数
-              const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
-              msg.toolCalls.forEach((tc) => {
-                if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
-                  dsl2sqlTools.push({
-                    semanticParams: {
-                      metrics: tc.args.metrics as string[] | undefined,
-                      dimensions: tc.args.dimensions as SemanticParams['dimensions'],
-                      filters: tc.args.filters as SemanticParams['filters'],
-                      having: tc.args.having as SemanticParams['having'],
-                      order_by: tc.args.order_by as SemanticParams['order_by'],
-                      limit: tc.args.limit as number | undefined,
-                      offset: tc.args.offset as number | undefined,
-                    },
-                  })
-                }
-              })
-
-              // 用于追踪 execute_sql_tool 索引（与 dsl2sql_tool 对应）
-              let executeSqlIndex = 0
-
               msg.toolCalls = msg.toolCalls.map((tc) => {
                 const result = toolResultMap.get(tc.tool_call_id)
                 if (!result) return tc
@@ -495,17 +481,13 @@ export function useConversationHistory({
                 let renderType: 'queryResult' | 'chart' | undefined
                 let semanticParams: SemanticParams | undefined
 
-                if (tc.tool_name === 'execute_sql_tool') {
+                if (tc.tool_name === 'semantic_query_tool') {
                   const queryResultMatch = result.match(/<query_result>([\s\S]*?)<\/query_result>/)
                   if (queryResultMatch?.[1]) {
                     renderId = queryResultMatch[1].trim()
                     renderType = 'queryResult'
                   }
-                  // 从对应的 dsl2sql_tool 获取语义参数
-                  if (executeSqlIndex < dsl2sqlTools.length) {
-                    semanticParams = dsl2sqlTools[executeSqlIndex]?.semanticParams
-                  }
-                  executeSqlIndex++
+                  semanticParams = extractSemanticParamsFromArgs(tc.args)
                 } else if (tc.tool_name === 'generate_chart_tool') {
                   const chartMatch = result.match(/<chart_config>([^<]+)<\/chart_config>/)
                   if (chartMatch?.[1]) {
@@ -551,45 +533,21 @@ export function useConversationHistory({
             }
           }
 
-          // 合并后重新关联 dsl2sql_tool 和 execute_sql_tool 的语义参数
-          // 因为它们原本在不同的 assistant 消息中，合并前无法正确关联
+          // 合并后只使用 semantic_query_tool 自身 DSL 参数重建展示信息。
           displayMessages.forEach((msg) => {
             if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-              // 收集合并后消息中所有 dsl2sql_tool 的参数
-              const dsl2sqlTools: Array<{ semanticParams?: SemanticParams }> = []
-              msg.toolCalls.forEach((tc) => {
-                if (tc.tool_name === 'dsl2sql_tool' && tc.args) {
-                  dsl2sqlTools.push({
-                    semanticParams: {
-                      metrics: tc.args.metrics as string[] | undefined,
-                      dimensions: tc.args.dimensions as SemanticParams['dimensions'],
-                      filters: tc.args.filters as SemanticParams['filters'],
-                      having: tc.args.having as SemanticParams['having'],
-                      order_by: tc.args.order_by as SemanticParams['order_by'],
-                      limit: tc.args.limit as number | undefined,
-                      offset: tc.args.offset as number | undefined,
-                    },
-                  })
-                }
-              })
-
-              // 重新关联 execute_sql_tool 的语义参数
-              if (dsl2sqlTools.length > 0) {
-                let executeSqlIndex = 0
-                msg.toolCalls = msg.toolCalls.map((tc) => {
-                  if (tc.tool_name === 'execute_sql_tool') {
-                    const dslTool = dsl2sqlTools[executeSqlIndex]
-                    executeSqlIndex++
-                    if (dslTool) {
-                      return {
-                        ...tc,
-                        semanticParams: dslTool.semanticParams,
-                      }
+              msg.toolCalls = msg.toolCalls.map((tc) => {
+                if (tc.tool_name === 'semantic_query_tool') {
+                  const semanticParams = extractSemanticParamsFromArgs(tc.args)
+                  if (semanticParams) {
+                    return {
+                      ...tc,
+                      semanticParams,
                     }
                   }
-                  return tc
-                })
-              }
+                }
+                return tc
+              })
             }
           })
 
@@ -607,7 +565,7 @@ export function useConversationHistory({
               setActiveMessageId(lastAssistantMsg.id)
               setPendingTool({
                 tool_call_id: historyPendingTool.tool_call_id || '',
-                tool_name: historyPendingTool.tool_name || 'execute_sql_tool',
+                tool_name: historyPendingTool.tool_name || 'semantic_query_tool',
                 args: historyPendingTool.args || {},
                 message: historyPendingTool.message,
               })

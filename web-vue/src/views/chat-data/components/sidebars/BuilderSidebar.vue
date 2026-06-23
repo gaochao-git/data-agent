@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 辅助查询侧边栏
- * 仅支持数据集模式，拖拽维度和指标
+ * 仅支持指标集模式，拖拽维度和指标
  */
 import SemanticDatasetPanel from './SemanticDatasetPanel.vue'
 import type { SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
@@ -145,7 +145,7 @@ const handleDragEnd = () => {
 
       <div v-else-if="!semanticConfig" class="flex flex-col items-center justify-center gap-2 p-6 text-gray-400 text-xs">
         <i class="fa-solid fa-layer-group text-xl opacity-50"></i>
-        <span>请选择数据集</span>
+        <span>请选择指标集</span>
       </div>
 
       <template v-else>

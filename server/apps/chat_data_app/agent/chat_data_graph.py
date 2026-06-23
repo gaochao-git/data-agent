@@ -16,6 +16,7 @@ from utils.logger import get_logger
 from .state import SqlGeneratorState
 from .nodes import create_agent_node
 from .tools import TOOLS, create_semantic_config_selection_tools
+from .tools.readonly_skill_load import create_readonly_skill_load_tool
 
 logger = get_logger(__name__)
 
@@ -35,6 +36,8 @@ def get_chat_data_graph(
     model_id: str | None = None,
     mode: str | None = None,
     enable_thinking: bool | None = None,
+    user_id: str | None = None,
+    available_skills_context: str | None = None,
 ):
     """
     编译图（带持久化）
@@ -49,13 +52,23 @@ def get_chat_data_graph(
     """
     effective_mode = mode or ("query" if semantic_config else None)
     if effective_mode == "query":
-        tools = create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config) + TOOLS
+        tools = [
+            create_readonly_skill_load_tool(user_id=user_id or ""),
+            *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config, user_id=user_id),
+            *TOOLS,
+        ]
     else:
         tools = TOOLS
         semantic_config = None
 
     # 创建 agent 节点，传入 semantic_config（而不是 semantic_prompt）
-    agent_node = create_agent_node(tools, semantic_config, model_id=model_id, enable_thinking=enable_thinking)
+    agent_node = create_agent_node(
+        tools,
+        semantic_config,
+        model_id=model_id,
+        enable_thinking=enable_thinking,
+        available_skills_context=available_skills_context,
+    )
 
     # 构建图
     builder = StateGraph(SqlGeneratorState)

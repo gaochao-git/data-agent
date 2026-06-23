@@ -8,8 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -199,6 +198,7 @@ async def test_dashboard_service_panel_explicit_layout_and_no_user_branches(dash
         refresh_interval=30,
         source_thread_id="thread_a",
         datasource_id="ds_a",
+        member_datasource_id="member_a",
     )
     updated_panel = await service.update_panel(
         dashboard_id=dashboard["id"],
@@ -226,6 +226,7 @@ async def test_dashboard_service_panel_explicit_layout_and_no_user_branches(dash
     assert explicit_panel["chart_config"] is None
     assert explicit_panel["refresh_interval"] == 30
     assert explicit_panel["source_thread_id"] == "thread_a"
+    assert explicit_panel["member_datasource_id"] == "member_a"
     assert updated_panel["sql"] == "select order_id from orders"
     assert updated_panel["chart_type"] == "bar"
     assert updated_panel["chart_config"] == {"x": "order_id"}

@@ -125,8 +125,8 @@ metadata:
 
 - 禁止模型凭推理手写复杂最终数据 JSON。
 - 需要多结果拼接、排序、补齐、同比、环比、差值、占比、TopN 合并时，必须写 Python 处理脚本生成最终 `chart_spec`。
-- Python 脚本必须读取 `execute_sql_tool(save_as=...)` 生成的真实查询结果文件，不能把数据硬编码在脚本里。
-- 查询数据必须先通过 `dsl2sql_tool` 生成 SQL，再把返回 SQL 传给 `execute_sql_tool`；禁止模型手写 SQL 调用 `execute_sql_tool`。
+- Python 脚本必须读取 `semantic_query_tool(save_as=...)` 生成的真实查询结果文件，不能把数据硬编码在脚本里。
+- 查询数据必须先通过 `dsl2sql_tool` 校验同一份 DSL，再把同一份 DSL 传给 `semantic_query_tool` 执行；禁止模型手写 SQL 或向 `semantic_query_tool` 传 SQL。
 - 如果 `dsl2sql_tool` 生成的 SQL 不符合预期，只能修正 DSL 参数后重新调用 `dsl2sql_tool`，最多重试 2 次；仍失败时停止该查询分支并说明失败原因，禁止自行改写、拼接或替换成手写 SQL。
 - 派生字段必须由脚本计算，例如 `diff`、`change_rate`、`ratio`、`rank`。
 - 缺失值处理必须显式，例如补 0、保留 null 或丢弃，并写入 `meta.missing_policy`。
@@ -146,7 +146,7 @@ metadata:
 3. 判断属于单 SQL 还是多 SQL 场景
 4. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 5. 使用 `dsl2sql_tool` 构造真实查询；禁止手写 SQL
-6. 使用 `execute_sql_tool(sql=..., save_as="/mnt/user-data/workspace/current.json")` 获取真实数据并保存中间文件；多 SQL 场景分别保存为 `/mnt/user-data/workspace/current.json`、`/mnt/user-data/workspace/previous.json` 等
+6. 使用 `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/current.json")` 获取真实数据并保存中间文件；多 SQL 场景分别保存为 `/mnt/user-data/workspace/current.json`、`/mnt/user-data/workspace/previous.json` 等
 7. 简单单 SQL 场景：按主指南生成 `/mnt/user-data/workspace/chart_spec_draft.json`；多图使用带业务后缀的草稿名
 8. 复杂场景：参考 `scripts/` 写入 `/mnt/user-data/workspace/build_chart_spec.py`
 9. 使用 `sandbox_run(command="python3 /mnt/user-data/workspace/build_chart_spec.py ...")` 执行脚本，生成 `/mnt/user-data/workspace/chart_spec_draft.json` 或带业务后缀的草稿文件

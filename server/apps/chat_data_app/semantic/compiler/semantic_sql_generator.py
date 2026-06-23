@@ -85,6 +85,30 @@ class SemanticSQLGenerator:
         return str((item or {}).get("table_alias") or (item or {}).get("alias") or (item or {}).get("table") or "").strip()
 
     @staticmethod
+    def _quote_column_name(column: Any) -> str:
+        cleaned = str(column or "").strip().replace("`", "")
+        return f"`{cleaned}`"
+
+    @staticmethod
+    def _sql_literal(value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        if isinstance(value, (int, float)):
+            return str(value)
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
+
+    @staticmethod
+    def _rewrite_expression_table_qualifier(expression: str, table_alias: str, physical_table: str) -> str:
+        expr = str(expression or "").strip()
+        if not expr or not table_alias or not physical_table or table_alias == physical_table:
+            return expr
+        escaped = re.escape(physical_table)
+        return re.sub(rf"(?<![\w`])`?{escaped}`?\.", f"{table_alias}.", expr)
+
+    @staticmethod
     def _relationship_left_alias(rel: Dict[str, Any]) -> str:
         return str((rel or {}).get("left_alias") or (rel or {}).get("left_table") or "").strip()
 
@@ -140,6 +164,9 @@ class SemanticSQLGenerator:
         table_name = node.get("tableAlias") or node.get("table")
         if table_name:
             tables_needed.add(table_name)
+        for table_name in node.get("expressionTables") or []:
+            if table_name:
+                tables_needed.add(table_name)
 
     def _map_filter_node_for_builder(self, node: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(node, dict):
@@ -149,6 +176,9 @@ class SemanticSQLGenerator:
             return {"and": [self._map_filter_node_for_builder(child) for child in node.get("and", []) or [] if isinstance(child, dict)]}
         if "or" in node:
             return {"or": [self._map_filter_node_for_builder(child) for child in node.get("or", []) or [] if isinstance(child, dict)]}
+
+        if self._is_expression_filter_node(node):
+            return self._map_expression_filter_node_for_builder(node)
 
         dim_name = node.get("dimension")
         dim_config = self.dimensions_map.get(dim_name, {})
@@ -164,15 +194,65 @@ class SemanticSQLGenerator:
             "value": node.get("value"),
             "logic": node.get("logic", "AND"),
         }
-        self._copy_filter_advanced_fields(node, builder_node)
+        self._copy_filter_value_type(node, builder_node)
         return builder_node
 
     @staticmethod
-    def _copy_filter_advanced_fields(source: Dict[str, Any], target: Dict[str, Any]):
-        """透传 builder compiler 支持的高级过滤字段。"""
-        for key in ("value_type", "valueType", "rightExpression", "rightTable", "rightColumn"):
+    def _copy_filter_value_type(source: Dict[str, Any], target: Dict[str, Any]):
+        """语义 DSL 只允许透传固定值的 value_type，不透传自由 SQL 表达式。"""
+        for key in ("value_type",):
             if key in source:
                 target[key] = source.get(key)
+
+    @staticmethod
+    def _is_expression_filter_node(node: Dict[str, Any]) -> bool:
+        return isinstance(node, dict) and isinstance(node.get("left"), dict) and "right" in node
+
+    def _dimension_sql_expression(self, dim_name: str) -> tuple[str, set[str]]:
+        dim_cfg = self.dimensions_map.get(dim_name) or {}
+        dim_table = dim_cfg.get("table")
+        dim_table_alias = self._table_alias(dim_cfg) or dim_table
+        dim_column = dim_cfg.get("column")
+        dim_expression = str(dim_cfg.get("expression") or "").strip()
+        if dim_expression:
+            return self._rewrite_expression_table_qualifier(dim_expression, dim_table_alias, dim_table), {dim_table_alias} if dim_table_alias else set()
+        column_expr = self._quote_column_name(dim_column)
+        if dim_table_alias:
+            column_expr = f"{dim_table_alias}.{column_expr}"
+        return column_expr, {dim_table_alias} if dim_table_alias else set()
+
+    def _compile_filter_operand(self, operand: Dict[str, Any]) -> tuple[str, set[str]]:
+        operand_type = str((operand or {}).get("type") or "").strip().lower()
+        if operand_type == "dimension":
+            return self._dimension_sql_expression(str(operand.get("name") or "").strip())
+        if operand_type == "literal":
+            return self._sql_literal(operand.get("value")), set()
+        if operand_type == "binary":
+            left_expr, left_tables = self._compile_filter_operand(operand.get("left") or {})
+            right_expr, right_tables = self._compile_filter_operand(operand.get("right") or {})
+            operator = str(operand.get("operator") or "").strip()
+            return f"({left_expr} {operator} {right_expr})", left_tables | right_tables
+        return "NULL", set()
+
+    def _map_expression_filter_node_for_builder(self, node: Dict[str, Any]) -> Dict[str, Any]:
+        left = node.get("left") or {}
+        left_dim_name = str(left.get("name") or "").strip()
+        left_dim_cfg = self.dimensions_map.get(left_dim_name, {})
+        left_table = left_dim_cfg.get("table")
+        left_table_alias = self._table_alias(left_dim_cfg) or left_table
+        right_expression, right_tables = self._compile_filter_operand(node.get("right") or {})
+        return {
+            "id": f"filter-{left_dim_name}",
+            "table": left_table,
+            "tableAlias": left_table_alias,
+            "column": left_dim_cfg.get("column"),
+            "expression": left_dim_cfg.get("expression"),
+            "operator": node.get("operator", "="),
+            "logic": node.get("logic", "AND"),
+            "valueType": "expression",
+            "rightExpression": right_expression,
+            "expressionTables": sorted(table for table in right_tables if table),
+        }
 
     def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
         relationships = self.semantic_config.get("relationships", []) or []
@@ -570,6 +650,9 @@ class SemanticSQLGenerator:
             builder_filters.append(self._map_filter_node_for_builder(validated_filters[0]))
         else:
             for fil in validated_filters:
+                if self._is_expression_filter_node(fil):
+                    builder_filters.append(self._map_expression_filter_node_for_builder(fil))
+                    continue
                 dim_cfg = self.dimensions_map.get(fil.get("dimension"), {})
                 builder_filters.append({
                     "id": f"filter-{fil.get('dimension', '')}",
@@ -581,7 +664,7 @@ class SemanticSQLGenerator:
                     "value": fil.get("value"),
                     "logic": fil.get("logic", "AND"),
                 })
-                self._copy_filter_advanced_fields(fil, builder_filters[-1])
+                self._copy_filter_value_type(fil, builder_filters[-1])
 
         builder_having = []
         for hv in validated_having:
@@ -608,7 +691,7 @@ class SemanticSQLGenerator:
                 "aggFunc": func,
                 "aggId": metric_alias_to_id.get(metric_name),
             })
-            self._copy_filter_advanced_fields(hv, builder_having[-1])
+            self._copy_filter_value_type(hv, builder_having[-1])
 
         builder_order_by = []
         for od in validated_order_by:

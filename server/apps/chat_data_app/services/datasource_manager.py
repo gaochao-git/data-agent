@@ -70,6 +70,38 @@ def _build_source_line(source_config: Optional[dict]) -> str:
     return f"{host}:{int(port)}:{database}"
 
 
+def _build_persisted_source_line(
+    source_type: str,
+    source_config: Optional[dict],
+    default_query_executor_type: Optional[str] = None,
+) -> str:
+    """将成员执行源配置格式化为落库文本。"""
+    normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
+    org_name = str(normalized_config.get("org_name") or "").strip()
+    org_code = str(normalized_config.get("org_code") or "").strip()
+    query_executor_type = normalized_config.get("query_executor_type") or "direct"
+    if query_executor_type == "http":
+        database = str(normalized_config.get("database") or "").strip()
+        return f"{org_name}|{org_code}|http|{database}"
+    return f"{org_name}|{org_code}|direct|{_build_source_line(normalized_config)}"
+
+
+def _build_template_source_line(
+    source_type: str,
+    source_config: Optional[dict],
+    default_query_executor_type: Optional[str] = None,
+) -> str:
+    """将模板执行源配置格式化为落库文本。"""
+    config = sanitize_source_config(source_config)
+    query_executor_type = _normalize_query_executor_type(
+        source_type,
+        config.get("query_executor_type") or default_query_executor_type,
+    )
+    if query_executor_type == "http":
+        return _build_persisted_source_line(source_type, config, query_executor_type)
+    return _build_source_line(config)
+
+
 def _normalize_member_source_config(
     source_type: str,
     source_config: Optional[dict],
@@ -80,13 +112,21 @@ def _normalize_member_source_config(
     normalized_org_name = str(config.get("org_name") or "").strip()
     normalized_org_code = str(config.get("org_code") or "").strip()
     normalized_query_executor_type = _normalize_query_executor_type(source_type, config.get("query_executor_type") or default_query_executor_type)
+    database = str(config.get("database") or "").strip()
     if not normalized_org_name:
-        raise ValueError("机构名称不能为空，请使用固定格式：机构名称|机构编码|direct/http|ip:port:db_name")
+        raise ValueError("机构名称不能为空")
     if not normalized_org_code:
-        raise ValueError("机构编码不能为空，请使用固定格式：机构名称|机构编码|direct/http|ip:port:db_name")
+        raise ValueError("机构编码不能为空")
+    if not database:
+        raise ValueError("数据库名不能为空")
+    if normalized_query_executor_type == "direct":
+        _build_source_line(config)
+    elif str(config.get("host") or "").strip() or config.get("port") is not None:
+        raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
     config["query_executor_type"] = normalized_query_executor_type
     config["org_name"] = normalized_org_name
     config["org_code"] = normalized_org_code
+    config["database"] = database
     return config
 
 
@@ -110,12 +150,7 @@ def _build_member_source_text_line(
     default_query_executor_type: Optional[str] = None,
 ) -> str:
     """将成员执行源配置格式化为持久化文本。"""
-    normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
-    org_name = str(normalized_config.get("org_name") or "").strip()
-    org_code = str(normalized_config.get("org_code") or "").strip()
-    query_executor_type = normalized_config.get("query_executor_type") or "direct"
-    source_line = _build_source_line(normalized_config)
-    return f"{org_name}|{org_code}|{query_executor_type}|{source_line}"
+    return _build_persisted_source_line(source_type, source_config, default_query_executor_type)
 
 
 def _dedupe_member_source_configs(
@@ -710,8 +745,8 @@ class DataSourceManager:
         """异步按模板源和成员连接信息创建数据源组。"""
         now = datetime.now()
         datasource_id = f"ds_{now.strftime('%Y%m%d%H%M%S')}_{now.microsecond}"
-        template_source = _build_source_line(template_source_config)
         query_executor_type = str(template_source_config.get("query_executor_type") or "direct").strip().lower() or "direct"
+        template_source = _build_persisted_source_line(source_type, template_source_config, query_executor_type)
         member_source_configs_merged = _merge_member_source_lines(
             current={},
             next_template_source_config=template_source_config,
@@ -755,8 +790,8 @@ class DataSourceManager:
         if not current:
             return None
 
-        template_source = _build_source_line(template_source_config)
         query_executor_type = str(template_source_config.get("query_executor_type") or "direct").strip().lower() or "direct"
+        template_source = _build_persisted_source_line(source_type, template_source_config, query_executor_type)
         member_source_configs_merged = _merge_member_source_lines(
             current,
             template_source_config,
@@ -806,11 +841,15 @@ class DataSourceManager:
         next_template_source_config: Dict[str, Any] = _get_template_member_source_config(current)
         if source_config is not None:
             sanitized_source_config = sanitize_source_config(source_config)
-            next_template_source = _build_source_line(source_config)
             next_template_source_config = {
                 **next_template_source_config,
                 **sanitized_source_config,
             }
+            next_template_source = _build_template_source_line(
+                source_type if source_type is not None else current.get("source_type") or "",
+                next_template_source_config,
+                current.get("query_executor_type") or "direct",
+            )
 
         updated = await self._save_datasource_async(
             datasource_id=datasource_id,
@@ -869,6 +908,26 @@ class DataSourceManager:
                 and str(config.get("create_by") or "").strip() == normalized_user_id
             )
         ]
+
+    async def get_runtime_semantic_configs_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
+        """异步获取智能问数运行时语义配置列表，并临时合并物理字段字典。"""
+        configs = await self.get_semantic_configs_async(datasource_id, user_id)
+        if not configs:
+            return []
+        try:
+            datasource = await self.db_store.get_datasource_async(datasource_id)
+            group_id = str((datasource or {}).get("group_id") or "").strip()
+            if not group_id:
+                return configs
+            column_dicts = await self.db_store.get_column_dicts_by_group_id_async(group_id)
+        except AttributeError:
+            column_dicts = {}
+        except Exception as e:
+            logger.warning("读取字段数据字典失败，指标集选择降级使用原始配置: datasource_id=%s error=%s", datasource_id, e)
+            column_dicts = {}
+        if not column_dicts:
+            return configs
+        return [self._merge_column_dict_into_semantic_config(config, column_dicts) for config in configs]
 
     async def get_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[dict]:
         """异步获取指定的语义配置。"""
@@ -1086,6 +1145,12 @@ class DataSourceManager:
             raise ValueError("数据源连接配置不完整")
 
         try:
+            meta_source_config = _build_meta_source_config(datasource)
+            if meta_source_config.get("query_executor_type") == "http":
+                if source_type != "hive":
+                    raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
+                return await get_hive_meta_schema_async(meta_source_config, table_names, user_id=user_id, username=username)
+
             if source_type == "mysql":
                 from apps.chat_data_app.services.mysql_sync import MySQLSyncService
 
@@ -1101,10 +1166,6 @@ class DataSourceManager:
                     service.get_full_schema_async(table_names),
                     timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
                 )
-
-            meta_source_config = _build_meta_source_config(datasource)
-            if meta_source_config.get("query_executor_type") == "http":
-                return await get_hive_meta_schema_async(meta_source_config, table_names, user_id=user_id, username=username)
 
             from apps.chat_data_app.services.hive_sync import HiveSyncService
 

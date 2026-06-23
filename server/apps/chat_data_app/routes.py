@@ -21,7 +21,6 @@ from .schema import (
     QuickSqlRequest,
     ExecuteSqlRequest,
     QueryTaskCreateRequest,
-    CompileBuilderSqlRequest,
     CompileSemanticBuilderSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
@@ -46,7 +45,6 @@ from .services.hive_meta_http import get_hive_meta_tables_async, get_hive_meta_s
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
 from .services import query_runtime
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
-from .semantic.compiler import compile_builder_sql
 from .semantic.utils import parse_llm_json
 from .services.llm_config import get_chat_data_llm
 from .handlers import _stream_sql_generation, _build_execution_target_info_async
@@ -294,7 +292,6 @@ def _normalize_source_item(
     """标准化数据源连接项。"""
     normalized_host = str(host or "").strip()
     normalized_database = str(database or "").strip()
-    normalized_port = int(port or SOURCE_DEFAULT_PORTS[source_type])
     normalized_org_name = str(org_name or "").strip()
     normalized_org_code = str(org_code or "").strip()
     normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
@@ -302,16 +299,26 @@ def _normalize_source_item(
         raise ValueError("机构名称不能为空")
     if not normalized_org_code:
         raise ValueError("机构编码不能为空")
-    if not normalized_host or not normalized_database:
-        raise ValueError("数据源连接信息不完整")
     if normalized_executor_type not in {"direct", "http"}:
         raise ValueError(f"不支持的查询执行方式: {normalized_executor_type}")
-    result = {
-        "host": normalized_host,
-        "port": normalized_port,
-        "database": normalized_database,
-        "query_executor_type": normalized_executor_type,
-    }
+    if not normalized_database:
+        raise ValueError("数据库名不能为空")
+    if normalized_executor_type == "direct" and not normalized_host:
+        raise ValueError("数据源连接信息不完整")
+    if normalized_executor_type == "http" and (normalized_host or port is not None):
+        raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
+    if normalized_executor_type == "direct":
+        result = {
+            "host": normalized_host,
+            "port": int(port or SOURCE_DEFAULT_PORTS[source_type]),
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
+    else:
+        result = {
+            "database": normalized_database,
+            "query_executor_type": normalized_executor_type,
+        }
     result["org_name"] = normalized_org_name
     result["org_code"] = normalized_org_code
     return result
@@ -319,6 +326,8 @@ def _normalize_source_item(
 
 async def _load_tables_from_source(source_type: str, source_item: Dict[str, Any], table_names: Optional[List[str]] = None, user_id: Optional[str] = None, username: Optional[str] = None) -> List[Dict[str, Any]]:
     """从模板数据源拉取表结构。"""
+    if _is_http_query_executor(source_item) and source_type != "hive":
+        raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
     if source_type == "hive":
         if _is_http_query_executor(source_item):
             return await get_hive_meta_schema_async(source_item, table_names, user_id=user_id, username=username)
@@ -1599,7 +1608,7 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
                 status="error"
             )
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
-        llm = get_chat_data_llm(streaming=False, temperature=0, max_tokens=1200)
+        llm = get_chat_data_llm(streaming=False, max_tokens=1200)
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         content = response.content if hasattr(response, "content") else str(response)
         column_dict = _parse_column_dict_generate_response(str(content))
@@ -1850,17 +1859,22 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
         user_params = _get_optional_request_user_http_params(http_request)
         source_type = request.source_type
 
-        # 设置默认端口
         port = request.port
-        if port is None:
+        if request.query_executor_type == "direct" and port is None:
             port = 10000 if source_type == "hive" else 3306
 
-        logger.info(f"获取 {source_type.upper()} 表列表: {request.host}:{port}/{request.database}")
+        logger.info(
+            "获取 %s 表列表: executor=%s host=%s port=%s database=%s org_code=%s",
+            source_type.upper(),
+            request.query_executor_type,
+            request.host,
+            port,
+            request.database,
+            request.org_code,
+        )
 
         if source_type == "hive":
             source_config = {
-                "host": request.host,
-                "port": port,
                 "database": request.database,
                 "org_code": request.org_code,
                 "org_name": request.org_name,
@@ -1869,6 +1883,8 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
             if request.query_executor_type == "http":
                 tables = await get_hive_meta_tables_async(source_config, **user_params)
             else:
+                source_config["host"] = request.host
+                source_config["port"] = port
                 hive_credentials = resolve_hive_credentials(source_config)
                 service = HiveSyncService(
                     host=request.host,
@@ -1882,6 +1898,8 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
                     timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
                 )
         else:
+            if request.query_executor_type == "http":
+                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
             mysql_credentials = resolve_mysql_credentials({})
             service = MySQLSyncService(
                 host=request.host,
@@ -2182,12 +2200,13 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
         ]
         error_message = "；".join(error_messages) if error_messages else "所有执行对象均执行失败"
 
+    result_success = bool(successful_results) and task_status != "running"
     return {
         "status": task_status,
         "progress_text": progress_text,
         "error_message": error_message,
         "result_payload": {
-            "success": bool(successful_results),
+            "success": result_success,
             "sql": primary_result.get("sql") or ((response_data.get("request_payload") or {}).get("sql") or ""),
             "columns": primary_result.get("columns") or [],
             "data": primary_result.get("data") or [],
@@ -2747,26 +2766,6 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
             code=50010,
             status="error"
         )
-
-
-@router.post("/compile-builder-sql")
-async def compile_builder_sql_endpoint(request: CompileBuilderSqlRequest):
-    """编译 Builder DSL 为 SQL（仅预览，不执行）。"""
-    try:
-        dialect = "mysql"
-        if request.datasource_id:
-            ds_manager = get_datasource_manager()
-            datasource = await ds_manager.get_datasource_async(request.datasource_id)
-            if not datasource:
-                return business_response(msg=f"数据源不存在: {request.datasource_id}", code=40404, status="error")
-            dialect = datasource.get("source_type", "mysql")
-        sql = compile_builder_sql(request.builder_config, dialect=dialect)
-        return business_response(data={"sql": sql}, msg="编译成功")
-    except ValueError as err:
-        return business_response(msg=str(err), code=40001, status="error")
-    except Exception as err:
-        logger.error(f"Builder DSL 编译失败: {err}", exc_info=True)
-        return business_response(msg="Builder DSL 编译失败，请检查配置", code=50010, status="error")
 
 
 @router.post("/compile-semantic-builder-sql")

@@ -10,8 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
@@ -138,6 +137,17 @@ def test_persistent_query_task_result_payload_local_success_and_error_fallback()
     assert success["cache_age_seconds"] == 10
 
 
+def test_has_running_member_result_detects_unfinished_members():
+    assert query_runtime.has_running_member_result([
+        {"member_datasource_id": "m1", "success": True, "status": "succeeded"},
+        {"member_datasource_id": "m2", "success": False, "status": "running"},
+    ]) is True
+    assert query_runtime.has_running_member_result([
+        {"member_datasource_id": "m1", "success": True, "status": "succeeded"},
+        {"member_datasource_id": "m2", "success": False, "status": "failed"},
+    ]) is False
+
+
 def test_runtime_task_operator_and_execution_id_helpers():
     assert query_runtime.get_task_operator_name({"request_payload": "{bad"}) == ""
     assert query_runtime.get_task_operator_name({"request_payload": json.dumps({"operator_name": "测试用户"})}) == "测试用户"
@@ -177,6 +187,12 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         datasource_id="ds_a",
         semantic_builder_config={"dimensions": []},
     )
+    builder_without_semantic_config = ExecuteSqlRequest(
+        sql="select bad",
+        datasource_id="ds_a",
+        query_type="builder",
+        builder_config={"mainTable": "orders"},
+    )
     semantic_builder = ExecuteSqlRequest(
         sql="select bad",
         datasource_id="ds_a",
@@ -194,6 +210,8 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
     monkeypatch.setattr(query_runtime, "compile_semantic_builder_sql", fake_compile_semantic_builder_sql)
 
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(normal)) is normal
+    with pytest.raises(ValueError, match="必须基于指标集"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(no_semantic_config))
 
@@ -873,6 +891,25 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     asyncio.run(query_runtime.update_query_execution("missing", sql_status="running"))
     assert missing_session.commits == 0
 
+    optional_execution = SimpleNamespace(
+        sql_status="pending",
+        remote_task_id="old_remote",
+        db_connection_id="old_conn",
+        execution_time_ms=1,
+        result_row_count=2,
+        result_payload="old",
+        error_message="old",
+        started_time=started,
+        finished_time=finished,
+        update_time=None,
+    )
+    optional_execution_session = _SessionQueue(_ScalarResult(optional_execution))
+    _patch_query_runtime_session(monkeypatch, optional_execution_session)
+    asyncio.run(query_runtime.update_query_execution("exec_optional"))
+    assert optional_execution.sql_status == "pending"
+    assert optional_execution.remote_task_id == "old_remote"
+    assert optional_execution_session.commits == 1
+
     task = SimpleNamespace(
         task_id="task_1",
         task_type="sql",
@@ -918,6 +955,19 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     cancelled_response = asyncio.run(query_runtime.update_query_task("task_cancel", status="failed"))
     assert cancelled_response["status"] == "cancelled"
     assert cancelled_task_session.commits == 0
+
+    optional_task = SimpleNamespace(**{**task.__dict__, "task_status": "pending", "progress_text": "old"})
+    optional_task_session = _SessionQueue(_ScalarResult(optional_task))
+    _patch_query_runtime_session(monkeypatch, optional_task_session)
+    optional_response = asyncio.run(query_runtime.update_query_task("task_optional"))
+    assert optional_response["status"] == "pending"
+    assert optional_task.progress_text == "old"
+    assert optional_task_session.commits == 1
+
+    missing_task_session = _SessionQueue(_ScalarResult(None))
+    _patch_query_runtime_session(monkeypatch, missing_task_session)
+    assert asyncio.run(query_runtime.update_query_task("missing")) is None
+    assert missing_task_session.commits == 0
 
 
 def test_get_query_executions_applies_operator_fallbacks(monkeypatch):
@@ -967,9 +1017,38 @@ def test_get_query_executions_applies_operator_fallbacks(monkeypatch):
     empty_session = _SessionQueue(_ScalarResult(scalars=[]))
     _patch_query_runtime_session(monkeypatch, empty_session)
 
+    task_without_name = SimpleNamespace(
+        task_id="task_3",
+        task_type="sql",
+        datasource_id="ds_a",
+        query_type="sql",
+        task_status="succeeded",
+        progress_text="done",
+        request_payload="{}",
+        result_payload=None,
+        remote_task_payload=None,
+        error_message=None,
+        started_time=None,
+        finished_time=None,
+        create_time=None,
+        update_time=None,
+        create_by="",
+        update_by="",
+        create_by_name="",
+        update_by_name="",
+    )
+    session_without_name = _SessionQueue(
+        _ScalarResult(scalars=[Execution()]),
+        _ScalarResult(task_without_name),
+    )
+    _patch_query_runtime_session(monkeypatch, session_without_name)
+    unnamed = asyncio.run(query_runtime.get_query_executions("task_3"))
+
     assert named[0]["operator_name"] == "创建人"
     assert payload_named[0]["operator_name"] == "明细用户"
+    assert "operator_name" not in unnamed[0]
     assert asyncio.run(query_runtime.get_query_executions("empty")) == []
+    assert asyncio.run(query_runtime.get_query_executions("")) == []
 
 
 def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monkeypatch):
@@ -1162,3 +1241,14 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     generic_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
     assert generic_error_result["success"] is False
     assert generic_error_result["error"] == "执行失败: boom"
+
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
+    no_task_value_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
+    assert no_task_value_error["success"] is False
+    assert no_task_value_error["error"] == "unsupported"
+
+    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
+    no_task_generic_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
+    assert no_task_generic_error["success"] is False
+    assert no_task_generic_error["error"] == "执行失败: boom"

@@ -38,7 +38,7 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_THINKING_PROMPT,
 )
 from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware, invoke_with_token_usage
-from .nodes import normalize_response_tool_call_names
+from .nodes import normalize_response_tool_call_names, timestamp_message
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -59,7 +59,7 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "sandbox_run", "status": "available", "description": "在当前会话沙箱中执行 ls/find/python3/node/bash 等非交互命令。"},
     {"name": "select_semantic_config_tool", "status": "available", "description": "当前没有手动选择指标集时，从数据源组指标集中选择可回答问题的指标集。"},
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
-    {"name": "execute_sql_tool", "status": "available", "description": "执行只读 SQL 查询，返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
+    {"name": "semantic_query_tool", "status": "available", "description": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
 ]
 MAX_STAGE_HISTORY_MESSAGES = 10
 MAX_STAGE_HISTORY_CHARS = 4000
@@ -242,7 +242,7 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
-        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id),
+        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id, user_id=user_id),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
         create_exec_sql_tool(
             datasource_id=datasource_id,
@@ -297,10 +297,11 @@ def create_tool_call_name_normalizer_middleware(tools: list[Any]):
         result = list(getattr(response, "result", []) or [])
         if not result:
             return response
-        response.result = [
+        normalized_result = [
             normalize_response_tool_call_names(message, tools)
             for message in result
         ]
+        response.result = normalized_result
         return response
 
     return normalize_tool_call_name_middleware
@@ -378,8 +379,15 @@ async def execute_data_analyze_agent(
     )
     get_stream_writer()({"type": "token_usage", "usage": token_usage})
     if isinstance(result, dict):
-        return dict(result)
-    return {"messages": [result]}
+        payload = dict(result)
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            payload["messages"] = [
+                timestamp_message(message) if getattr(message, "type", None) == "ai" else message
+                for message in messages
+            ]
+        return payload
+    return {"messages": [timestamp_message(result)]}
 
 
 def create_data_analyze_flow_graph(

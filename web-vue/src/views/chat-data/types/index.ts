@@ -50,8 +50,8 @@ export interface DataSource {
     org_code?: string
     source_type?: string
     query_executor_type?: 'direct' | 'http'
-    host: string
-    port: number
+    host?: string
+    port?: number
     database: string
   }>
   template_datasource_id?: string
@@ -195,6 +195,11 @@ export interface ChatDataTokenUsage {
   breakdown?: ChatDataTokenUsageBreakdown[]
 }
 
+export interface ChatDataMessageEndPayload {
+  usage?: ChatDataTokenUsage | null
+  timestamp?: string
+}
+
 export interface ChatDataTokenUsageBreakdown {
   key: string
   label: string
@@ -283,7 +288,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
-  timestamp: Date
+  timestamp?: Date
   result?: unknown
   toolCalls?: ToolCallInfo[]
   thinkingSegments?: ThinkingSegment[]
@@ -457,7 +462,7 @@ export interface ChatDataOptions {
   defaultMode?: ViewMode
   /** 默认打开的看板名称（仅 dashboard 模式生效，不传则默认第一个） */
   defaultDashboardName?: string
-  /** 主模式自定义名称（数据集配置可选，不传使用默认名称） */
+  /** 主模式自定义名称（指标集配置可选，不传使用默认名称） */
   modeLabels?: ChatDataModeLabels
   /** SQL 查询模式初始化 SQL */
   initialSql?: string

@@ -3,17 +3,18 @@ import os
 import sys
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.services import sql_executor
+import apps.chat_data_app.services.sql_parser as sql_parser
 from apps.chat_data_app.services.sql_parser import prepare_sql_for_execution, validate_single_sql_statement
 
 
@@ -77,14 +78,21 @@ def test_http_payload_extractors_and_normalizers():
     assert sql_executor._extract_remote_status({"data": {"status": "processing"}}) == "running"
     assert sql_executor._extract_result_payload({"data": {"query_result": {"columns": ["a"]}}}) == {"columns": ["a"]}
     assert sql_executor._extract_result_payload({"data": {"result": {"columns": ["b"]}}}) == {"columns": ["b"]}
+    assert sql_executor._extract_result_payload({"data": "raw text", "result": {"columns": ["root"]}}) == {"columns": ["root"]}
+    assert sql_executor._extract_result_payload({"data": "raw text", "status": "running"}) == {"data": "raw text", "status": "running"}
     assert sql_executor._extract_result_payload({"data": []}) == {"data": []}
     assert sql_executor._extract_result_payload({"rows": [[1]]}) == {"rows": [[1]]}
+    assert sql_executor._extract_result_payload({"data": {"status": "done"}}) == {"data": {"status": "done"}}
+    assert sql_executor._extract_result_payload({"data": [], "meta": "only"}) == {"data": [], "meta": "only"}
+    assert sql_executor._extract_result_payload({"data": {"meta": "only"}, "meta": "root-only"}) == {"data": {"meta": "only"}, "meta": "root-only"}
+    assert sql_executor._extract_result_payload({"meta": "root-only"}) == {}
     assert sql_executor._extract_result_payload(["bad"]) == {}
 
     rows = [{"a": 1, "b": date(2024, 1, 1)}]
     assert sql_executor._normalize_http_columns([{"name": "a"}, "b"], rows) == ["a", "b"]
     assert sql_executor._normalize_http_columns([{}, " "], rows) == ["a", "b"]
     assert sql_executor._normalize_http_columns([{"column_name": "c"}], []) == ["c"]
+    assert sql_executor._normalize_http_columns([123, None], []) == []
     assert sql_executor._normalize_http_columns([], rows) == ["a", "b"]
     assert sql_executor._normalize_http_columns("bad", rows) == ["a", "b"]
     assert sql_executor._normalize_http_columns([], []) == []
@@ -92,6 +100,12 @@ def test_http_payload_extractors_and_normalizers():
     assert sql_executor._normalize_http_rows([[1, 2]], ["a", "b"]) == [{"a": 1, "b": 2}]
     assert sql_executor._normalize_http_rows([[1, 2]], []) == []
     assert sql_executor._normalize_http_rows(rows, ["a", "b"]) == [{"a": 1, "b": "2024-01-01"}]
+
+
+def test_extract_result_payload_skips_non_dict_remote_data(monkeypatch):
+    monkeypatch.setattr(sql_executor, "_extract_remote_data", lambda _payload: ["not", "dict"])
+
+    assert sql_executor._extract_result_payload({"result": {"columns": ["root"]}}) == {"columns": ["root"]}
 
 
 def test_get_executor_returns_hive_http_executor():
@@ -181,6 +195,32 @@ def test_validate_sql_analyzes_raw_sql_without_comment_cleanup():
 ])
 def test_validate_sql_allows_query_shapes_when_select_is_allowed(sql):
     assert sql_executor.validate_sql(sql, source_type="mysql") == (True, "")
+
+
+def test_get_sql_operation_type_parser_error_edges(monkeypatch):
+    original_import = __import__
+
+    def fail_sqlglot_import(name, *args, **kwargs):
+        if name == "sqlglot":
+            raise ImportError("missing sqlglot")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fail_sqlglot_import)
+    assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
+    monkeypatch.setattr("builtins.__import__", original_import)
+
+    monkeypatch.setattr(
+        sql_parser,
+        "_parse_sql",
+        lambda *_args, **_kwargs: [],
+    )
+    assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
+
+    def raise_parse(*_args, **_kwargs):
+        raise RuntimeError("parse failed")
+
+    monkeypatch.setattr(sql_parser, "_parse_sql", raise_parse)
+    assert sql_executor._get_sql_operation_type("select 1", "mysql") == ""
 
 
 @pytest.mark.parametrize("sql", [
@@ -683,6 +723,37 @@ def test_fetch_http_query_task_result_status_variants(monkeypatch):
     assert failed["error"] == "执行失败"
 
 
+def test_fetch_http_query_task_result_without_user_params(monkeypatch):
+    captured = {}
+
+    async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
+        captured.update({"method": method, "task_id": task_id, "params": params})
+        return {"code": 20000, "data": {"status": "running"}}
+
+    monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
+
+    result = asyncio.run(sql_executor.fetch_http_query_task_result("task_no_user"))
+
+    assert result["status"] == "running"
+    assert captured == {"method": "GET", "task_id": "task_no_user", "params": None}
+
+
+def test_fetch_http_query_task_result_with_user_params(monkeypatch):
+    captured = {}
+
+    async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
+        captured.update({"method": method, "task_id": task_id, "params": params})
+        return {"code": 20000, "data": {"status": "running"}}
+
+    monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
+
+    result = asyncio.run(sql_executor.fetch_http_query_task_result("task_user", user_id="u1", username="张三"))
+
+    assert result["status"] == "running"
+    assert captured["params"]["userId"] == "u1"
+    assert captured["params"]["username"] == "张三"
+
+
 def test_fetch_http_query_task_result_non_failed_error_status(monkeypatch):
     async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
         return {"code": 50000, "data": {"status": "running"}, "msg": "网关异常"}
@@ -861,6 +932,7 @@ def test_mysql_executor_success_callbacks_kill_and_close(monkeypatch):
         callback_payloads.append(payload)
 
     result = asyncio.run(executor.execute("select * from orders", limit=10, db_connection_callback=db_callback))
+    connection_ok = asyncio.run(executor.test_connection())
     kill_result = asyncio.run(executor.kill_query("12345"))
     executor._pool = pool
     close_result = asyncio.run(executor.close())
@@ -872,12 +944,46 @@ def test_mysql_executor_success_callbacks_kill_and_close(monkeypatch):
     assert callback_payloads == [{"db_connection_id": "12345"}]
     assert cursor.executed[0] == "SELECT CONNECTION_ID()"
     assert cursor.executed[1] == "select * from orders LIMIT 10"
+    assert connection_ok is True
+    assert "SELECT 1" in cursor.executed
     assert kill_result == {"success": True, "error": None}
     assert "KILL QUERY 12345" in cursor.executed
     assert close_result is None
     assert pool.closed is True
     assert pool.waited is True
     assert executor._pool is None
+
+
+def test_mysql_executor_optional_connection_and_sync_callback_branches(monkeypatch):
+    class EmptyConnectionCursor(_FakeMySQLCursor):
+        async def fetchone(self):
+            return None
+
+    no_connection_cursor = EmptyConnectionCursor()
+    executor = sql_executor.MySQLExecutor("127.0.0.1", 3306, "demo", "u", "p")
+    monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(no_connection_cursor)))
+
+    no_connection = asyncio.run(executor.execute("select 1", limit=10))
+    assert no_connection["success"] is True
+    assert no_connection["db_connection_id"] == ""
+    assert no_connection_cursor.executed[1] == "select 1 LIMIT 10"
+
+    callback_payloads = []
+    tuple_cursor = _FakeMySQLCursor()
+    tuple_cursor.fetchone = lambda: asyncio.sleep(0, result=67890)
+    monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(tuple_cursor)))
+
+    result = asyncio.run(executor.execute(
+        "select 1",
+        limit=10,
+        db_connection_callback=lambda payload: callback_payloads.append(payload),
+    ))
+
+    assert result["db_connection_id"] == "67890"
+    assert callback_payloads == [{"db_connection_id": "67890"}]
+
+    empty_executor = sql_executor.MySQLExecutor("127.0.0.1", 3306, "demo", "u", "p")
+    assert asyncio.run(empty_executor.close()) is None
 
 
 def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypatch):
@@ -1147,3 +1253,73 @@ def test_get_executor_fills_direct_credentials(monkeypatch):
     assert hive_executor.password == "hive_pwd"
     assert explicit_hive_executor.username == "explicit"
     assert explicit_hive_executor.password == "pwd"
+
+    monkeypatch.setattr(sql_executor, "resolve_hive_credentials", lambda: {"username": "hive_only"})
+    hive_username_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "password": ""}})
+    assert hive_username_only.username == "hive_only"
+    assert hive_username_only.password is None
+
+    monkeypatch.setattr(sql_executor, "resolve_hive_credentials", lambda: {"password": "pwd_only"})
+    hive_password_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "username": ""}})
+    assert hive_password_only.username == ""
+    assert hive_password_only.password == "pwd_only"
+
+
+def test_abstract_executor_and_mysql_error_branches(monkeypatch):
+    class BareExecutor(sql_executor.SQLExecutor):
+        async def execute(self, sql, limit=100, timeout=None, user_id=None, remote_task_callback=None, db_connection_callback=None):
+            return await super().execute(sql, limit, timeout, user_id, remote_task_callback, db_connection_callback)
+
+        async def test_connection(self):
+            return await super().test_connection()
+
+        async def close(self):
+            return await super().close()
+
+    bare = BareExecutor()
+    assert asyncio.run(bare.execute("select 1")) is None
+    assert asyncio.run(bare.test_connection()) is None
+    assert asyncio.run(bare.close()) is None
+
+    mysql = sql_executor.MySQLExecutor("localhost", 3306, "demo", "u", "p")
+
+    class FakeCursor:
+        description = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _sql):
+            return None
+
+        async def fetchone(self):
+            return [123]
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeAcquire:
+        async def __aenter__(self):
+            return FakeConnection()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakePool:
+        def acquire(self):
+            return FakeAcquire()
+
+    monkeypatch.setattr(sql_executor, "validate_sql", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(sql_executor, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("limit invalid")))
+    monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=FakePool()))
+    invalid = asyncio.run(mysql.execute("select 1"))
+    assert invalid["success"] is False
+    assert invalid["error"] == "limit invalid"
+
+    monkeypatch.setattr(mysql, "_get_pool", lambda: asyncio.sleep(0, result=SimpleNamespace(acquire=lambda: (_ for _ in ()).throw(RuntimeError("pool down")))))
+    assert asyncio.run(mysql.test_connection()) is False
+    assert asyncio.run(mysql.kill_query("123"))["success"] is False

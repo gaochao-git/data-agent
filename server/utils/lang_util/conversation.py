@@ -51,7 +51,7 @@ TITLE_GENERATION_PROMPT = """你是一个对话标题生成助手。根据用户
 
 def _get_title_llm():
     """获取标题生成用的LLM"""
-    return get_chat_data_llm(streaming=False, temperature=0.3, max_tokens=30)
+    return get_chat_data_llm(streaming=False, max_tokens=30)
 
 
 def _format_thread(t: UserThread) -> Dict[str, Any]:
@@ -138,7 +138,7 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
         if not hasattr(msg, 'type'):
             continue
 
-        # 提取时间戳
+        # 时间戳只使用 checkpoint 中真实保存的消息时间，避免历史刷新时显示推导出来的假时间。
         timestamp = _extract_timestamp(msg)
 
         if msg.type == 'human':

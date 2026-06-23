@@ -157,8 +157,8 @@ interface DataSource {
     org_name?: string
     org_code?: string
     source_type?: string
-    host: string
-    port: number
+    host?: string
+    port?: number
     database: string
   }>
 }
@@ -836,9 +836,11 @@ const handleCancelHistoryItem = async (item: SqlHistoryItem) => {
 const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref('table')
-const handleSaveToDashboard = (sql: string, chartType: string) => {
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = chartType
+  saveMemberDatasourceId.value = String(memberDatasourceId || currentResult.value?.memberDatasourceId || '').trim()
   showSaveModal.value = true
 }
 
@@ -1753,6 +1755,8 @@ const currentResultData = computed(() => {
     cache_hit: result.cache_hit,
     cache_age_seconds: result.cache_age_seconds,
     cache_expires_in_seconds: result.cache_expires_in_seconds,
+    member_datasource_id: result.memberDatasourceId,
+    member_name: result.memberName,
   })
 })
 
@@ -2250,6 +2254,7 @@ defineExpose({
     :sql="saveSql"
     :chart-type="saveChartType"
     :datasource-id="datasourceId"
+    :member-datasource-id="saveMemberDatasourceId"
   />
 
   <QueryFavoriteModal

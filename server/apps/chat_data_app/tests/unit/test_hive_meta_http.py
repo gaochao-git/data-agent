@@ -5,8 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -19,8 +18,6 @@ def test_hive_meta_payload_uses_internal_org_fields():
     payload = _build_payload({
         "org_code": "Z2002131000014",
         "org_name": "机构名称xx",
-        "host": "localhost",
-        "port": 10000,
         "database": "default",
     }, ["orders"], user_id="user_a", username="测试用户")
 
@@ -28,13 +25,20 @@ def test_hive_meta_payload_uses_internal_org_fields():
         "source_type": "hive",
         "orgCode": "Z2002131000014",
         "orgName": "机构名称xx",
-        "host": "localhost",
-        "port": 10000,
         "database": "default",
         "userId": "user_a",
         "username": "测试用户",
         "table_names": ["orders"],
     }
+    legacy_payload = _build_payload({
+        "org_code": "Z2002131000014",
+        "org_name": "机构名称xx",
+        "host": "localhost",
+        "port": 10000,
+        "database": "default",
+    })
+    assert legacy_payload["host"] == "localhost"
+    assert legacy_payload["port"] == 10000
 
 
 def test_hive_meta_payload_requires_internal_org_code():
@@ -86,6 +90,27 @@ def test_hive_meta_headers_include_auth_token(monkeypatch):
     assert hive_meta_http._build_headers() == {
         "Content-Type": "application/json",
         "Authorization": "Bearer secret",
+    }
+
+
+def test_hive_meta_log_summary_helpers():
+    short_payload = hive_meta_http._meta_payload_summary({"orgCode": "org_1", "table_names": ["a", "b"]})
+    assert short_payload["table_count"] == 2
+    assert short_payload["table_names"] == ["a", "b"]
+
+    long_names = [f"t{i}" for i in range(12)]
+    long_payload = hive_meta_http._meta_payload_summary({"table_names": long_names})
+    assert long_payload["table_count"] == 12
+    assert long_payload["table_names"] == long_names[:10]
+
+    assert hive_meta_http._meta_response_summary(["bad"]) == {"payload_type": "list"}
+    assert hive_meta_http._meta_response_summary({"code": 20000, "data": {"tables": [1, 2]}}) == {
+        "code": 20000,
+        "table_count": 2,
+    }
+    assert hive_meta_http._meta_response_summary({"message": "ok", "tables": []}) == {
+        "msg": "ok",
+        "table_count": 0,
     }
 
 

@@ -1,12 +1,12 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -68,6 +68,9 @@ def test_state_reducers_cover_empty_merge_append_dedupe_and_window():
     )
     assert len(windowed) == 10
     assert windowed[0]["id"] == "item_2"
+
+    assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
+    assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
 
 
 def test_serialize_semantic_config_selection_keeps_refresh_payload():
@@ -162,3 +165,15 @@ def test_common_format_json_and_normalize_json_like_payload():
     assert common.normalize_json_like_payload("not json") == "not json"
     assert common.normalize_json_like_payload("```json\n{\"a\": 1}\n```") == {"a": 1}
     assert common.normalize_json_like_payload("\"{\\\"a\\\": 1}\"") == {"a": 1}
+    assert common.normalize_json_like_payload("```\n{\"a\": 1}") == {"a": 1}
+    assert common.normalize_json_like_payload("{\"a\": 1}\n```") == "{\"a\": 1}\n```"
+    assert common.normalize_json_like_payload("```\nnot json\n```") == "```\nnot json\n```"
+
+
+def test_common_iter_files_skips_ignored_root_name(tmp_path):
+    ignored_root = tmp_path / "node_modules"
+    nested = ignored_root / "a.txt"
+    nested.parent.mkdir()
+    nested.write_text("a", encoding="utf-8")
+
+    assert common.iter_files(Path(ignored_root)) == []

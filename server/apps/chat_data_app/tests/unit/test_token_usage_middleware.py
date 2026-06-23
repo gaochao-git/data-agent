@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -223,6 +222,22 @@ def test_build_request_breakdown_includes_system_message_group():
     assert breakdown[1]["children"][0]["message_index"] == 1
 
 
+def test_build_request_breakdown_can_return_only_tool_schema():
+    breakdown = build_request_breakdown(
+        messages=[],
+        message_tokens=0,
+        tools=[{
+            "type": "function",
+            "function": {"name": "only_tool", "description": "工具", "parameters": {"type": "object"}},
+        }],
+        tools_tokens=10,
+        overhead_tokens=0,
+    )
+
+    assert [item["key"] for item in breakdown] == ["tool_schema"]
+    assert breakdown[0]["children"][0]["label"] == "工具定义 · only_tool"
+
+
 def test_build_tools_breakdown_fallback_payload(monkeypatch):
     from apps.chat_data_app.agent.middleware import token_usage_middleware as module
 
@@ -270,6 +285,9 @@ def test_request_message_and_model_helpers():
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model="model-field"))) == "model-field"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model_id="model-id-field"))) == "model-id-field"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace())) is None
+
+    request_without_system = SimpleNamespace(messages=[HumanMessage(content="用户问题")])
+    assert _build_request_messages(request_without_system) == request_without_system.messages
 
 
 def test_merge_response_usage_supports_message_and_result_wrapper():

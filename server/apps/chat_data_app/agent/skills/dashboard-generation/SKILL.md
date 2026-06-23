@@ -87,7 +87,7 @@ workspace/dashboard_draft.json
 
 新建看板预览时不要复用或覆盖已有 outputs 看板文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。修改已有预览文件前必须 `file_read` 当前文件内容，修改后必要时重新调用 `dsl2sql_tool` 校验。
 
-`execute_sql_tool` 只用于抽样确认 SQL 是否有数据或确认枚举、状态、类型、时间、金额等字段存储口径；执行结果不能写入 `dashboard_spec`。
+`semantic_query_tool` 只用于接收抽样 DSL，并在内部生成 SQL 后确认是否有数据，或确认枚举、状态、类型、时间、金额等字段存储口径；执行结果不能写入 `dashboard_spec`。
 
 ## 设计规则
 

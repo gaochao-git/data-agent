@@ -41,6 +41,27 @@ def format_execution_target_info_for_llm(execution_target_info: str) -> str:
     return f"\n{text}\n"
 
 
+def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
+    """格式化当前可见指标集轻量目录，供 system prompt 注入。"""
+    text = str(directory_info or "").strip()
+    if not text:
+        return ""
+    return f"\n{text}\n"
+
+
+def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
+    """给 LangChain 消息补充服务端时间戳，随 checkpoint 一起持久化。"""
+    if not message:
+        return message
+    additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+    additional_kwargs["timestamp"] = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        message.additional_kwargs = additional_kwargs
+    except Exception:
+        logger.warning("消息时间戳写入失败: message=%r", message, exc_info=True)
+    return message
+
+
 def _get_available_tool_names(tools: list) -> set[str]:
     """提取当前可用工具名称。"""
     return {
@@ -65,7 +86,7 @@ def _normalize_repeated_tool_name(tool_name: Any, available_tool_names: set[str]
 
 
 def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
-    """在工具执行前归一化明显重复的已注册工具名。"""
+    """在 ToolNode 执行前归一化明显重复的已注册工具名。"""
     tool_calls = getattr(message, "tool_calls", None)
     if not tool_calls:
         return message
@@ -106,7 +127,10 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
     if mode != "query":
         return ""
     if not semantic_config:
-        return "## 当前指标集\n当前未选择指标集。业务数据查询必须先调用 `select_semantic_config_tool`。\n"
+        return (
+            "## 当前指标集\n"
+            "本轮未提供完整指标集。业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
+        )
     from .tools import build_semantic_prompt
     config_id = str(semantic_config.get("id") or "").strip()
     config_name = str(semantic_config.get("name") or semantic_config.get("config_name") or config_id or "").strip()
@@ -115,7 +139,10 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         header += f"：{config_name}"
     if config_id:
         header += f"（semantic_config_id: {config_id}）"
-    header += "。业务数据查询不要调用 `select_semantic_config_tool`。\n\n"
+    header += (
+        "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
+        "如当前指标集或用户问题与可用业务知识技能明显同域，可先加载技能补充业务判断；最终回答不要提及技能加载过程。\n\n"
+    )
     return header + build_semantic_prompt(semantic_config, mode)
 
 
@@ -124,6 +151,7 @@ def create_agent_node(
     semantic_config: dict | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    available_skills_context: str | None = None,
 ) -> Callable:
     """
     创建 agent 节点的工厂函数
@@ -160,6 +188,8 @@ def create_agent_node(
             "tables_ddl_info": tables_ddl_info,
             "current_time": current_time,
             "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
+            "available_skills_context": available_skills_context or "",
+            "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(state.get("semantic_config_directory_info") or ""),
         }
 
         prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)
@@ -221,7 +251,7 @@ def create_agent_node(
                 response = await llm.ainvoke(llm_messages)
             response = normalize_response_tool_call_names(response, active_tools)
 
-        return {"messages": [response], "token_usage": token_usage}
+        return {"messages": [timestamp_message(response)], "token_usage": token_usage}
 
     return agent_node
 

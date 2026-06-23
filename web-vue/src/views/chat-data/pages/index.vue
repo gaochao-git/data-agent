@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * ChatData 智能问数主页面
- * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、数据集配置
+ * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -49,7 +49,7 @@ const DEFAULT_MODE_LABELS: Record<ViewMode, string> = {
   builder: '可视化查询',
   editor: 'SQL查询',
   dashboard: '数据看板',
-  metricConfig: '数据集配置',
+  metricConfig: '指标集配置',
 }
 
 const resolveModeLabels = (): Record<ViewMode, string> => {
@@ -304,7 +304,7 @@ const builderMounted = ref(viewMode.value === 'builder')
 const editorMounted = ref(viewMode.value === 'editor')
 const dashboardMounted = ref(viewMode.value === 'dashboard')
 
-// 选中的数据集 ID
+// 选中的指标集 ID
 const selectedSemanticConfigId = ref<string | null>(null)
 const conversationSelectedSemanticConfigId = ref<string | null>(null)
 const semanticConfigs = ref<SemanticConfigItem[]>([])
@@ -354,11 +354,11 @@ const activeSidebarTab = ref<string>('metrics')
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
-    tabs.push({ key: 'metrics', label: '数据集', icon: 'fa-bullseye' })
+    tabs.push({ key: 'metrics', label: '指标集', icon: 'fa-bullseye' })
   } else if (viewMode.value === 'dashboard') {
     tabs.push({ key: 'dashboard', label: '数据看板', icon: 'fa-chart-pie' })
   } else if (viewMode.value === 'builder') {
-    tabs.push({ key: 'tables', label: '数据集', icon: 'fa-database' })
+    tabs.push({ key: 'tables', label: '指标集', icon: 'fa-database' })
   } else if (viewMode.value === 'editor') {
     tabs.push({ key: 'tables', label: '数据表', icon: 'fa-database' })
   }
@@ -926,7 +926,7 @@ const loadSemanticConfigs = async () => {
       }
     }
   } catch (err) {
-    console.error('加载数据集失败:', err)
+    console.error('加载指标集失败:', err)
     semanticConfigs.value = []
     selectedSemanticConfigId.value = null
     conversationSelectedSemanticConfigId.value = null
@@ -939,11 +939,11 @@ const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入数据集名称', '新建数据集', {
+    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入数据集名称',
+      inputPlaceholder: '请输入指标集名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -1079,15 +1079,15 @@ const buildExecutionTargets = (datasource: DataSource | null): ExecutionTargetOp
 }
 
 const executionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
-const executionTargetMultiple = ref(false)
-
 const selectedMemberDatasourceIds = ref<string[]>([])
+const conversationMemberDatasourceIds = ref<string[]>([])
 
 const resolveSelectedExecutionTargetIds = (
   targets: ExecutionTargetOption[],
   currentIds: string[],
   templateId?: string,
-  multiple = true
+  multiple = true,
+  defaultAll = false
 ): string[] => {
   const availableIds = targets.map(item => item.member_datasource_id)
   if (availableIds.length === 0) {
@@ -1097,6 +1097,10 @@ const resolveSelectedExecutionTargetIds = (
   const retainedIds = currentIds.filter(id => availableIds.includes(id))
   if (retainedIds.length > 0) {
     return multiple ? retainedIds : [retainedIds[0]!]
+  }
+
+  if (multiple && defaultAll) {
+    return [...availableIds]
   }
 
   if (templateId && availableIds.includes(templateId)) {
@@ -1116,10 +1120,23 @@ const syncSelectedExecutionTargets = () => {
     executionTargets.value,
     selectedMemberDatasourceIds.value,
     currentDatasource.value?.template_datasource_id,
-    executionTargetMultiple.value
+    true,
+    false
   )
   if (isSameStringArray(nextIds, selectedMemberDatasourceIds.value)) return
   selectedMemberDatasourceIds.value = nextIds
+}
+
+const syncConversationExecutionTargets = () => {
+  const nextIds = resolveSelectedExecutionTargetIds(
+    executionTargets.value,
+    conversationMemberDatasourceIds.value,
+    currentDatasource.value?.template_datasource_id,
+    true,
+    true
+  )
+  if (isSameStringArray(nextIds, conversationMemberDatasourceIds.value)) return
+  conversationMemberDatasourceIds.value = nextIds
 }
 
 watch(
@@ -1130,12 +1147,18 @@ watch(
   ],
   () => {
     syncSelectedExecutionTargets()
+    syncConversationExecutionTargets()
   },
   { immediate: true }
 )
 
+const isConversationContextMode = computed(() => viewMode.value === 'conversation')
+const activeMemberDatasourceIds = computed(() => (
+  isConversationContextMode.value ? conversationMemberDatasourceIds.value : selectedMemberDatasourceIds.value
+))
+
 const selectedExecutionTargetSummary = computed(() => {
-  const selectedTargets = executionTargets.value.filter(item => selectedMemberDatasourceIds.value.includes(item.member_datasource_id))
+  const selectedTargets = executionTargets.value.filter(item => activeMemberDatasourceIds.value.includes(item.member_datasource_id))
   if (selectedTargets.length === 0) return '未选择执行对象'
   if (selectedTargets.length === 1) return selectedTargets[0]?.label || '已选择 1 个执行对象'
   return `${selectedTargets[0]?.label || '已选择'} 等 ${selectedTargets.length} 个`
@@ -1143,8 +1166,8 @@ const selectedExecutionTargetSummary = computed(() => {
 
 const showContextSelectorDialog = ref(false)
 const draftDatasourceId = ref('')
-const draftExecutionTargetMultiple = ref(false)
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
+const draftDefaultAllExecutionTargets = ref(false)
 
 const draftDatasource = computed(() => {
   return datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
@@ -1154,8 +1177,8 @@ const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecu
 
 const openContextSelector = () => {
   draftDatasourceId.value = selectedDatasourceId.value
-  draftExecutionTargetMultiple.value = executionTargetMultiple.value
-  draftSelectedMemberDatasourceIds.value = [...selectedMemberDatasourceIds.value]
+  draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
+  draftDefaultAllExecutionTargets.value = isConversationContextMode.value
   showContextSelectorDialog.value = true
 }
 
@@ -1166,7 +1189,8 @@ watch(
       draftExecutionTargets.value,
       draftSelectedMemberDatasourceIds.value,
       draftDatasource.value?.template_datasource_id,
-      draftExecutionTargetMultiple.value
+      true,
+      draftDefaultAllExecutionTargets.value
     )
     if (isSameStringArray(nextIds, draftSelectedMemberDatasourceIds.value)) return
     draftSelectedMemberDatasourceIds.value = nextIds
@@ -1178,16 +1202,21 @@ const handleConfirmContextSelector = () => {
     ElMessage.warning('请选择执行对象')
     return
   }
-  executionTargetMultiple.value = draftExecutionTargetMultiple.value
   selectedDatasourceId.value = draftDatasourceId.value
   const nextDatasource = datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
   const nextTargets = buildExecutionTargets(nextDatasource)
-  selectedMemberDatasourceIds.value = resolveSelectedExecutionTargetIds(
+  const nextIds = resolveSelectedExecutionTargetIds(
     nextTargets,
     draftSelectedMemberDatasourceIds.value,
     nextDatasource?.template_datasource_id,
-    draftExecutionTargetMultiple.value
+    true,
+    draftDefaultAllExecutionTargets.value
   )
+  if (isConversationContextMode.value) {
+    conversationMemberDatasourceIds.value = nextIds
+  } else {
+    selectedMemberDatasourceIds.value = nextIds
+  }
   showContextSelectorDialog.value = false
 }
 
@@ -1230,17 +1259,6 @@ watch(
   },
   { immediate: true }
 )
-
-watch(draftExecutionTargetMultiple, () => {
-  const nextIds = resolveSelectedExecutionTargetIds(
-    draftExecutionTargets.value,
-    draftSelectedMemberDatasourceIds.value,
-    draftDatasource.value?.template_datasource_id,
-    draftExecutionTargetMultiple.value
-  )
-  if (isSameStringArray(nextIds, draftSelectedMemberDatasourceIds.value)) return
-  draftSelectedMemberDatasourceIds.value = nextIds
-})
 
 watch(
   [viewMode, activeSidebarTab, isSidebarVisible, selectedDatasourceId, selectedSemanticConfigId, conversationSelectedSemanticConfigId],
@@ -1435,7 +1453,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 数据集配置：全宽内容区，不占用左侧栏空间 -->
+    <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
     <div v-if="!noMatchedDatasource && viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="text-[13px] font-medium text-slate-700">数据源组</span>
@@ -1448,16 +1466,16 @@ onUnmounted(() => {
             {{ ds.group_name }}
           </option>
         </select>
-        <span class="ml-4 text-[13px] font-medium text-slate-700">数据集</span>
+        <span class="ml-4 text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           v-model="selectedSemanticConfigId"
           class="min-w-[260px] max-w-[460px]"
           filterable
           :loading="loadingSemanticConfigs"
           :disabled="loadingSemanticConfigs || semanticConfigs.length === 0"
-          placeholder="请选择数据集"
+          placeholder="请选择指标集"
           loading-text="加载中"
-          no-data-text="暂无数据集"
+          no-data-text="暂无指标集"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
         >
@@ -1470,7 +1488,7 @@ onUnmounted(() => {
         </el-select>
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg border-none bg-blue-500 text-white text-[13px] transition-all hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建数据集"
+          title="新建指标集"
           :disabled="!selectedDatasourceId || creatingMetricConfig"
           @click="handleCreateMetricConfig"
         >
@@ -1659,8 +1677,8 @@ onUnmounted(() => {
                   :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
                   :execution-targets="executionTargets"
-                  :execution-target-multiple="executionTargetMultiple"
-                  :selected-member-datasource-ids="selectedMemberDatasourceIds"
+                  :execution-target-multiple="true"
+                  :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   hide-header
                   hide-datasource-selector
                   hide-execution-target-selector
@@ -1668,7 +1686,7 @@ onUnmounted(() => {
                   class="h-full"
                   @first-message-complete="handleFirstMessageComplete"
                   @datasource-change="handleDatasourceChange"
-                  @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+                  @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @analysis-panel-change="handleAnalysisPanelChange"
                   @agent-change="handleAgentChange"
                   @switch-to-conversation="switchToConversationPanel"
@@ -1687,12 +1705,12 @@ onUnmounted(() => {
                     :semantic-config-selection="conversationSemanticConfigSelection"
                     :ensure-conversation-id="ensureConversationId"
                     :execution-targets="executionTargets"
-                    :execution-target-multiple="executionTargetMultiple"
-                    :selected-member-datasource-ids="selectedMemberDatasourceIds"
+                    :execution-target-multiple="true"
+                    :selected-member-datasource-ids="conversationMemberDatasourceIds"
                     class="h-full"
                     @first-message-complete="handleFirstMessageComplete"
                     @agent-change="handleAgentChange"
-                    @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+                    @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                     @dashboard-created="handleDashboardCreatedFromConversation"
                     @semantic-config-selected="handleConversationSemanticConfigSelected"
                   />
@@ -1712,7 +1730,7 @@ onUnmounted(() => {
                 :semantic-config="currentSemanticConfig"
                 :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
                 :execution-targets="executionTargets"
-                :execution-target-multiple="executionTargetMultiple"
+                :execution-target-multiple="true"
                 :selected-member-datasource-ids="selectedMemberDatasourceIds"
                 :on-sql-change="options?.onSqlChange"
                 :hide-chart-panel="!!options?.hideBuilderChartPanel"
@@ -1733,7 +1751,7 @@ onUnmounted(() => {
                 :table-schema="tableSchema"
                 :initial-sql="options?.initialSql"
                 :execution-targets="executionTargets"
-                :execution-target-multiple="executionTargetMultiple"
+                :execution-target-multiple="true"
                 :selected-member-datasource-ids="selectedMemberDatasourceIds"
                 :on-sql-change="options?.onSqlChange"
                 hide-execution-target-selector
@@ -1764,7 +1782,7 @@ onUnmounted(() => {
 
     <el-dialog v-model="showContextSelectorDialog" width="520px" title="切换数据源组与执行对象">
       <div class="space-y-4">
-        <div class="flex items-end gap-3">
+        <div>
           <div class="min-w-0 flex-1">
             <div class="mb-2 text-[13px] font-medium text-slate-700">数据源组</div>
             <select
@@ -1777,30 +1795,6 @@ onUnmounted(() => {
               </option>
             </select>
           </div>
-
-          <div class="shrink-0">
-            <div class="mb-2 text-[13px] font-medium text-slate-700">选择模式</div>
-            <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-              <button
-                :class="[
-                  'h-8 px-3 rounded-md text-[12px] transition-all',
-                  !draftExecutionTargetMultiple ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                ]"
-                @click="draftExecutionTargetMultiple = false"
-              >
-                单选
-              </button>
-              <button
-                :class="[
-                  'h-8 px-3 rounded-md text-[12px] transition-all',
-                  draftExecutionTargetMultiple ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                ]"
-                @click="draftExecutionTargetMultiple = true"
-              >
-                多选
-              </button>
-            </div>
-          </div>
         </div>
 
         <div>
@@ -1809,7 +1803,7 @@ onUnmounted(() => {
             v-if="draftExecutionTargets.length > 0"
             v-model="draftSelectedMemberDatasourceIds"
             :targets="draftExecutionTargets"
-            :multiple="draftExecutionTargetMultiple"
+            :multiple="true"
             inline
           />
           <div

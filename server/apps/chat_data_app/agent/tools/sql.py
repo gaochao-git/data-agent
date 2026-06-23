@@ -15,11 +15,13 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import interrupt
 
 from utils.logger import get_logger
-from ...schema import ExecuteSqlInput
+from ...schema import SemanticQueryInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
+from ...services.semantic_tools import load_runtime_semantic_config
 from ...services import query_runtime
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
+from ...semantic.compiler import SemanticSQLGenerator
 from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
@@ -177,7 +179,7 @@ async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> li
     )
 
     # 调用 LLM 选择表（非流式，快速返回）
-    llm = get_chat_data_llm(streaming=False, temperature=0)
+    llm = get_chat_data_llm(streaming=False)
     response = await llm.ainvoke([HumanMessage(content=system_prompt)])
 
     # 解析返回的表名列表
@@ -210,26 +212,91 @@ async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> li
 
 # ============ Agent 工具定义 ============
 
-from langchain_core.tools import tool
+# ============ 语义查询工具 ============
 
-from ...schema import ExecuteSqlInput
+def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
+    """判断 state 中预加载的语义配置是否可用于本次工具调用。"""
+    if not config:
+        return False
+    if not semantic_config_id:
+        return True
+    config_id = str(config.get("id") or "").strip()
+    return not config_id or config_id == semantic_config_id
 
 
-# ============ 执行 SQL 工具 ============
+def _latest_human_query(messages: list[Any] | None) -> str:
+    """提取最近一条用户消息，保持 DSL 校验和执行阶段的意图判定一致。"""
+    for message in reversed(messages or []):
+        if isinstance(message, HumanMessage):
+            return str(getattr(message, "content", "") or "").strip()
+        if getattr(message, "type", None) == "human":
+            return str(getattr(message, "content", "") or "").strip()
+    return ""
 
-@tool(args_schema=ExecuteSqlInput)
-async def execute_sql_tool(
-    sql: str,
+
+async def _resolve_semantic_query_config(
+    state: dict,
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+) -> dict[str, Any] | None:
+    """优先复用图状态里的临时配置，否则按数据源和指标集 ID 读取运行时配置。"""
+    state_config = state.get("semantic_config")
+    if isinstance(state_config, dict) and _state_semantic_config_matches(state_config, semantic_config_id):
+        config = dict(state_config)
+        if semantic_config_id and not config.get("id"):
+            config["id"] = semantic_config_id
+        return config
+    return await load_runtime_semantic_config(datasource_id, semantic_config_id)
+
+
+@tool(args_schema=SemanticQueryInput)
+async def semantic_query_tool(
+    dsl: dict,
     state: Annotated[dict, InjectedState],
-    semantic_config_id: str | None = None
+    semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] | None = None,
 ) -> str:
     """
-    执行 SQL 查询并返回结果。
+    执行语义查询并返回结果。
 
-    当用户需要查询数据时，调用此工具执行 SQL。
+    接收语义 DSL，内部生成 SQL 后执行。
     返回的 result_id 可用于后续生成图表。
     """
-    logger.info(f"执行 SQL: {sql[:100]}...")
+    if not isinstance(dsl, dict):
+        return "semantic_query_tool 执行失败: dsl 必须是对象"
+    if "sql" in dsl:
+        return "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+
+    datasource_id = state.get("datasource_id")
+    state_config = state.get("semantic_config")
+    state_config_id = str((state_config or {}).get("id") or "").strip() if isinstance(state_config, dict) else ""
+    semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or state_config_id or "").strip() or None
+    if not semantic_config_id and not isinstance(state_config, dict):
+        return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+
+    config = await _resolve_semantic_query_config(state, datasource_id, semantic_config_id)
+    if not config:
+        return f"semantic_query_tool 执行失败: 未找到可用指标集 {semantic_config_id or '-'}"
+
+    query_text = _latest_human_query(state.get("messages") or [])
+
+    compile_result = SemanticSQLGenerator(config).generate_sql(
+        metrics=dsl.get("metrics") or [],
+        dimensions=dsl.get("dimensions") or [],
+        filters=dsl.get("filters") or [],
+        having=dsl.get("having") or [],
+        order_by=dsl.get("order_by") or [],
+        limit=dsl.get("limit"),
+        offset=dsl.get("offset"),
+        user_query=query_text or None,
+    )
+    if not compile_result.get("success"):
+        return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
+    sql = str(compile_result.get("sql") or "").strip()
+    if not sql:
+        return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+
+    logger.info(f"执行语义查询 SQL: {sql[:100]}...")
 
     # Human-in-the-Loop: 根据开关决定是否需要用户确认
     if SQL_APPROVAL_ENABLED:
@@ -253,18 +320,34 @@ async def execute_sql_tool(
         logger.info(f"直接执行 SQL（审批已关闭）: {sql[:100]}...")
 
     # 获取数据源ID
-    datasource_id = state.get("datasource_id")
     user_id = str(state.get("user_id") or "").strip() or None
     operator_name = str(state.get("operator_name") or "").strip() or None
-    member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
-    logger.info("chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s", user_id, operator_name, datasource_id, member_datasource_ids)
-    semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or "").strip() or None
+    requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
+    state_member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
+    if requested_member_datasource_ids:
+        if state_member_datasource_ids:
+            invalid_member_ids = [
+                member_id
+                for member_id in requested_member_datasource_ids
+                if member_id not in state_member_datasource_ids
+            ]
+            if invalid_member_ids:
+                return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
+        effective_member_datasource_ids = requested_member_datasource_ids
+    elif state.get("require_explicit_member_selection") and len(state_member_datasource_ids) > 1:
+        return "semantic_query_tool 执行失败: 多个可用执行对象时必须传入本次要查询的 member_datasource_ids；如果用户未明确机构范围，请先确认查询哪个机构或是否查询全部"
+    else:
+        effective_member_datasource_ids = state_member_datasource_ids
+    logger.info(
+        "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
+        user_id,
+        operator_name,
+        datasource_id,
+        effective_member_datasource_ids,
+    )
     conversation_id = str(state.get("conversation_id") or "").strip() or None
-    query_text = ""
-    messages = state.get("messages") or []
-    if messages:
-        query_text = str(getattr(messages[0], "content", "") or "").strip()
-    query_result = await _execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    query_result["sql"] = query_result.get("sql") or sql
 
     if query_result["success"]:
         result_json = json.dumps(query_result, ensure_ascii=False)
@@ -325,14 +408,15 @@ def _build_multi_member_query_result(sql: str, member_results: list[dict]) -> di
     if primary_result is None:
         primary_result = member_results[0] if member_results else {}
     has_success = any(item.get("success") for item in member_results)
+    has_running = any(str(item.get("status") or "").strip().lower() in {"pending", "running"} for item in member_results)
     return {
-        "success": has_success,
+        "success": has_success and not has_running,
         "sql": sql,
         "columns": primary_result.get("columns", []),
         "data": primary_result.get("data", []),
         "total_count": primary_result.get("total_count", 0),
         "execution_time_ms": primary_result.get("execution_time_ms"),
-        "error": None if has_success else (primary_result.get("error") or "查询失败"),
+        "error": "部分执行对象仍在查询中" if has_running else (None if has_success else (primary_result.get("error") or "查询失败")),
         "member_datasource_id": primary_result.get("member_datasource_id"),
         "member_name": primary_result.get("member_name"),
         "results": member_results,

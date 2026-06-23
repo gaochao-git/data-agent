@@ -115,6 +115,95 @@ def extract_semantic_config_id(state: Optional[Dict]) -> Optional[str]:
     return semantic_config_id or None
 
 
+def _is_semantic_config_directory_query(query: str) -> bool:
+    """判断用户是否在询问当前可见指标集目录，而不是要选择一个指标集查数。"""
+    text = str(query or "").strip()
+    if not text:
+        return False
+    dataset_terms = ("指标集", "数据集", "语义配置", "可查范围", "查询范围")
+    view_terms = ("有哪些", "有那些", "能看到", "可以看到", "可用", "当前", "列表", "列出", "都有什么", "都有哪些")
+    if not any(term in text for term in dataset_terms):
+        return False
+    return any(term in text for term in view_terms)
+
+
+def _semantic_config_directory_item(config: Dict[str, Any]) -> Dict[str, Any]:
+    """构造面向模型的指标集目录项，只包含名称、描述和规模。"""
+    config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
+    metrics = config.get("metrics") if isinstance(config.get("metrics"), list) else []
+    dimensions = config.get("dimensions") if isinstance(config.get("dimensions"), list) else []
+    return {
+        "id": config_id,
+        "name": str(config.get("name") or config.get("semantic_config_name") or config_id).strip(),
+        "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
+        "metrics_total": len(metrics),
+        "dimensions_total": len(dimensions),
+    }
+
+
+def _prompt_text(value: Any) -> str:
+    """标准化注入提示词的目录文本，不裁剪后台维护内容。"""
+    return str(value or "").strip()
+
+
+def _safe_count(value: Any) -> int:
+    """读取目录数量字段，避免脏数据影响提示词构造。"""
+    try:
+        count = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(count, 0)
+
+
+def format_semantic_config_directory_for_prompt(directory: List[Dict[str, Any]]) -> str:
+    """将当前可见指标集轻量目录格式化为 system prompt 文本。"""
+    normalized_items = []
+    for item in directory or []:
+        if not isinstance(item, dict):
+            continue
+        name = _prompt_text(item.get("name"))
+        if not name:
+            continue
+        normalized_items.append({
+            "name": name,
+            "description": _prompt_text(item.get("description")) or "未填写",
+            "metrics_total": _safe_count(item.get("metrics_total")),
+            "dimensions_total": _safe_count(item.get("dimensions_total")),
+        })
+    if not normalized_items:
+        return ""
+
+    lines = [
+        "## 当前可见指标集目录",
+        "以下是当前数据源组下可见的启用指标集轻量目录，只包含名称、描述、指标数量和维度数量；用于回答可见范围或业务域介绍，不代表已加载完整指标/维度口径。",
+    ]
+    for index, item in enumerate(normalized_items, start=1):
+        lines.append(f"{index}. 名称：{item['name']}")
+        lines.append(f"   描述：{item['description']}")
+        lines.append(f"   指标数：{item['metrics_total']}；维度数：{item['dimensions_total']}")
+    return "\n".join(lines)
+
+
+async def list_runtime_semantic_config_directory(datasource_id: str | None, user_id: str | None = None) -> List[Dict[str, Any]]:
+    """读取当前数据源组下所有启用指标集的轻量目录。"""
+    normalized_datasource_id = str(datasource_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_datasource_id:
+        return []
+    ds_manager = get_datasource_manager()
+    if hasattr(ds_manager, "get_runtime_semantic_configs_async"):
+        configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id, normalized_user_id)
+    else:
+        configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id, normalized_user_id)
+    directory = [
+        _semantic_config_directory_item(config)
+        for config in configs or []
+        if str((config or {}).get("id") or (config or {}).get("semantic_config_id") or "").strip()
+        and bool((config or {}).get("enabled", True))
+    ]
+    return directory
+
+
 async def load_runtime_semantic_config(datasource_id: str | None, semantic_config_id: str | None) -> Dict[str, Any] | None:
     """读取运行时语义配置，并补齐方言和 joins。"""
     normalized_datasource_id = str(datasource_id or "").strip()
@@ -162,6 +251,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], selected_con
         and not selection.get("cross_config_required")
     )
     candidates = selection.get("candidates") if isinstance(selection.get("candidates"), list) else []
+    query_plan = selection.get("query_plan") if isinstance(selection.get("query_plan"), dict) else None
     payload = {
         "success": True,
         "selected": can_select,
@@ -176,15 +266,64 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], selected_con
         "cross_config_required": bool(selection.get("cross_config_required")),
         "candidates": candidates,
     }
+    if query_plan:
+        payload["query_plan"] = dict(query_plan)
+        task_summaries = []
+        for task in query_plan.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task_config_id = str(task.get("semantic_config_id") or "").strip()
+            task_config = next(
+                (item for item in candidates if str(item.get("id") or "").strip() == task_config_id),
+                None,
+            )
+            task_summaries.append({
+                "task_id": task.get("task_id") or "",
+                "semantic_config_id": task_config_id,
+                "semantic_config_name": task.get("semantic_config_name") or (task_config or {}).get("name") or task_config_id,
+                "question": task.get("question") or "",
+                "intent": task.get("intent") or "",
+                "reason": task.get("reason") or "",
+            })
+        payload["query_plan"]["tasks"] = task_summaries
+        if query_plan.get("type") in {"multi_config_independent", "multi_config_calculation"}:
+            payload["message"] = "该问题需要拆分为多个指标集子任务；请按 query_plan.tasks 逐个调用 dsl2sql_tool 和 semantic_query_tool，每次传入对应 semantic_config_id"
+            return payload
+        if query_plan.get("type") == "cross_join_required":
+            payload["cross_config_required"] = True
+            payload["message"] = "当前智能问数不支持跨指标集 JOIN、混合维度分组或自动拼宽表；请向用户说明无法继续执行，并给出可拆分为独立查询的建议"
+            return payload
     if can_select:
         payload["message"] = "已选择指标集，请后续调用 dsl2sql_tool 时将 selected_config_id 作为 semantic_config_id 传入"
         if selected_config:
             payload["semantic_config"] = _summarize_semantic_config(selected_config)
-    elif payload["ambiguous"] or payload["cross_config_required"]:
-        payload["message"] = "存在多个可用指标集或需要跨指标集，请让用户从 candidates 中选择一个指标集后再查询"
+    elif payload["cross_config_required"]:
+        payload["message"] = "当前智能问数不支持跨指标集 JOIN、混合维度分组或自动拼宽表；请向用户说明无法继续执行，并给出可拆分为独立查询的建议"
+    elif payload["ambiguous"]:
+        payload["message"] = "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询"
     else:
         payload["message"] = "当前指标体系不支持该问题，请说明缺少的指标、维度或业务口径"
     return payload
+
+
+def _semantic_config_directory_to_tool_payload(directory: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """将指标集目录转为选择工具返回结构。"""
+    return {
+        "success": True,
+        "directory": True,
+        "selected": False,
+        "selected_config_id": "",
+        "selected_config_name": "",
+        "coverage": "none",
+        "confidence": "none",
+        "reason": "用户询问当前可见指标集目录",
+        "matched_metrics": [],
+        "matched_dimensions": [],
+        "ambiguous": False,
+        "cross_config_required": False,
+        "semantic_configs": directory,
+        "message": "当前可见指标集目录已返回；请基于 semantic_configs 用自然语言列出名称、描述和指标/维度数量，不要选择单个指标集，也不要编造不存在的指标集",
+    }
 
 
 def create_semantic_config_selection_tools(
@@ -192,9 +331,11 @@ def create_semantic_config_selection_tools(
     include_query_tools: bool = True,
     datasource_id: str | None = None,
     semantic_config: Dict[str, Any] | None = None,
+    user_id: str | None = None,
 ):
     """创建统一语义查询工具。"""
     bound_datasource_id = str(datasource_id or "").strip() or None
+    bound_user_id = str(user_id or "").strip()
     bound_semantic_config = dict(semantic_config or {}) if semantic_config else None
     bound_semantic_config_id = str((bound_semantic_config or {}).get("id") or "").strip()
 
@@ -215,6 +356,7 @@ def create_semantic_config_selection_tools(
         从当前数据源组的指标集中选择最适合回答用户问题的指标集。
 
         仅在用户提出业务数据查询、且当前会话没有选择指标集时调用。
+        如已加载只读业务知识技能的路由 reference，query 可包含原问题和简短业务限定。
         普通对话、概念解释、使用帮助不要调用。
         """
         datasource_id = bound_datasource_id or extract_datasource_id(state)
@@ -224,14 +366,32 @@ def create_semantic_config_selection_tools(
         if not user_query:
             return "select_semantic_config_tool 执行失败: 缺少用户问题"
         try:
+            if _is_semantic_config_directory_query(user_query):
+                directory = await list_runtime_semantic_config_directory(datasource_id, bound_user_id)
+                payload = _semantic_config_directory_to_tool_payload(directory)
+                return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
             selection = await select_semantic_config_for_query(
                 datasource_id=datasource_id,
                 user_query=user_query,
                 model_id=model_id,
+                user_id=bound_user_id,
             )
             selected_config_id = str((selection or {}).get("selected_config_id") or "").strip()
             selected_config = await load_runtime_semantic_config(datasource_id, selected_config_id) if selected_config_id else None
-            return "[select_semantic_config_tool]\n" + json.dumps(_selection_to_tool_payload(selection, selected_config), ensure_ascii=False, indent=2)
+            payload = _selection_to_tool_payload(selection, selected_config)
+            query_plan = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else None
+            if query_plan and query_plan.get("tasks"):
+                task_summaries = {}
+                for task in query_plan.get("tasks") or []:
+                    config_id = str(task.get("semantic_config_id") or "").strip()
+                    if not config_id or config_id in task_summaries:
+                        continue
+                    task_config = await load_runtime_semantic_config(datasource_id, config_id)
+                    if task_config:
+                        task_summaries[config_id] = _summarize_semantic_config(task_config)
+                if task_summaries:
+                    payload["query_plan"]["semantic_configs"] = task_summaries
+            return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
         except Exception as exc:
             logger.error("select_semantic_config_tool 执行失败: %s", exc, exc_info=True)
             return f"select_semantic_config_tool 执行失败: {exc}"

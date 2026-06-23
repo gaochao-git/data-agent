@@ -442,7 +442,7 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         existing_questions=payload.existing_questions,
         semantic_config_payload=_semantic_config_prompt_payload(config),
     )
-    llm = get_chat_data_llm(streaming=False, temperature=0.2, max_tokens=2000)
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
@@ -836,7 +836,7 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
 
 @router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
-    """读取当前数据集场景的评测测试集。"""
+    """读取当前指标集场景的评测测试集。"""
     try:
         scene_paths = _scene_case_paths(datasource_id, config_id)
         loaded = await _load_scene_case_set(datasource_id, config_id)
@@ -853,7 +853,7 @@ async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
 
 @router.put("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
-    """保存当前数据集场景的评测测试集。"""
+    """保存当前指标集场景的评测测试集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(getattr(current_user, "user_id", "") or "").strip()

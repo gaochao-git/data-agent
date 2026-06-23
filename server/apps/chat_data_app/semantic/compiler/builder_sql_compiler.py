@@ -283,8 +283,6 @@ def _build_where_leaf_clause(
         return f"{where_expr} {operator} ({expr})"
     if leaf.get("valueType") == "expression" and (leaf.get("rightExpression") or "").strip():
         expr = str(leaf.get("rightExpression")).strip()
-        if operator in ("IN", "NOT IN"):
-            return f"{where_expr} {operator} ({expr})"
         return f"{where_expr} {operator} {expr}"
     if operator == "EMPTY STRING":
         return f"{where_expr} = ''"
@@ -362,8 +360,6 @@ def _build_having_leaf_clause(
         return f"{agg_expr} {operator} ({expr})"
     if leaf.get("valueType") == "expression" and (leaf.get("rightExpression") or "").strip():
         expr = str(leaf.get("rightExpression")).strip()
-        if operator in ("IN", "NOT IN"):
-            return f"{agg_expr} {operator} ({expr})"
         return f"{agg_expr} {operator} {expr}"
     if operator == "EMPTY STRING":
         return f"{agg_expr} = ''"
@@ -790,10 +786,7 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                     clause = f"{agg_expr} {operator} ({expr})"
                 elif f.get("valueType") == "expression" and (f.get("rightExpression") or "").strip():
                     expr = str(f.get("rightExpression")).strip()
-                    if operator in ("IN", "NOT IN"):
-                        clause = f"{agg_expr} {operator} ({expr})"
-                    else:
-                        clause = f"{agg_expr} {operator} {expr}"
+                    clause = f"{agg_expr} {operator} {expr}"
                 elif operator == "EMPTY STRING":
                     clause = f"{agg_expr} = ''"
                 elif operator == "STARTS WITH":

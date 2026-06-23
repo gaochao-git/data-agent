@@ -9,6 +9,7 @@ import { ElMessage } from 'element-plus'
 import type { ToolCallInfo } from '../types'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
+import { extractGeneratedSqlFromToolCall, extractSemanticDslFromArgs } from '../utils/semanticTool'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -33,6 +34,15 @@ const emit = defineEmits<{
 
 // 保存到看板弹窗
 const showSaveModal = ref(false)
+const saveSql = ref('')
+const saveChartType = ref('table')
+const saveMemberDatasourceId = ref('')
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
+  saveSql.value = sql
+  saveChartType.value = chartType
+  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
+  showSaveModal.value = true
+}
 
 
 // 折叠状态
@@ -56,7 +66,7 @@ const TOOL_META: Record<string, { label: string }> = {
   select_semantic_config_tool: { label: '选择指标集' },
   dsl2sql_tool: { label: '语义转SQL' },
   generate_chart_tool: { label: '聚合查询' },
-  execute_sql_tool: { label: 'SQL执行' }
+  semantic_query_tool: { label: '语义查询' }
 }
 
 // 参数标签
@@ -75,6 +85,7 @@ const PARAM_LABELS: Record<string, string> = {
   y_field: 'Y轴字段',
   series_field: '分组字段',
   skill_name: '技能名称',
+  reference_names: '参考文档',
   file_path: '文件路径',
   source_path: '源路径',
   target_path: '目标路径',
@@ -98,11 +109,19 @@ type SemanticSelectionResult = {
   selected_config_name?: string
   confidence?: string
   reason?: string
+  message?: string
   matched_metrics?: string[]
   matched_dimensions?: string[]
   ambiguous?: boolean
   cross_config_required?: boolean
   candidates?: Array<{ id?: string; name?: string; reason?: string; coverage?: string; confidence?: string }>
+  query_plan?: {
+    type?: string
+    tasks?: Array<Record<string, unknown>>
+    final_action?: string
+    calculation?: string
+    reason?: string
+  }
 }
 
 // DSL 参数标签颜色
@@ -113,7 +132,6 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   having: { bg: 'rgba(139, 92, 246, 0.1)', text: '#7c3aed' },
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
-const SEMANTIC_DSL_KEYS = ['metrics', 'dimensions', 'filters', 'having', 'order_by', 'limit', 'offset'] as const
 
 // 获取工具元数据
 const meta = computed(() => {
@@ -151,17 +169,19 @@ const compactDescription = computed(() => {
   if (props.toolCall.tool_name === 'skill_load') {
     return String(args.skill_name || args.name || getResultField('runtime_path') || '').trim()
   }
-  if (props.toolCall.tool_name === 'execute_sql_tool') {
+  if (props.toolCall.tool_name === 'semantic_query_tool') {
     return normalizeVisiblePath(args.save_as)
   }
   return ''
 })
 
-// 是否可以保存到看板（execute_sql_tool 完成且有 SQL）
+const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
+
+// 是否可以保存到看板（semantic_query_tool 完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
-  return props.toolCall.tool_name === 'execute_sql_tool' &&
+  return props.toolCall.tool_name === 'semantic_query_tool' &&
     props.toolCall.status === 'completed' &&
-    props.toolCall.args?.sql
+    Boolean(generatedSql.value)
 })
 
 const copyText = (text: string, message: string) => {
@@ -202,19 +222,9 @@ function isEmptyParamValue(value: unknown): boolean {
 }
 
 function buildSemanticDslParam(args: Record<string, unknown>): Record<string, unknown> | null {
-  if (props.toolCall.tool_name !== 'dsl2sql_tool') return null
   if (Object.prototype.hasOwnProperty.call(args, 'dsl')) return null
-  const hasDslField = SEMANTIC_DSL_KEYS.some(key => Object.prototype.hasOwnProperty.call(args, key))
-  if (!hasDslField) return null
-  return {
-    metrics: args.metrics || [],
-    dimensions: args.dimensions || [],
-    filters: args.filters || [],
-    having: args.having || [],
-    order_by: args.order_by || [],
-    limit: Object.prototype.hasOwnProperty.call(args, 'limit') ? args.limit : null,
-    offset: Object.prototype.hasOwnProperty.call(args, 'offset') ? args.offset : null,
-  }
+  if (props.toolCall.tool_name !== 'dsl2sql_tool' && props.toolCall.tool_name !== 'semantic_query_tool') return null
+  return extractSemanticDslFromArgs(args)
 }
 
 // 过滤要展示的参数
@@ -331,6 +341,17 @@ const semanticSelectionCandidates = computed(() => {
   const result = semanticSelectionResult.value
   if (!result || result.selected) return []
   return result.candidates || []
+})
+const semanticSelectionHeader = computed(() => {
+  const result = semanticSelectionResult.value
+  if (!result) return ''
+  if (result.selected && semanticSelectionTitle.value) return `自动选择：${semanticSelectionTitle.value}`
+  const planType = result.query_plan?.type || ''
+  if (planType === 'multi_config_independent' || planType === 'multi_config_calculation') return '需要拆分多个指标集查询'
+  if (planType === 'cross_join_required' || result.cross_config_required) return '需要跨指标集处理'
+  if (result.ambiguous) return '需要选择指标集'
+  if ((result.candidates || []).length > 0) return '未找到单一可覆盖指标集'
+  return '未匹配到可用指标集'
 })
 
 // 解析结果内容，将 SQL 代码块与普通文本分离
@@ -507,8 +528,8 @@ function getSqlTokenClass(type: string): string {
           <div class="p-3 rounded-lg bg-white border border-black/[0.06]">
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
-              <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 grid grid-cols-[72px_minmax(0,1fr)] items-start gap-2 last:mb-0">
-                <span class="pt-0.5 text-xs text-gray-400">{{ PARAM_LABELS[key] || key }}</span>
+              <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -540,9 +561,9 @@ function getSqlTokenClass(type: string): string {
                 <pre class="max-h-40 overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><template v-if="key === 'sql'"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatParamValue(key, value))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></template><code v-else class="text-emerald-600">{{ formatParamValue(key, value) }}</code></pre>
               </div>
               <!-- 普通类型 -->
-              <div v-else class="mb-3 grid grid-cols-[72px_minmax(0,1fr)] items-start gap-2 last:mb-0">
-                <span class="pt-0.5 text-xs text-gray-400">{{ PARAM_LABELS[key] || key }}</span>
-                <span class="min-w-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
+              <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>
           </div>
@@ -570,10 +591,7 @@ function getSqlTokenClass(type: string): string {
           <div v-if="semanticSelectionResult" class="p-3 rounded-lg bg-blue-50/70 border border-blue-100 mb-2 last:mb-0">
             <div class="flex items-center gap-2 font-medium text-slate-800">
               <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
-              <span v-if="semanticSelectionResult.selected && semanticSelectionTitle">自动选择：{{ semanticSelectionTitle }}</span>
-              <span v-else-if="semanticSelectionResult.ambiguous">需要选择指标集</span>
-              <span v-else-if="semanticSelectionResult.cross_config_required">需要跨指标集处理</span>
-              <span v-else>未匹配到可用指标集</span>
+              <span>{{ semanticSelectionHeader }}</span>
             </div>
             <div v-if="semanticSelectionResult.reason" class="mt-1.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-600">
               {{ semanticSelectionResult.reason }}
@@ -644,11 +662,11 @@ function getSqlTokenClass(type: string): string {
             <AsyncQueryResult
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"
-              :sql="toolCall.args?.sql as string"
+              :sql="generatedSql"
               :semantic-params="toolCall.semanticParams"
               :on-view-analysis="onViewAnalysis"
               :is-analysis-active="isAnalysisActive"
-              :on-save="canSaveToPanel ? () => (showSaveModal = true) : undefined"
+              :on-save="canSaveToPanel ? handleSaveToDashboard : undefined"
             />
           </div>
           <div v-else-if="toolCall.renderId && toolCall.renderType === 'chart'" class="flex items-center gap-2.5 p-5 text-center text-gray-500 text-[13px] bg-[linear-gradient(135deg,#fafbfc_0%,#f5f7fa_100%)] rounded-xl border border-dashed border-black/10">
@@ -679,8 +697,10 @@ function getSqlTokenClass(type: string): string {
     <SaveToPanelModal
       v-if="canSaveToPanel"
       v-model:visible="showSaveModal"
-      :sql="toolCall.args?.sql as string"
+      :sql="saveSql || generatedSql"
+      :chart-type="saveChartType"
       :datasource-id="datasourceId"
+      :member-datasource-id="saveMemberDatasourceId"
     />
   </div>
 </template>

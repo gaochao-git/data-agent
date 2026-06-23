@@ -86,12 +86,6 @@ class QueryTaskCreateRequest(BaseModel):
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
 
-class CompileBuilderSqlRequest(BaseModel):
-    """编译 Builder DSL 请求（仅生成 SQL，不执行）"""
-    builder_config: dict = Field(..., description="辅助查询模式的 DSL 配置")
-    datasource_id: Optional[str] = Field(default=None, description="数据源ID（用于选择 SQL 方言）")
-
-
 class CompileSemanticBuilderSqlRequest(BaseModel):
     """编译语义可视化 DSL 请求（仅生成 SQL，不执行）。"""
     datasource_id: str = Field(..., description="数据源ID")
@@ -157,11 +151,28 @@ class DbConnectionRequest(BaseModel):
     """数据库连接请求（用于获取表列表）"""
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     query_executor_type: QueryExecutorType = Field(default="direct", description="查询执行方式: direct | http")
-    host: str = Field(..., description="服务器地址")
+    host: str = Field(default="", description="服务器地址")
     port: Optional[int] = Field(default=None, description="端口（Hive默认10000，MySQL默认3306）")
     database: str = Field(..., description="数据库名")
     org_code: Optional[str] = Field(default=None, description="机构编码")
     org_name: Optional[str] = Field(default=None, description="机构名称")
+
+    @model_validator(mode="after")
+    def validate_connection_fields(self):
+        self.host = str(self.host or "").strip()
+        self.database = str(self.database or "").strip()
+        self.org_code = str(self.org_code or "").strip() or None
+        self.org_name = str(self.org_name or "").strip() or None
+        if self.query_executor_type == "direct":
+            if not self.host:
+                raise ValueError("host 不能为空")
+        elif not self.org_code:
+            raise ValueError("HTTP 模式缺少机构编码")
+        elif self.host or self.port is not None:
+            raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
+        if not self.database:
+            raise ValueError("database 不能为空")
+        return self
 
 
 class DatasourceUpdateRequest(BaseModel):
@@ -248,7 +259,7 @@ class DatasourceSourceItem(BaseModel):
     org_name: str = Field(..., min_length=1, max_length=128, description="机构名称")
     org_code: str = Field(..., min_length=1, max_length=128, description="机构编码")
     query_executor_type: QueryExecutorType = Field(..., description="查询执行方式: direct | http")
-    host: str = Field(..., min_length=1, description="主机地址")
+    host: str = Field(default="", description="主机地址")
     port: Optional[int] = Field(default=None, description="端口")
     database: str = Field(..., min_length=1, description="数据库名")
 
@@ -262,8 +273,10 @@ class DatasourceSourceItem(BaseModel):
             raise ValueError("org_name 不能为空")
         if not self.org_code:
             raise ValueError("org_code 不能为空")
-        if not self.host:
+        if self.query_executor_type == "direct" and not self.host:
             raise ValueError("host 不能为空")
+        if self.query_executor_type == "http" and (self.host or self.port is not None):
+            raise ValueError("HTTP 模式只填写数据库名，不填写 IP 和端口")
         if not self.database:
             raise ValueError("database 不能为空")
         return self
@@ -354,7 +367,7 @@ class SemanticConfig(BaseModel):
     """单个语义配置（支持多配置）"""
     id: str = Field(..., description="配置ID")
     name: str = Field(..., description="配置名称，如'数据库集群分析'")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
@@ -365,7 +378,7 @@ class SemanticConfig(BaseModel):
 class SemanticConfigCreateRequest(BaseModel):
     """创建语义配置请求"""
     name: str = Field(..., description="配置名称")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
@@ -376,7 +389,7 @@ class SemanticConfigCreateRequest(BaseModel):
 class SemanticConfigUpdateRequest(BaseModel):
     """更新语义配置请求"""
     name: Optional[str] = Field(default=None, description="配置名称")
-    description: Optional[str] = Field(default=None, description="数据集短描述")
+    description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
     enabled: Optional[bool] = Field(default=None, description="是否启用")
     metrics: Optional[List[SemanticMetric]] = Field(default=None, description="指标列表")
@@ -433,7 +446,7 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
 
 class SemanticAutoPrefillRequest(BaseModel):
     """语义字段自动预填请求"""
-    selected_tables: List[str] = Field(default_factory=list, description="当前数据集已选择的数据表")
+    selected_tables: List[str] = Field(default_factory=list, description="当前指标集已选择的数据表")
     table_model_type: Literal["detail", "aggregated"] = Field(default="detail", description="表建模类型：detail 明细表，aggregated 预聚合表")
     generate_business_flow: bool = Field(default=False, description="是否生成业务运转说明")
     business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
@@ -451,7 +464,7 @@ class SemanticPrefillColumn(BaseModel):
 class SemanticPrefillTable(BaseModel):
     """语义预填表信息"""
     table_name: str = Field(..., description="表名")
-    table_alias: Optional[str] = Field(default=None, description="当前数据集中的表角色别名")
+    table_alias: Optional[str] = Field(default=None, description="当前指标集中的表角色别名")
     description: Optional[str] = Field(default=None, description="表描述")
     columns: List[SemanticPrefillColumn] = Field(default_factory=list, description="字段列表")
 
@@ -521,7 +534,10 @@ OrFilter.model_rebuild()
 
 class SelectSemanticConfigInput(BaseModel):
     """指标集选择工具的输入参数"""
-    query: Optional[str] = Field(default=None, description="用户问题；不传时使用当前会话最近一条用户消息")
+    query: Optional[str] = Field(
+        default=None,
+        description="用户问题；可包含只读技能路由后追加的简短业务限定、查询类型或粒度要求；不传时使用当前会话最近一条用户消息",
+    )
 
 
 class ExecuteSemanticInput(BaseModel):
@@ -545,7 +561,8 @@ class ExecuteSemanticInput(BaseModel):
         default=[],
         description='''WHERE 过滤条件，支持两种格式：
 1. 平铺格式（简单场景）: [{"dimension": "维度名", "operator": "=", "value": "值"}]
-2. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]'''
+2. 结构化表达式（字段间比较，不传 SQL 字符串）: [{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"dimension","name":"字段B"},"right":{"type":"literal","value":10}}}]
+3. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]'''
     )
     having: List[Dict] = Field(
         default=[],
@@ -575,10 +592,25 @@ class ExecuteSemanticInput(BaseModel):
 
 # ============ Agent 工具输入模型 ============
 
-class ExecuteSqlInput(BaseModel):
-    """执行 SQL 工具的输入参数"""
-    sql: str = Field(..., description="要执行的 SQL 语句")
+class SemanticQueryInput(BaseModel):
+    """语义查询工具的输入参数。接收 DSL，内部生成 SQL 后执行。"""
+    dsl: Dict[str, Any] = Field(
+        ...,
+        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset",
+    )
     semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
+    member_datasource_ids: List[str] = Field(
+        default_factory=list,
+        description="本次查询要执行的成员数据源 ID 列表；仅使用系统提示词中当前可用范围列出的执行对象",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_sql(cls, data: Any):
+        """拒绝旧版 sql 参数，避免模型绕过语义 DSL 编译链路。"""
+        if isinstance(data, dict) and "sql" in data:
+            raise ValueError("semantic_query_tool 已改为接收 dsl 参数，禁止传入 sql")
+        return data
 
 
 class CalculatorItem(BaseModel):
@@ -611,7 +643,7 @@ class CalculatorInput(BaseModel):
 class GenerateChartInput(BaseModel):
     """图表生成工具的输入参数"""
     result_id: str = Field(
-        description="查询结果ID，从 execute_sql_tool 返回的 result_id"
+        description="查询结果ID，从 semantic_query_tool 返回的 result_id"
     )
     chart_type: Optional[ChartType] = Field(
         default=None,
@@ -672,6 +704,7 @@ class PanelCreateRequest(BaseModel):
     refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
     source_thread_id: Optional[str] = Field(default=None, description="来源会话ID")
     datasource_id: Optional[str] = Field(default=None, description="数据源ID")
+    member_datasource_id: Optional[str] = Field(default=None, description="成员数据源ID")
 
 
 class DashboardFromSpecRequest(BaseModel):
@@ -720,6 +753,7 @@ class PanelUpdateRequest(BaseModel):
     layout_w: Optional[int] = Field(default=None, description="布局宽度")
     layout_h: Optional[int] = Field(default=None, description="布局高度")
     refresh_interval: Optional[int] = Field(default=None, description="刷新间隔(秒)")
+    member_datasource_id: Optional[str] = Field(default=None, description="成员数据源ID")
 
 
 class LayoutUpdateRequest(BaseModel):

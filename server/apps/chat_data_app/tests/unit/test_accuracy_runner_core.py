@@ -10,8 +10,7 @@ from starlette.responses import StreamingResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -76,6 +75,41 @@ def test_scorer_normalizes_dimensions_temporal_filters_and_offset():
     assert result["slot_scores"]["offset"] == 1.0
 
 
+def test_scorer_filter_and_slot_mismatch_branches():
+    assert scorers.normalize_temporal_exclusive_upper("bad", inclusive=True) is None
+    assert scorers.normalize_filter("plain") == ["plain"]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}) == [
+        {"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["2026-06-01", "2026-06-02"]}) == [
+        {"dimension": "下单时间", "operator": ">=", "value": "2026-06-01 00:00:00"},
+        {"dimension": "下单时间", "operator": "<", "value": "2026-06-03 00:00:00"},
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": ">=", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": ">=", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": ">", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": ">", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<", "value": "2026-06-01"}) == [
+        {"dimension": "下单时间", "operator": "<", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<=", "value": "bad"}) == [
+        {"dimension": "下单时间", "operator": "<=", "value": "bad"}
+    ]
+
+    score = scorers.score_dsl(
+        {"metrics": ["销售额"], "dimensions": ["城市"], "order_by": [{"field": "城市"}], "limit": "10"},
+        {"metrics": ["订单数"], "dimensions": [], "order_by": [], "limit": 10},
+    )
+
+    assert score["dsl_exact_match"] is False
+    assert score["slot_scores"]["metrics"] == 0.0
+    assert score["slot_scores"]["dimensions"] == 0.0
+    assert score["slot_scores"]["order_by"] == 1.0
+    assert score["slot_scores"]["limit"] == 1.0
+
+
 def test_runner_case_validation_and_sql_helpers(tmp_path):
     cases = [_case()]
     runner.validate_cases(cases, tmp_path / "cases.json")
@@ -118,7 +152,7 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert runner.parse_tool_content("") == {}
     assert runner.parse_tool_content("[dsl2sql_tool]") == {}
     assert runner.parse_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select 1"})) == {"sql": "select 1"}
-    assert runner.parse_tool_content("[execute_sql_tool]\n[]") == {}
+    assert runner.parse_tool_content("[semantic_query_tool]\n[]") == {}
     assert runner.extract_sql_from_tool_content("") == ""
     assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n" + json.dumps({"sql": "select json"})) == "select json"
     assert runner.extract_sql_from_tool_content("[dsl2sql_tool]\n```sql\nselect * from orders\n```") == "select * from orders"
@@ -143,6 +177,11 @@ def test_tool_content_and_sse_parsing_cover_json_markdown_and_errors():
     assert traces[0].args == {"metrics": ["订单数"]}
     assert state["error"] == "模型失败"
 
+    dsl = runner.normalize_pagination_values({"limit": " 10 ", "offset": "05", "keep": " 7a "})
+    assert dsl == {"limit": 10, "offset": 5, "keep": " 7a "}
+    runner.flush_sse_event(state={"current_event": None, "data_lines": []}, tool_traces=traces)
+    assert len(traces) == 1
+
 
 def test_dsl2sql_payload_selection_and_execution_summary():
     trace_from_json = ToolTrace(
@@ -158,9 +197,9 @@ def test_dsl2sql_payload_selection_and_execution_summary():
         content="[dsl2sql_tool]\n```sql\nselect sum(amount) from orders\n```",
     )
     other_trace = ToolTrace(
-        name="execute_sql_tool",
+        name="semantic_query_tool",
         status="done",
-        content="[execute_sql_tool]\n" + json.dumps({"success": False}),
+        content="[semantic_query_tool]\n" + json.dumps({"success": False}),
     )
 
     payload = runner.build_dsl2sql_payload(trace_from_json)
@@ -183,7 +222,7 @@ def test_dsl2sql_payload_selection_and_execution_summary():
     assert selected_trace is trace_from_text
     assert selected_payload["dsl"] == {"metrics": ["销售额"]}
     no_trace, no_payload = runner.choose_final_dsl2sql_trace([
-        ToolTrace(name="execute_sql_tool", status="done", content=json.dumps({"success": True})),
+        ToolTrace(name="semantic_query_tool", status="done", content=json.dumps({"success": True})),
         ToolTrace(name="dsl2sql_tool", status="done", content="bad"),
     ])
     assert no_trace is None

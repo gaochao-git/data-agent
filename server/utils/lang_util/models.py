@@ -96,6 +96,7 @@ class ChatDataDashboardPanel(Base):
     chart_type: Mapped[str] = mapped_column(String(50), default="table")
     chart_config: Mapped[Optional[str]] = mapped_column(String(2000))  # JSON 格式的图表配置
     datasource_id: Mapped[Optional[str]] = mapped_column(String(255))  # 数据源ID
+    member_datasource_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")  # 成员数据源ID
     # 布局信息 (react-grid-layout 格式)
     layout_x: Mapped[int] = mapped_column(Integer, default=0)
     layout_y: Mapped[int] = mapped_column(Integer, default=0)

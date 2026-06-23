@@ -239,6 +239,7 @@ class DashboardService:
         refresh_interval: int = None,
         source_thread_id: str = None,
         datasource_id: str = None,
+        member_datasource_id: str = "",
         user_id: str = None,
         operator_name: str = "",
     ) -> Optional[Dict[str, Any]]:
@@ -295,6 +296,7 @@ class DashboardService:
                 refresh_interval=refresh_interval,
                 source_thread_id=source_thread_id,
                 datasource_id=datasource_id,
+                member_datasource_id=str(member_datasource_id or "").strip(),
                 create_time=now,
                 update_time=now,
                 create_by=user_id,
@@ -327,6 +329,7 @@ class DashboardService:
         layout_w: int = None,
         layout_h: int = None,
         refresh_interval: int = None,
+        member_datasource_id: str = None,
         user_id: str = None,
         operator_name: str = "",
     ) -> Optional[Dict[str, Any]]:
@@ -373,6 +376,8 @@ class DashboardService:
                 panel.layout_h = layout_h
             if refresh_interval is not None:
                 panel.refresh_interval = refresh_interval
+            if member_datasource_id is not None:
+                panel.member_datasource_id = str(member_datasource_id or "").strip()
 
             now = datetime.now()
             panel.update_time = now
@@ -578,6 +583,7 @@ class DashboardService:
             "refresh_interval": panel.refresh_interval,
             "source_thread_id": panel.source_thread_id,
             "datasource_id": panel.datasource_id,
+            "member_datasource_id": getattr(panel, "member_datasource_id", "") or "",
             "create_time": panel.create_time.isoformat() if panel.create_time else None,
             "update_time": panel.update_time.isoformat() if panel.update_time else None,
             "create_by": panel.create_by,

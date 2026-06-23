@@ -37,6 +37,8 @@ watch(
   (newToolCalls) => {
     if (props.defaultExpanded) {
       expandedIds.value = new Set(newToolCalls.map((tc) => tc.tool_call_id))
+    } else {
+      expandedIds.value = new Set([...expandedIds.value].filter((id) => newToolCalls.some((tc) => tc.tool_call_id === id)))
     }
   },
   { immediate: true }
@@ -65,8 +67,8 @@ const toggleExpand = (id: string) => {
       :compact="compact"
       :active="activeToolCallId === tc.tool_call_id"
       :datasource-id="datasourceId"
-      :on-view-analysis="tc.tool_name === 'execute_sql_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
-      :is-analysis-active="Boolean(tc.tool_name === 'execute_sql_tool' && tc.renderId && isAnalysisActive)"
+      :on-view-analysis="tc.tool_name === 'semantic_query_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
+      :is-analysis-active="Boolean(tc.tool_name === 'semantic_query_tool' && tc.renderId && isAnalysisActive)"
       @toggle-expand="toggleExpand(tc.tool_call_id)"
       @select="emit('selectTool', tc)"
     />

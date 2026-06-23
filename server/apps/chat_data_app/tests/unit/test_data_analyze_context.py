@@ -3,8 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -68,3 +67,38 @@ async def test_build_data_analyze_context_summarizes_datasource(monkeypatch):
     assert context["semantic_configs"][0]["selected"] is True
     assert context["semantic_configs"][0]["source_type"] == "hive"
     assert context["semantic_configs"][0]["metrics"][0]["name"] == "风险事件数"
+
+
+def test_data_analyze_context_truncate_short_and_long_text():
+    assert data_analyze_context._truncate("短文本", 10) == "短文本"
+    assert data_analyze_context._truncate("abcdef", 3) == "abc..."
+
+
+@pytest.mark.asyncio
+async def test_build_data_analyze_context_missing_datasource_and_fallback_configs(monkeypatch):
+    class MissingManager:
+        async def get_datasource_async(self, datasource_id):
+            return None
+
+    monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: MissingManager())
+    missing = await data_analyze_context.build_data_analyze_context("missing_ds")
+    assert missing["datasource"] == {"id": "missing_ds", "missing": True}
+
+    class FallbackManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "id": datasource_id,
+                "name": "普通数据源",
+                "description": "描述",
+                "source_type": "mysql",
+                "ds_tables": [],
+                "semantic_configs": None,
+            }
+
+        async def get_semantic_configs_async(self, datasource_id):
+            return [{"id": "cfg_a", "name": "指标集A", "metrics": [], "dimensions": []}]
+
+    monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: FallbackManager())
+    fallback = await data_analyze_context.build_data_analyze_context("ds_a")
+    assert fallback["datasource"]["name"] == "普通数据源"
+    assert fallback["semantic_configs"][0]["id"] == "cfg_a"

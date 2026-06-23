@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
+from ...services.dashboard_spec_service import get_dashboard_spec_semantic_config, remove_mixed_raw_metrics_for_aggregate_dsl
 from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
-from .common import json_dumps
+from ...semantic.compiler import SemanticSQLGenerator
+from .common import json_dumps, normalize_json_like_payload
 from .sql import _execute_sql_real, _normalize_member_datasource_ids
 
 logger = get_logger(__name__)
@@ -30,40 +34,68 @@ def create_exec_sql_tool(
     bound_operator_name = str(operator_name or "").strip() or None
     bound_workspace_root = str(workspace_root or "").strip()
 
-    @tool("execute_sql_tool")
-    async def execute_sql_tool(sql: str, save_as: str | None = None, semantic_config_id: str | None = None) -> str:
+    @tool("semantic_query_tool")
+    async def semantic_query_tool(dsl: Any, save_as: str | None = None, semantic_config_id: str | None = None, user_query: str = "") -> str:
         """
-        执行只读 SQL 查询并返回真实数据结果。
+        根据语义 DSL 生成只读 SQL 并返回真实数据结果。
 
         不传 save_as 时返回完整查询结果；传入 save_as 时直接把完整结果写入 workspace/ 或 outputs/ 下的 JSON 文件，
         并仅返回路径和摘要，适合后续 Python 脚本读取。
         """
         try:
             if not bound_datasource_id:
-                return "execute_sql_tool 执行失败: 当前会话未绑定数据源"
+                return "semantic_query_tool 执行失败: 当前会话未绑定数据源"
             effective_semantic_config_id = str(semantic_config_id or bound_semantic_config_id or "").strip() or None
+            if not effective_semantic_config_id:
+                return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+            dsl_payload = normalize_json_like_payload(dsl)
+            if not isinstance(dsl_payload, dict) or isinstance(dsl_payload.get("cards"), list):
+                return "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
+            if "sql" in dsl_payload:
+                return "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+            save_path = str(save_as or "").strip()
+            if save_path:
+                if not bound_workspace_root:
+                    return "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+                if not save_path.lower().endswith(".json"):
+                    return "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
+            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id)
+            payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl_payload or {}, semantic_config)
+            if payload.get("compare"):
+                return "semantic_query_tool 执行失败: DSL2SQL 不支持 compare，请拆成基础 DSL 查询"
+            compile_result = SemanticSQLGenerator(semantic_config).generate_sql(
+                metrics=payload.get("metrics") or [],
+                dimensions=payload.get("dimensions") or [],
+                filters=payload.get("filters") or [],
+                having=payload.get("having") or [],
+                order_by=payload.get("order_by") or [],
+                limit=payload.get("limit"),
+                offset=payload.get("offset"),
+                user_query=user_query or None,
+            )
+            if not compile_result.get("success"):
+                return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
+            sql = str(compile_result.get("sql") or "").strip()
+            if not sql:
+                return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
             query_result = await _execute_sql_real(
                 sql=sql,
                 datasource_id=bound_datasource_id,
                 member_datasource_ids=bound_member_datasource_ids,
                 user_id=bound_user_id,
                 semantic_config_id=effective_semantic_config_id,
+                query_text=user_query or None,
                 conversation_id=bound_conversation_id,
                 operator_name=bound_operator_name,
             )
-            if save_as:
-                if not bound_workspace_root:
-                    return "execute_sql_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
-                save_path = str(save_as or "").strip()
-                if not save_path.lower().endswith(".json"):
-                    return "execute_sql_tool 执行失败: save_as 只支持 .json 文件"
+            if save_path:
                 write_result = await sandbox_write_text_file(
                     session_ref=execution_session_ref,
                     file_path=save_path,
                     content=json_dumps(query_result),
                     mode="overwrite",
                 )
-                payload = {
+                result_summary = {
                     "success": bool(query_result.get("success")),
                     "result_path": write_result.get("file_path") or save_path,
                     "columns": query_result.get("columns", []),
@@ -72,12 +104,19 @@ def create_exec_sql_tool(
                     "execution_time_ms": query_result.get("execution_time_ms"),
                     "error": query_result.get("error"),
                     "sql": query_result.get("sql") or sql,
+                    "dsl": payload,
+                    "warnings": warnings,
                     "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
                 }
-                return "[execute_sql_tool]\n" + json_dumps(payload)
-            return "[execute_sql_tool]\n" + json_dumps(query_result)
+                return "[semantic_query_tool]\n" + json_dumps(result_summary)
+            result_payload = dict(query_result)
+            result_payload.setdefault("sql", sql)
+            result_payload["dsl"] = payload
+            if warnings:
+                result_payload["warnings"] = warnings
+            return "[semantic_query_tool]\n" + json_dumps(result_payload)
         except Exception as exc:
-            logger.error("execute_sql_tool 执行失败: %s", exc, exc_info=True)
-            return f"execute_sql_tool 执行失败: {exc}"
+            logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
+            return f"semantic_query_tool 执行失败: {exc}"
 
-    return execute_sql_tool
+    return semantic_query_tool

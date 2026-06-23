@@ -22,7 +22,7 @@ const sections: HelpSection[] = [
     icon: 'fa-solid fa-robot',
     accentClass: 'border-blue-200 bg-blue-50 text-blue-700',
     iconClass: 'bg-blue-100 text-blue-600',
-    basedOn: '数据集',
+    basedOn: '指标集',
     workflow: ['配置数据源', '维护字段字典', '配置表关系', '配置指标维度', '维护业务说明', '自然语言问数'],
     fitFor: '自然语言问数、快速理解业务问题、自动生成图表/看板/报告',
     basicCapabilities: ['指标维度查询', '明细数据查询', '已配置表关系查询', '自动选择指标维度'],
@@ -34,7 +34,7 @@ const sections: HelpSection[] = [
     icon: 'fa-solid fa-chart-column',
     accentClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
     iconClass: 'bg-emerald-100 text-emerald-600',
-    basedOn: '数据集',
+    basedOn: '指标集',
     workflow: ['配置数据源', '维护字段字典', '配置表关系', '配置指标维度', '拖拽查询'],
     fitFor: '拖拽组装查询、手动调整聚合函数、配置筛选、排序和展示字段',
     basicCapabilities: ['指标维度查询', '明细数据查询', '已配置表关系查询', '手动选择配置'],
@@ -155,7 +155,7 @@ const sections: HelpSection[] = [
         </div>
 
         <div class="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-[12px] leading-5 text-slate-500">
-          数据智能体和可视化查询基于数据集工作；SQL 查询直接面向当前数据源，可使用当前数据源支持的 SQL 语法。
+          数据智能体和可视化查询基于指标集工作；SQL 查询直接面向当前数据源，可使用当前数据源支持的 SQL 语法。
         </div>
       </div>
     </div>

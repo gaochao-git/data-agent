@@ -5,8 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -26,7 +25,7 @@ def test_data_analyze_tool_metadata_and_dialect_sections():
         "sandbox_run",
         "select_semantic_config_tool",
         "dsl2sql_tool",
-        "execute_sql_tool",
+        "semantic_query_tool",
     ]
     assert "`skill_load`" in data_analyze_graph.get_data_analyze_allowed_tool_names_text()
     assert "Hive" in data_analyze_graph.build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
@@ -76,6 +75,37 @@ def test_stage_context_empty_and_multimodal_message_edges():
     assert no_history_prompt == "当前用户目标：\n当前问题"
 
 
+def test_data_analyze_reasoning_merge_and_default_skill_prompt(monkeypatch, tmp_path):
+    assert data_analyze_graph.merge_reasoning_segments([{"id": "old"}], [{"id": "new"}]) == [{"id": "old"}, {"id": "new"}]
+
+    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
+    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+        skill={},
+        data_context={},
+        workspace_root=str(tmp_path),
+        available_skills_xml=None,
+    )
+
+    assert "<skills>默认</skills>" in prompt
+
+
+def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
+    assert data_analyze_graph._message_text([{"text": ""}, {"content": None}]) == ""
+    assert data_analyze_graph._message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"
+    assert data_analyze_graph._format_stage_conversation_context([HumanMessage(content=""), SystemMessage(content="ignored")]) == ""
+    assert data_analyze_graph._extract_source_type({"semantic_configs": ["bad", {}]}) == ""
+
+    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills />")
+    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+        skill=None,
+        data_context={},
+        workspace_root=str(tmp_path),
+        available_skills_xml=None,
+    )
+    assert "<skills />" in prompt
+    assert str(tmp_path) in prompt
+
+
 def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_path):
     monkeypatch.setattr(data_analyze_graph, "create_tool_retry_guard", lambda tools: tools)
     tools = data_analyze_graph.create_data_analyze_tools(
@@ -96,7 +126,7 @@ def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_pa
         "sandbox_run",
         "select_semantic_config_tool",
         "dsl2sql_tool",
-        "execute_sql_tool",
+        "semantic_query_tool",
     ]
 
 
@@ -319,6 +349,7 @@ async def test_execute_data_analyze_agent_returns_message_for_non_dict(monkeypat
     result = await data_analyze_graph.execute_data_analyze_agent(agent=object(), state={"messages": []}, system_prompt="system", model_id=None)
 
     assert result["messages"][0].content == "完成"
+    assert result["messages"][0].additional_kwargs["timestamp"]
     assert emitted == [{"type": "token_usage", "usage": {"total_tokens": 3}}]
 
 

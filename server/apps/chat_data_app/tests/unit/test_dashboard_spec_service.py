@@ -3,8 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1")
-os.environ.setdefault("FXCJG_DB_PORT", "3306")
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
@@ -881,6 +880,12 @@ def test_dashboard_spec_structure_invalid_layout_branches():
     assert "semantic_config_id 必填" in spec_errors
     assert any("缺少 dsl 对象" in item for item in spec_errors)
 
+    x_range_errors = validate_dashboard_card_structure(
+        {"title": "X越界", "chart_type": "kpi", "dsl": {}, "layout": {"x": 12, "y": 0, "w": 1, "h": 1}},
+        3,
+    )
+    assert any("layout.x 必须在 0-11" in item for item in x_range_errors)
+
 
 def test_build_dashboard_panel_plans_skips_non_dict_and_records_empty_sql():
     class EmptySqlGenerator:
@@ -962,3 +967,79 @@ def test_create_dashboard_from_spec_payload_skips_non_dict_cards(monkeypatch):
     assert len(service.added) == 1
     assert service.added[0]["name"]
     assert service.added[0]["operator_name"] == "测试用户"
+
+
+def test_dashboard_spec_normalize_remaining_edges():
+    assert normalize_dashboard_spec_dimensions([{"name": "城市"}, {"dimension": ""}, "  省份  "]) == [
+        {"name": "城市"},
+        "省份",
+    ]
+    assert _normalize_filter_node({"dimension": "城市", "operator": "=", "value": "杭州"}) == {
+        "dimension": "城市",
+        "operator": "=",
+        "value": "杭州",
+    }
+    assert _normalize_filter_node({"field": "", "op": "", "value": 1}) == {"value": 1}
+
+
+def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
+    calls = {}
+
+    class FakeExecutor:
+        async def execute(self, **kwargs):
+            calls["execute"] = kwargs
+            return {"success": True}
+
+        async def close(self):
+            calls["closed"] = True
+
+    class FakeManager:
+        async def get_execution_datasources_async(self, datasource_id, member_ids):
+            return [{"source_type": "mysql", "source_config": {"host": "h"}}]
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_executor", lambda _target: FakeExecutor())
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.resolve_query_timeout", lambda _source_type: 60)
+
+    ok, error = asyncio.run(execute_dashboard_panel_sql_preflight("ds_a", "select 1", user_id="u1", username="用户1"))
+
+    assert (ok, error) == (True, "")
+    assert "username" not in calls["execute"]
+    assert calls["closed"] is True
+
+
+def test_create_dashboard_from_spec_payload_skips_empty_panel_and_deletes(monkeypatch):
+    class FakeService:
+        def __init__(self):
+            self.deleted = []
+
+        async def create_dashboard(self, **_kwargs):
+            return {"id": "dash_empty"}
+
+        async def add_panel(self, **_kwargs):
+            return None
+
+        async def get_dashboard(self, _dashboard_id):
+            raise AssertionError("should delete before readback when no panels")
+
+        async def delete_dashboard(self, dashboard_id):
+            self.deleted.append(dashboard_id)
+
+    async def fake_validate(**_kwargs):
+        return {
+            "valid": True,
+            "warnings": [],
+            "panels": [{"index": 0, "title": "空面板", "chart_type": "kpi", "sql": "select 1", "error": ""}],
+        }
+
+    service = FakeService()
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.validate_dashboard_spec_payload", fake_validate)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_service", lambda: service)
+
+    result = asyncio.run(create_dashboard_from_spec_payload(
+        dashboard_spec={"dashboard_name": "空面板看板", "cards": [{"title": "空面板", "chart_type": "kpi", "layout": {}}]},
+        datasource_id="ds_a",
+    ))
+
+    assert result == {"dashboard": None, "panels": [], "warnings": []}
+    assert service.deleted == ["dash_empty"]

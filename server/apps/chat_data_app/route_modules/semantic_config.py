@@ -673,7 +673,7 @@ async def _generate_history_learning_suggestions_by_llm(
         table_context=_build_history_learning_table_context(datasource, config),
         compact_samples=compact_samples,
     )
-    llm = get_chat_data_llm(streaming=False, temperature=0.1, max_tokens=4000)
+    llm = get_chat_data_llm(streaming=False, max_tokens=4000)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
@@ -922,7 +922,7 @@ async def _call_metric_recommendation_llm(
         business_context=business_context,
         max_metrics=max_metrics,
     )
-    llm = get_chat_data_llm(streaming=False, temperature=0, max_tokens=2000)
+    llm = get_chat_data_llm(streaming=False, max_tokens=2000)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
@@ -930,7 +930,7 @@ async def _call_metric_recommendation_llm(
 
 async def _call_prefill_llm(prompt: str, generate_business_flow: bool = False) -> Dict[str, Any]:
     """调用大模型并解析自动预填字段。"""
-    llm = get_chat_data_llm(streaming=False, temperature=0, max_tokens=4000)
+    llm = get_chat_data_llm(streaming=False, max_tokens=4000)
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_response(str(content), generate_business_flow)

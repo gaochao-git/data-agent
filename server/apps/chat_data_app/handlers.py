@@ -2,7 +2,7 @@
 chat_data_app 的 completion handler
 
 使用 LangGraph interrupt() 函数实现 Human-in-the-Loop:
-- execute_sql_tool 内部调用 interrupt() 暂停等待用户确认
+- semantic_query_tool 内部调用 interrupt() 暂停等待用户确认
 - 用户确认后通过 Command(resume=...) 恢复执行
 
 语义模式：
@@ -37,11 +37,23 @@ from .services.datasource_manager import get_datasource_manager
 from .services.data_analyze_context import build_data_analyze_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
+from .services.skill_context_service import build_available_skills_prompt
+from .services.semantic_tools import (
+    format_semantic_config_directory_for_prompt,
+    list_runtime_semantic_config_directory,
+)
 
 logger = get_logger(__name__)
 
 AGENT_ID = "chat_data"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
+REASONING_TOOL_DISPLAY_NAMES = {
+    "select_semantic_config_tool": "选择指标集",
+    "dsl2sql_tool": "生成SQL",
+    "semantic_query_tool": "查询数据",
+    "calculator_tool": "计算",
+    "skill_load": "加载技能",
+}
 
 
 def _get_timestamp() -> str:
@@ -79,6 +91,37 @@ def _format_sse(event: str, data: dict | str) -> str:
     return f"event: {event}\ndata: {data_str}\n\n"
 
 
+def _message_end_payload(usage: Any | None = None) -> dict[str, Any]:
+    """构造消息结束事件，timestamp 表示服务端确认完成的时间。"""
+    payload: dict[str, Any] = {"timestamp": _get_timestamp()}
+    if usage:
+        payload["usage"] = usage
+    return payload
+
+
+def _latest_assistant_timestamp(state: Any) -> str:
+    """从 checkpoint state 中读取最后一条 AI 消息的持久化时间。"""
+    messages = (getattr(state, "values", None) or {}).get("messages") or []
+    for message in reversed(messages):
+        if getattr(message, "type", None) != "ai":
+            continue
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        timestamp = str(additional_kwargs.get("timestamp") or "").strip()
+        if timestamp:
+            return timestamp
+        break
+    return ""
+
+
+def _message_end_payload_from_state(state: Any, usage: Any | None = None) -> dict[str, Any]:
+    """构造消息结束事件，优先使用已随 AIMessage 持久化的完成时间。"""
+    payload = _message_end_payload(usage)
+    persisted_timestamp = _latest_assistant_timestamp(state)
+    if persisted_timestamp:
+        payload["timestamp"] = persisted_timestamp
+    return payload
+
+
 def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str:
     """从 OpenAI compatible 流式 chunk 中提取思考内容。"""
     candidates: list[Any] = []
@@ -101,8 +144,16 @@ def _extract_reasoning_content(message_chunk: Any, msg_data: dict[str, Any] | No
     return ""
 
 
+def _format_reasoning_for_display(content: str) -> str:
+    """将思考流中的内部工具名替换为更短的展示名，不影响真实工具调用。"""
+    text = str(content or "")
+    for tool_name, display_name in REASONING_TOOL_DISPLAY_NAMES.items():
+        text = text.replace(tool_name, display_name)
+    return text
+
+
 def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None = None) -> str | None:
-    reasoning_content = _extract_reasoning_content(message_chunk, msg_data)
+    reasoning_content = _format_reasoning_for_display(_extract_reasoning_content(message_chunk, msg_data))
     if not reasoning_content:
         return None
     return _format_sse("thinking", {
@@ -112,6 +163,7 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
 
 
 def _append_reasoning_segment(segments: list[dict[str, Any]], content: str, tool_call_count: int) -> None:
+    content = _format_reasoning_for_display(content)
     if not content:
         return
     if segments and segments[-1].get("tool_call_count") == tool_call_count:
@@ -299,6 +351,15 @@ def _semantic_select_required_event_from_tool_payload(payload: Dict[str, Any], u
     return _build_semantic_select_required_event(selection, user_query)
 
 
+def _should_emit_semantic_select_required(payload: Dict[str, Any]) -> bool:
+    """多指标集 query_plan 由智能体继续拆分执行，不触发前端二选一候选框。"""
+    if payload.get("selected"):
+        return False
+    if isinstance(payload.get("query_plan"), dict):
+        return False
+    return bool(payload.get("candidates"))
+
+
 def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
     """标准化前端传入的指标集选择留痕。"""
     if not isinstance(value, dict):
@@ -474,7 +535,7 @@ async def _get_semantic_config_async(
 
 
 async def _build_execution_target_info_async(datasource_id: str | None, member_datasource_ids: list[str] | None = None) -> str:
-    """异步构造执行对象说明，避免同步读取数据源配置。"""
+    """异步构造可用执行对象说明，避免同步读取数据源配置。"""
     if not datasource_id:
         return ""
 
@@ -488,17 +549,70 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
     if not execution_targets:
         return ""
 
-    lines = ["## 当前执行对象"]
+    lines = ["## 可用执行对象"]
     if len(execution_targets) == 1:
-        lines.append("本次查询仅在 1 个执行对象上运行：")
+        lines.append("当前可用范围只有 1 个可用执行对象：")
     else:
-        lines.append(f"本次查询会在 {len(execution_targets)} 个执行对象上分别运行，同一条 SQL 会返回多份结果：")
+        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象。请根据用户问题选择本次要查询的机构；如果用户未指定机构，默认查询第 1 个机构，不要默认全部执行：")
 
     for index, target in enumerate(execution_targets, start=1):
-        member_name = target.get("member_name") or target.get("member_datasource_id") or f"执行对象{index}"
-        lines.append(f"{index}. {member_name}")
+        source_config = target.get("source_config") or {}
+        member_name = (
+            target.get("member_name")
+            or target.get("org_name")
+            or source_config.get("org_name")
+            or target.get("member_datasource_id")
+            or f"执行对象{index}"
+        )
+        org_code = str(target.get("org_code") or source_config.get("org_code") or "").strip()
+        member_datasource_id = str(target.get("member_datasource_id") or target.get("id") or "").strip()
+        if org_code and org_code != str(member_name).strip():
+            line = f"{index}. 机构名称：{member_name}"
+            if member_datasource_id:
+                line += f"；成员数据源ID：{member_datasource_id}"
+            lines.append(line)
+            lines.append(f"   机构编码：{org_code}")
+        else:
+            line = f"{index}. 机构名称：{member_name}"
+            if member_datasource_id:
+                line += f"；成员数据源ID：{member_datasource_id}"
+            lines.append(line)
 
     return "\n".join(lines)
+
+
+async def _build_semantic_config_directory_info_async(
+    datasource_id: str | None,
+    user_id: str | None = None,
+    enabled: bool = True,
+) -> str:
+    """异步构造当前可见指标集轻量目录说明。"""
+    if not enabled or not datasource_id:
+        return ""
+    try:
+        directory = await list_runtime_semantic_config_directory(datasource_id, user_id)
+        return format_semantic_config_directory_for_prompt(directory)
+    except Exception as err:
+        logger.warning(f"构造指标集目录说明失败: {err}")
+        return ""
+
+
+async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
+    """构造智能问数业务知识技能上下文，显式指定的技能必须让模型稳定可见。"""
+    context = await build_available_skills_prompt(user_id=user_id or "")
+    normalized_skill_names = [
+        str(item or "").strip()
+        for item in skill_names or []
+        if str(item or "").strip()
+    ]
+    if not normalized_skill_names:
+        return context
+    requested = "、".join(f"`{name}`" for name in dict.fromkeys(normalized_skill_names))
+    requested_context = (
+        "## 本轮指定业务知识技能\n"
+        f"用户本轮明确指定以下业务知识技能：{requested}。确定唯一指标集后，先调用 `skill_load` 加载对应技能，再继续查询规划。"
+    )
+    return f"{context}\n\n{requested_context}".strip() if context else requested_context
 
 
 async def _stream_sql_generation(
@@ -515,10 +629,16 @@ async def _stream_sql_generation(
     model_id: str | None = None,
     semantic_config_selection: dict | None = None,
     enable_thinking: bool | None = None,
+    skill_names: list[str] | None = None,
 ):
     """流式执行 SQL 生成"""
     datasource_id = str(datasource_id or "").strip() or None
     semantic_config_id = str(semantic_config_id or "").strip() or None
+    normalized_skill_names = []
+    for item in skill_names or []:
+        skill_name = str(item or "").strip()
+        if skill_name and skill_name not in normalized_skill_names:
+            normalized_skill_names.append(skill_name)
     logger.info(f"开始执行，thread_id: {thread_id}, mode: {mode}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
 
     # 获取语义配置
@@ -544,6 +664,8 @@ async def _stream_sql_generation(
 
     if mode == "query":
         logger.info("query 模式使用统一语义工具链")
+    if semantic_config and not semantic_config_id:
+        semantic_config_id = str(semantic_config.get("id") or "").strip() or None
 
     config = {
         "configurable": {
@@ -563,6 +685,8 @@ async def _stream_sql_generation(
                 model_id=model_id,
                 mode=mode,
                 enable_thinking=enable_thinking,
+                user_id=user_id,
+                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names) if mode == "query" else "",
             )
 
             # 语义模式不需要表结构，semantic_to_sql_tool 内部已封装
@@ -602,6 +726,12 @@ async def _stream_sql_generation(
             human_message_kwargs = {"timestamp": _get_timestamp()}
             if semantic_selection_event:
                 human_message_kwargs["semantic_config_selection"] = semantic_selection_event
+            if normalized_skill_names:
+                human_message_kwargs["skill_names"] = normalized_skill_names
+
+            semantic_config_directory_info = ""
+            if mode == "query" and not semantic_config:
+                semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
 
             initial_state = {
                 "messages": [HumanMessage(
@@ -613,11 +743,14 @@ async def _stream_sql_generation(
                 "mode": mode,
                 "datasource_id": datasource_id,  # 传递数据源ID，用于真实SQL执行
                 "semantic_config_id": semantic_config_id,
+                "semantic_config": semantic_config,
                 "user_id": user_id,
                 "operator_name": username or "",
                 "conversation_id": thread_id,
                 "member_datasource_ids": member_datasource_ids or [],
+                "require_explicit_member_selection": mode == "query",
                 "execution_target_info": await _build_execution_target_info_async(datasource_id, member_datasource_ids),
+                "semantic_config_directory_info": semantic_config_directory_info,
             }
 
             # 用于跟踪已发送 running 状态的工具
@@ -766,7 +899,7 @@ async def _stream_sql_generation(
                         if selection_payload:
                             if selection_payload.get("selected"):
                                 yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                            elif selection_payload.get("candidates"):
+                            elif _should_emit_semantic_select_required(selection_payload):
                                 yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, user_query))
                     yield _format_sse(event_name, msg_data)
                 else:
@@ -797,14 +930,14 @@ async def _stream_sql_generation(
                     args=interrupt_info.get("args"),
                     message=interrupt_info.get("message"),
                 )
-                if token_usage:
-                    yield _format_sse("message_end", {"usage": token_usage})
+                end_payload = _message_end_payload_from_state(state, token_usage)
+                yield _format_sse("message_end", end_payload)
                 yield _format_sse("done", "[DONE]")
                 return
 
         # 正常结束
-        if token_usage:
-            yield _format_sse("message_end", {"usage": token_usage})
+        end_payload = _message_end_payload_from_state(state, token_usage)
+        yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
     except Exception as e:
@@ -821,6 +954,7 @@ async def _continue_execution(
     request: Request | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
+    user_id: str | None = None,
 ):
     """
     继续执行被 interrupt() 暂停的图
@@ -849,6 +983,8 @@ async def _continue_execution(
                 semantic_config=semantic_config,
                 model_id=model_id,
                 enable_thinking=enable_thinking,
+                user_id=user_id,
+                available_skills_context=await _build_query_skills_context(user_id=user_id) if semantic_config else "",
             )
 
             # 构建恢复数据
@@ -1007,13 +1143,13 @@ async def _continue_execution(
                     args=interrupt_info.get("args"),
                     message=interrupt_info.get("message"),
                 )
-                if token_usage:
-                    yield _format_sse("message_end", {"usage": token_usage})
+                end_payload = _message_end_payload_from_state(state, token_usage)
+                yield _format_sse("message_end", end_payload)
                 yield _format_sse("done", "[DONE]")
                 return
 
-        if token_usage:
-            yield _format_sse("message_end", {"usage": token_usage})
+        end_payload = _message_end_payload_from_state(state, token_usage)
+        yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
     except Exception as e:
@@ -1041,6 +1177,13 @@ async def sql_completion_handler(
     enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
     member_datasource_ids = options_data.get("member_datasource_ids") or []
     semantic_config_selection = options_data.get("semantic_config_selection")
+    raw_skill_names = options_data.get("skill_names") or []
+    if isinstance(raw_skill_names, str):
+        skill_names = [raw_skill_names]
+    elif isinstance(raw_skill_names, list):
+        skill_names = [str(item or "").strip() for item in raw_skill_names if str(item or "").strip()]
+    else:
+        skill_names = []
 
     # 确保 thread 记录存在
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
@@ -1059,6 +1202,7 @@ async def sql_completion_handler(
             model_id=model_id,
             semantic_config_selection=semantic_config_selection,
             enable_thinking=enable_thinking,
+            skill_names=skill_names,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
@@ -1290,7 +1434,7 @@ async def data_analyze_completion_handler(
                             if selection_payload:
                                 if selection_payload.get("selected"):
                                     yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                                elif selection_payload.get("candidates"):
+                                elif _should_emit_semantic_select_required(selection_payload):
                                     yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, query))
                         yield _format_sse("tool", msg_data)
                     else:
@@ -1303,8 +1447,9 @@ async def data_analyze_completion_handler(
                     as_node="execute",
                     persisted_count=persisted_reasoning_count,
                 )
-                if latest_token_usage:
-                    yield _format_sse("message_end", {"usage": latest_token_usage})
+                state = await agent.aget_state(config) if hasattr(agent, "aget_state") else None
+                end_payload = _message_end_payload_from_state(state, latest_token_usage)
+                yield _format_sse("message_end", end_payload)
             yield _format_sse("done", "[DONE]")
         except Exception as e:
             logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
@@ -1349,6 +1494,7 @@ async def sql_resume_handler(
     datasource_id = data.get("datasource_id")
     semantic_config_id = data.get("semantic_config_id")
     enable_thinking = _normalize_enable_thinking(data.get("enable_thinking"))
+    user_id = str(data.get("user_id") or "system").strip() or "system"
 
     # 获取语义配置（如果有）
     semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id)
@@ -1364,6 +1510,7 @@ async def sql_resume_handler(
             action=effective_action,
             semantic_config=semantic_config,
             enable_thinking=enable_thinking,
+            user_id=user_id,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
