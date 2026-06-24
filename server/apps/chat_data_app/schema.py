@@ -566,7 +566,9 @@ class ExecuteSemanticInput(BaseModel):
     )
     having: List[Dict] = Field(
         default=[],
-        description='HAVING 过滤条件列表（过滤聚合结果），格式: [{"metric": "指标名", "operator": ">", "value": 10}]'
+        description='''HAVING 过滤条件列表（过滤聚合结果）：
+1. 固定值过滤: [{"metric": "指标名", "operator": ">", "value": 10}]
+2. 指标间比较或指标与表达式比较: [{"left":{"type":"metric","name":"指标A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"metric","name":"指标B"},"right":{"type":"literal","value":10}}}]'''
     )
     order_by: List[Dict] = Field(
         default=[],

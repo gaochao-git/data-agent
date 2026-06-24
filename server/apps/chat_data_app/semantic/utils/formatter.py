@@ -4,7 +4,23 @@
 提供语义查询参数的格式化功能。
 """
 
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
+
+
+def _format_expression_operand(operand: Any) -> str:
+    if not isinstance(operand, dict):
+        return ""
+    operand_type = str(operand.get("type") or "").lower()
+    if operand_type in {"dimension", "metric"}:
+        return str(operand.get("name") or "")
+    if operand_type == "literal":
+        return str(operand.get("value"))
+    if operand_type == "binary":
+        left = _format_expression_operand(operand.get("left"))
+        right = _format_expression_operand(operand.get("right"))
+        operator = str(operand.get("operator") or "")
+        return f"{left} {operator} {right}".strip()
+    return ""
 
 
 def format_params_for_display(
@@ -53,6 +69,12 @@ def format_params_for_display(
     if having:
         having_displays = []
         for h in having:
+            if isinstance(h.get('left'), dict) and 'right' in h:
+                left = _format_expression_operand(h.get('left'))
+                op = h.get('operator', '>')
+                right = _format_expression_operand(h.get('right'))
+                having_displays.append(f"{left} {op} {right}".strip())
+                continue
             metric = h.get('metric', '')
             op = h.get('operator', '>')
             val = h.get('value', '')

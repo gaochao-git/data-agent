@@ -586,6 +586,62 @@ def test_generate_having_order_offset_and_params_block():
     assert "**跳过条数**: 5" in result["params_block"]
 
 
+def test_generate_structured_metric_expression_having():
+    config = build_config()
+    config["metrics"].extend([
+        {"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"},
+        {"name": "入金总额", "expression": "SUM(orders.in_amount)", "table": "orders"},
+    ])
+
+    result = generate_result(
+        config,
+        {
+            "metrics": ["出金总额", "入金总额"],
+            "dimensions": ["分账户PID"],
+            "having": [
+                {
+                    "left": {"type": "metric", "name": "出金总额"},
+                    "operator": ">",
+                    "right": {
+                        "type": "binary",
+                        "operator": "*",
+                        "left": {"type": "metric", "name": "入金总额"},
+                        "right": {"type": "literal", "value": 10},
+                    },
+                }
+            ],
+        },
+    )
+
+    assert result["success"] is True
+    assert "GROUP BY `pid`" in result["sql"]
+    assert "HAVING SUM(out_amount) > (SUM(in_amount) * 10)" in result["sql"]
+
+
+def test_generate_structured_having_collects_right_metric_join_table():
+    config = build_config()
+    config["metrics"].append({"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"})
+
+    result = generate_result(
+        config,
+        {
+            "metrics": ["出金总额", "销售额"],
+            "dimensions": ["订单状态"],
+            "having": [
+                {
+                    "left": {"type": "metric", "name": "出金总额"},
+                    "operator": ">",
+                    "right": {"type": "metric", "name": "销售额"},
+                }
+            ],
+        },
+    )
+
+    assert result["success"] is True
+    assert "LEFT JOIN order_items" in result["sql"]
+    assert "HAVING SUM(orders.out_amount) > SUM(order_items.amount)" in result["sql"]
+
+
 def test_generate_rejects_having_unknown_metric_and_order_direction():
     bad_having = generate_result(build_config(), {
         "metrics": ["订单数"],

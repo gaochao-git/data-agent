@@ -370,6 +370,14 @@ class InputValidator:
         """
         validated_having = []
         for h in having:
+            if not isinstance(h, dict):
+                return [], "错误：HAVING 条件格式错误，必须是对象"
+            if self._is_expression_having(h):
+                err = self._validate_expression_having(h)
+                if err:
+                    return [], err
+                validated_having.append(h)
+                continue
             metric_name = h.get('metric')
             if metric_name and metric_name in self.metrics_map:
                 validated_having.append(h)
@@ -377,6 +385,56 @@ class InputValidator:
                 return [], f"错误：HAVING 条件中的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
 
         return validated_having, None
+
+    @staticmethod
+    def _is_expression_having(having_node: Dict) -> bool:
+        return isinstance(having_node, dict) and isinstance(having_node.get('left'), dict) and 'right' in having_node
+
+    def _validate_expression_having(self, having_node: Dict) -> Optional[str]:
+        operator = str(having_node.get('operator', '=')).upper()
+        if operator not in EXPRESSION_OPERATORS:
+            return f"错误：HAVING 表达式暂不支持操作符 '{operator}'。可选值：{', '.join(sorted(EXPRESSION_OPERATORS))}"
+
+        left = having_node.get('left')
+        right = having_node.get('right')
+        if not isinstance(left, dict) or left.get('type') != 'metric':
+            return "错误：HAVING 表达式 left 只支持 metric"
+        left_name = str(left.get('name') or '').strip()
+        if left_name not in self.metrics_map:
+            return f"错误：HAVING 条件中的指标 '{left_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
+
+        return self._validate_metric_expression_operand(right, path='right')
+
+    def _validate_metric_expression_operand(self, operand: Any, path: str) -> Optional[str]:
+        if not isinstance(operand, dict):
+            return f"错误：HAVING 表达式 {path} 必须是对象"
+        operand_type = str(operand.get('type') or '').strip().lower()
+        if operand_type == 'metric':
+            metric_name = str(operand.get('name') or '').strip()
+            if metric_name not in self.metrics_map:
+                return f"错误：HAVING 表达式引用的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
+            return None
+        if operand_type == 'literal':
+            value = operand.get('value')
+            if isinstance(value, (dict, list)):
+                return f"错误：HAVING 表达式 {path}.value 只支持字符串、数字、布尔值或空值"
+            return None
+        if operand_type == 'binary':
+            operator = str(operand.get('operator') or '').strip()
+            if operator not in BINARY_OPERATORS:
+                return f"错误：HAVING 表达式二元运算符 '{operator}' 不支持。可选值：{', '.join(sorted(BINARY_OPERATORS))}"
+            left = operand.get('left')
+            right = operand.get('right')
+            err = self._validate_metric_expression_operand(left, path=f'{path}.left')
+            if err:
+                return err
+            err = self._validate_metric_expression_operand(right, path=f'{path}.right')
+            if err:
+                return err
+            if operator == '/' and isinstance(right, dict) and right.get('type') == 'literal' and self._is_zero_literal(right.get('value')):
+                return "错误：HAVING 表达式不允许除以 0"
+            return None
+        return f"错误：HAVING 表达式 {path}.type 只支持 metric、literal、binary"
 
     def validate_order_by(
         self,

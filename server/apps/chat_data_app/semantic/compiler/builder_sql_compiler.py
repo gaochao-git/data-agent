@@ -214,7 +214,22 @@ def _filter_has_real_aggregation(node: Dict[str, Any]) -> bool:
         return any(_filter_has_real_aggregation(child) for child in children if isinstance(child, dict))
     if _is_real_aggregation_func(node.get("aggFunc")):
         return True
+    if _having_operand_has_real_aggregation(node.get("rightOperand")):
+        return True
     return _is_aggregate_expression(node.get("expression"))
+
+
+def _having_operand_has_real_aggregation(operand: Any) -> bool:
+    if not isinstance(operand, dict):
+        return False
+    operand_type = str(operand.get("type") or "").strip().lower()
+    if operand_type == "metric":
+        if _is_real_aggregation_func(operand.get("aggFunc")):
+            return True
+        return _is_aggregate_expression(operand.get("expression"))
+    if operand_type == "binary":
+        return _having_operand_has_real_aggregation(operand.get("left")) or _having_operand_has_real_aggregation(operand.get("right"))
+    return False
 
 
 def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
@@ -318,32 +333,30 @@ def _build_having_leaf_clause(
     column = leaf.get("column", "")
     operator = str(leaf.get("operator", "=")).upper()
     value_type = leaf.get("value_type")
-    agg_id = leaf.get("aggId")
-
-    matched = agg_by_id.get(str(agg_id)) if agg_id else None
-    if not matched and not (leaf.get("expression") or "").strip():
-        for agg in aggregations:
-            if _effective_table_ref(agg, fallback=main_table) == table and agg.get("column") == column and (agg.get("func") or "").upper() == agg_func:
-                matched = agg
-                break
-
-    matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table)
-    matched_expr = (matched or {}).get("expression") or leaf.get("expression")
-    if agg_func == "RAW" and (matched_expr or "").strip():
-        agg_expr = _rewrite_expression_table_qualifier(matched_expr.strip(), table, matched_physical_table, is_multi_table)
-    elif agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
-        agg_expr = _rewrite_expression_table_qualifier(matched_expr.strip(), table, matched_physical_table, is_multi_table)
-    else:
-        col_expr = "*" if column == "*" else _get_column_expr(table, column, is_multi_table)
-        if agg_func == "RAW":
-            agg_expr = col_expr
-        elif agg_func == "COUNT_DISTINCT":
-            agg_expr = f"COUNT(DISTINCT {col_expr})"
-        else:
-            agg_expr = f"{agg_func}({col_expr})"
+    agg_expr = _build_aggregate_expr(
+        agg_func=agg_func,
+        table=table,
+        column=column,
+        agg_id=leaf.get("aggId"),
+        expression=leaf.get("expression"),
+        physical_table=physical_table,
+        is_multi_table=is_multi_table,
+        main_table=main_table,
+        aggregations=aggregations,
+        agg_by_id=agg_by_id,
+    )
 
     if operator in ("IS NULL", "IS NOT NULL"):
         return f"{agg_expr} {operator}"
+    if isinstance(leaf.get("rightOperand"), dict):
+        right_expr = _build_having_operand_expr(
+            leaf.get("rightOperand") or {},
+            is_multi_table=is_multi_table,
+            main_table=main_table,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+        )
+        return f"{agg_expr} {operator} {right_expr}"
     if (
         leaf.get("valueType") == "field_ref"
         and (leaf.get("rightTable") or "").strip()
@@ -380,6 +393,96 @@ def _build_having_leaf_clause(
         right = _sql_literal(leaf.get("value")[1], _value_type_for_index(value_type, 1))
         return f"{agg_expr} BETWEEN {left} AND {right}"
     return f"{agg_expr} {operator} {_sql_literal(leaf.get('value'), value_type)}"
+
+
+def _build_aggregate_expr(
+    *,
+    agg_func: str,
+    table: str,
+    column: str,
+    agg_id: Optional[str],
+    expression: Optional[str],
+    physical_table: str,
+    is_multi_table: bool,
+    main_table: str,
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    normalize_expression: bool = False,
+) -> str:
+    matched = agg_by_id.get(str(agg_id)) if agg_id else None
+    if not matched and not (expression or "").strip():
+        for agg in aggregations:
+            if _effective_table_ref(agg, fallback=main_table) == table and agg.get("column") == column and (agg.get("func") or "").upper() == agg_func:
+                matched = agg
+                break
+
+    matched_physical_table = _physical_table_ref(matched or {}, fallback=physical_table)
+    matched_expr = (matched or {}).get("expression") or expression
+    if agg_func == "RAW" and (matched_expr or "").strip():
+        if normalize_expression:
+            return _normalize_raw_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
+        return _rewrite_expression_table_qualifier(matched_expr.strip(), table, matched_physical_table, is_multi_table)
+    if agg_func != "RAW" and (matched_expr or "").strip() and _is_aggregate_expression(matched_expr):
+        if normalize_expression:
+            return _normalize_aggregate_expression(matched_expr, table, column, is_multi_table, matched_physical_table)
+        return _rewrite_expression_table_qualifier(matched_expr.strip(), table, matched_physical_table, is_multi_table)
+
+    col_expr = "*" if column == "*" else _get_column_expr(table, column, is_multi_table)
+    if agg_func == "RAW":
+        return col_expr
+    if agg_func == "COUNT_DISTINCT":
+        return f"COUNT(DISTINCT {col_expr})"
+    return f"{agg_func}({col_expr})"
+
+
+def _build_having_operand_expr(
+    operand: Dict[str, Any],
+    *,
+    is_multi_table: bool,
+    main_table: str,
+    aggregations: List[Dict[str, Any]],
+    agg_by_id: Dict[str, Dict[str, Any]],
+    normalize_expression: bool = False,
+) -> str:
+    operand_type = str((operand or {}).get("type") or "").strip().lower()
+    if operand_type == "metric":
+        table = _effective_table_ref(operand, fallback=main_table)
+        physical_table = _physical_table_ref(operand, fallback=table)
+        return _build_aggregate_expr(
+            agg_func=str(operand.get("aggFunc", "RAW")).upper(),
+            table=table,
+            column=operand.get("column", ""),
+            agg_id=operand.get("aggId"),
+            expression=operand.get("expression"),
+            physical_table=physical_table,
+            is_multi_table=is_multi_table,
+            main_table=main_table,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+            normalize_expression=normalize_expression,
+        )
+    if operand_type == "literal":
+        return _sql_literal(operand.get("value"), "literal")
+    if operand_type == "binary":
+        left_expr = _build_having_operand_expr(
+            operand.get("left") or {},
+            is_multi_table=is_multi_table,
+            main_table=main_table,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+            normalize_expression=normalize_expression,
+        )
+        right_expr = _build_having_operand_expr(
+            operand.get("right") or {},
+            is_multi_table=is_multi_table,
+            main_table=main_table,
+            aggregations=aggregations,
+            agg_by_id=agg_by_id,
+            normalize_expression=normalize_expression,
+        )
+        operator = str(operand.get("operator") or "").strip()
+        return f"({left_expr} {operator} {right_expr})"
+    return "NULL"
 
 
 def _build_filter_tree_clause(
@@ -770,6 +873,16 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                 agg_expr = get_agg_expr(agg_func, table, column, f.get("aggId"), f.get("expression"), physical_table)
                 if operator in ("IS NULL", "IS NOT NULL"):
                     clause = f"{agg_expr} {operator}"
+                elif isinstance(f.get("rightOperand"), dict):
+                    right_expr = _build_having_operand_expr(
+                        f.get("rightOperand") or {},
+                        is_multi_table=is_multi_table,
+                        main_table=main_alias,
+                        aggregations=aggregations,
+                        agg_by_id=agg_by_id,
+                        normalize_expression=True,
+                    )
+                    clause = f"{agg_expr} {operator} {right_expr}"
                 elif (
                     f.get("valueType") == "field_ref"
                     and (f.get("rightTable") or "").strip()

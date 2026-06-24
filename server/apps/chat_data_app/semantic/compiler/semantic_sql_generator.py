@@ -167,6 +167,20 @@ class SemanticSQLGenerator:
         for table_name in node.get("expressionTables") or []:
             if table_name:
                 tables_needed.add(table_name)
+        self._collect_tables_from_having_operand(node.get("rightOperand"), tables_needed)
+
+    def _collect_tables_from_having_operand(self, operand: Any, tables_needed: set[str]):
+        if not isinstance(operand, dict):
+            return
+        operand_type = str(operand.get("type") or "").strip().lower()
+        if operand_type == "metric":
+            table_name = operand.get("tableAlias") or operand.get("table")
+            if table_name:
+                tables_needed.add(table_name)
+            return
+        if operand_type == "binary":
+            self._collect_tables_from_having_operand(operand.get("left"), tables_needed)
+            self._collect_tables_from_having_operand(operand.get("right"), tables_needed)
 
     def _map_filter_node_for_builder(self, node: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(node, dict):
@@ -253,6 +267,87 @@ class SemanticSQLGenerator:
             "rightExpression": right_expression,
             "expressionTables": sorted(table for table in right_tables if table),
         }
+
+    @staticmethod
+    def _is_expression_having_node(node: Dict[str, Any]) -> bool:
+        return isinstance(node, dict) and isinstance(node.get("left"), dict) and "right" in node
+
+    def _metric_aggregation_node(self, metric_name: str, main_table: str) -> Dict[str, Any]:
+        metric_cfg = self.metrics_map.get(metric_name, {})
+        metric_table = metric_cfg.get("table") or main_table
+        metric_table_alias = self._table_alias(metric_cfg) or metric_table
+        parsed = self._parse_aggregate_expression((metric_cfg.get("expression") or "").strip())
+        func = parsed[0] if parsed else "RAW"
+        column = "*"
+        if parsed and parsed[1]:
+            column_expr = parsed[1]
+            column = "*" if column_expr == "*" else column_expr.split(".")[-1].replace("`", "")
+        elif metric_cfg.get("column"):
+            column = metric_cfg.get("column")
+        return {
+            "table": metric_table,
+            "tableAlias": metric_table_alias,
+            "column": column,
+            "expression": metric_cfg.get("expression"),
+            "aggFunc": func,
+        }
+
+    def _map_having_operand_for_builder(
+        self,
+        operand: Dict[str, Any],
+        metric_alias_to_id: Dict[str, str],
+        main_table: str,
+    ) -> Dict[str, Any]:
+        operand_type = str((operand or {}).get("type") or "").strip().lower()
+        if operand_type == "metric":
+            metric_name = str((operand or {}).get("name") or "").strip()
+            metric_node = self._metric_aggregation_node(metric_name, main_table)
+            metric_node.update({
+                "type": "metric",
+                "name": metric_name,
+                "aggId": metric_alias_to_id.get(metric_name),
+            })
+            return metric_node
+        if operand_type == "literal":
+            return {"type": "literal", "value": (operand or {}).get("value")}
+        if operand_type == "binary":
+            return {
+                "type": "binary",
+                "operator": str((operand or {}).get("operator") or "").strip(),
+                "left": self._map_having_operand_for_builder((operand or {}).get("left") or {}, metric_alias_to_id, main_table),
+                "right": self._map_having_operand_for_builder((operand or {}).get("right") or {}, metric_alias_to_id, main_table),
+            }
+        return {"type": "literal", "value": None}
+
+    def _collect_having_metric_names(self, having: List[Dict[str, Any]]) -> List[str]:
+        metric_names: List[str] = []
+        seen: set[str] = set()
+
+        def add_metric(name: Any):
+            metric_name = str(name or "").strip()
+            if metric_name and metric_name not in seen:
+                seen.add(metric_name)
+                metric_names.append(metric_name)
+
+        def collect_operand(operand: Any):
+            if not isinstance(operand, dict):
+                return
+            operand_type = str(operand.get("type") or "").strip().lower()
+            if operand_type == "metric":
+                add_metric(operand.get("name"))
+            elif operand_type == "binary":
+                collect_operand(operand.get("left"))
+                collect_operand(operand.get("right"))
+
+        for item in having or []:
+            if not isinstance(item, dict):
+                continue
+            add_metric(item.get("metric"))
+            if self._is_expression_having_node(item):
+                collect_operand(item.get("left"))
+                collect_operand(item.get("right"))
+
+        return metric_names
 
     def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
         relationships = self.semantic_config.get("relationships", []) or []
@@ -503,6 +598,8 @@ class SemanticSQLGenerator:
         if err:
             return {"success": False, "error": err}
 
+        having_metric_names = self._collect_having_metric_names(validated_having)
+
         dimension_names = [self._extract_dimension_name(d) for d in matched_dimensions]
         validated_order_by, err = self.validator.validate_order_by(order_by or [], metrics or [], dimension_names)
         if err:
@@ -537,6 +634,8 @@ class SemanticSQLGenerator:
             main_table = (self.dimensions_map.get(first_dim_name) or {}).get("table")
         if not main_table and matched_metrics:
             main_table = matched_metrics[0].get("table")
+        if not main_table and having_metric_names:
+            main_table = (self.metrics_map.get(having_metric_names[0]) or {}).get("table")
         if not main_table:
             return {"success": False, "error": "错误：查询至少需要一个指标或维度来确定数据范围"}
 
@@ -668,30 +767,30 @@ class SemanticSQLGenerator:
 
         builder_having = []
         for hv in validated_having:
+            if self._is_expression_having_node(hv):
+                left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
+                having_node = self._metric_aggregation_node(left_metric_name, main_table)
+                having_node.update({
+                    "id": f"having-{left_metric_name}",
+                    "operator": hv.get("operator", "="),
+                    "logic": hv.get("logic", "AND"),
+                    "aggId": metric_alias_to_id.get(left_metric_name),
+                    "rightOperand": self._map_having_operand_for_builder(hv.get("right") or {}, metric_alias_to_id, main_table),
+                })
+                builder_having.append(having_node)
+                continue
+
             metric_name = hv.get("metric")
-            metric_cfg = self.metrics_map.get(metric_name, {})
-            metric_table_alias = self._table_alias(metric_cfg) or metric_cfg.get("table") or main_table
-            parsed = self._parse_aggregate_expression((metric_cfg.get("expression") or "").strip())
-            func = parsed[0] if parsed else "RAW"
-            column = "*"
-            if parsed and parsed[1]:
-                column_expr = parsed[1]
-                column = "*" if column_expr == "*" else column_expr.split(".")[-1].replace("`", "")
-            elif metric_cfg.get("column"):
-                column = metric_cfg.get("column")
-            builder_having.append({
+            having_node = self._metric_aggregation_node(metric_name, main_table)
+            having_node.update({
                 "id": f"having-{metric_name}",
-                "table": metric_cfg.get("table", main_table),
-                "tableAlias": metric_table_alias,
-                "column": column,
-                "expression": metric_cfg.get("expression"),
                 "operator": hv.get("operator", "="),
                 "value": hv.get("value"),
                 "logic": hv.get("logic", "AND"),
-                "aggFunc": func,
                 "aggId": metric_alias_to_id.get(metric_name),
             })
-            self._copy_filter_value_type(hv, builder_having[-1])
+            builder_having.append(having_node)
+            self._copy_filter_value_type(hv, having_node)
 
         builder_order_by = []
         for od in validated_order_by:
@@ -747,6 +846,7 @@ class SemanticSQLGenerator:
         for hv in builder_having:
             if hv.get("tableAlias") or hv.get("table"):
                 tables_needed.add(hv.get("tableAlias") or hv.get("table"))
+            self._collect_tables_from_having_operand(hv.get("rightOperand"), tables_needed)
         for od in builder_order_by:
             if od.get("tableAlias") or od.get("table"):
                 tables_needed.add(od.get("tableAlias") or od.get("table"))

@@ -230,6 +230,8 @@ class SemanticBuilderCompiler:
             if not isinstance(children, list):
                 raise ValueError("语义可视化 or 过滤节点必须是数组")
             return {"or": [self._map_filter_node(child) for child in children if isinstance(child, dict)]}
+        if isinstance(node.get("left"), dict) and "right" in node:
+            return self._map_having_filter(node)
         if node.get("aggFunc"):
             return self._map_having_filter(node)
         return self._map_dimension_filter(node)
@@ -248,6 +250,68 @@ class SemanticBuilderCompiler:
             target["rightTableAlias"] = _semantic_alias(right) or right.get("table")
             target["rightColumn"] = right.get("column")
 
+    def _map_having_operand(self, operand: Any) -> Dict[str, Any]:
+        if not isinstance(operand, dict):
+            raise ValueError("HAVING 表达式操作数必须是对象")
+        operand_type = _normalize_text(operand.get("type")).lower()
+        if operand_type == "metric":
+            metric = self._resolve_metric_config({
+                "semanticName": operand.get("name") or operand.get("semanticName"),
+                "name": operand.get("name"),
+                "alias": operand.get("alias"),
+                "displayName": operand.get("displayName"),
+                "func": operand.get("aggFunc") or operand.get("func"),
+                "table": operand.get("table"),
+                "tableAlias": _normalize_alias(operand),
+                "column": operand.get("column"),
+                "expression": operand.get("expression"),
+            })
+            if not metric:
+                raise ValueError(f"HAVING 表达式引用的指标不存在: {operand.get('name') or operand.get('semanticName') or operand.get('column')}")
+            agg = self._map_aggregation({
+                "semanticName": metric.get("name"),
+                "func": operand.get("aggFunc") or operand.get("func"),
+                "table": metric.get("table"),
+                "tableAlias": _semantic_alias(metric),
+                "column": operand.get("column"),
+                "expression": operand.get("expression"),
+            })
+            return {
+                "type": "metric",
+                "name": metric.get("name"),
+                "table": agg.get("table"),
+                "tableAlias": agg.get("tableAlias"),
+                "column": agg.get("column"),
+                "aggFunc": agg.get("func"),
+                "aggId": agg.get("id"),
+                "expression": agg.get("expression"),
+            }
+        if operand_type == "literal":
+            value = operand.get("value")
+            if isinstance(value, (dict, list)):
+                raise ValueError("HAVING 表达式 literal.value 只支持字符串、数字、布尔值或空值")
+            return {"type": "literal", "value": value}
+        if operand_type == "binary":
+            operator = _normalize_text(operand.get("operator"))
+            if operator not in {"+", "-", "*", "/"}:
+                raise ValueError("HAVING 表达式二元运算符只支持 +、-、*、/")
+            right = operand.get("right")
+            if operator == "/" and isinstance(right, dict) and right.get("type") == "literal":
+                try:
+                    if float(right.get("value")) == 0:
+                        raise ValueError("HAVING 表达式不允许除以 0")
+                except ValueError:
+                    raise
+                except Exception:
+                    pass
+            return {
+                "type": "binary",
+                "operator": operator,
+                "left": self._map_having_operand(operand.get("left")),
+                "right": self._map_having_operand(right),
+            }
+        raise ValueError("HAVING 表达式操作数只支持 metric、literal、binary")
+
     def _map_dimension_filter(self, node: Dict[str, Any]) -> Dict[str, Any]:
         dim = self._resolve_dimension_config(node)
         mapped = {
@@ -263,29 +327,40 @@ class SemanticBuilderCompiler:
         return mapped
 
     def _map_having_filter(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        agg = self._map_aggregation({
-            "id": node.get("aggId"),
-            "func": node.get("aggFunc"),
-            "table": node.get("table"),
-            "tableAlias": _normalize_alias(node),
-            "column": node.get("column"),
-            "alias": node.get("displayName"),
-            "semanticName": node.get("semanticName"),
-            "displayName": node.get("displayName"),
-            "expression": node.get("expression"),
-        })
+        if isinstance(node.get("left"), dict) and "right" in node:
+            left = self._map_having_operand(node.get("left"))
+            if left.get("type") != "metric":
+                raise ValueError("HAVING 表达式 left 只支持 metric")
+            agg = left
+        else:
+            agg = self._map_aggregation({
+                "id": node.get("aggId"),
+                "func": node.get("aggFunc"),
+                "table": node.get("table"),
+                "tableAlias": _normalize_alias(node),
+                "column": node.get("column"),
+                "alias": node.get("displayName"),
+                "semanticName": node.get("semanticName"),
+                "displayName": node.get("displayName"),
+                "expression": node.get("expression"),
+            })
         mapped = {
-            "id": node.get("id") or f"having-{agg.get('alias')}",
+            "id": node.get("id") or f"having-{agg.get('name') or agg.get('alias')}",
             "table": agg.get("table"),
             "tableAlias": agg.get("tableAlias"),
             "column": agg.get("column"),
             "operator": node.get("operator", "="),
             "logic": node.get("logic", "AND"),
-            "aggFunc": agg.get("func"),
-            "aggId": agg.get("id"),
+            "aggFunc": agg.get("aggFunc") or agg.get("func"),
+            "aggId": agg.get("aggId") or agg.get("id"),
             "expression": agg.get("expression"),
         }
-        self._copy_filter_value_fields(node, mapped)
+        if isinstance(node.get("left"), dict) and "right" in node:
+            mapped["rightOperand"] = self._map_having_operand(node.get("right"))
+            if "logic" in node:
+                mapped["logic"] = node.get("logic")
+        else:
+            self._copy_filter_value_fields(node, mapped)
         return mapped
 
     def _map_order_by(self, item: Dict[str, Any], aggregations: List[Dict[str, Any]], dimensions: List[Dict[str, Any]]) -> Dict[str, Any]:

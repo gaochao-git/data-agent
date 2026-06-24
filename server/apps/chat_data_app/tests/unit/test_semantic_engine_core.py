@@ -649,7 +649,7 @@ def test_semantic_models_relationship_and_indexes():
 
 def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_offset():
     validator = InputValidator(
-        metrics_map={"订单数": {"name": "订单数"}},
+        metrics_map={"订单数": {"name": "订单数"}, "出金总额": {"name": "出金总额"}, "入金总额": {"name": "入金总额"}},
         dimensions_map={
             "订单状态": {"name": "订单状态", "allowed_values": ["paid", "cancelled"], "mapping": {"已支付": "paid"}},
             "下单时间": {"name": "下单时间"},
@@ -706,8 +706,36 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     assert "无效的过滤条件格式" in validator.validate_filters([{"and": [{"bad": []}]}])[1]
 
     assert validator.validate_having([{"metric": "订单数", "operator": ">", "value": 1}])[1] is None
+    structured_having, structured_having_err = validator.validate_having([
+        {
+            "left": {"type": "metric", "name": "出金总额"},
+            "operator": ">",
+            "right": {
+                "type": "binary",
+                "operator": "*",
+                "left": {"type": "metric", "name": "入金总额"},
+                "right": {"type": "literal", "value": 10},
+            },
+        }
+    ])
+    assert structured_having_err is None
+    assert structured_having[0]["right"]["operator"] == "*"
     assert validator.validate_having([{}]) == ([], None)
     assert "HAVING 条件中的指标" in validator.validate_having([{"metric": "未知指标"}])[1]
+    assert "HAVING 条件中的指标" in validator.validate_having([{"left": {"type": "metric", "name": "未知指标"}, "operator": ">", "right": {"type": "literal", "value": 1}}])[1]
+    assert "不允许除以 0" in validator.validate_having([
+        {
+            "left": {"type": "metric", "name": "出金总额"},
+            "operator": ">",
+            "right": {
+                "type": "binary",
+                "operator": "/",
+                "left": {"type": "metric", "name": "入金总额"},
+                "right": {"type": "literal", "value": 0},
+            },
+        }
+    ])[1]
+    assert "只支持 metric、literal、binary" in validator.validate_having([{"left": {"type": "metric", "name": "出金总额"}, "operator": ">", "right": {"type": "dimension", "name": "订单状态"}}])[1]
     assert validator.validate_order_by([{"field": "订单数", "direction": "asc"}], ["订单数"], [])[0] == [{"field": "订单数", "direction": "ASC"}]
     assert "不是字典" in validator.validate_order_by(["bad"], ["订单数"], [])[1]
     assert "缺少 'field'" in validator.validate_order_by([{"direction": "DESC"}], ["订单数"], [])[1]

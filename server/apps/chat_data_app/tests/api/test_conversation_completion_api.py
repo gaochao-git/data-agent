@@ -4,6 +4,12 @@ import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+from langchain_core.messages import AIMessage
+
+from apps.chat_data_app import routes
+from apps.chat_data_app.agent import nodes
+from apps.chat_data_app.services import semantic_builder_compiler, semantic_tools
+from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from utils.lang_util import conversation_router
 
 
@@ -54,7 +60,7 @@ class FakeGraph:
 
 @asynccontextmanager
 async def fake_checkpointer():
-    yield object()
+    yield None
 
 
 def _patch_completion_dependencies(monkeypatch, graph):
@@ -228,3 +234,115 @@ def test_completion_api_passes_explicit_skill_names_to_query_state(client, auth_
     assert "完成" in response.text
     human_message = graph.initial_state["messages"][0]
     assert human_message.additional_kwargs["skill_names"] == ["business-query", "custom-query"]
+
+
+class ToolCallingLLM:
+    def __init__(self, tool_args):
+        self.tool_args = tool_args
+        self.calls = 0
+        self.bound_tools = None
+
+    def bind_tools(self, tools):
+        self.bound_tools = tools
+        return self
+
+    async def ainvoke(self, _messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": "call_dsl",
+                    "name": "dsl2sql_tool",
+                    "args": self.tool_args,
+                }],
+            )
+        return AIMessage(content="已生成 SQL。")
+
+
+def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, auth_headers, monkeypatch):
+    manager = FakeDatasourceManager()
+    datasource = manager.datasources["ds_a"]
+    datasource["ds_tables"].append({
+        "table_name": "order_items",
+        "description": "订单明细",
+        "columns": [
+            {"name": "order_id", "type": "int"},
+            {"name": "amount", "type": "decimal"},
+        ],
+    })
+    config = datasource["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "出金总额", "expression": "SUM(orders.out_amount)", "table": "orders"},
+        {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items"},
+    ]
+    config["dimensions"] = [
+        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
+    ]
+    config["relationships"] = [
+        {
+            "left_table": "orders",
+            "right_table": "order_items",
+            "join_type": "left",
+            "join_conditions": [{"left_column": "order_id", "right_column": "order_id"}],
+            "relationship_type": "one_to_many",
+        }
+    ]
+    tool_args = {
+        "semantic_config_id": "cfg_a",
+        "metrics": ["出金总额", "销售额"],
+        "dimensions": ["订单状态"],
+        "filters": [],
+        "having": [{
+            "left": {"type": "metric", "name": "出金总额"},
+            "operator": ">",
+            "right": {
+                "type": "binary",
+                "operator": "*",
+                "left": {"type": "metric", "name": "销售额"},
+                "right": {"type": "literal", "value": 10},
+            },
+        }],
+        "order_by": [],
+    }
+    fake_llm = ToolCallingLLM(tool_args)
+
+    async def fake_get_agent_id(_db_path, conversation_id, user_id=None):
+        return "chat_data" if conversation_id.startswith("conv_") else None
+
+    async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
+        return conversation_id
+
+    handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
+    monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
+    monkeypatch.setattr(handler_module, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
+    monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda **_kwargs: asyncio.sleep(0, result=""))
+    monkeypatch.setattr(handler_module, "get_datasource_manager", lambda: manager)
+    for module in (routes, semantic_builder_compiler, semantic_tools):
+        monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
+    for module_name in (
+        "apps.chat_data_app.agent.nodes",
+        "server.apps.chat_data_app.agent.nodes",
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            monkeypatch.setattr(module, "get_chat_data_llm", lambda **_kwargs: fake_llm)
+
+    response = _post_completion(
+        client,
+        auth_headers,
+        "conv_real_dsl_tool_api",
+        "按订单状态查询出金总额大于销售额十倍的情况",
+        options={"mode": "query", "datasource_id": "ds_a", "semantic_config_id": "cfg_a"},
+    )
+
+    assert response.status_code == 200
+    text = response.text
+    assert "event: tool" in text
+    assert "dsl2sql_tool" in text
+    assert "LEFT JOIN order_items" in text
+    assert "HAVING SUM(orders.out_amount) > (SUM(order_items.amount) * 10)" in text
+    assert "已生成 SQL。" in text
+    assert fake_llm.calls == 2

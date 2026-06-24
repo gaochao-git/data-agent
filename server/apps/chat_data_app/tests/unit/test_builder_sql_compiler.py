@@ -676,6 +676,46 @@ def test_compile_builder_sql_having_non_tree_expression_in_branch():
     assert "HAVING SUM(`amount`) IN (select amount from whitelist)" in sql
 
 
+def test_compile_builder_sql_having_structured_right_operand():
+    sql = compile_builder_sql({
+        "mainTable": "orders",
+        "mainAlias": "o",
+        "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "pid", "alias": "分账户PID"}],
+        "aggregations": [
+            {"id": "out", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "out_amount", "alias": "出金总额", "expression": "SUM(orders.out_amount)"},
+            {"id": "in", "func": "SUM", "table": "orders", "tableAlias": "o", "column": "in_amount", "alias": "入金总额", "expression": "SUM(orders.in_amount)"},
+        ],
+        "filters": [
+            {
+                "id": "h1",
+                "table": "orders",
+                "tableAlias": "o",
+                "column": "out_amount",
+                "operator": ">",
+                "aggFunc": "SUM",
+                "aggId": "out",
+                "expression": "SUM(orders.out_amount)",
+                "rightOperand": {
+                    "type": "binary",
+                    "operator": "*",
+                    "left": {
+                        "type": "metric",
+                        "table": "orders",
+                        "tableAlias": "o",
+                        "column": "in_amount",
+                        "aggFunc": "SUM",
+                        "aggId": "in",
+                        "expression": "SUM(orders.in_amount)",
+                    },
+                    "right": {"type": "literal", "value": 10},
+                },
+            }
+        ],
+    })
+
+    assert "HAVING SUM(o.out_amount) > (SUM(o.in_amount) * 10)" in sql
+
+
 def test_compile_builder_sql_having_and_order_remaining_branches():
     raw_order_sql = compile_builder_sql({
         "mainTable": "orders",

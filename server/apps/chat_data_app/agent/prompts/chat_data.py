@@ -90,7 +90,8 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - `filters` 支持固定值过滤：`dimension`、`operator`、`value`、`value_type`；`value_type` 仅允许 `literal` / `sql_function`。
 - `filters` 也支持字段间比较或字段与表达式比较：使用结构化 `left/right`；表达式操作数只支持 `dimension`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。不要把“维度B * 10”这类表达式字符串放进固定值过滤的 `value`。
 - 日期/时间维度过滤时，筛选值必须和该维度当前查询使用的表达式口径一致：如果维度表达式或 `time_grain` 已把原始值格式化为展示格式，`value` 必须使用转换后的展示格式；如果没有日期格式化转换，`value` 必须使用数据库原始存储格式。范围过滤优先使用半开区间，避免漏掉结束日当天非零时分秒数据。
-- `having` 用于聚合结果过滤；`order_by.field` 只能使用当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
+- `having` 用于聚合结果过滤。固定值过滤使用 `metric/operator/value`；指标间比较或指标与表达式比较使用结构化 `left/right`，表达式操作数只支持 `metric`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。涉及指标结果的比较必须放在 `having`，不要放在 `filters`；不要把“指标B * 10”这类表达式字符串放进固定值过滤的 `value`。
+- `order_by.field` 只能使用当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
 
 # 最终回答
 - 查询结果明细已经由 `semantic_query_tool` 返回并由前端表格/图表展示，最终回复不要重复输出结果表格。
