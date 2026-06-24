@@ -1335,6 +1335,7 @@ const hasVisibleAssistantContent = (content: string): boolean => {
 
 // 首 token 前已有气泡占位时，底部状态行不重复显示。
 const shouldShowStreamingStatus = (message: Message): boolean => {
+  if (shouldShowStreamingProgress(message)) return false
   return hasVisibleAssistantContent(message.content) || getVisibleToolCalls(message.toolCalls).length > 0 || Boolean(message.semanticConfigSelection || message.semanticConfigSelectRequired)
 }
 
@@ -1881,19 +1882,6 @@ const handleViewAnalysis = (msg: Message) => {
                   v-if="shouldShowStreamingProgress(msg)"
                   class="px-1 py-1"
                 >
-                  <div class="flex items-center gap-2 mb-2">
-                    <div class="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500/15 to-blue-400/10 flex items-center justify-center">
-                      <i class="fa-solid fa-wand-magic-sparkles text-[10px] text-blue-500 animate-pulse"></i>
-                    </div>
-                    <span class="text-sm text-gray-500 font-medium">{{ getStreamingStageText(msg) }}</span>
-                    <button
-                      v-if="isAnalysisPanelOpen && !showAnalysisPanel"
-                      class="ml-auto h-6 px-2 border border-blue-200 rounded bg-blue-50 text-[11px] text-blue-600 hover:bg-blue-100 hover:border-blue-300"
-                      @click="emit('switchToAnalysis')"
-                    >
-                      查看分析
-                    </button>
-                  </div>
                   <div class="px-2 py-1">
                     <div class="particle-storm relative h-[88px] overflow-hidden">
                       <div
@@ -1909,6 +1897,19 @@ const handleViewAnalysis = (msg: Message) => {
                         }"
                       ></div>
                     </div>
+                  </div>
+                  <div class="mt-2 flex items-center gap-2">
+                    <div class="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500/15 to-blue-400/10 flex items-center justify-center">
+                      <i class="fa-solid fa-wand-magic-sparkles text-[10px] text-blue-500 animate-pulse"></i>
+                    </div>
+                    <span class="text-sm text-gray-500 font-medium">{{ getStreamingStageText(msg) }}</span>
+                    <button
+                      v-if="isAnalysisPanelOpen && !showAnalysisPanel"
+                      class="ml-auto h-6 px-2 border border-blue-200 rounded bg-blue-50 text-[11px] text-blue-600 hover:bg-blue-100 hover:border-blue-300"
+                      @click="emit('switchToAnalysis')"
+                    >
+                      查看分析
+                    </button>
                   </div>
                 </div>
                 <!-- 普通问答 → 直接流式显示文字 -->

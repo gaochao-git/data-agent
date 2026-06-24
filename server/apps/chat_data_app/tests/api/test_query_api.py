@@ -390,6 +390,39 @@ def test_compile_semantic_builder_sql_accepts_structured_metric_having(client, f
     assert "HAVING SUM(orders.out_amount) > (SUM(order_items.amount) * 10)" in sql
 
 
+def test_compile_semantic_builder_sql_normalizes_time_filter_to_range(client, fake_datasource_manager, monkeypatch):
+    config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
+    config["metrics"] = [
+        {"name": "订单数", "expression": "COUNT(DISTINCT orders.order_id)", "table": "orders"},
+    ]
+    config["dimensions"] = [
+        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
+        {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
+    ]
+    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/compile-semantic-builder-sql",
+        json={
+            "datasource_id": "ds_a",
+            "semantic_config_id": "cfg_a",
+            "semantic_builder_config": {
+                "dimensions": [{"semanticName": "订单状态"}],
+                "aggregations": [{"semanticName": "订单数"}],
+                "filters": [{"semanticName": "下单时间", "operator": "=", "value": "2024"}],
+            },
+        },
+    )
+
+    payload = response.json()
+    assert payload["status"] == "success"
+    sql = payload["data"]["sql"]
+    assert "`order_time` >= '2024-01-01 00:00:00'" in sql
+    assert "`order_time` < '2025-01-01 00:00:00'" in sql
+    assert "`order_time` = 2024" not in sql
+
+
 def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_name(client, fake_datasource_manager, monkeypatch):
     config = fake_datasource_manager.datasources["ds_a"]["semantic_configs"][0]
     config["metrics"] = [

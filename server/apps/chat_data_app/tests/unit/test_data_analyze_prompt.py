@@ -60,6 +60,33 @@ def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expressi
     assert "value` 必须使用数据库原始存储格式" in prompt
 
 
+def test_chat_data_query_prompt_has_minimal_dsl_few_shots():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "# DSL 示例" in prompt
+    assert "按维度A找指标A大于10的对象" in prompt
+    assert 'having=[{{"metric":"指标A","operator":">","value":10}}]' in prompt
+    assert "按维度A找指标A大于指标B 10倍的对象" in prompt
+    assert '"left":{{"type":"metric","name":"指标A"}}' in prompt
+    assert '"right":{{"type":"literal","value":10}}' in prompt
+    assert "明细里维度A大于维度B 10倍" in prompt
+    assert "操作数类型是 `dimension`" in prompt
+    assert "不要把指标结果比较放进 `filters`" in prompt
+
+
+def test_chat_data_query_prompt_template_format_keeps_json_examples_valid():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.format(
+        current_time="2026-06-24 10:00:00",
+        execution_target_info="",
+        available_skills_context="",
+        semantic_config_directory_info="",
+        semantic_layer_config="",
+    )
+
+    assert 'having=[{"metric":"指标A","operator":">","value":10}]' in prompt
+    assert '"left":{"type":"metric","name":"指标A"}' in prompt
+
+
 def test_chat_data_query_prompt_stops_when_question_exceeds_current_capability():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
@@ -84,6 +111,9 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "可见输出约束" in prompt
     assert "不要输出思考标签、伪造思考块或内部推理内容" in prompt
     assert "不要输出内部执行步骤说明，包括技能加载、系统规则依据、工具选择理由、工具调用顺序和配置选择过程" in prompt
+    assert "最终回答和澄清问题只说业务结论或业务口径" in prompt
+    assert "不要说“我先加载/查看/调用/使用技能、工具、配置、指标集”等内部动作" in prompt
+    assert "不要描述“修正、重新查询、让我检查”等过程" in prompt
     assert "思考过程由模型原生推理流展示" in prompt
     assert "禁止出现工具名、配置 ID、工具调用计划" in prompt
     assert "除用户明确询问当前可见指标集目录或业务范围外，不要输出配置名或指标集名称" in prompt

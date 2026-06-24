@@ -21,10 +21,12 @@ from apps.chat_data_app.handlers import (
     _format_reasoning_for_display,
     _continue_execution,
     _extract_select_semantic_config_payload,
+    _format_execution_target_info,
     _format_sse,
     _format_thinking_event,
     _format_tool_event,
     _get_interrupt_info,
+    _get_execution_targets_async,
     _get_semantic_config_async,
     _is_tool_result_error,
     _normalize_enable_thinking,
@@ -326,6 +328,112 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     assert "不要默认全部执行" in multi
     assert "2. 机构名称：宁波库；成员数据源ID：m2" in multi
     assert "机构编码：ORG_NB" in multi
+
+
+def test_build_execution_target_info_async_can_show_all_targets_when_selected(monkeypatch):
+    import asyncio
+
+    calls = []
+
+    class FakeDatasourceManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "source_type": "hive",
+                "query_executor_type": "direct",
+                "member_sources": [
+                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
+                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
+                ],
+            }
+
+        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
+            calls.append(list(member_datasource_ids or []))
+            return [
+                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
+                for member_id in member_datasource_ids or []
+            ]
+
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            calls.append(member_datasource_ids)
+            targets = [
+                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
+                {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
+            ]
+            if member_datasource_ids == ["m1"]:
+                return targets[:1]
+            return targets
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
+
+    selected_only = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"]))
+    all_targets = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"], include_all_available=True))
+
+    assert calls == [["m1"], ["m1", "m2"]]
+    assert "只有 1 个可用执行对象" in selected_only
+    assert "2 个可用执行对象" in all_targets
+    assert "成员数据源ID：m2" in all_targets
+
+
+def test_get_execution_targets_async_expands_all_members(monkeypatch):
+    import asyncio
+
+    class FakeDatasourceManager:
+        async def get_datasource_async(self, datasource_id):
+            assert datasource_id == "ds_a"
+            return {
+                "source_type": "hive",
+                "query_executor_type": "direct",
+                "member_sources": [
+                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
+                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
+                ],
+            }
+
+        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
+            return [
+                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
+                for member_id in member_datasource_ids or []
+            ]
+
+        async def get_execution_datasources_async(self, *_args, **_kwargs):
+            return [{"member_datasource_id": "m1", "member_name": "默认库", "org_code": "ORG_HZ"}]
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
+
+    targets = asyncio.run(_get_execution_targets_async("ds_a", [], include_all_available=True))
+
+    assert [target["member_datasource_id"] for target in targets] == ["m1", "m2"]
+
+
+def test_format_execution_target_info_prefers_long_exact_member_name():
+    targets = [
+        {"member_datasource_id": "ORG_CODE1", "member_name": "运维平台", "org_code": "ORG_CODE1"},
+        {"member_datasource_id": "ORG_CODE2", "member_name": "运维平台1", "org_code": "ORG_CODE2"},
+        {"member_datasource_id": "ORG_CODE3", "member_name": "运维平台2", "org_code": "ORG_CODE3"},
+    ]
+
+    info, matched_member_ids = _format_execution_target_info(
+        targets,
+        "查询运维平台1在2024年的订单数量是多少",
+    )
+
+    assert matched_member_ids == ["ORG_CODE2"]
+    assert "## 用户问题中的执行对象匹配" in info
+    assert "member_datasource_id：ORG_CODE2" in info
+
+
+def test_format_execution_target_info_matches_all_execution_targets():
+    targets = [
+        {"member_datasource_id": "ORG_CODE1", "member_name": "运维平台", "org_code": "ORG_CODE1"},
+        {"member_datasource_id": "ORG_CODE2", "member_name": "运维平台1", "org_code": "ORG_CODE2"},
+    ]
+
+    _info, matched_member_ids = _format_execution_target_info(
+        targets,
+        "查询所有机构2024年的订单数量",
+    )
+
+    assert matched_member_ids == ["ORG_CODE1", "ORG_CODE2"]
 
 
 def test_build_execution_target_info_async_empty_and_error(monkeypatch):
@@ -1085,6 +1193,100 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     assert fake_graph.initial_state["operator_name"] == "测试用户"
 
 
+def test_stream_sql_generation_query_mode_exposes_all_available_members(monkeypatch):
+    import asyncio
+
+    class FakeDatasourceManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "source_type": "hive",
+                "query_executor_type": "direct",
+                "member_sources": [
+                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
+                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
+                ],
+            }
+
+        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
+            return [
+                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
+                for member_id in member_datasource_ids or []
+            ]
+
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            targets = [
+                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
+                {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
+            ]
+            if member_datasource_ids == ["m1"]:
+                return targets[:1]
+            return targets
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "agent"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
+    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_a", "metrics": [], "dimensions": []}))
+
+    asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_members",
+        user_query="查询所有机构订单数",
+        datasource_id="ds_a",
+        user_id="user_a",
+        member_datasource_ids=[],
+        mode="query",
+        semantic_config_id="cfg_a",
+    )))
+
+    assert fake_graph.initial_state["member_datasource_ids"] == []
+    assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1", "m2"]
+    assert "2 个可用执行对象" in fake_graph.initial_state["execution_target_info"]
+    assert "成员数据源ID：m2" in fake_graph.initial_state["execution_target_info"]
+
+
+def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatch):
+    import asyncio
+
+    class FakeDatasourceManager:
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            targets = [
+                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
+                {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
+            ]
+            if member_datasource_ids == ["m1"]:
+                return targets[:1]
+            return targets
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "agent"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
+    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_a", "metrics": [], "dimensions": []}))
+
+    asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_query_member_selected",
+        user_query="查询订单数",
+        datasource_id="ds_a",
+        user_id="user_a",
+        member_datasource_ids=["m1"],
+        mode="query",
+        semantic_config_id="cfg_a",
+    )))
+
+    assert fake_graph.initial_state["member_datasource_ids"] == ["m1"]
+    assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1"]
+    assert "只有 1 个可用执行对象" in fake_graph.initial_state["execution_target_info"]
+    assert "成员数据源ID：m2" not in fake_graph.initial_state["execution_target_info"]
+
+
 def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
     import asyncio
 
@@ -1158,7 +1360,12 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     fake_graph = _FakeGraph(events=[(_FakeMessageChunk(content="语义查询完成"), {"langgraph_node": "agent"})])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers._build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="对象"))
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers._get_execution_targets_async",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=[
+            {"member_datasource_id": "m1", "member_name": "对象", "org_code": "ORG_1"},
+        ]),
+    )
     monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="不应注入目录"))
     temp_events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_temp",
@@ -1171,7 +1378,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     joined = "".join(temp_events)
     assert "语义查询完成" in joined
     assert fake_graph.initial_state["tables_ddl_info"] == ""
-    assert fake_graph.initial_state["execution_target_info"] == "对象"
+    assert "机构名称：对象" in fake_graph.initial_state["execution_target_info"]
     assert fake_graph.initial_state["semantic_config_directory_info"] == ""
 
 

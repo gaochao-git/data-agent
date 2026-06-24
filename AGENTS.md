@@ -36,6 +36,7 @@
 - 前端构建：`cd web-vue && npm run build-only`
 - 前端完整检查：`cd web-vue && npm run build`
 - 后端条件覆盖率和行覆盖率要求大于95%
+- sonar代码复杂度要控制复杂度不能大于15，控制好for循环、if-else、except分支复杂度
 
 ## 4. 代码风格
 

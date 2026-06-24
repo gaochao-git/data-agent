@@ -324,20 +324,44 @@ async def semantic_query_tool(
     operator_name = str(state.get("operator_name") or "").strip() or None
     requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
     state_member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
+    available_member_datasource_ids = _normalize_member_datasource_ids(state.get("available_member_datasource_ids"))
+    matched_member_datasource_ids = _normalize_member_datasource_ids(state.get("matched_member_datasource_ids"))
+    allowed_member_datasource_ids = state_member_datasource_ids or available_member_datasource_ids
     if requested_member_datasource_ids:
-        if state_member_datasource_ids:
+        if matched_member_datasource_ids:
+            invalid_matched_member_ids = [
+                member_id
+                for member_id in requested_member_datasource_ids
+                if member_id not in matched_member_datasource_ids
+            ]
+            if invalid_matched_member_ids:
+                return (
+                    "semantic_query_tool 执行失败: 本次查询的执行对象与用户问题中指定的机构不一致；"
+                    f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
+                )
+        if allowed_member_datasource_ids:
             invalid_member_ids = [
                 member_id
                 for member_id in requested_member_datasource_ids
-                if member_id not in state_member_datasource_ids
+                if member_id not in allowed_member_datasource_ids
             ]
             if invalid_member_ids:
                 return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
         effective_member_datasource_ids = requested_member_datasource_ids
-    elif state.get("require_explicit_member_selection") and len(state_member_datasource_ids) > 1:
+    elif state.get("require_explicit_member_selection") and len(allowed_member_datasource_ids) > 1:
         return "semantic_query_tool 执行失败: 多个可用执行对象时必须传入本次要查询的 member_datasource_ids；如果用户未明确机构范围，请先确认查询哪个机构或是否查询全部"
     else:
         effective_member_datasource_ids = state_member_datasource_ids
+    if (
+        state.get("require_explicit_member_selection")
+        and len(available_member_datasource_ids) > 1
+        and len(effective_member_datasource_ids) == 1
+        and not matched_member_datasource_ids
+        and effective_member_datasource_ids[0] == available_member_datasource_ids[0]
+    ):
+        query_result_default_member_note = "用户未指定机构，本次默认查询第 1 个机构；最终回答需要说明该默认机构范围。"
+    else:
+        query_result_default_member_note = ""
     logger.info(
         "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
         user_id,
@@ -348,6 +372,8 @@ async def semantic_query_tool(
     conversation_id = str(state.get("conversation_id") or "").strip() or None
     query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
     query_result["sql"] = query_result.get("sql") or sql
+    if query_result_default_member_note:
+        query_result["default_member_notice"] = query_result_default_member_note
 
     if query_result["success"]:
         result_json = json.dumps(query_result, ensure_ascii=False)

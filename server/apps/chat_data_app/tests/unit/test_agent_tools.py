@@ -591,6 +591,92 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
 
 
+def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    captured = {}
+
+    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, *_args, **_kwargs):
+        captured["member_datasource_ids"] = member_datasource_ids
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": [],
+        "available_member_datasource_ids": ["org_a", "org_b"],
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查 org_b 订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["org_b"],
+        "state": state,
+    }))
+
+    assert result.startswith("<query_result>")
+    assert captured["member_datasource_ids"] == ["org_b"]
+
+
+def test_semantic_query_tool_adds_default_member_notice_when_using_first_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, *_args, **_kwargs):
+        return {
+            "success": True,
+            "columns": ["id"],
+            "data": [{"id": 1}],
+            "total_count": 1,
+            "member_datasource_id": member_datasource_ids[0],
+        }
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": ["org_a"],
+        "available_member_datasource_ids": ["org_a", "org_b"],
+        "semantic_config_id": "cfg_a",
+        "require_explicit_member_selection": True,
+        "messages": [HumanMessage(content="查订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "state": state,
+    }))
+
+    assert result.startswith("<query_result>")
+    assert "default_member_notice" in result
+    assert "默认查询第 1 个机构" in result
+
+
 def test_semantic_query_tool_rejects_member_ids_outside_available_scope(monkeypatch):
     from langchain_core.messages import HumanMessage
 
@@ -625,6 +711,82 @@ def test_semantic_query_tool_rejects_member_ids_outside_available_scope(monkeypa
     }))
 
     assert "本次查询包含不可用的执行对象 org_c" in result
+
+
+def test_semantic_query_tool_rejects_member_ids_outside_available_member_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fail_execute_sql_real(*_args, **_kwargs):
+        raise AssertionError("should not execute unavailable member id")
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": [],
+        "available_member_datasource_ids": ["org_a", "org_b"],
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查指定机构订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["org_c"],
+        "state": state,
+    }))
+
+    assert "本次查询包含不可用的执行对象 org_c" in result
+
+
+def test_semantic_query_tool_rejects_member_ids_conflicting_with_matched_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fail_execute_sql_real(*_args, **_kwargs):
+        raise AssertionError("should not execute member id that conflicts with exact query match")
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": [],
+        "available_member_datasource_ids": ["org_a", "org_b"],
+        "matched_member_datasource_ids": ["org_b"],
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查机构B订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "member_datasource_ids": ["org_a"],
+        "state": state,
+    }))
+
+    assert "与用户问题中指定的机构不一致" in result
+    assert "org_b" in result
 
 
 def test_semantic_query_tool_requires_explicit_member_ids_when_multiple_available(monkeypatch):

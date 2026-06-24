@@ -534,38 +534,105 @@ async def _get_semantic_config_async(
         return None
 
 
-async def _build_execution_target_info_async(datasource_id: str | None, member_datasource_ids: list[str] | None = None) -> str:
-    """异步构造可用执行对象说明，避免同步读取数据源配置。"""
-    if not datasource_id:
-        return ""
+def _execution_target_member_id(target: dict) -> str:
+    return str(target.get("member_datasource_id") or target.get("id") or "").strip()
 
-    try:
-        ds_manager = get_datasource_manager()
-        execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, member_datasource_ids)
-    except Exception as err:
-        logger.warning(f"构造执行对象说明失败: {err}")
-        return ""
 
+def _execution_target_org_code(target: dict) -> str:
+    source_config = target.get("source_config") or {}
+    return str(target.get("org_code") or source_config.get("org_code") or "").strip()
+
+
+def _execution_target_name(target: dict, index: int) -> str:
+    source_config = target.get("source_config") or {}
+    return str(
+        target.get("member_name")
+        or target.get("org_name")
+        or source_config.get("org_name")
+        or _execution_target_member_id(target)
+        or f"执行对象{index}"
+    ).strip()
+
+
+def _execution_target_terms(target: dict, index: int) -> list[str]:
+    terms = [
+        _execution_target_name(target, index),
+        _execution_target_org_code(target),
+        _execution_target_member_id(target),
+    ]
+    return [term for term in dict.fromkeys(terms) if term]
+
+
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _match_execution_targets_from_query(user_query: str | None, execution_targets: list[dict]) -> list[str]:
+    """从用户原文中精确匹配执行对象，长名称优先，避免前缀机构误命中。"""
+    text = str(user_query or "").strip()
+    if not text or not execution_targets:
+        return []
+
+    lowered_text = text.casefold()
+    matches: list[tuple[int, int, int, str]] = []
+    for index, target in enumerate(execution_targets, start=1):
+        member_id = _execution_target_member_id(target)
+        if not member_id:
+            continue
+        for term in _execution_target_terms(target, index):
+            lowered_term = term.casefold()
+            start = lowered_text.find(lowered_term)
+            while start >= 0:
+                end = start + len(lowered_term)
+                matches.append((start, end, len(lowered_term), member_id))
+                start = lowered_text.find(lowered_term, start + 1)
+
+    selected: list[tuple[int, int, int, str]] = []
+    selected_spans: list[tuple[int, int]] = []
+    for item in sorted(matches, key=lambda match: (-match[2], match[0])):
+        span = (item[0], item[1])
+        if any(_spans_overlap(span, selected_span) for selected_span in selected_spans):
+            continue
+        selected.append(item)
+        selected_spans.append(span)
+
+    ordered_member_ids = [
+        item[3]
+        for item in sorted(selected, key=lambda match: match[0])
+    ]
+    return list(dict.fromkeys(ordered_member_ids))
+
+
+def _query_requests_all_execution_targets(user_query: str | None) -> bool:
+    text = str(user_query or "").strip()
+    if not text:
+        return False
+    keywords = ("全部机构", "所有机构", "各机构", "每个机构", "全部执行对象", "所有执行对象")
+    return any(keyword in text for keyword in keywords)
+
+
+def _format_execution_target_info(execution_targets: list[dict], user_query: str | None = None) -> tuple[str, list[str]]:
     if not execution_targets:
-        return ""
+        return "", []
+
+    matched_member_ids = [
+        _execution_target_member_id(target)
+        for target in execution_targets
+        if _query_requests_all_execution_targets(user_query) and _execution_target_member_id(target)
+    ]
+    if not matched_member_ids:
+        matched_member_ids = _match_execution_targets_from_query(user_query, execution_targets)
 
     lines = ["## 可用执行对象"]
     if len(execution_targets) == 1:
         lines.append("当前可用范围只有 1 个可用执行对象：")
     else:
-        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象。请根据用户问题选择本次要查询的机构；如果用户未指定机构，默认查询第 1 个机构，不要默认全部执行：")
+        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象。请根据用户问题选择本次要查询的机构；如果用户未指定机构，默认查询第 1 个机构，不要默认全部执行。机构名称必须按完整名称或机构编码精确匹配，不能用前缀或包含关系替代：")
 
     for index, target in enumerate(execution_targets, start=1):
-        source_config = target.get("source_config") or {}
-        member_name = (
-            target.get("member_name")
-            or target.get("org_name")
-            or source_config.get("org_name")
-            or target.get("member_datasource_id")
-            or f"执行对象{index}"
-        )
-        org_code = str(target.get("org_code") or source_config.get("org_code") or "").strip()
-        member_datasource_id = str(target.get("member_datasource_id") or target.get("id") or "").strip()
+        member_name = _execution_target_name(target, index)
+        org_code = _execution_target_org_code(target)
+        member_datasource_id = _execution_target_member_id(target)
         if org_code and org_code != str(member_name).strip():
             line = f"{index}. 机构名称：{member_name}"
             if member_datasource_id:
@@ -578,7 +645,66 @@ async def _build_execution_target_info_async(datasource_id: str | None, member_d
                 line += f"；成员数据源ID：{member_datasource_id}"
             lines.append(line)
 
-    return "\n".join(lines)
+    if matched_member_ids:
+        matched_targets = [
+            (index, target)
+            for index, target in enumerate(execution_targets, start=1)
+            if _execution_target_member_id(target) in matched_member_ids
+        ]
+        lines.append("")
+        lines.append("## 用户问题中的执行对象匹配")
+        lines.append("已按用户原文精确匹配到以下机构；本次查询必须只使用这些机构对应的 member_datasource_ids：")
+        for index, target in matched_targets:
+            member_name = _execution_target_name(target, index)
+            member_datasource_id = _execution_target_member_id(target)
+            org_code = _execution_target_org_code(target)
+            line = f"- 机构名称：{member_name}"
+            if org_code:
+                line += f"；机构编码：{org_code}"
+            if member_datasource_id:
+                line += f"；member_datasource_id：{member_datasource_id}"
+            lines.append(line)
+
+    return "\n".join(lines), matched_member_ids
+
+
+async def _get_execution_targets_async(
+    datasource_id: str | None,
+    member_datasource_ids: list[str] | None = None,
+    include_all_available: bool = False,
+) -> list[dict]:
+    if not datasource_id:
+        return []
+    try:
+        ds_manager = get_datasource_manager()
+        if include_all_available:
+            datasource = await ds_manager.get_datasource_async(datasource_id)
+            if datasource and hasattr(ds_manager, "_build_execution_datasource_targets"):
+                all_member_ids = [
+                    _execution_target_member_id(member)
+                    for member in datasource.get("member_sources") or []
+                    if _execution_target_member_id(member)
+                ]
+                return ds_manager._build_execution_datasource_targets(datasource, all_member_ids)
+        return await ds_manager.get_execution_datasources_async(
+            datasource_id,
+            member_datasource_ids,
+        )
+    except Exception as err:
+        logger.warning(f"构造执行对象说明失败: {err}")
+        return []
+
+
+async def _build_execution_target_info_async(
+    datasource_id: str | None,
+    member_datasource_ids: list[str] | None = None,
+    include_all_available: bool = False,
+    user_query: str | None = None,
+) -> str:
+    """异步构造可用执行对象说明，避免同步读取数据源配置。"""
+    execution_targets = await _get_execution_targets_async(datasource_id, member_datasource_ids, include_all_available)
+    info, _matched_member_ids = _format_execution_target_info(execution_targets, user_query)
+    return info
 
 
 async def _build_semantic_config_directory_info_async(
@@ -732,6 +858,20 @@ async def _stream_sql_generation(
             semantic_config_directory_info = ""
             if mode == "query" and not semantic_config:
                 semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
+            execution_targets = await _get_execution_targets_async(
+                datasource_id,
+                member_datasource_ids,
+                include_all_available=(mode == "query" and not member_datasource_ids),
+            )
+            all_execution_target_info, matched_member_datasource_ids = _format_execution_target_info(
+                execution_targets,
+                user_query if mode == "query" else None,
+            )
+            all_member_datasource_ids = [
+                _execution_target_member_id(target)
+                for target in execution_targets
+                if _execution_target_member_id(target)
+            ] if mode == "query" else []
 
             initial_state = {
                 "messages": [HumanMessage(
@@ -748,8 +888,10 @@ async def _stream_sql_generation(
                 "operator_name": username or "",
                 "conversation_id": thread_id,
                 "member_datasource_ids": member_datasource_ids or [],
+                "available_member_datasource_ids": all_member_datasource_ids,
+                "matched_member_datasource_ids": matched_member_datasource_ids,
                 "require_explicit_member_selection": mode == "query",
-                "execution_target_info": await _build_execution_target_info_async(datasource_id, member_datasource_ids),
+                "execution_target_info": all_execution_target_info,
                 "semantic_config_directory_info": semantic_config_directory_info,
             }
 

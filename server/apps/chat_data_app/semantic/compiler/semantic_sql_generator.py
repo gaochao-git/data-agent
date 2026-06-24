@@ -13,6 +13,7 @@ from utils.logger import get_logger
 from ..utils import format_params_for_display
 from ..validators import InputValidator
 from .builder_sql_compiler import compile_builder_sql
+from .filter_normalization import normalize_time_filter_leaf
 
 logger = get_logger(__name__)
 
@@ -196,20 +197,14 @@ class SemanticSQLGenerator:
 
         dim_name = node.get("dimension")
         dim_config = self.dimensions_map.get(dim_name, {})
-        dim_table = dim_config.get("table")
-        dim_column = dim_config.get("column")
-        dim_expression = dim_config.get("expression")
-        builder_node = {
-            "table": dim_table,
-            "tableAlias": self._table_alias(dim_config) or dim_table,
-            "column": dim_column,
-            "expression": dim_expression,
-            "operator": node.get("operator", "="),
-            "value": node.get("value"),
-            "logic": node.get("logic", "AND"),
-        }
-        self._copy_filter_value_type(node, builder_node)
-        return builder_node
+        normalized_filters = self._map_filter_value_for_builder(node, dim_config)
+        builder_nodes = [
+            self._filter_leaf_to_builder_node(normalized_filter, dim_config)
+            for normalized_filter in normalized_filters
+        ]
+        if len(builder_nodes) == 1:
+            return builder_nodes[0]
+        return {"and": builder_nodes}
 
     @staticmethod
     def _copy_filter_value_type(source: Dict[str, Any], target: Dict[str, Any]):
@@ -217,6 +212,28 @@ class SemanticSQLGenerator:
         for key in ("value_type",):
             if key in source:
                 target[key] = source.get(key)
+
+    def _filter_leaf_to_builder_node(self, fil: Dict[str, Any], dim_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        node = {
+            "id": f"filter-{fil.get('dimension', '')}",
+            "table": dim_cfg.get("table"),
+            "tableAlias": self._table_alias(dim_cfg) or dim_cfg.get("table"),
+            "column": dim_cfg.get("column"),
+            "expression": dim_cfg.get("expression"),
+            "operator": fil.get("operator", "="),
+            "value": fil.get("value"),
+            "logic": fil.get("logic", "AND"),
+        }
+        self._copy_filter_value_type(fil, node)
+        return node
+
+    def _map_filter_value_for_builder(self, node: Dict[str, Any], dim_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return normalize_time_filter_leaf(node, dim_config)
+
+    def _append_filter_nodes_for_builder(self, builder_filters: List[Dict[str, Any]], fil: Dict[str, Any]) -> None:
+        dim_cfg = self.dimensions_map.get(fil.get("dimension"), {})
+        for normalized_filter in self._map_filter_value_for_builder(fil, dim_cfg):
+            builder_filters.append(self._filter_leaf_to_builder_node(normalized_filter, dim_cfg))
 
     @staticmethod
     def _is_expression_filter_node(node: Dict[str, Any]) -> bool:
@@ -752,18 +769,7 @@ class SemanticSQLGenerator:
                 if self._is_expression_filter_node(fil):
                     builder_filters.append(self._map_expression_filter_node_for_builder(fil))
                     continue
-                dim_cfg = self.dimensions_map.get(fil.get("dimension"), {})
-                builder_filters.append({
-                    "id": f"filter-{fil.get('dimension', '')}",
-                    "table": dim_cfg.get("table"),
-                    "tableAlias": self._table_alias(dim_cfg) or dim_cfg.get("table"),
-                    "column": dim_cfg.get("column"),
-                    "expression": dim_cfg.get("expression"),
-                    "operator": fil.get("operator", "="),
-                    "value": fil.get("value"),
-                    "logic": fil.get("logic", "AND"),
-                })
-                self._copy_filter_value_type(fil, builder_filters[-1])
+                self._append_filter_nodes_for_builder(builder_filters, fil)
 
         builder_having = []
         for hv in validated_having:

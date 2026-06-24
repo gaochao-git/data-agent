@@ -171,6 +171,76 @@ def test_generate_time_grain_uses_source_type_dialect():
     assert "GROUP BY DATE_FORMAT(orders.`order_time`, 'yyyy-MM')" in sql
 
 
+def test_time_dimension_equal_year_is_normalized_to_half_open_range():
+    sql = generate(
+        build_config("hive"),
+        {
+            "metrics": ["订单数"],
+            "filters": [{"dimension": "下单时间", "operator": "=", "value": "2024"}],
+        },
+    )
+
+    assert "`order_time` >= '2024-01-01 00:00:00'" in sql
+    assert "`order_time` < '2025-01-01 00:00:00'" in sql
+    assert "`order_time` = 2024" not in sql
+    assert "`order_time` = '2024'" not in sql
+
+
+def test_time_dimension_equal_month_and_day_are_normalized_to_ranges():
+    month_sql = generate(
+        build_config("hive"),
+        {
+            "metrics": ["订单数"],
+            "filters": [{"dimension": "下单时间", "operator": "=", "value": "2024-12"}],
+        },
+    )
+    day_sql = generate(
+        build_config("hive"),
+        {
+            "metrics": ["订单数"],
+            "filters": [{"dimension": "下单时间", "operator": "=", "value": "2024-02-29"}],
+        },
+    )
+
+    assert "`order_time` >= '2024-12-01 00:00:00'" in month_sql
+    assert "`order_time` < '2025-01-01 00:00:00'" in month_sql
+    assert "`order_time` >= '2024-02-29 00:00:00'" in day_sql
+    assert "`order_time` < '2024-03-01 00:00:00'" in day_sql
+
+
+def test_time_dimension_text_between_is_split_to_between_values():
+    sql = generate(
+        build_config("hive"),
+        {
+            "metrics": ["订单数"],
+            "filters": [{
+                "dimension": "下单时间",
+                "operator": "BETWEEN",
+                "value": "2024-01-01 00:00:00 AND 2024-12-31 23:59:59",
+            }],
+        },
+    )
+
+    assert "`order_time` BETWEEN '2024-01-01 00:00:00' AND '2024-12-31 23:59:59'" in sql
+
+
+def test_time_dimension_equal_year_inside_tree_is_normalized_to_range():
+    sql = generate(
+        build_config("hive"),
+        {
+            "metrics": ["订单数"],
+            "filters": [{"and": [
+                {"dimension": "订单状态", "operator": "=", "value": "paid"},
+                {"dimension": "下单时间", "operator": "=", "value": "2024"},
+            ]}],
+        },
+    )
+
+    assert "`order_time` >= '2024-01-01 00:00:00'" in sql
+    assert "`order_time` < '2025-01-01 00:00:00'" in sql
+    assert "`order_time` = '2024'" not in sql
+
+
 def test_generate_join_path_for_cross_table_metric_and_dimension():
     sql = generate(
         build_config(),
@@ -341,7 +411,8 @@ def test_structured_expression_filter_compares_dimension_to_binary_expression():
 
     assert "`pid` AS `分账户PID`" in sql
     assert "`name` AS `名称`" in sql
-    assert "`order_time` = '2026-06-01'" in sql
+    assert "`order_time` >= '2026-06-01 00:00:00'" in sql
+    assert "`order_time` < '2026-06-02 00:00:00'" in sql
     assert "`out_amount` > (orders.`in_amount` * 10)" in sql
     assert "rightExpression" not in sql
 
@@ -372,7 +443,7 @@ def test_structured_expression_filter_inside_tree():
         },
     )
 
-    assert "WHERE (`order_time` = '2026-06-01' AND `out_amount` >= (orders.`in_amount` + 100))" in sql
+    assert "WHERE ((`order_time` >= '2026-06-01 00:00:00' AND `order_time` < '2026-06-02 00:00:00') AND `out_amount` >= (orders.`in_amount` + 100))" in sql
 
 
 def test_structured_expression_filter_collects_cross_table_join():
@@ -749,7 +820,7 @@ def test_generator_helper_branches_for_tables_and_joins():
     assert generator._validate_table_column("orders", "missing") is None
     assert generator._validate_table_column("missing", "id").startswith("表 'missing' 不存在")
     assert generator._map_filter_node_for_builder({"or": [{"dimension": "订单状态", "operator": "=", "value": "paid"}]}) == {
-        "or": [{"table": "orders", "tableAlias": "orders", "column": "status", "expression": None, "operator": "=", "value": "paid", "logic": "AND"}]
+        "or": [{"id": "filter-订单状态", "table": "orders", "tableAlias": "orders", "column": "status", "expression": None, "operator": "=", "value": "paid", "logic": "AND"}]
     }
     tables_needed = set()
     generator._collect_tables_from_filter_node({"and": [{"table": "orders"}, {"or": [{"table": "users"}]}]}, tables_needed)

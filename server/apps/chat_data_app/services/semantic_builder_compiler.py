@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from utils.logger import get_logger
 
 from ..semantic.compiler import SemanticSQLGenerator, compile_builder_sql
+from ..semantic.compiler.filter_normalization import normalize_time_filter_leaf
 from ..semantic.validators import InputValidator
 from .datasource_manager import get_datasource_manager
 
@@ -217,24 +218,52 @@ class SemanticBuilderCompiler:
             return []
         if not isinstance(value, list):
             raise ValueError("语义可视化 filters 必须是数组")
-        return [self._map_filter_node(item) for item in value if isinstance(item, dict)]
+        mapped: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            node = self._map_filter_node(item)
+            if isinstance(node, list):
+                mapped.extend(node)
+            else:
+                mapped.append(node)
+        return mapped
 
-    def _map_filter_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_filter_node(self, node: Dict[str, Any]) -> Dict[str, Any] | List[Dict[str, Any]]:
         if "and" in node:
             children = node.get("and") or []
             if not isinstance(children, list):
                 raise ValueError("语义可视化 and 过滤节点必须是数组")
-            return {"and": [self._map_filter_node(child) for child in children if isinstance(child, dict)]}
+            mapped_children: List[Dict[str, Any]] = []
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                mapped_child = self._map_filter_node(child)
+                if isinstance(mapped_child, list):
+                    mapped_children.extend(mapped_child)
+                else:
+                    mapped_children.append(mapped_child)
+            return {"and": mapped_children}
         if "or" in node:
             children = node.get("or") or []
             if not isinstance(children, list):
                 raise ValueError("语义可视化 or 过滤节点必须是数组")
-            return {"or": [self._map_filter_node(child) for child in children if isinstance(child, dict)]}
+            mapped_children = []
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                mapped_child = self._map_filter_node(child)
+                if isinstance(mapped_child, list):
+                    mapped_children.append({"and": mapped_child})
+                else:
+                    mapped_children.append(mapped_child)
+            return {"or": mapped_children}
         if isinstance(node.get("left"), dict) and "right" in node:
             return self._map_having_filter(node)
         if node.get("aggFunc"):
             return self._map_having_filter(node)
-        return self._map_dimension_filter(node)
+        mapped_filters = self._map_dimension_filter_leaves(node)
+        return mapped_filters[0] if len(mapped_filters) == 1 else mapped_filters
 
     def _copy_filter_value_fields(self, source: Dict[str, Any], target: Dict[str, Any]) -> None:
         for key in ("value", "valueType", "value_type", "rightExpression", "logic"):
@@ -314,6 +343,16 @@ class SemanticBuilderCompiler:
 
     def _map_dimension_filter(self, node: Dict[str, Any]) -> Dict[str, Any]:
         dim = self._resolve_dimension_config(node)
+        return self._map_dimension_filter_with_config(node, dim)
+
+    def _map_dimension_filter_leaves(self, node: Dict[str, Any]) -> List[Dict[str, Any]]:
+        dim = self._resolve_dimension_config(node)
+        return [
+            self._map_dimension_filter_with_config(normalized_node, dim)
+            for normalized_node in normalize_time_filter_leaf(node, dim)
+        ]
+
+    def _map_dimension_filter_with_config(self, node: Dict[str, Any], dim: Dict[str, Any]) -> Dict[str, Any]:
         mapped = {
             "id": node.get("id") or f"filter-{dim.get('name') or dim.get('column')}",
             "table": dim.get("table"),

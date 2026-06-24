@@ -34,6 +34,7 @@ def build_semantic_config():
         "dimensions": [
             {"name": "城市", "column": "city", "table": "orders", "type": "categorical", "expression": "orders.city"},
             {"name": "状态", "column": "status", "table": "orders", "type": "categorical"},
+            {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
             {"name": "用户等级", "column": "level", "table": "users", "table_alias": "u", "type": "categorical"},
         ],
         "relationships": [
@@ -170,6 +171,53 @@ def test_semantic_builder_filter_mapping_branches():
     })
     assert having["aggFunc"] == "SUM"
     assert having["column"] == "amount"
+
+
+def test_semantic_builder_normalizes_time_dimension_equal_filter():
+    compiler = SemanticBuilderCompiler(build_semantic_config())
+
+    mapped = compiler._map_filter_nodes([
+        {"semanticName": "下单时间", "operator": "=", "value": "2024"},
+        {"semanticName": "状态", "operator": "=", "value": "paid"},
+    ])
+
+    assert [item["operator"] for item in mapped] == [">=", "<", "="]
+    assert mapped[0]["value"] == "2024-01-01 00:00:00"
+    assert mapped[1]["value"] == "2025-01-01 00:00:00"
+    assert mapped[2]["column"] == "status"
+
+    sql = compiler.compile({
+        "dimensions": [{"semanticName": "状态"}],
+        "aggregations": [{"semanticName": "订单数"}],
+        "filters": [{"semanticName": "下单时间", "operator": "=", "value": "2024"}],
+    })["sql"]
+
+    assert "`order_time` >= '2024-01-01 00:00:00'" in sql
+    assert "`order_time` < '2025-01-01 00:00:00'" in sql
+    assert "`order_time` = 2024" not in sql
+
+
+def test_semantic_builder_normalizes_time_dimension_inside_filter_trees():
+    compiler = SemanticBuilderCompiler(build_semantic_config())
+
+    and_tree = compiler._map_filter_nodes([{
+        "and": [
+            {"semanticName": "状态", "operator": "=", "value": "paid"},
+            {"semanticName": "下单时间", "operator": "=", "value": "2024-06"},
+        ]
+    }])
+    or_tree = compiler._map_filter_nodes([{
+        "or": [
+            {"semanticName": "下单时间", "operator": "=", "value": "2024-06-01"},
+            {"semanticName": "状态", "operator": "=", "value": "paid"},
+        ]
+    }])
+
+    assert [item["operator"] for item in and_tree[0]["and"]] == ["=", ">=", "<"]
+    assert and_tree[0]["and"][1]["value"] == "2024-06-01 00:00:00"
+    assert and_tree[0]["and"][2]["value"] == "2024-07-01 00:00:00"
+    assert [item["operator"] for item in or_tree[0]["or"][0]["and"]] == [">=", "<"]
+    assert or_tree[0]["or"][0]["and"][1]["value"] == "2024-06-02 00:00:00"
 
 
 def test_semantic_builder_order_and_selection_helpers():

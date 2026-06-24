@@ -107,6 +107,10 @@ class SqlGeneratorState(TypedDict):
     conversation_id: str | None
     # 指定执行的成员数据源ID列表
     member_datasource_ids: list[str]
+    # 当前可用执行对象的成员数据源ID列表，仅用于工具层校验可选范围
+    available_member_datasource_ids: NotRequired[list[str]]
+    # 用户原文已精确匹配到的成员数据源ID列表，仅用于工具层防止执行错机构
+    matched_member_datasource_ids: NotRequired[list[str]]
     # 是否要求 semantic_query_tool 显式传入本次执行成员，避免把可用范围误当默认执行范围
     require_explicit_member_selection: NotRequired[bool]
     # 当前可用执行对象说明，供大模型理解可查询范围
