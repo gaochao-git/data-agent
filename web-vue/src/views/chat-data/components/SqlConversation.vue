@@ -1335,7 +1335,6 @@ const hasVisibleAssistantContent = (content: string): boolean => {
 
 // 首 token 前已有气泡占位时，底部状态行不重复显示。
 const shouldShowStreamingStatus = (message: Message): boolean => {
-  if (shouldShowStreamingProgress(message)) return false
   return hasVisibleAssistantContent(message.content) || getVisibleToolCalls(message.toolCalls).length > 0 || Boolean(message.semanticConfigSelection || message.semanticConfigSelectRequired)
 }
 
@@ -1871,12 +1870,6 @@ const handleViewAnalysis = (msg: Message) => {
 
               <!-- 流式中：数据查询显示加载状态，普通问答直接流式输出 -->
               <template v-else-if="msg.isStreaming">
-                <StructuredMessage
-                  v-if="getConversationDisplayContent(msg.content)"
-                  :class="shouldShowStreamingProgress(msg) ? 'mb-3' : ''"
-                  :content="getConversationDisplayContent(msg.content)"
-                  :is-streaming="!shouldShowStreamingProgress(msg)"
-                />
                 <!-- 有思考/工具调用 → 数据查询，过程在侧边栏展示 -->
                 <div
                   v-if="shouldShowStreamingProgress(msg)"
@@ -1898,20 +1891,18 @@ const handleViewAnalysis = (msg: Message) => {
                       ></div>
                     </div>
                   </div>
-                  <div class="mt-2 flex items-center gap-2">
-                    <div class="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500/15 to-blue-400/10 flex items-center justify-center">
-                      <i class="fa-solid fa-wand-magic-sparkles text-[10px] text-blue-500 animate-pulse"></i>
-                    </div>
-                    <span class="text-sm text-gray-500 font-medium">{{ getStreamingStageText(msg) }}</span>
-                    <button
-                      v-if="isAnalysisPanelOpen && !showAnalysisPanel"
-                      class="ml-auto h-6 px-2 border border-blue-200 rounded bg-blue-50 text-[11px] text-blue-600 hover:bg-blue-100 hover:border-blue-300"
-                      @click="emit('switchToAnalysis')"
-                    >
-                      查看分析
-                    </button>
-                  </div>
+                  <StructuredMessage
+                    v-if="getConversationDisplayContent(msg.content)"
+                    class="mt-3"
+                    :content="getConversationDisplayContent(msg.content)"
+                    :is-streaming="false"
+                  />
                 </div>
+                <StructuredMessage
+                  v-else-if="getConversationDisplayContent(msg.content)"
+                  :content="getConversationDisplayContent(msg.content)"
+                  :is-streaming="true"
+                />
                 <!-- 普通问答 → 直接流式显示文字 -->
                 <div v-else-if="!getConversationDisplayContent(msg.content)" class="flex items-center gap-2 text-gray-500 text-sm">
                   <i class="fa-solid fa-spinner fa-spin"></i>
@@ -2014,10 +2005,17 @@ const handleViewAnalysis = (msg: Message) => {
 
             <!-- 生成状态 -->
             <div v-if="msg.isStreaming && shouldShowStreamingStatus(msg)" class="flex items-center gap-2 py-1">
-              <span class="text-xs font-medium text-gray-500">{{ hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考' }}</span>
+              <span class="text-xs font-medium text-gray-500">{{ shouldShowStreamingProgress(msg) ? getStreamingStageText(msg) : (hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考') }}</span>
               <div class="flex gap-1">
                 <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
               </div>
+              <button
+                v-if="shouldShowStreamingProgress(msg) && isAnalysisPanelOpen && !showAnalysisPanel"
+                class="ml-auto h-6 px-2 border border-blue-200 rounded bg-blue-50 text-[11px] text-blue-600 hover:bg-blue-100 hover:border-blue-300"
+                @click="emit('switchToAnalysis')"
+              >
+                查看分析
+              </button>
             </div>
           </div>
         </div>
