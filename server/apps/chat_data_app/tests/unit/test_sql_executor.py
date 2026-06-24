@@ -102,6 +102,28 @@ def test_http_payload_extractors_and_normalizers():
     assert sql_executor._normalize_http_rows(rows, ["a", "b"]) == [{"a": 1, "b": "2024-01-01"}]
 
 
+def test_http_auth_token_is_decrypted_from_existing_env_name(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_HTTP_AUTH_TOKEN", "encrypted-token")
+    monkeypatch.setattr(sql_executor, "decrypt_password", lambda value: f"plain:{value}")
+
+    assert sql_executor._get_http_auth_token() == "plain:encrypted-token"
+
+
+def test_http_auth_token_empty_env_skips_decrypt(monkeypatch):
+    called = False
+
+    def fail_decrypt(_value):
+        nonlocal called
+        called = True
+        raise AssertionError("empty token should not decrypt")
+
+    monkeypatch.delenv("CHAT_DATA_HTTP_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(sql_executor, "decrypt_password", fail_decrypt)
+
+    assert sql_executor._get_http_auth_token() == ""
+    assert called is False
+
+
 def test_extract_result_payload_skips_non_dict_remote_data(monkeypatch):
     monkeypatch.setattr(sql_executor, "_extract_remote_data", lambda _payload: ["not", "dict"])
 

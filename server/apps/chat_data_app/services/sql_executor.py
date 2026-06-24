@@ -14,6 +14,7 @@ import re
 import os
 
 from utils.logger import get_logger
+from utils.crypto import decrypt_password
 from .datasource_credentials import build_hive_connect_params, resolve_hive_credentials, resolve_mysql_credentials
 from .hive_sync import _apply_socket_timeout, SOCKET_TIMEOUT_SECONDS
 from .runtime_config import DEFAULT_ROW_LIMIT, normalize_row_limit
@@ -38,8 +39,18 @@ CONNECT_TIMEOUT_SECONDS = 3
 HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
 HTTP_STATUS_URL = str(os.getenv("CHAT_DATA_HTTP_STATUS_URL") or "").strip()
 HTTP_STOP_URL = str(os.getenv("CHAT_DATA_HTTP_STOP_URL") or "").strip()
-HTTP_AUTH_TOKEN = str(os.getenv("CHAT_DATA_HTTP_AUTH_TOKEN") or "").strip()
 HTTP_VERIFY_TLS = str(os.getenv("CHAT_DATA_HTTP_VERIFY_TLS", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_http_auth_token() -> str:
+    """读取 ChatData HTTP 认证 token，环境变量中存储 SM4 密文。"""
+    encrypted_token = str(os.getenv("CHAT_DATA_HTTP_AUTH_TOKEN") or "").strip()
+    if not encrypted_token:
+        return ""
+    return decrypt_password(encrypted_token)
+
+
+HTTP_AUTH_TOKEN = _get_http_auth_token()
 
 
 def _http_payload_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:

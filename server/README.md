@@ -56,7 +56,7 @@ uvicorn main:app --host 0.0.0.0 --port 5001
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
 - `CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` / `CHAT_DATA_MODEL` / `CHAT_DATA_TEMPERATURE`：智能问数模型配置，其中 `CHAT_DATA_API_KEY` 存放 SM4 加密后的密文
-- `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务
+- `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制
 - `CHATDATA_TOOL_RESULT_OFFLOAD_SIZE`：大结果转 artifact 阈值
 
