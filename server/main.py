@@ -1,27 +1,28 @@
 import os
 import sys
 from pathlib import Path
-
-from dotenv import load_dotenv
-
-_SERVER_ENV_FILE = Path(__file__).resolve().parent / ".env"
-if _SERVER_ENV_FILE.exists():
-    if load_dotenv(dotenv_path=_SERVER_ENV_FILE):
-        print(f"[env] Loaded environment from {_SERVER_ENV_FILE}")
-    else:
-        print(f"[env] Failed to load environment from {_SERVER_ENV_FILE}")
-
-if load_dotenv():
-    print("[env] Loaded environment from default search paths")
-
-os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
-
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from utils.lang_util.common_util import load_runtime_env
+
+_SERVER_DIR = Path(__file__).resolve().parent
+_RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
+print(
+    f"[env] active_env={_RUNTIME_ENV.active_env} active_idc={_RUNTIME_ENV.active_idc} "
+    f"loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
+)
+
 from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger
+from apps.chat_data_app import router as chat_data_router  # noqa: E402
+from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
+from utils.lang_util.checkpoint import setup_checkpointer  # noqa: E402
+from utils.file_service import file_router  # noqa: E402
+
+os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
 # 用 pysqlite3 替换 sqlite3，解决 deterministic=True 在旧 SQLite 上报错的问题
 # pysqlite3-binary 自带新版 SQLite，aiosqlite 底层会使用被替换的 sqlite3 模块
 try:
@@ -31,12 +32,6 @@ except ImportError:
     pass  # macOS 等平台无法安装 pysqlite3-binary，使用系统自带的 sqlite3
 
 logger = get_logger(__name__)
-
-from apps.chat_data_app import router as chat_data_router  # noqa: E402
-from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
-from utils.lang_util.checkpoint import setup_checkpointer  # noqa: E402
-from utils.file_service import file_router  # noqa: E402
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -115,7 +110,7 @@ def _build_uvicorn_log_config():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
     reload_enabled = _env_flag("FASTAPI_RELOAD", False)
-    access_log_enabled = _env_flag("UVICORN_ACCESS_LOG", True)
+    access_log_enabled = _env_flag("UVICORN_ACCESS_LOG", False)
     log_level = os.getenv("UVICORN_LOG_LEVEL", "info")
     target_app = "main:app" if reload_enabled else app
     logger.info("[startup] host=0.0.0.0 port=%s reload=%s access_log=%s log_level=%s", port, reload_enabled, access_log_enabled, log_level)

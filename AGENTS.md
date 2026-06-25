@@ -18,7 +18,7 @@
 ### 2.1 后端
 - 入口：`server/main.py`
 - 依赖：`server/requirements.txt`
-- 环境变量示例：`server/.env.example`
+- 环境变量示例：`server/conf/.env.example`
 
 ### 2.2 前端
 - 入口：`web-vue/`
@@ -36,7 +36,7 @@
 - 前端构建：`cd web-vue && npm run build-only`
 - 前端完整检查：`cd web-vue && npm run build`
 - 后端条件覆盖率和行覆盖率要求大于95%
-- sonar代码复杂度要控制复杂度不能大于15，控制好for循环、if-else、except分支复杂度
+- sonar代码复杂度要控制复杂度不能大于15，控制好for循环、if-else、except分支复杂度，已有的可以不改，新的功能代码一定要控制
 
 ## 4. 代码风格
 

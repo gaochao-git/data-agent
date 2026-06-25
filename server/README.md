@@ -14,7 +14,7 @@
 server/
 ├── main.py                         # FastAPI 入口
 ├── requirements.txt                # Python 依赖
-├── .env.example                    # 环境变量示例
+├── conf/                           # 机房环境配置、示例和 IP 映射
 ├── apps/chat_data_app/             # 智能问数核心模块
 ├── utils/lang_util/                # 会话、LangGraph、artifact、LLM 公共能力
 ├── utils/file_service/             # 文件上传/解析基础服务
@@ -28,7 +28,6 @@ cd server
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 python main.py
 ```
 
@@ -46,13 +45,20 @@ uvicorn main:app --host 0.0.0.0 --port 5001
 
 ## 关键配置
 
-配置文件为 `server/.env`，示例见 `server/.env.example`。
+运行配置位于 `server/conf/`：
+
+- `deploy_env_hosts.json`：维护本机 IP 到环境名的映射。
+- `.env-{env}`：对应环境的变量配置，例如 `.env-dev`、`.env-bj12`。
+- `.env.example`：环境变量示例。
+
+启动时先根据本机 IP 匹配环境，再加载对应 `.env-{env}`。如果没有匹配到环境，或缺少对应配置文件，服务会直接启动失败。
+本地需要强制指定环境时，可以设置 `CHAT_DATA_ENV=dev`。
 
 常用配置包括：
 
 - `PORT`：后端服务端口
 - `ALLOWED_ORIGINS`：CORS 允许来源
-- `LOG_LEVEL` / `LOG_DIR` / `LOG_FILE`：日志配置
+- `LOG_LEVEL` / `LOG_DIR` / `LOG_APP_NAME`：日志配置，默认按应用名分为应用日志、访问日志和告警日志；日志 IDC 使用启动时识别出的环境名
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
 - `CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` / `CHAT_DATA_MODEL` / `CHAT_DATA_TEMPERATURE`：智能问数模型配置，其中 `CHAT_DATA_API_KEY` 存放 SM4 加密后的密文

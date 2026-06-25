@@ -7,10 +7,49 @@
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
+from contextvars import ContextVar
+from datetime import datetime
 from typing import Optional
+
+from utils.lang_util.common_util import get_active_idc, get_local_ip
 
 
 DEFAULT_BACKUP_COUNT = 30  # 保留30天
+request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+_STANDARD_LOG_RECORD_FIELDS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "taskName",
+    "processName",
+    "process",
+    "message",
+    "getMessage",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "request_id",
+    "user_id",
+    "idc",
+    "ip",
+    "extra_fields",
+}
+
+
+LOCAL_IP = get_local_ip()
 
 
 def _env_text(key: str, default: str) -> str:
@@ -43,12 +82,40 @@ def get_current_log_dir() -> str:
 
 def get_current_log_file() -> str:
     """读取当前日志文件名。"""
-    return _env_text("LOG_FILE", "data_agent_app.log")
+    return _build_log_file_name("app")
+
+
+def _get_log_file_prefix() -> str:
+    return get_current_log_app_name().strip() or "data-agent"
+
+
+def _build_log_file_name(suffix: str) -> str:
+    return f"{_get_log_file_prefix()}_{suffix}.log"
+
+
+def get_current_access_log_file() -> str:
+    """读取访问日志文件名。"""
+    return _build_log_file_name("acc")
+
+
+def get_current_alarm_log_file() -> str:
+    """读取告警日志文件名。"""
+    return _build_log_file_name("alarm")
 
 
 def get_current_console_output() -> bool:
     """读取是否输出控制台日志。"""
     return _env_bool("LOG_CONSOLE", True)
+
+
+def get_current_log_app_name() -> str:
+    """读取日志中的应用名。"""
+    return _env_text("LOG_APP_NAME", "data-agent")
+
+
+def get_current_log_idc() -> str:
+    """读取日志 IDC 标识。"""
+    return get_active_idc()
 
 
 def resolve_log_path(path: str) -> str:
@@ -61,24 +128,160 @@ def resolve_log_path(path: str) -> str:
     return os.path.abspath(raw)
 
 
+def set_log_context(request_id: str | None = None, user_id: str | None = None) -> None:
+    """设置当前请求日志上下文。"""
+    if request_id:
+        request_id_ctx.set(str(request_id))
+    if user_id:
+        user_id_ctx.set(str(user_id))
+
+
+def clear_log_context() -> None:
+    """清理当前请求日志上下文。"""
+    request_id_ctx.set(None)
+    user_id_ctx.set(None)
+
+
+def _format_log_time(created: float) -> str:
+    return datetime.fromtimestamp(created).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _clean_log_part(value: object, default: str = "-") -> str:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return default
+    return text.replace("|", "/").replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _collect_record_extra_fields(record: logging.LogRecord) -> dict[str, object]:
+    extra_fields = {
+        str(key): value
+        for key, value in record.__dict__.items()
+        if key not in _STANDARD_LOG_RECORD_FIELDS and not str(key).startswith("_")
+    }
+    configured_extra = getattr(record, "extra_fields", None)
+    if isinstance(configured_extra, dict):
+        extra_fields.update({str(key): value for key, value in configured_extra.items() if str(key).strip()})
+    return extra_fields
+
+
+def _append_message_parts(message: str, user_id: object, extra_fields: dict[str, object]) -> str:
+    parts = [message]
+    if user_id:
+        parts.append(f"user_id={user_id}")
+    if extra_fields:
+        parts.append(", ".join(f"{key}={value}" for key, value in extra_fields.items()))
+    return " | ".join(parts)
+
+
+class PipeLogFormatter(logging.Formatter):
+    """应用日志管道分隔格式。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_time = _format_log_time(record.created)
+        trace_id = getattr(record, "request_id", None) or request_id_ctx.get() or "-"
+        user_id = getattr(record, "user_id", None) or user_id_ctx.get() or ""
+        idc = getattr(record, "idc", None) or get_current_log_idc()
+        ip = getattr(record, "ip", None) or LOCAL_IP
+        message = record.getMessage()
+        if record.exc_info:
+            message = f"{message}\n{self.formatException(record.exc_info)}"
+        message = _append_message_parts(message, user_id, _collect_record_extra_fields(record))
+
+        return "|".join([
+            log_time,
+            record.levelname,
+            str(record.thread),
+            str(trace_id),
+            str(idc),
+            str(ip),
+            record.filename,
+            record.module,
+            str(record.lineno),
+            message,
+        ])
+
+
+class AccessLogFormatter(logging.Formatter):
+    """访问日志管道分隔格式。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        trace_id = getattr(record, "request_id", None) or request_id_ctx.get() or "-"
+        fields = [
+            _format_log_time(record.created),
+            trace_id,
+            getattr(record, "parent_id", "-"),
+            getattr(record, "request_type", "HTTP"),
+            getattr(record, "app_name", get_current_log_app_name()),
+            getattr(record, "idc", get_current_log_idc()),
+            getattr(record, "ip", LOCAL_IP),
+            getattr(record, "start_time", "-"),
+            getattr(record, "cost_time", "-"),
+            getattr(record, "error_code", "0"),
+            getattr(record, "ext1", "-"),
+            getattr(record, "ext2", record.getMessage()),
+        ]
+        return "|".join(_clean_log_part(field) for field in fields)
+
+
+class AlarmLogFormatter(logging.Formatter):
+    """告警日志管道分隔格式。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        trace_id = getattr(record, "request_id", None) or request_id_ctx.get() or "-"
+        fields = [
+            _format_log_time(record.created),
+            trace_id,
+            getattr(record, "alarm_id", "-"),
+            getattr(record, "request_type", "ALARM"),
+            getattr(record, "app_name", get_current_log_app_name()),
+            getattr(record, "idc", get_current_log_idc()),
+            getattr(record, "ip", LOCAL_IP),
+            getattr(record, "error_code", "500"),
+            record.getMessage(),
+            getattr(record, "ext1", "-"),
+            getattr(record, "ext2", "-"),
+        ]
+        return "|".join(_clean_log_part(field) for field in fields)
+
+
 class LoggerManager:
     """日志管理器"""
 
     _loggers = {}  # 缓存已创建的 logger
     _file_handler = None  # 全局唯一的文件 handler
     _file_handler_key = None  # 当前文件 handler 对应的配置
+    _access_logger = None  # 访问日志 logger
+    _access_file_handler = None  # 全局唯一的访问日志文件 handler
+    _access_file_handler_key = None  # 当前访问日志文件 handler 对应的配置
+    _alarm_logger = None  # 告警日志 logger
+    _alarm_file_handler = None  # 全局唯一的告警日志文件 handler
+    _alarm_file_handler_key = None  # 当前告警日志文件 handler 对应的配置
     _console_handler = None  # 全局唯一的控制台 handler
     _formatter = None  # 全局唯一的格式化器
+    _access_formatter = None  # 全局唯一的访问日志格式化器
+    _alarm_formatter = None  # 全局唯一的告警日志格式化器
 
     @classmethod
     def _get_formatter(cls) -> logging.Formatter:
         """获取全局唯一的格式化器"""
         if cls._formatter is None:
-            cls._formatter = logging.Formatter(
-                '[%(asctime)s] [%(levelname)s] [%(name)s.%(funcName)s:%(lineno)d] - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-            )
+            cls._formatter = PipeLogFormatter()
         return cls._formatter
+
+    @classmethod
+    def _get_access_formatter(cls) -> logging.Formatter:
+        """获取全局唯一的访问日志格式化器。"""
+        if cls._access_formatter is None:
+            cls._access_formatter = AccessLogFormatter()
+        return cls._access_formatter
+
+    @classmethod
+    def _get_alarm_formatter(cls) -> logging.Formatter:
+        """获取全局唯一的告警日志格式化器。"""
+        if cls._alarm_formatter is None:
+            cls._alarm_formatter = AlarmLogFormatter()
+        return cls._alarm_formatter
 
     @classmethod
     def _build_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
@@ -108,7 +311,7 @@ class LoggerManager:
         若环境变量中的日志路径配置发生变化，则重新创建 handler。
         """
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or '').strip() or 'data_agent_app.log', int(backup_count))
+        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_log_file(), int(backup_count))
         if cls._file_handler is not None and cls._file_handler_key == handler_key:
             return cls._file_handler
         if cls._file_handler is not None:
@@ -119,6 +322,52 @@ class LoggerManager:
         cls._file_handler = cls._build_file_handler(handler_key[0], handler_key[1], handler_key[2])
         cls._file_handler_key = handler_key
         return cls._file_handler
+
+    @classmethod
+    def _build_access_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+        """按当前配置创建访问日志文件 handler。"""
+        handler = cls._build_file_handler(log_dir, log_file_name, backup_count)
+        handler.setFormatter(cls._get_access_formatter())
+        return handler
+
+    @classmethod
+    def _get_access_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+        """获取全局唯一的访问日志文件 handler。"""
+        resolved_dir = resolve_log_path(log_dir)
+        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_access_log_file(), int(backup_count))
+        if cls._access_file_handler is not None and cls._access_file_handler_key == handler_key:
+            return cls._access_file_handler
+        if cls._access_file_handler is not None:
+            try:
+                cls._access_file_handler.close()
+            except Exception:
+                pass
+        cls._access_file_handler = cls._build_access_file_handler(handler_key[0], handler_key[1], handler_key[2])
+        cls._access_file_handler_key = handler_key
+        return cls._access_file_handler
+
+    @classmethod
+    def _build_alarm_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+        """按当前配置创建告警日志文件 handler。"""
+        handler = cls._build_file_handler(log_dir, log_file_name, backup_count)
+        handler.setFormatter(cls._get_alarm_formatter())
+        return handler
+
+    @classmethod
+    def _get_alarm_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+        """获取全局唯一的告警日志文件 handler。"""
+        resolved_dir = resolve_log_path(log_dir)
+        handler_key = (resolved_dir, str(log_file_name or '').strip() or get_current_alarm_log_file(), int(backup_count))
+        if cls._alarm_file_handler is not None and cls._alarm_file_handler_key == handler_key:
+            return cls._alarm_file_handler
+        if cls._alarm_file_handler is not None:
+            try:
+                cls._alarm_file_handler.close()
+            except Exception:
+                pass
+        cls._alarm_file_handler = cls._build_alarm_file_handler(handler_key[0], handler_key[1], handler_key[2])
+        cls._alarm_file_handler_key = handler_key
+        return cls._alarm_file_handler
 
     @classmethod
     def _get_console_handler(cls) -> logging.StreamHandler:
@@ -141,7 +390,7 @@ class LoggerManager:
         name: str,
         log_level: str = "INFO",
         log_dir: str = "logs",
-        log_file_name: str = "data_agent_app.log",
+        log_file_name: str = "",
         backup_count: int = 30,
         console_output: bool = True,
         file_output: bool = True
@@ -179,6 +428,48 @@ class LoggerManager:
             logger.addHandler(cls._get_file_handler(log_dir, log_file_name, backup_count))
 
         cls._loggers[name] = logger
+        return logger
+
+    @classmethod
+    def get_access_logger(
+        cls,
+        name: str = "access",
+        log_level: str = "INFO",
+        log_dir: str = "logs",
+        log_file_name: str = "",
+        backup_count: int = 30,
+    ) -> logging.Logger:
+        """获取访问日志 logger。"""
+        if cls._access_logger is not None:
+            return cls._access_logger
+
+        logger = logging.getLogger(name)
+        logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+        logger.propagate = False
+        logger.handlers.clear()
+        logger.addHandler(cls._get_access_file_handler(log_dir, log_file_name, backup_count))
+        cls._access_logger = logger
+        return logger
+
+    @classmethod
+    def get_alarm_logger(
+        cls,
+        name: str = "alarm",
+        log_level: str = "WARNING",
+        log_dir: str = "logs",
+        log_file_name: str = "",
+        backup_count: int = 30,
+    ) -> logging.Logger:
+        """获取告警日志 logger。"""
+        if cls._alarm_logger is not None:
+            return cls._alarm_logger
+
+        logger = logging.getLogger(name)
+        logger.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
+        logger.propagate = False
+        logger.handlers.clear()
+        logger.addHandler(cls._get_alarm_file_handler(log_dir, log_file_name, backup_count))
+        cls._alarm_logger = logger
         return logger
 
     @classmethod
@@ -235,9 +526,39 @@ def get_logger(name: str, log_level: Optional[str] = None, console_output: Optio
     )
 
 
+def get_access_logger(name: str = "access", log_level: Optional[str] = None) -> logging.Logger:
+    """获取访问日志 logger。"""
+    return LoggerManager.get_access_logger(
+        name=name,
+        log_level=log_level or "INFO",
+        log_dir=get_current_log_dir(),
+        log_file_name=get_current_access_log_file(),
+        backup_count=DEFAULT_BACKUP_COUNT,
+    )
+
+
+def get_alarm_logger(name: str = "alarm", log_level: Optional[str] = None) -> logging.Logger:
+    """获取告警日志 logger。"""
+    return LoggerManager.get_alarm_logger(
+        name=name,
+        log_level=log_level or "WARNING",
+        log_dir=get_current_log_dir(),
+        log_file_name=get_current_alarm_log_file(),
+        backup_count=DEFAULT_BACKUP_COUNT,
+    )
+
+
 __all__ = [
     'get_logger',
+    'get_access_logger',
+    'get_alarm_logger',
     'get_current_log_dir',
     'get_current_log_file',
+    'get_current_access_log_file',
+    'get_current_alarm_log_file',
+    'get_current_log_app_name',
+    'get_current_log_idc',
     'resolve_log_path',
+    'set_log_context',
+    'clear_log_context',
 ]

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import os
 import base64
 import binascii
 import time
 import uuid
+from datetime import datetime
 from urllib.parse import parse_qs
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from middleware.log_redaction import dump_masked_payload, mask_headers
-from utils.logger import get_logger
+from middleware.log_redaction import dump_masked_payload
+from utils.logger import clear_log_context, get_access_logger, get_alarm_logger, get_logger, set_log_context
 
 logger = get_logger(__name__)
+access_logger = get_access_logger()
+alarm_logger = get_alarm_logger()
 
 DOWNLOAD_CONTENT_TYPES = {
     "application/octet-stream",
@@ -28,16 +30,6 @@ def _build_request_id() -> str:
 
 def _decode_bytes(value: bytes) -> str:
     return value.decode("utf-8", errors="ignore")
-
-
-def _normalize_header_text(value: str | None) -> str:
-    if not value:
-        return ""
-    text = value.strip()
-    try:
-        return text.encode("latin-1").decode("utf-8")
-    except UnicodeError:
-        return text
 
 
 def _decode_username_header_value(value: bytes) -> bytes:
@@ -78,19 +70,6 @@ def _client_ip(scope: Scope, headers: dict[str, str]) -> str:
     return ""
 
 
-def _header_summary(headers: dict[str, str]) -> dict[str, str]:
-    selected = {
-        "user-agent": headers.get("user-agent", ""),
-        "authorization": headers.get("authorization", ""),
-        "cookie": headers.get("cookie", ""),
-        "x-service-token": headers.get("x-service-token", ""),
-        "x-username": _normalize_header_text(headers.get("x-username", "")),
-        "content-type": headers.get("content-type", ""),
-        "content-length": headers.get("content-length", ""),
-    }
-    return {key: value for key, value in mask_headers(selected).items() if str(value or "").strip()}
-
-
 def _upsert_header(headers: list[tuple[bytes, bytes]], key: bytes, value: bytes) -> list[tuple[bytes, bytes]]:
     result: list[tuple[bytes, bytes]] = []
     lowered = key.lower()
@@ -117,17 +96,41 @@ def _is_streaming_response(content_type: str, disposition: str) -> bool:
     return any(item in lowered_type for item in DOWNLOAD_CONTENT_TYPES)
 
 
+def _format_start_time(started_at: float) -> str:
+    return datetime.fromtimestamp(started_at).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _access_ext1(client_ip: str, user_id: str | None) -> str:
+    parts = [f"client_ip:{client_ip or '-'}"]
+    if user_id:
+        parts.append(f"user_id:{user_id}")
+    return ";".join(parts)
+
+
 class _ResponseLogState:
-    def __init__(self, request_id: str, method: str, path: str, started_at: float):
+    def __init__(self, request_id: str, method: str, path: str, query: dict[str, str], client_ip: str, user_id: str | None, started_at: float):
         self.request_id = request_id
         self.method = method
         self.path = path
+        self.query = query
+        self.client_ip = client_ip
+        self.user_id = user_id
         self.started_at = started_at
         self.status_code = 500
         self.content_type = ""
         self.content_length = ""
         self.disposition = ""
         self.response_logged = False
+
+    def _base_extra(self, elapsed_ms: int, error_code: str) -> dict[str, object]:
+        return {
+            "request_id": self.request_id,
+            "request_type": self.method,
+            "start_time": _format_start_time(self.started_at),
+            "cost_time": f"{elapsed_ms}ms",
+            "error_code": error_code,
+            "ext1": _access_ext1(self.client_ip, self.user_id),
+        }
 
     def log_response(self) -> None:
         if self.response_logged:
@@ -145,7 +148,37 @@ class _ResponseLogState:
             "body": "[omitted]",
             "body_omitted_reason": "streaming_or_download" if is_streaming else "body_capture_disabled",
         }
-        logger.info("[api_access] response=%s", dump_masked_payload(response_payload))
+        error_code = str(self.status_code) if self.status_code >= 400 else "0"
+        extra = self._base_extra(elapsed_ms=elapsed_ms, error_code=error_code)
+        extra["ext2"] = dump_masked_payload(response_payload)
+        access_logger.info("api_access", extra=extra)
+        self.response_logged = True
+
+    def log_error(self, exc: Exception) -> None:
+        if self.response_logged:
+            return
+        elapsed_ms = int((time.time() - self.started_at) * 1000)
+        error_payload = {
+            "request_id": self.request_id,
+            "method": self.method,
+            "path": self.path,
+            "query": self.query,
+            "elapsed_ms": elapsed_ms,
+            "error": str(exc),
+        }
+        extra = self._base_extra(elapsed_ms=elapsed_ms, error_code="500")
+        extra["ext2"] = dump_masked_payload(error_payload)
+        access_logger.info("api_access_error", extra=extra)
+        alarm_logger.error(
+            f"{self.method} {self.path} failed: {exc}",
+            extra={
+                "request_id": self.request_id,
+                "request_type": self.method,
+                "error_code": "500",
+                "ext1": _access_ext1(self.client_ip, self.user_id),
+                "ext2": dump_masked_payload(error_payload),
+            },
+        )
         self.response_logged = True
 
 
@@ -162,21 +195,18 @@ class APIAccessLogMiddleware:
         headers = _scope_headers(scope)
         request_id = _build_request_id()
         started_at = time.time()
-        request_payload = {
-            "request_id": request_id,
-            "method": scope.get("method", ""),
-            "path": scope.get("path", ""),
-            "query": _scope_query(scope),
-            "headers": _header_summary(headers),
-            "content_type": headers.get("content-type", ""),
-            "content_length": headers.get("content-length", ""),
-            "client_ip": _client_ip(scope, headers),
-            "body": "[omitted]",
-            "body_omitted_reason": "body_capture_disabled",
-        }
-        logger.info("[api_access] request=%s", dump_masked_payload(request_payload))
+        user_id = headers.get("x-user-id")
+        set_log_context(request_id=request_id, user_id=user_id)
 
-        response_state = _ResponseLogState(request_id, str(scope.get("method", "")), str(scope.get("path", "")), started_at)
+        response_state = _ResponseLogState(
+            request_id=request_id,
+            method=str(scope.get("method", "")),
+            path=str(scope.get("path", "")),
+            query=_scope_query(scope),
+            client_ip=_client_ip(scope, headers),
+            user_id=user_id,
+            started_at=started_at,
+        )
 
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -194,13 +224,8 @@ class APIAccessLogMiddleware:
             await self.app(scope, receive, send_wrapper)
             response_state.log_response()
         except Exception as exc:
-            elapsed_ms = int((time.time() - started_at) * 1000)
-            error_payload = {
-                "request_id": request_id,
-                "method": scope.get("method", ""),
-                "path": scope.get("path", ""),
-                "elapsed_ms": elapsed_ms,
-                "error": str(exc),
-            }
-            logger.error("[api_access] error=%s", dump_masked_payload(error_payload))
+            response_state.log_error(exc)
+            logger.exception("[api_access] unhandled_error request_id=%s", request_id)
             raise
+        finally:
+            clear_log_context()

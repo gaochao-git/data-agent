@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -15,8 +16,9 @@ from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
 from apps.chat_data_app.route_modules import common, data_analyze_workspace
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
+from middleware import api_logging as api_logging_module
 from utils import logger as logger_module
-from utils.lang_util import checkpoint, database, llm
+from utils.lang_util import checkpoint, common_util, database, llm
 from utils.lang_util.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 
@@ -714,8 +716,16 @@ def test_logger_env_and_manager_branches(monkeypatch, tmp_path):
     logger_module.LoggerManager._loggers.clear()
     logger_module.LoggerManager._file_handler = None
     logger_module.LoggerManager._file_handler_key = None
+    logger_module.LoggerManager._access_logger = None
+    logger_module.LoggerManager._access_file_handler = None
+    logger_module.LoggerManager._access_file_handler_key = None
+    logger_module.LoggerManager._alarm_logger = None
+    logger_module.LoggerManager._alarm_file_handler = None
+    logger_module.LoggerManager._alarm_file_handler_key = None
     logger_module.LoggerManager._console_handler = None
     logger_module.LoggerManager._formatter = None
+    logger_module.LoggerManager._access_formatter = None
+    logger_module.LoggerManager._alarm_formatter = None
 
     log = logger_module.LoggerManager.get_logger(
         "unit.logger",
@@ -745,6 +755,241 @@ def test_logger_env_and_manager_branches(monkeypatch, tmp_path):
     existing_logger.handlers[:] = [logging.NullHandler()]
     logger_module.LoggerManager._loggers.pop("unit.existing", None)
     assert logger_module.LoggerManager.get_logger("unit.existing") is existing_logger
+
+
+def test_log_file_derivation_and_formatters(monkeypatch):
+    monkeypatch.delenv("LOG_APP_NAME", raising=False)
+    assert logger_module.get_current_log_file() == "data-agent_app.log"
+    assert logger_module.get_current_access_log_file() == "data-agent_acc.log"
+    assert logger_module.get_current_alarm_log_file() == "data-agent_alarm.log"
+
+    monkeypatch.setenv("LOG_APP_NAME", "chat-data-prod")
+    assert logger_module.get_current_log_file() == "chat-data-prod_app.log"
+    assert logger_module.get_current_access_log_file() == "chat-data-prod_acc.log"
+    assert logger_module.get_current_alarm_log_file() == "chat-data-prod_alarm.log"
+
+    monkeypatch.setenv("LOG_APP_NAME", "  ")
+    assert logger_module.get_current_log_file() == "data-agent_app.log"
+
+    access_record = logging.LogRecord("access", logging.INFO, __file__, 1, "ignored", (), None)
+    access_record.request_id = "trace-1"
+    access_record.request_type = "GET"
+    access_record.app_name = "chat-data"
+    access_record.idc = "idc-a"
+    access_record.ip = "10.0.0.2"
+    access_record.start_time = "2026-06-25 12:00:00.000"
+    access_record.cost_time = "12ms"
+    access_record.error_code = "0"
+    access_record.ext1 = "client_ip:127.0.0.1"
+    access_record.ext2 = "path:/demo"
+    assert "|trace-1|-|GET|chat-data|idc-a|10.0.0.2|2026-06-25 12:00:00.000|12ms|0|client_ip:127.0.0.1|path:/demo" in logger_module.AccessLogFormatter().format(access_record)
+
+    alarm_record = logging.LogRecord("alarm", logging.ERROR, __file__, 1, "boom", (), None)
+    alarm_record.request_id = "trace-2"
+    alarm_record.request_type = "POST"
+    alarm_record.app_name = "chat-data"
+    alarm_record.idc = "idc-b"
+    alarm_record.ip = "10.0.0.3"
+    alarm_record.error_code = "500"
+    alarm_record.ext1 = "client_ip:127.0.0.2"
+    alarm_record.ext2 = "path:/fail"
+    assert "|trace-2|-|POST|chat-data|idc-b|10.0.0.3|500|boom|client_ip:127.0.0.2|path:/fail" in logger_module.AlarmLogFormatter().format(alarm_record)
+
+
+def test_runtime_env_loading_from_ip_mapping(monkeypatch, tmp_path):
+    conf_dir = tmp_path / "conf"
+    conf_dir.mkdir()
+    (conf_dir / "deploy_env_hosts.json").write_text(json.dumps({
+        "dev": ["172.20.10.2"],
+        "bj12": ["10.96."],
+    }), encoding="utf-8")
+    (conf_dir / ".env-dev").write_text("UNIT_RUNTIME_ENV_VALUE=dev-value\n", encoding="utf-8")
+    (conf_dir / ".env-bj12").write_text("UNIT_RUNTIME_ENV_VALUE=bj12-value\n", encoding="utf-8")
+
+    for key in (
+        common_util.ENV_KEY,
+        common_util.ACTIVE_ENV_KEY,
+        common_util.ACTIVE_IDC_KEY,
+        "UNIT_RUNTIME_ENV_VALUE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(common_util, "get_local_ips", lambda: ("172.20.10.2",))
+
+    result = common_util.load_runtime_env(tmp_path)
+
+    assert result.active_env == "dev"
+    assert result.active_idc == "dev"
+    assert result.local_ips == ("172.20.10.2",)
+    assert result.loaded_files == (str(conf_dir / ".env-dev"),)
+    assert common_util.get_active_idc() == "dev"
+    assert common_util.get_active_deploy_env() == "dev"
+    assert common_util.load_deploy_env_hosts(conf_dir)["bj12"] == ("10.96.",)
+    assert common_util.resolve_deploy_env({"bj12": ("10.96.",)}, ("10.96.1.2",)) == "bj12"
+
+
+def test_runtime_env_loading_errors_and_explicit_env(monkeypatch, tmp_path):
+    conf_dir = tmp_path / "conf"
+    conf_dir.mkdir()
+    (conf_dir / "deploy_env_hosts.json").write_text(json.dumps({
+        "dev": ["172.20."],
+        "uat": ["172.20.10."],
+    }), encoding="utf-8")
+    (conf_dir / ".env-dev").write_text("UNIT_RUNTIME_ENV_VALUE=dev-value\n", encoding="utf-8")
+
+    monkeypatch.setattr(common_util, "get_local_ips", lambda: ("172.20.10.2",))
+    for key in (common_util.ENV_KEY, common_util.ACTIVE_ENV_KEY, common_util.ACTIVE_IDC_KEY):
+        monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(RuntimeError, match="同时匹配多个环境"):
+        common_util.load_runtime_env(tmp_path)
+
+    monkeypatch.setenv(common_util.ENV_KEY, "dev")
+    result = common_util.load_runtime_env(tmp_path)
+    assert result.active_env == "dev"
+
+    monkeypatch.setenv(common_util.ENV_KEY, "missing")
+    with pytest.raises(RuntimeError, match="未找到环境配置文件"):
+        common_util.load_runtime_env(tmp_path)
+
+    (conf_dir / "deploy_env_hosts.json").write_text(json.dumps({"bj12": ["10.96."]}), encoding="utf-8")
+    monkeypatch.delenv(common_util.ENV_KEY, raising=False)
+    with pytest.raises(RuntimeError, match="未识别当前机器所属环境"):
+        common_util.load_runtime_env(tmp_path)
+
+
+def test_pipe_log_formatter_and_context_helpers(monkeypatch):
+    formatter = logger_module.PipeLogFormatter()
+    monkeypatch.setattr(logger_module, "LOCAL_IP", "10.0.0.1")
+    monkeypatch.setattr(logger_module, "get_current_log_idc", lambda: "idc-test")
+    logger_module.set_log_context(request_id="req-123", user_id="user-456")
+
+    record = logging.LogRecord(
+        name="unit.logger",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=42,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+    record.request_id = "req-record"
+    record.user_id = "user-record"
+    record.idc = "idc-record"
+    record.ip = "127.0.0.9"
+    record.extra_fields = {"tenant": "ops"}
+    record.custom = "value"
+
+    output = formatter.format(record)
+
+    assert "|INFO|" in output
+    assert "|req-record|idc-record|127.0.0.9|" in output
+    assert "|hello | user_id=user-record | custom=value, tenant=ops" in output
+
+    logger_module.clear_log_context()
+    assert logger_module.request_id_ctx.get() is None
+    assert logger_module.user_id_ctx.get() is None
+
+
+@pytest.mark.asyncio
+async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
+    records = {"set": [], "clear": 0, "access_info": [], "alarm_error": [], "exception": []}
+
+    monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
+        exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
+        info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "alarm_logger", SimpleNamespace(
+        error=lambda msg, *args, **kwargs: records["alarm_error"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
+    monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
+    monkeypatch.setattr(api_logging_module, "dump_masked_payload", lambda payload: payload)
+    monkeypatch.setattr(api_logging_module, "_build_request_id", lambda: "req-abc")
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = api_logging_module.APIAccessLogMiddleware(app)
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/demo",
+        "query_string": b"a=1",
+        "headers": [(b"x-user-id", b"user-1"), (b"user-agent", b"pytest")],
+        "client": ("127.0.0.1", 12345),
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    await middleware(scope, receive, send)
+
+    assert records["set"] == [{"request_id": "req-abc", "user_id": "user-1"}]
+    assert records["clear"] == 1
+    assert sent[0]["type"] == "http.response.start"
+    assert (b"x-request-id", b"req-abc") in sent[0]["headers"]
+    assert len(records["access_info"]) == 1
+    assert records["access_info"][0][0] == "api_access"
+    assert records["access_info"][0][2]["extra"]["request_id"] == "req-abc"
+    assert records["access_info"][0][2]["extra"]["error_code"] == "0"
+    assert records["alarm_error"] == []
+    assert records["exception"] == []
+
+
+@pytest.mark.asyncio
+async def test_api_access_log_middleware_logs_alarm_on_error(monkeypatch):
+    records = {"set": [], "clear": 0, "access_info": [], "alarm_error": [], "exception": []}
+
+    monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
+        exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
+        info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "alarm_logger", SimpleNamespace(
+        error=lambda msg, *args, **kwargs: records["alarm_error"].append((msg, args, kwargs)),
+    ))
+    monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
+    monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
+    monkeypatch.setattr(api_logging_module, "dump_masked_payload", lambda payload: payload)
+    monkeypatch.setattr(api_logging_module, "_build_request_id", lambda: "req-err")
+
+    async def app(_scope, _receive, _send):
+        raise RuntimeError("boom")
+
+    middleware = api_logging_module.APIAccessLogMiddleware(app)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/fail",
+        "query_string": b"",
+        "headers": [(b"x-user-id", b"user-2")],
+        "client": ("127.0.0.2", 12345),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await middleware(scope, receive, send)
+
+    assert records["set"] == [{"request_id": "req-err", "user_id": "user-2"}]
+    assert records["clear"] == 1
+    assert len(records["access_info"]) == 1
+    assert records["access_info"][0][0] == "api_access_error"
+    assert len(records["alarm_error"]) == 1
+    assert records["alarm_error"][0][2]["extra"]["request_id"] == "req-err"
+    assert records["exception"][0][0] == "[api_access] unhandled_error request_id=%s"
 
 
 def test_route_common_and_schema_edge_branches(monkeypatch):

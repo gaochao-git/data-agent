@@ -35,7 +35,6 @@ data-agent/
 
 ```bash
 cd server
-cp .env.example .env
 python main.py
 ```
 
@@ -78,5 +77,5 @@ https://www.modelscope.cn/dzkk666/data-agent.git
 ## 安全说明
 
 - 不要提交真实 `.env`、密钥、Token、运行日志和上传文件。
-- `server/.env`、`web-vue/.env` 等本地环境文件已在 `.gitignore` 中忽略。
+- `server/conf/.env-*`、`web-vue/.env` 等本地环境文件已在 `.gitignore` 中忽略。
 - 如曾在命令行或对话中暴露 ModelScope Token，建议及时在 ModelScope 账号设置中重置。
