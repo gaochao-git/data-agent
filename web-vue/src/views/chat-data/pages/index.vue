@@ -29,6 +29,7 @@ import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
 import QueryCapabilityHelp from '../components/help/QueryCapabilityHelp.vue'
+import { formatSemanticConfigOptionLabel } from '../utils'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -1017,6 +1018,14 @@ const currentSemanticConfig = computed(() => {
 
 const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
 
+const getSemanticConfigIndex = (config: SemanticConfigItem) => {
+  return semanticConfigs.value.findIndex(item => item.id === config.id)
+}
+
+const formatSemanticConfigLabel = (config: SemanticConfigItem) => {
+  return formatSemanticConfigOptionLabel(config, getSemanticConfigIndex(config))
+}
+
 const conversationSemanticConfigId = computed(() => {
   const selected = semanticConfigs.value.find(cfg => cfg.id === conversationSelectedSemanticConfigId.value)
   return selected?.enabled ? selected.id : null
@@ -1241,10 +1250,10 @@ watch(
 )
 
 watch(
-  [selectedDatasourceId, viewMode],
-  ([datasourceId, mode]) => {
+  [selectedDatasourceId, viewMode, activeSidebarTab],
+  ([datasourceId, mode, sidebarTab]) => {
     if (!datasourceId) return
-    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig') {
+    if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || (mode === 'conversation' && sidebarTab === 'metrics')) {
       void loadDatasourceSchema(datasourceId)
     }
   },
@@ -1469,10 +1478,11 @@ onUnmounted(() => {
         <span class="ml-4 text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           v-model="selectedSemanticConfigId"
-          class="min-w-[260px] max-w-[460px]"
+          class="w-[720px] max-w-[calc(100vw-560px)]"
           filterable
           :loading="loadingSemanticConfigs"
           :disabled="loadingSemanticConfigs || semanticConfigs.length === 0"
+          :title="currentSemanticConfig ? formatSemanticConfigLabel(currentSemanticConfig) : ''"
           placeholder="请选择指标集"
           loading-text="加载中"
           no-data-text="暂无指标集"
@@ -1480,10 +1490,11 @@ onUnmounted(() => {
           popper-class="chatdata-semantic-config-select-popper"
         >
           <el-option
-            v-for="config in semanticConfigs"
+            v-for="(config, configIndex) in semanticConfigs"
             :key="config.id"
             :value="config.id"
-            :label="`${config.name}（${config.metrics?.length || 0}指标 · ${config.dimensions?.length || 0}维度）`"
+            :label="formatSemanticConfigOptionLabel(config, configIndex)"
+            :title="formatSemanticConfigOptionLabel(config, configIndex)"
           />
         </el-select>
         <button

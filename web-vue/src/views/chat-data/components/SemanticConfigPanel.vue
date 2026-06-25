@@ -25,6 +25,7 @@ import {
   getDatasourceColumnDict,
   getDatasourceTableColumnDicts,
 } from '../api'
+import { formatSemanticConfigOptionLabel } from '../utils'
 import type { AccuracyEvaluationCaseItem, AccuracyEvaluationReport, AccuracyEvaluationRunHistoryItem, AccuracyEvaluationRunCaseHistoryItem, DatasourceColumnDictPayload, SemanticHistoryLearningResult, SemanticHistoryLearningSuggestion } from '../api'
 
 type EvaluationCaseRunStatus = 'idle' | 'queued' | 'running' | 'passed' | 'failed' | 'pending' | 'stopped'
@@ -410,6 +411,14 @@ const buildConfigMaintainerTitle = (config: SemanticConfigItem) => {
   const createTime = config.create_time || '-'
   const updateTime = config.update_time || '-'
   return `创建人：${creator}\n创建时间：${createTime}\n最近维护人：${updater}\n维护时间：${updateTime}`
+}
+
+const getConfigIndex = (config: SemanticConfigItem) => {
+  return configs.value.findIndex(item => item.id === config.id)
+}
+
+const formatConfigOptionLabel = (config: SemanticConfigItem) => {
+  return formatSemanticConfigOptionLabel(config, getConfigIndex(config))
 }
 
 const showDatasetSelectorInHeader = computed(() => !props.embedded)
@@ -3517,9 +3526,10 @@ const saveOntologyRules = () => {
         <span class="ml-2 text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           :model-value="activeConfig?.id || ''"
-          class="min-w-[260px] max-w-[460px]"
+          class="w-[720px] max-w-[calc(100vw-680px)]"
           filterable
           :disabled="loading || configs.length === 0"
+          :title="activeConfig ? formatConfigOptionLabel(activeConfig) : ''"
           placeholder="请选择指标集"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
@@ -3528,10 +3538,11 @@ const saveOntologyRules = () => {
           <el-option v-if="loading" value="" label="加载中" />
           <el-option v-else-if="configs.length === 0" value="" label="暂无指标集" />
           <el-option
-            v-for="config in configs"
+            v-for="(config, configIndex) in configs"
             :key="config.id"
             :value="config.id"
-            :label="`${config.name}（${config.metrics?.length || 0}指标 · ${config.dimensions?.length || 0}维度）`"
+            :label="formatSemanticConfigOptionLabel(config, configIndex)"
+            :title="formatSemanticConfigOptionLabel(config, configIndex)"
           />
         </el-select>
         <button
@@ -3570,16 +3581,18 @@ const saveOntologyRules = () => {
                   :model-value="activeConfig.id"
                   class="min-w-0 flex-1"
                   filterable
+                  :title="formatConfigOptionLabel(activeConfig)"
                   placeholder="请选择指标集"
                   fit-input-width
                   popper-class="chatdata-semantic-config-select-popper"
                   @change="toggleExpand"
                 >
                   <el-option
-                    v-for="config in configs"
+                    v-for="(config, configIndex) in configs"
                     :key="config.id"
                     :value="config.id"
-                    :label="`${config.name}（${config.metrics?.length || 0}指标 · ${config.dimensions?.length || 0}维度）`"
+                    :label="formatSemanticConfigOptionLabel(config, configIndex)"
+                    :title="formatSemanticConfigOptionLabel(config, configIndex)"
                   />
                 </el-select>
                 <button

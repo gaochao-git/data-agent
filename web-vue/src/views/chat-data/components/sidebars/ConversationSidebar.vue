@@ -7,6 +7,7 @@
 import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { getSemanticConfigs } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import { getSemanticConfigTableCount } from '../../utils'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
 interface ConversationItem {
@@ -82,6 +83,11 @@ const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
 const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
 const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
+const physicalTableCount = computed(() => {
+  return new Set((props.tables || [])
+    .map(table => String(table.table_name || '').trim())
+    .filter(Boolean)).size
+})
 const configSearchKeyword = ref('')
 const dimensionSearchKeywords = reactive<Record<string, string>>({})
 const metricSearchKeywords = reactive<Record<string, string>>({})
@@ -150,6 +156,24 @@ const filteredSemanticConfigs = computed(() => {
     return text.includes(keyword)
   })
 })
+
+const getSmartSelectionSummary = () => {
+  return `${semanticConfigs.value.length}指标集/${physicalTableCount.value}表`
+}
+
+const getConfigSummary = (config: SemanticConfigItem) => {
+  return `${getSemanticConfigTableCount(config)}表/${(config.relationships || []).length}关系/${(config.dimensions || []).length}维度/${(config.metrics || []).length}指标`
+}
+
+const getConfigOrdinal = (config: SemanticConfigItem) => {
+  const index = semanticConfigs.value.findIndex(item => item.id === config.id)
+  return index >= 0 ? index + 1 : 0
+}
+
+const getConfigDisplayName = (config: SemanticConfigItem) => {
+  const ordinal = getConfigOrdinal(config)
+  return ordinal > 0 ? `${ordinal}. ${config.name}` : config.name
+}
 
 const getFilteredDimensions = (config: SemanticConfigItem) => {
   const dimensions = config.dimensions || []
@@ -550,6 +574,12 @@ onUnmounted(() => {
             <i class="fa-solid fa-check"></i>
           </span>
           <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
+          <span
+            class="ml-2 shrink-0 text-[10px] text-[#939495]"
+            :title="`可用指标集：${semanticConfigs.length}；表：${physicalTableCount}`"
+          >
+            {{ getSmartSelectionSummary() }}
+          </span>
           <button
             type="button"
             class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#5B5C60] transition-colors hover:bg-[#E8F3FF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
@@ -590,10 +620,15 @@ onUnmounted(() => {
             >
               <i class="fa-solid fa-check"></i>
             </button>
-            <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-semibold leading-[28px] text-[#2E2F32]" :title="config.name">
-              {{ config.name }}
+            <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-semibold leading-[28px] text-[#2E2F32]" :title="getConfigDisplayName(config)">
+              {{ getConfigDisplayName(config) }}
             </span>
-            <span class="ml-2 shrink-0 text-[10px] text-[#939495]" title="维度/指标">{{ config.dimensions?.length || 0 }}维度/{{ config.metrics?.length || 0 }}指标</span>
+            <span
+              class="ml-2 shrink-0 text-[10px] text-[#939495]"
+              :title="`${getConfigDisplayName(config)}：${getConfigSummary(config)}`"
+            >
+              {{ getConfigSummary(config) }}
+            </span>
           </div>
 
           <div v-if="expandedConfigIds.has(config.id)" class="ml-6 border-l border-[#E5E6EB] pl-1">
