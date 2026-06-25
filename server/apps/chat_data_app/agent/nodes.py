@@ -141,7 +141,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         header += f"（semantic_config_id: {config_id}）"
     header += (
         "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
-        "如当前指标集或用户问题与可用业务知识技能明显同域，可先加载技能补充业务判断；最终回答不要提及技能加载过程。\n\n"
+        "如可用业务知识技能中存在 `business-query`，先读取 `business-query` 主说明判断领域路由；如当前指标集名称/描述、指标/维度或用户问题与某个技能明显同域，必须先读取对应技能补充业务判断；最终回答不要提及技能加载过程。\n\n"
     )
     return header + build_semantic_prompt(semantic_config, mode)
 
