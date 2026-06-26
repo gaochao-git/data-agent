@@ -809,7 +809,6 @@ def test_runtime_env_loading_from_ip_mapping(monkeypatch, tmp_path):
     for key in (
         common_util.ENV_KEY,
         common_util.ACTIVE_ENV_KEY,
-        common_util.ACTIVE_IDC_KEY,
         "UNIT_RUNTIME_ENV_VALUE",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -818,7 +817,6 @@ def test_runtime_env_loading_from_ip_mapping(monkeypatch, tmp_path):
     result = common_util.load_runtime_env(tmp_path)
 
     assert result.active_env == "dev"
-    assert result.active_idc == "dev"
     assert result.local_ips == ("172.20.10.2",)
     assert result.loaded_files == (str(conf_dir / ".env-dev"),)
     assert common_util.get_active_idc() == "dev"
@@ -837,7 +835,7 @@ def test_runtime_env_loading_errors_and_explicit_env(monkeypatch, tmp_path):
     (conf_dir / ".env-dev").write_text("UNIT_RUNTIME_ENV_VALUE=dev-value\n", encoding="utf-8")
 
     monkeypatch.setattr(common_util, "get_local_ips", lambda: ("172.20.10.2",))
-    for key in (common_util.ENV_KEY, common_util.ACTIVE_ENV_KEY, common_util.ACTIVE_IDC_KEY):
+    for key in (common_util.ENV_KEY, common_util.ACTIVE_ENV_KEY):
         monkeypatch.delenv(key, raising=False)
 
     with pytest.raises(RuntimeError, match="同时匹配多个环境"):
@@ -855,6 +853,10 @@ def test_runtime_env_loading_errors_and_explicit_env(monkeypatch, tmp_path):
     monkeypatch.delenv(common_util.ENV_KEY, raising=False)
     with pytest.raises(RuntimeError, match="未识别当前机器所属环境"):
         common_util.load_runtime_env(tmp_path)
+
+    monkeypatch.setenv(common_util.ENV_KEY, "dev")
+    (conf_dir / "deploy_env_hosts.json").unlink()
+    assert common_util.load_runtime_env(tmp_path).active_env == "dev"
 
 
 def test_pipe_log_formatter_and_context_helpers(monkeypatch):

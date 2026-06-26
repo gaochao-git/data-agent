@@ -11,7 +11,6 @@ from dotenv import dotenv_values
 
 ENV_KEY = "CHAT_DATA_ENV"
 ACTIVE_ENV_KEY = "CHAT_DATA_ACTIVE_ENV"
-ACTIVE_IDC_KEY = "CHAT_DATA_ACTIVE_IDC"
 DEPLOY_ENV_HOSTS_FILE = "deploy_env_hosts.json"
 
 
@@ -95,14 +94,13 @@ def get_active_deploy_env() -> str:
 
 
 def get_active_idc() -> str:
-    """读取当前进程已识别的 IDC。"""
-    return os.getenv(ACTIVE_IDC_KEY, "").strip() or "default"
+    """读取当前日志 IDC 标识。"""
+    return get_active_deploy_env()
 
 
 @dataclass(frozen=True)
 class RuntimeEnvLoadResult:
     active_env: str
-    active_idc: str
     loaded_files: tuple[str, ...]
     local_ips: tuple[str, ...]
 
@@ -130,20 +128,18 @@ def load_runtime_env(server_dir: Path | str) -> RuntimeEnvLoadResult:
     loaded_files: list[str] = []
 
     local_ips = get_local_ips()
-    hosts_config = load_deploy_env_hosts(conf_dir)
-    active_env = os.getenv(ENV_KEY, "").strip() or resolve_deploy_env(hosts_config, local_ips)
+    active_env = os.getenv(ENV_KEY, "").strip()
+    if not active_env:
+        active_env = resolve_deploy_env(load_deploy_env_hosts(conf_dir), local_ips)
 
     env_file = conf_dir / f".env-{active_env}"
     if not _apply_env_file(env_file, protected_keys, override_loaded=True):
         raise RuntimeError(f"未找到环境配置文件: {env_file}")
     loaded_files.append(str(env_file))
 
-    active_idc = active_env
-    os.environ.setdefault(ACTIVE_ENV_KEY, active_env)
-    os.environ.setdefault(ACTIVE_IDC_KEY, active_idc)
+    os.environ[ACTIVE_ENV_KEY] = active_env
     return RuntimeEnvLoadResult(
         active_env=active_env,
-        active_idc=os.environ.get(ACTIVE_IDC_KEY, active_idc),
         loaded_files=tuple(loaded_files),
         local_ips=local_ips,
     )

@@ -11,7 +11,7 @@ from utils.lang_util.common_util import load_runtime_env
 _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
 print(
-    f"[env] active_env={_RUNTIME_ENV.active_env} active_idc={_RUNTIME_ENV.active_idc} "
+    f"[env] active_env={_RUNTIME_ENV.active_env} "
     f"loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
 )
 
