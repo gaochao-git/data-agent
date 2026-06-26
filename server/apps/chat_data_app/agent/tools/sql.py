@@ -244,21 +244,28 @@ async def _resolve_semantic_query_config(
 
 @tool(args_schema=SemanticQueryInput)
 async def semantic_query_tool(
-    dsl: dict,
-    state: Annotated[dict, InjectedState],
+    dsl: dict | None = None,
+    state: Annotated[dict | None, InjectedState] = None,
+    sql: str | None = None,
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
 ) -> str:
     """
-    执行语义查询并返回结果。
+    执行智能问数查询并返回结果。
 
-    接收语义 DSL，内部生成 SQL 后执行。
+    优先接收语义 DSL，内部生成 SQL 后执行；DSL 明确无法表达时接收只读 SQL 执行。
     返回的 result_id 可用于后续生成图表。
     """
-    if not isinstance(dsl, dict):
+    has_dsl = dsl is not None
+    sql = str(sql or "").strip()
+    has_sql = bool(sql)
+    if has_dsl == has_sql:
+        return "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
+    if has_dsl and not isinstance(dsl, dict):
         return "semantic_query_tool 执行失败: dsl 必须是对象"
-    if "sql" in dsl:
-        return "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+    if isinstance(dsl, dict) and "sql" in dsl:
+        return "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
+    state = state or {}
 
     datasource_id = state.get("datasource_id")
     state_config = state.get("semantic_config")
@@ -273,21 +280,24 @@ async def semantic_query_tool(
 
     query_text = _latest_human_query(state.get("messages") or [])
 
-    compile_result = SemanticSQLGenerator(config).generate_sql(
-        metrics=dsl.get("metrics") or [],
-        dimensions=dsl.get("dimensions") or [],
-        filters=dsl.get("filters") or [],
-        having=dsl.get("having") or [],
-        order_by=dsl.get("order_by") or [],
-        limit=dsl.get("limit"),
-        offset=dsl.get("offset"),
-        user_query=query_text or None,
-    )
-    if not compile_result.get("success"):
-        return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
-    sql = str(compile_result.get("sql") or "").strip()
-    if not sql:
-        return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
+    query_mode = "nl2sql" if has_sql else "dsl2sql"
+    confidence = 0.6 if has_sql else 0.9
+    if has_dsl:
+        compile_result = SemanticSQLGenerator(config).generate_sql(
+            metrics=dsl.get("metrics") or [],
+            dimensions=dsl.get("dimensions") or [],
+            filters=dsl.get("filters") or [],
+            having=dsl.get("having") or [],
+            order_by=dsl.get("order_by") or [],
+            limit=dsl.get("limit"),
+            offset=dsl.get("offset"),
+            user_query=query_text or None,
+        )
+        if not compile_result.get("success"):
+            return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
+        sql = str(compile_result.get("sql") or "").strip()
+        if not sql:
+            return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
 
     logger.info(f"执行语义查询 SQL: {sql[:100]}...")
 
@@ -344,6 +354,8 @@ async def semantic_query_tool(
     conversation_id = str(state.get("conversation_id") or "").strip() or None
     query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
     query_result["sql"] = query_result.get("sql") or sql
+    query_result["query_mode"] = query_mode
+    query_result["confidence"] = confidence
     if query_result_default_member_note:
         query_result["default_member_notice"] = query_result_default_member_note
 
@@ -359,6 +371,8 @@ async def semantic_query_tool(
                 "execution_time_ms": query_result.get("execution_time_ms"),
                 "result_size_chars": len(result_json),
                 "llm_analysis_skipped": True,
+                "query_mode": query_mode,
+                "confidence": confidence,
                 "message": "查询结果已超过限制，仅返回工具结果，不进行分析；如需二次分析请使用智能分析功能。",
             }
             if query_result.get("sql"):
@@ -517,6 +531,37 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
             return table_name
         return f"{alias}({table_name})"
 
+    def collect_semantic_table_names() -> set[str]:
+        table_names: set[str] = set()
+        for item in [*(semantic_config.get("metrics") or []), *(semantic_config.get("dimensions") or [])]:
+            table_name = str((item or {}).get("table") or "").strip()
+            if table_name:
+                table_names.add(table_name)
+        for relationship in semantic_config.get("relationships") or []:
+            left_table = str((relationship or {}).get("left_table") or "").strip()
+            right_table = str((relationship or {}).get("right_table") or "").strip()
+            if left_table:
+                table_names.add(left_table)
+            if right_table:
+                table_names.add(right_table)
+        return table_names
+
+    def column_name(column: dict) -> str:
+        return str(column.get("name") or column.get("column_name") or "").strip()
+
+    def column_type(column: dict) -> str:
+        return str(
+            column.get("type")
+            or column.get("mysql_type")
+            or column.get("hive_type")
+            or column.get("data_type")
+            or column.get("columnType")
+            or ""
+        ).strip()
+
+    def column_description(column: dict) -> str:
+        return str(column.get("description") or column.get("comment") or "").strip()
+
     # 配置描述（可选）
     description_section = ""
     if semantic_config.get('description'):
@@ -530,26 +575,6 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
     # SQL 方言（帮助模型理解 SQL 语法边界）
     source_type = str(semantic_config.get('source_type') or '').strip()
     dialect_section = f"**SQL方言**: {source_type.upper()}\n\n" if source_type else ""
-
-    # 构建指标列表
-    metrics = semantic_config.get('metrics', [])
-    metrics_section = ""
-    if metrics:
-        metrics_lines = []
-        for m in metrics:
-            name = m.get('name', '')
-            desc = m.get('description') or m.get('label') or name
-            expression = m.get('expression')
-            if not expression:
-                aggregation = m.get('aggregation', 'COUNT')
-                field = m.get('field', '')
-                expression = f"{aggregation}({field})"
-            table_ref = semantic_table_ref(m.get('table', ''), m.get('table_alias', ''))
-            line = format_prompt_line(name, desc, get_metric_type(m), expression, m.get('metadata_supplement'))
-            if table_ref:
-                line = f"{line}，表: {table_ref}"
-            metrics_lines.append(f"- {line}")
-        metrics_section = "### 可用指标（用于聚合统计，明细查询不要放入 metrics）\n" + "\n".join(metrics_lines) + "\n\n"
 
     # 构建维度列表
     dimensions = semantic_config.get('dimensions', [])
@@ -584,7 +609,57 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
             else:
                 dimensions_lines.append(f"- {prompt_line}")
 
-        dimensions_section = "### 可用维度（用于分组/筛选，也可用于明细字段选择）\n" + "\n".join(dimensions_lines) + "\n\n"
+        dimensions_section = "### 可用维度/字段（可用于返回、筛选、分组）\n" + "\n".join(dimensions_lines) + "\n\n"
+
+    # 构建指标列表
+    metrics = semantic_config.get('metrics', [])
+    metrics_section = ""
+    if metrics:
+        metrics_lines = []
+        for m in metrics:
+            name = m.get('name', '')
+            desc = m.get('description') or m.get('label') or name
+            expression = m.get('expression')
+            if not expression:
+                aggregation = m.get('aggregation', 'COUNT')
+                field = m.get('field', '')
+                expression = f"{aggregation}({field})"
+            table_ref = semantic_table_ref(m.get('table', ''), m.get('table_alias', ''))
+            line = format_prompt_line(name, desc, get_metric_type(m), expression, m.get('metadata_supplement'))
+            if table_ref:
+                line = f"{line}，表: {table_ref}"
+            metrics_lines.append(f"- {line}")
+        metrics_section = "### 可用指标（仅用于明确聚合口径）\n" + "\n".join(metrics_lines) + "\n\n"
+
+    # 构建当前指标集相关表和原始字段列表，供 NL2SQL 回退理解表名、字段名和字段备注。
+    tables = semantic_config.get('tables') or []
+    table_names = collect_semantic_table_names()
+    tables_section = ""
+    if tables and table_names:
+        table_lines = []
+        for table in tables:
+            table_name = str((table or {}).get("table_name") or "").strip()
+            if not table_name or table_name not in table_names:
+                continue
+            table_desc = str((table or {}).get("description") or "").strip()
+            header = f"- **{table_name}**"
+            if table_desc:
+                header = f"{header}：{table_desc}"
+            table_lines.append(header)
+            for column in table.get("columns") or []:
+                name = column_name(column)
+                if not name:
+                    continue
+                parts = [name]
+                col_type = column_type(column)
+                col_desc = column_description(column)
+                if col_type:
+                    parts.append(f"类型: {col_type}")
+                if col_desc:
+                    parts.append(f"备注: {col_desc}")
+                table_lines.append(f"  - {'，'.join(parts)}")
+        if table_lines:
+            tables_section = "### 相关表和原始字段（用于补充字段理解和 SQL 回退）\n" + "\n".join(table_lines) + "\n\n"
 
     # 构建表关系列表
     relationships = semantic_config.get('relationships', [])
@@ -613,7 +688,7 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
         relationships_section = "### 表关系（用于跨表查询）\n" + "\n".join(relationships_lines) + "\n\n"
 
     # 只注入当前指标集配置；工具参数规则由智能问数主提示词维护。
-    return f"""{description_section}{business_description_section}{dialect_section}{metrics_section}{dimensions_section}{relationships_section}"""
+    return f"""{description_section}{business_description_section}{dialect_section}{dimensions_section}{tables_section}{relationships_section}{metrics_section}"""
 
 
 # ============ 直接执行 SQL（用于 Dashboard 面板刷新） ============

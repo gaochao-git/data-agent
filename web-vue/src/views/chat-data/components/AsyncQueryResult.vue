@@ -13,6 +13,8 @@ import { getConversationArtifact } from '../api'
 interface QueryResult {
   success: boolean
   sql?: string
+  query_mode?: string
+  confidence?: number | string
   columns?: string[]
   data?: Record<string, unknown>[]
   total_count?: number
@@ -288,6 +290,22 @@ const formatExecutionSeconds = (value?: number | null): string => {
   return `${(ms / 1000).toFixed(2)}秒`
 }
 
+const queryModeText = computed(() => {
+  const mode = String(queryResult.value?.query_mode || activeResult.value?.query_mode || '').trim().toLowerCase()
+  if (mode === 'dsl2sql') return '语义查询'
+  if (mode === 'nl2sql') return '直接SQL'
+  return ''
+})
+
+const confidenceText = computed(() => {
+  const value = queryResult.value?.confidence ?? activeResult.value?.confidence
+  if (value === null || value === undefined || value === '') return ''
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return String(value)
+  const percent = numeric <= 1 ? numeric * 100 : numeric
+  return `${Math.round(percent)}%`
+})
+
 const verticalText = computed(() => {
   const resultColumns = activeResult.value?.columns || []
   if (!limitedData.value.length) return ''
@@ -530,6 +548,12 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           </span>
           <span v-if="activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
             缓存结果
+          </span>
+          <span v-if="queryModeText" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
+            {{ queryModeText }}
+          </span>
+          <span v-if="confidenceText" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
+            置信度 {{ confidenceText }}
           </span>
           <span v-if="isTruncated" class="shrink-0 whitespace-nowrap text-xs text-amber-600">
             已按前端上限展示前 {{ frontMaxRows }} 条

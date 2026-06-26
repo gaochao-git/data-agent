@@ -51,11 +51,49 @@ def _config_description(config: Dict[str, Any]) -> str:
 def _semantic_config_directory_entry(config: Dict[str, Any]) -> Dict[str, str]:
     """构造轻量指标集目录项，只用于候选召回。"""
     config_id = _config_id(config)
+    search_terms = _semantic_config_search_terms(config)
     return {
         "id": config_id,
         "name": _config_name(config) or config_id,
         "description": _truncate(_config_description(config), 240),
+        "search_terms": _truncate(search_terms, 2000),
     }
+
+
+def _semantic_config_search_terms(config: Dict[str, Any]) -> str:
+    """提取指标、维度和原始字段关键词，补充目录召回。"""
+    terms: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text:
+            terms.append(text)
+
+    for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+        add((item or {}).get("name"))
+        add((item or {}).get("description"))
+        add((item or {}).get("label"))
+        add((item or {}).get("metadata_supplement"))
+        add((item or {}).get("field"))
+        add((item or {}).get("column"))
+
+    table_names = _semantic_table_names(config)
+    for table in config.get("tables") or []:
+        table_name = str((table or {}).get("table_name") or "").strip()
+        if not table_name or table_name not in table_names:
+            continue
+        add(table_name)
+        add((table or {}).get("description"))
+        for column in table.get("columns") or []:
+            add((column or {}).get("name") or (column or {}).get("column_name"))
+            add((column or {}).get("description") or (column or {}).get("comment"))
+
+    return " ".join(terms)
+
+
+def _public_directory_entry(entry: Dict[str, str]) -> Dict[str, Any]:
+    """返回可对外记录的目录召回信息，去掉仅用于内部打分的字段。"""
+    return {key: value for key, value in entry.items() if key != "search_terms"}
 
 
 def _retrieval_terms(value: Any) -> set[str]:
@@ -87,11 +125,12 @@ def _retrieval_terms(value: Any) -> set[str]:
 
 
 def _directory_entry_score(user_query: str, entry: Dict[str, str]) -> int:
-    """按 id/name/description 对指标集目录项做轻量打分。"""
+    """按目录字段和轻量语义关键词对指标集目录项做召回打分。"""
     query = str(user_query or "").lower()
     name = str(entry.get("name") or "").lower()
     description = str(entry.get("description") or "").lower()
-    entry_text = f"{entry.get('id') or ''} {name} {description}".lower()
+    search_terms = str(entry.get("search_terms") or "").lower()
+    entry_text = f"{entry.get('id') or ''} {name} {description} {search_terms}".lower()
     query_terms = _retrieval_terms(query)
     entry_terms = _retrieval_terms(entry_text)
     if not query_terms or not entry_terms:
@@ -104,6 +143,8 @@ def _directory_entry_score(user_query: str, entry: Dict[str, str]) -> int:
             score += 4
         elif len(term) >= 2 and term in description:
             score += 2
+        elif len(term) >= 2 and term in search_terms:
+            score += 3
     if name and name in query:
         score += 12
     if description and description in query:
@@ -119,7 +160,7 @@ def _retrieve_semantic_config_candidates(
     """先用指标集 id/name/description 召回候选，召回失败时回退全量。"""
     if len(configs) <= max(int(top_k or 0), 0):
         directory = [_semantic_config_directory_entry(config) for config in configs]
-        return configs, [{**item, "score": 0, "selected": True} for item in directory]
+        return configs, [{**_public_directory_entry(item), "score": 0, "selected": True} for item in directory]
 
     scored: List[tuple[int, int, Dict[str, Any], Dict[str, str]]] = []
     for index, config in enumerate(configs):
@@ -129,13 +170,13 @@ def _retrieve_semantic_config_candidates(
             scored.append((score, index, config, entry))
     if not scored:
         directory = [_semantic_config_directory_entry(config) for config in configs]
-        return configs, [{**item, "score": 0, "selected": True} for item in directory]
+        return configs, [{**_public_directory_entry(item), "score": 0, "selected": True} for item in directory]
 
     limit = max(int(top_k or SELECTOR_DIRECTORY_TOP_K), 1)
     selected = sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]
     selected_ids = {_config_id(item[2]) for item in selected}
     retrieval = [
-        {**entry, "score": score, "selected": _config_id(config) in selected_ids}
+        {**_public_directory_entry(entry), "score": score, "selected": _config_id(config) in selected_ids}
         for score, _index, config, entry in sorted(scored, key=lambda item: (-item[0], item[1]))
     ]
     return [config for _score, _index, config, _entry in selected], retrieval
@@ -166,6 +207,75 @@ def _compact_dimension_summary(item: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in summary.items() if value not in ("", [], {})}
 
 
+def _semantic_table_names(config: Dict[str, Any]) -> set[str]:
+    """提取当前指标集实际引用的物理表名。"""
+    table_names: set[str] = set()
+    for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+        table_name = str((item or {}).get("table") or "").strip()
+        if table_name:
+            table_names.add(table_name)
+    for relationship in config.get("relationships") or []:
+        left_table = str((relationship or {}).get("left_table") or "").strip()
+        right_table = str((relationship or {}).get("right_table") or "").strip()
+        if left_table:
+            table_names.add(left_table)
+        if right_table:
+            table_names.add(right_table)
+    return table_names
+
+
+def _compact_table_summary(config: Dict[str, Any], max_columns: int = 80) -> List[Dict[str, Any]]:
+    """构造指标集相关表字段摘要，只保留表名、字段名、类型和备注。"""
+    table_names = _semantic_table_names(config)
+    if not table_names:
+        return []
+    result: List[Dict[str, Any]] = []
+    for table in config.get("tables") or []:
+        table_name = str((table or {}).get("table_name") or "").strip()
+        if not table_name or table_name not in table_names:
+            continue
+        columns = []
+        for column in (table.get("columns") or [])[:max_columns]:
+            column_name = str((column or {}).get("name") or (column or {}).get("column_name") or "").strip()
+            if not column_name:
+                continue
+            column_item = {
+                "name": column_name,
+                "type": str((column or {}).get("type") or (column or {}).get("mysql_type") or (column or {}).get("hive_type") or (column or {}).get("data_type") or "").strip(),
+                "description": _truncate((column or {}).get("description") or (column or {}).get("comment") or "", 80),
+            }
+            columns.append({key: value for key, value in column_item.items() if value})
+        result.append({
+            "table_name": table_name,
+            "description": _truncate((table or {}).get("description") or "", 120),
+            "columns": columns,
+        })
+    return result
+
+
+def _compact_relationship_summary(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """构造表关系摘要，帮助指标集检索识别跨表语义。"""
+    result: List[Dict[str, Any]] = []
+    for relationship in config.get("relationships") or []:
+        left_table = str((relationship or {}).get("left_table") or "").strip()
+        right_table = str((relationship or {}).get("right_table") or "").strip()
+        if not left_table or not right_table:
+            continue
+        conditions = []
+        for condition in (relationship or {}).get("join_conditions") or []:
+            left_column = str((condition or {}).get("left_column") or "").strip()
+            right_column = str((condition or {}).get("right_column") or "").strip()
+            if left_column and right_column:
+                conditions.append(f"{left_column}={right_column}")
+        result.append({
+            "left_table": left_table,
+            "right_table": right_table,
+            "join_type": str((relationship or {}).get("join_type") or "").strip(),
+            "conditions": conditions,
+        })
+    return result
+
+
 def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """构造给大模型判断的指标集摘要。"""
     metrics = config.get("metrics") or []
@@ -176,10 +286,12 @@ def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "name": _config_name(config),
         "description": _truncate(config.get("description") or config.get("semantic_config_desc") or "", 180),
         "business_description": _truncate(config.get("ontology_rules") or "", 500),
-        "metrics_total": len(metrics),
         "dimensions_total": len(dimensions),
-        "metrics": [_compact_metric_summary(item) for item in metrics],
+        "metrics_total": len(metrics),
         "dimensions": [_compact_dimension_summary(item) for item in dimensions],
+        "tables": _compact_table_summary(config),
+        "relationships": _compact_relationship_summary(config),
+        "metrics": [_compact_metric_summary(item) for item in metrics],
     }
 
 
@@ -195,10 +307,10 @@ def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]], datas
         "要求：\n"
         "1) 只能选择给定列表中的 id，不能编造指标集、指标、维度、业务口径或派生公式。\n"
         "1.1) datasource_group_context 是当前数据源组的问数说明，用于理解执行对象数据源、分库规则和查询边界；它不能覆盖 semantic_configs 中真实存在的指标、维度和口径。\n"
-        "2) 逐个检查所有 semantic_configs，判断每个指标集是否能完整覆盖用户问题所需的指标、维度、过滤条件和业务口径。coverage 只能是 full、partial、none；只有名称和口径都明确匹配，才算覆盖。\n"
-        "3) 选择指标集时不要先按“明细查询/聚合统计”做硬分类；请直接判断用户问题所需的业务语义是否能被某个指标集覆盖，包括指标、维度、筛选字段、时间字段、枚举口径和业务口径。\n"
-        "4) 如果用户问题需要统计数量、金额、余额、比例、趋势等结果，指标集需要包含可表达该统计口径的指标；如果用户问题需要展示、筛选、分组或限定某些业务字段，指标集需要包含对应维度。很多问题会同时需要指标和维度，不能只匹配指标，也不能只匹配维度。\n"
-        "5) 只有用户明确要求查看明细、列表、详情、记录时，才可以在没有聚合指标的情况下按维度字段判断是否覆盖；但如果问题同时包含统计口径，仍必须同时检查指标和相关维度。\n"
+        "2) 逐个检查所有 semantic_configs，判断每个指标集是否能完整覆盖用户问题所需的字段/维度、过滤条件、时间条件、指标和业务口径。coverage 只能是 full、partial、none；只有名称和口径都明确匹配，才算覆盖。\n"
+        "3) 默认按明细/字段查询理解用户问题，不要先找指标；先识别用户原词关注的业务对象，再在维度/字段、相关表字段、表关系和指标中同时匹配，判断哪个指标集的名称、描述、口径和筛选条件整体最贴近用户原词。\n"
+        "4) 如果用户问题同时涉及结果字段、筛选字段、时间字段、枚举口径或业务限定，必须同时检查这些语义是否被同一指标集覆盖；不能只匹配指标，也不能只匹配维度或原始字段。只有用户明确表达统计、汇总、平均、总计、趋势、分组、排行，或用户原词精确命中完整指标名称/口径时，才把相应指标放入 matched_metrics。\n"
+        "5) 同一业务名称同时出现在指标、维度或原始字段中时，必须按用户问题完整语义判断最贴近项；无法判断时不要猜测，返回需要澄清的原因。\n"
         "6) 同比、环比、增长率这类问题，如果某个指标集同时包含基础指标和可用于周期筛选/分组的时间维度，应视为可拆成基础查询后计算，coverage=full；不要因为没有预置同比/环比/增长率指标就判为 partial 或 none。\n"
         "7) candidates 必须包含所有 coverage=full 的指标集；如果没有 full，可返回最相关的 partial 候选。\n"
         "8) 如果多个指标集都能完整覆盖同一个完整问题，且能从指标集 id、名称或描述中明确识别数仓层级，优先按 ads > dws > dwd > ods 选择；如果无法明确识别层级，或层级仍无法唯一判断，或业务口径冲突，ambiguous 返回 true，selected_config_id 返回空字符串，candidates 返回这些指标集，交给用户选择。\n"
@@ -327,7 +439,7 @@ def _build_reducer_prompt(
         "要求：\n"
         "1) 只能从 candidates 中选择 id，不能编造指标集、指标、维度、业务口径或派生公式。\n"
         "1.1) datasource_group_context 是当前数据源组的问数说明，用于理解执行对象数据源、分库规则和查询边界；它不能覆盖 candidates 中真实存在的指标、维度和口径。\n"
-        "2) 选择指标集时不要先按“明细查询/聚合统计”做硬分类；请直接判断问题所需业务语义是否被候选覆盖。统计口径需要匹配指标，展示、筛选、分组或限定字段需要匹配维度；很多问题会同时需要指标和维度，不能只匹配指标，也不能只匹配维度；只有名称和口径都明确匹配，才算覆盖。\n"
+        "2) 默认按明细/字段查询理解用户问题，不要先找指标；先识别用户原词关注的业务对象，再在候选的维度/字段、相关表字段、表关系和指标中同时匹配，判断哪个候选的名称、描述、口径和筛选条件整体最贴近用户原词；只有名称和口径都明确匹配，才算覆盖。只有用户明确表达统计、汇总、平均、总计、趋势、分组、排行，或用户原词精确命中完整指标名称/口径时，才把相应指标放入 matched_metrics。\n"
         "3) 同比、环比、增长率这类问题，如果候选同时包含基础指标和时间维度，应视为可拆成基础查询后计算，coverage=full。\n"
         "4) candidates 必须包含所有 coverage=full 的指标集；如果没有 full，可返回最相关的 partial 候选。\n"
         "5) 如果只有一个指标集能完整覆盖，selected_config_id 返回该 id。\n"

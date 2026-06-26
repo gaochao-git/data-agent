@@ -285,7 +285,7 @@ def test_parse_selection_response_accepts_multi_config_query_plan():
     assert [item["semantic_config_id"] for item in parsed["query_plan"]["tasks"]] == ["sc_order", "sc_user"]
 
 
-def test_retrieve_semantic_config_candidates_uses_directory_name_and_description():
+def test_retrieve_semantic_config_candidates_uses_directory_name_description_and_fields():
     configs = [
         {"id": "sc_order", "name": "订单分析基线", "description": "订单经营分析评估用语义配置", "metrics": [{"name": "订单金额"}]},
         {"id": "sc_course", "name": "课程报名", "description": "课程、学生和报名分析"},
@@ -298,6 +298,31 @@ def test_retrieve_semantic_config_candidates_uses_directory_name_and_description
     assert retrieval[0]["id"] == "sc_order"
     assert retrieval[0]["selected"] is True
     assert all("metrics" not in item for item in retrieval)
+    assert all("search_terms" not in item for item in retrieval)
+
+    field_configs = [
+        {
+            "id": "sc_attendance",
+            "name": "学生基础信息",
+            "description": "学生日常数据",
+            "dimensions": [{"name": "学生姓名", "table": "student_attendance", "column": "student_name"}],
+            "tables": [{
+                "table_name": "student_attendance",
+                "description": "学生出勤明细",
+                "columns": [
+                    {"name": "attendance_rate", "type": "decimal", "description": "出勤率"},
+                    {"name": "student_name", "type": "varchar", "description": "学生姓名"},
+                ],
+            }],
+        },
+        {"id": "sc_order", "name": "订单分析", "description": "订单经营分析"},
+    ]
+
+    field_candidates, field_retrieval = _retrieve_semantic_config_candidates(field_configs, "查询2025年6月1号出勤率", top_k=1)
+
+    assert [item["id"] for item in field_candidates] == ["sc_attendance"]
+    assert field_retrieval[0]["id"] == "sc_attendance"
+    assert "search_terms" not in field_retrieval[0]
 
 
 def test_retrieval_terms_and_directory_score_edge_paths():
@@ -335,6 +360,34 @@ def test_summarize_semantic_config_truncates_business_fields():
         "ontology_rules": "业务规则" * 200,
         "metrics": [{"name": "销售额", "table": "orders", "expression": "sum(amount)", "metadata_supplement": "金额单位元"}],
         "dimensions": [{"name": "机构", "table": "orders", "column": "org_name", "type": "categorical"}],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_type": "left",
+                "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
+            }
+        ],
+        "tables": [
+            {
+                "table_name": "orders",
+                "description": "订单表",
+                "columns": [
+                    {"name": "amount", "type": "decimal", "description": "订单金额"},
+                    {"name": "org_name", "type": "varchar", "description": "机构名称"},
+                ],
+            },
+            {
+                "table_name": "users",
+                "description": "用户表",
+                "columns": [{"name": "id", "type": "bigint", "description": "用户ID"}],
+            },
+            {
+                "table_name": "unrelated",
+                "description": "无关表",
+                "columns": [{"name": "secret_col", "type": "varchar"}],
+            },
+        ],
     }
 
     summary = _summarize_semantic_config(config)
@@ -343,8 +396,12 @@ def test_summarize_semantic_config_truncates_business_fields():
     assert summary["metrics"][0]["name"] == "销售额"
     assert summary["metrics"][0]["supplement"] == "金额单位元"
     assert summary["dimensions"][0]["name"] == "机构"
-    assert "table" not in summary
-    assert "table" not in summary["metrics"][0]
+    assert [item["table_name"] for item in summary["tables"]] == ["orders", "users"]
+    assert summary["tables"][0]["columns"][0] == {"name": "amount", "type": "decimal", "description": "订单金额"}
+    assert "secret_col" not in json.dumps(summary, ensure_ascii=False)
+    assert summary["relationships"][0]["left_table"] == "orders"
+    assert summary["relationships"][0]["right_table"] == "users"
+    assert summary["relationships"][0]["conditions"] == ["user_id=id"]
     assert "expression" not in summary["metrics"][0]
     assert "column" not in summary["dimensions"][0]
     assert len(summary["description"]) <= 183
@@ -382,7 +439,7 @@ def test_summarize_semantic_config_keeps_all_metrics_dimensions_and_business_val
     assert summary["dimensions"][149]["mapping"] == {"别名149_0": "标准149_0", "别名149_1": "标准149_1"}
 
 
-def test_selector_prompt_matches_metrics_and_dimensions_by_required_semantics():
+def test_selector_prompt_matches_user_focus_across_metrics_dimensions_and_fields():
     prompt = _build_selector_prompt("查询某类别今日订单数", [{
         "id": "sc_category",
         "name": "分类订单",
@@ -398,12 +455,15 @@ def test_selector_prompt_matches_metrics_and_dimensions_by_required_semantics():
     )
 
     for text in (prompt, reducer_prompt):
-        assert "不要先按“明细查询/聚合统计”做硬分类" in text
-        assert "统计口径" in text
+        assert "默认按明细/字段查询理解用户问题" in text
+        assert "不要先找指标" in text
+        assert "先识别用户原词关注的业务对象" in text
+        assert "最贴近用户原词" in text
+        assert "指标" in text
         assert "维度" in text
-        assert "不能只匹配指标，也不能只匹配维度" in text
-    assert "只有用户明确要求查看明细、列表、详情、记录时" in prompt
-    assert "仍必须同时检查指标和相关维度" in prompt
+        assert "相关表字段" in text
+        assert "完整指标名称/口径" in text
+    assert "不能只匹配指标，也不能只匹配维度或原始字段" in prompt
 
 
 def test_chunk_semantic_config_summaries_never_splits_single_config(monkeypatch):

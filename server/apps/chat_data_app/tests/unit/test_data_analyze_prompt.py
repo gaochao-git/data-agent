@@ -63,11 +63,14 @@ def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expressi
 def test_chat_data_query_prompt_prefers_user_named_dimension_field_over_similar_metric():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "用户点名查询某个字段时" in prompt
-    assert "如果该字段维护在 `dimensions` 中，就放入 `dimensions` 返回或筛选" in prompt
-    assert "不要因为字段看起来像数值就改用相近指标" in prompt
-    assert "不要把“查询余额/查看余额/我要余额”擅自理解成“金额汇总/余额汇总”等相近聚合指标" in prompt
-    assert "如果同一业务名称同时存在指标和维度" in prompt
+    assert "按用户关注的业务对象" in prompt
+    assert "默认按明细/字段查询理解用户问题" in prompt
+    assert "指标、维度和相关表原始字段中同时匹配" in prompt
+    assert "不要默认指标优先，也不要默认维度优先" in prompt
+    assert "用户原词能精确命中某个指标、维度或原始字段时，优先使用精确命中的项" in prompt
+    assert "不要自动增加、删除或替换“平均、汇总、总额、明细、数量”等限定词" in prompt
+    assert "如果同一业务名称同时存在指标、维度或原始字段" in prompt
+    assert "不要用相近的平均、汇总、总额、明细字段替代" in prompt
 
 
 def test_chat_data_query_prompt_has_minimal_dsl_few_shots():
@@ -82,6 +85,22 @@ def test_chat_data_query_prompt_has_minimal_dsl_few_shots():
     assert "明细里维度A大于维度B 10倍" in prompt
     assert "操作数类型是 `dimension`" in prompt
     assert "不要把指标结果比较放进 `filters`" in prompt
+
+
+def test_chat_data_query_prompt_defines_nl2sql_fallback_boundary():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "# NL2SQL 回退规则" in prompt
+    assert "名称和口径明确一致" in prompt
+    assert "必须优先使用 DSL 路径" in prompt
+    assert "只能通过相近指标或相近维度表达时，不算 DSL 已明确可表达" in prompt
+    assert "只有 DSL 明确无法表达查询结构或目标原始字段未维护为可用维度/指标时，才允许使用 SQL 路径" in prompt
+    assert "子查询、CTE、窗口函数、多阶段聚合、自连接、UNION/EXISTS、复杂 CASE WHEN" in prompt
+    assert "SQL 路径仍然必须受当前指标集和执行对象数据源约束" in prompt
+    assert "不能因为指标、维度或业务口径不明确就回退 SQL" in prompt
+    assert "`query_mode=dsl2sql`" in prompt
+    assert "`query_mode=nl2sql`" in prompt
+    assert "置信度 0.6" in prompt
 
 
 def test_chat_data_query_prompt_template_format_keeps_json_examples_valid():

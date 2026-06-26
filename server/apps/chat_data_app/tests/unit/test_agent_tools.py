@@ -146,14 +146,40 @@ def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relatio
             },
             {"left_table": "orders", "right_table": "items", "join_conditions": []},
         ],
+        "tables": [
+            {
+                "table_name": "orders",
+                "description": "订单主表",
+                "columns": [
+                    {"name": "order_id", "type": "bigint", "description": "订单ID"},
+                    {"name": "status", "type": "string", "description": "订单状态"},
+                ],
+            },
+            {
+                "table_name": "users",
+                "description": "用户表",
+                "columns": [{"name": "user_id", "type": "bigint", "description": "用户ID"}],
+            },
+            {
+                "table_name": "unrelated",
+                "description": "无关表",
+                "columns": [{"name": "secret_col", "type": "string"}],
+            },
+        ],
     })
 
     assert "**SQL方言**: HIVE" in prompt
+    assert prompt.index("### 可用维度/字段（可用于返回、筛选、分组）") < prompt.index("### 可用指标（仅用于明确聚合口径）")
     assert "COUNT(order_id)" in prompt
     assert "类型: bigint" in prompt
     assert "元数据补充: 同义词：订单量" in prompt
     assert "元数据补充: 枚举值：paid=已支付，cancelled=已取消" in prompt
     assert "可选值: [paid、cancelled]" in prompt
+    assert "### 相关表和原始字段（用于补充字段理解和 SQL 回退）" in prompt
+    assert "**orders**：订单主表" in prompt
+    assert "order_id，类型: bigint，备注: 订单ID" in prompt
+    assert "**users**：用户表" in prompt
+    assert "secret_col" not in prompt
     assert "**orders** → **users**: orders.user_id = users.user_id (INNER JOIN, many_to_one)" in prompt
     assert "orders** → **items" not in prompt
 
@@ -546,6 +572,8 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     assert success.startswith("<query_result>")
     assert '"data": [{"id": 1}]' in success
     assert '"sql": "select 1"' in success
+    assert '"query_mode": "dsl2sql"' in success
+    assert '"confidence": 0.9' in success
     assert failed == "查询失败: 表不存在"
 
 
@@ -825,7 +853,7 @@ def test_semantic_query_tool_requires_explicit_member_ids_when_multiple_availabl
     assert "多个可用执行对象时必须传入本次要查询的 member_datasource_ids" in result
 
 
-def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_payload(monkeypatch):
+def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
     captured = {}
@@ -863,7 +891,69 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_payload(mon
     assert captured["user_query"] == "最新问题"
 
     legacy_sql_result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"sql": "select 1"}, "state": state}))
-    assert legacy_sql_result == "semantic_query_tool 执行失败: dsl 中禁止包含 sql，请传入语义 DSL"
+    assert legacy_sql_result == "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
+
+
+def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    async def fake_load_config(datasource_id, semantic_config_id):
+        assert datasource_id == "ds_a"
+        assert semantic_config_id == "cfg_a"
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    class FailGenerator:
+        def __init__(self, _config):
+            raise AssertionError("top-level sql should not go through DSL2SQL")
+
+    captured = {}
+
+    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
+        captured.update({
+            "sql": sql,
+            "datasource_id": datasource_id,
+            "member_datasource_ids": member_datasource_ids,
+            "user_id": user_id,
+            "semantic_config_id": semantic_config_id,
+            "query_text": query_text,
+            "conversation_id": conversation_id,
+            "operator_name": operator_name,
+        })
+        return {"success": True, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
+
+    state = {
+        "datasource_id": "ds_a",
+        "semantic_config_id": "cfg_a",
+        "member_datasource_ids": ["org_a"],
+        "user_id": "user_a",
+        "operator_name": "测试用户",
+        "conversation_id": "conv_a",
+        "messages": [HumanMessage(content="用复杂 SQL 查询")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FailGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "sql": "with t as (select 1 as v) select * from t",
+        "state": state,
+    }))
+    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+
+    assert captured == {
+        "sql": "with t as (select 1 as v) select * from t",
+        "datasource_id": "ds_a",
+        "member_datasource_ids": ["org_a"],
+        "user_id": "user_a",
+        "semantic_config_id": "cfg_a",
+        "query_text": "用复杂 SQL 查询",
+        "conversation_id": "conv_a",
+        "operator_name": "测试用户",
+    }
+    assert payload["query_mode"] == "nl2sql"
+    assert payload["confidence"] == 0.6
+    assert payload["sql"] == "with t as (select 1 as v) select * from t"
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
@@ -875,9 +965,11 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
 
     missing_config = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "state": {}}))
     bad_dsl = asyncio.run(agent_tools.semantic_query_tool.coroutine(["bad"], {"semantic_config": {}}))
+    mixed_payload = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["订单数"]}, "sql": "select 1", "state": {}}))
 
     assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
     assert bad_dsl == "semantic_query_tool 执行失败: dsl 必须是对象"
+    assert mixed_payload == "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
 
     async def fake_load_config(*_args, **_kwargs):
         return {"id": "cfg_a", "metrics": [], "dimensions": []}

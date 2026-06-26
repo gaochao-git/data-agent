@@ -550,7 +550,7 @@ class ExecuteSemanticInput(BaseModel):
         description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果",
     )
     metrics: List[str] = Field(
-        description="聚合查询使用的指标名称列表；明细查询必须为空，展示字段请放入 dimensions"
+        description="默认按明细/字段查询处理，metrics 必须为空；仅在用户明确要求统计、汇总、平均、总计、趋势、分组、排行，或用户原词精确命中完整指标名称/口径时填写"
     )
     dimensions: List[Union[str, Dict[str, str]]] = Field(
         default=[],
@@ -597,24 +597,20 @@ class ExecuteSemanticInput(BaseModel):
 # ============ Agent 工具输入模型 ============
 
 class SemanticQueryInput(BaseModel):
-    """语义查询工具的输入参数。接收 DSL，内部生成 SQL 后执行。"""
-    dsl: Dict[str, Any] = Field(
-        ...,
-        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset",
+    """查询工具的输入参数。优先接收 DSL；DSL 无法表达时接收只读 SQL。"""
+    dsl: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；与 sql 二选一",
+    )
+    sql: Optional[str] = Field(
+        default=None,
+        description="DSL 明确无法表达时使用的只读 SQL；与 dsl 二选一",
     )
     semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
     member_datasource_ids: List[str] = Field(
         default_factory=list,
         description="本次查询要执行的成员数据源 ID 列表；仅使用系统提示词中当前可用范围列出的执行对象",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_legacy_sql(cls, data: Any):
-        """拒绝旧版 sql 参数，避免模型绕过语义 DSL 编译链路。"""
-        if isinstance(data, dict) and "sql" in data:
-            raise ValueError("semantic_query_tool 已改为接收 dsl 参数，禁止传入 sql")
-        return data
 
 
 class CalculatorItem(BaseModel):
