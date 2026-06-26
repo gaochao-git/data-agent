@@ -382,20 +382,28 @@ def test_summarize_semantic_config_keeps_all_metrics_dimensions_and_business_val
     assert summary["dimensions"][149]["mapping"] == {"别名149_0": "标准149_0", "别名149_1": "标准149_1"}
 
 
-def test_selector_prompt_allows_detail_query_with_dimensions_without_metrics():
-    prompt = _build_selector_prompt("查询明细", [{
+def test_selector_prompt_matches_metrics_and_dimensions_by_required_semantics():
+    prompt = _build_selector_prompt("查询某类别今日订单数", [{
         "id": "sc_category",
-        "name": "分类明细",
-        "metrics_total": 0,
+        "name": "分类订单",
+        "metrics_total": 1,
         "dimensions_total": 6,
-        "metrics": [],
-        "dimensions": [{"name": "类别名称"}, {"name": "类别ID"}],
+        "metrics": [{"name": "订单数"}],
+        "dimensions": [{"name": "类别名称"}, {"name": "下单时间"}],
     }])
+    reducer_prompt = selector._build_reducer_prompt(
+        "查询某类别今日订单数",
+        chunk_results=[],
+        candidates=[{"id": "sc_category", "name": "分类订单", "coverage": "full", "confidence": "high"}],
+    )
 
-    assert "明细查询不要求 metrics" in prompt
-    assert "按 dimensions 判断展示字段和过滤字段是否可覆盖" in prompt
-    assert "不要因为 metrics_total=0 就判定不支持明细查询" in prompt
-    assert "聚合统计必须有可表达用户统计口径的 metrics" in prompt
+    for text in (prompt, reducer_prompt):
+        assert "不要先按“明细查询/聚合统计”做硬分类" in text
+        assert "统计口径" in text
+        assert "维度" in text
+        assert "不能只匹配指标，也不能只匹配维度" in text
+    assert "只有用户明确要求查看明细、列表、详情、记录时" in prompt
+    assert "仍必须同时检查指标和相关维度" in prompt
 
 
 def test_chunk_semantic_config_summaries_never_splits_single_config(monkeypatch):
