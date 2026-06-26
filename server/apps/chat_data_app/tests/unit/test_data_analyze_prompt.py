@@ -60,6 +60,16 @@ def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expressi
     assert "value` 必须使用数据库原始存储格式" in prompt
 
 
+def test_chat_data_query_prompt_prefers_user_named_dimension_field_over_similar_metric():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "用户点名查询某个字段时" in prompt
+    assert "如果该字段维护在 `dimensions` 中，就放入 `dimensions` 返回或筛选" in prompt
+    assert "不要因为字段看起来像数值就改用相近指标" in prompt
+    assert "不要把“查询余额/查看余额/我要余额”擅自理解成“金额汇总/余额汇总”等相近聚合指标" in prompt
+    assert "如果同一业务名称同时存在指标和维度" in prompt
+
+
 def test_chat_data_query_prompt_has_minimal_dsl_few_shots():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
@@ -78,6 +88,7 @@ def test_chat_data_query_prompt_template_format_keeps_json_examples_valid():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.format(
         current_time="2026-06-24 10:00:00",
         execution_target_info="",
+        datasource_group_context="",
         available_skills_context="",
         semantic_config_directory_info="",
         semantic_layer_config="",
