@@ -5,14 +5,12 @@ SQL Generator 工具函数
 """
 
 import json
-import os
 import re
 from typing import Any, Annotated
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
-from langgraph.types import interrupt
 
 from utils.logger import get_logger
 from ...schema import SemanticQueryInput
@@ -26,11 +24,6 @@ from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
 logger = get_logger(__name__)
-
-# ============ SQL 执行审批开关 ============
-# true = 需要用户确认才能执行 SQL，false = 直接执行（默认关闭）
-SQL_APPROVAL_ENABLED = os.getenv("SQL_APPROVAL_ENABLED", "false").lower() == "true"
-logger.info(f"[ChatData] SQL 执行审批: {'开启' if SQL_APPROVAL_ENABLED else '关闭'}")
 
 
 async def get_all_tables_async(datasource_id: str | None) -> list[dict[str, Any]]:
@@ -297,27 +290,6 @@ async def semantic_query_tool(
         return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
 
     logger.info(f"执行语义查询 SQL: {sql[:100]}...")
-
-    # Human-in-the-Loop: 根据开关决定是否需要用户确认
-    if SQL_APPROVAL_ENABLED:
-        # interrupt() 会暂停图执行，返回给用户确认
-        # 用户确认后通过 Command(resume=...) 恢复执行
-        approval = interrupt({
-            "args": {"sql": sql},  # 通用参数字段，不同工具有不同的 args
-            "message": "请确认是否执行此 SQL 查询"
-        })
-
-        # 检查用户响应
-        if isinstance(approval, dict):
-            action = approval.get("action", "approve")
-            if action == "reject":
-                return "用户取消了 SQL 执行"
-            # 如果用户修改了 SQL，使用修改后的版本
-            sql = approval.get("sql", sql)
-
-        logger.info(f"用户确认执行 SQL: {sql[:100]}...")
-    else:
-        logger.info(f"直接执行 SQL（审批已关闭）: {sql[:100]}...")
 
     # 获取数据源ID
     user_id = str(state.get("user_id") or "").strip() or None
@@ -644,11 +616,11 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
     return f"""{description_section}{business_description_section}{dialect_section}{metrics_section}{dimensions_section}{relationships_section}"""
 
 
-# ============ 直接执行 SQL（无审批，用于 Dashboard 面板刷新） ============
+# ============ 直接执行 SQL（用于 Dashboard 面板刷新） ============
 
 async def execute_sql_direct(sql: str, datasource_id: str = None) -> dict:
     """
-    直接执行 SQL 并返回结果（无审批流程）
+    直接执行 SQL 并返回结果。
 
     用于 Dashboard 面板数据刷新，不经过 Agent 工作流
 

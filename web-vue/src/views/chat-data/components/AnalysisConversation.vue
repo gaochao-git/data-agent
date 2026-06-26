@@ -1904,7 +1904,6 @@ const submitAnalysisQuery = async (
         finalizeUnfinishedToolCalls('error', error)
         setActiveAssistantError(error)
       },
-      () => {},
       (toolInfo) => {
         if (!toolInfo.tool_call_id) return
         const existing = toolCallsMap.value.get(toolInfo.tool_call_id)

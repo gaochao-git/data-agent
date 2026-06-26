@@ -279,37 +279,6 @@ async def test_stream_sql_generation_missing_semantic_config_and_graph_error(mon
 
 
 @pytest.mark.asyncio
-async def test_continue_execution_filters_disconnect_and_tool_args(monkeypatch):
-    class Graph:
-        async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(content="skip", msg_type="ai"), {"langgraph_node": "tool_llm"}
-            yield FakeChunk(), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "semantic_query_tool", "args": "{bad"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="执行失败", msg_type="tool", tool_call_id="tc1", name="semantic_query_tool"), {"langgraph_node": "tools"}
-            yield FakeChunk(content="done", msg_type="ai"), {"langgraph_node": "agent"}
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={"token_usage": {"total_tokens": 3}}, tasks=[])
-
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-
-    chunks = await collect_stream(handlers._continue_execution("conv", modified_sql="select 1", action="edit"))
-    text = "".join(chunks)
-    assert "semantic_query_tool" in text
-    assert "accumulated_args" not in text
-    assert "message_end" in text
-
-    class DisconnectRequest:
-        async def is_disconnected(self):
-            return True
-
-    chunks = await collect_stream(handlers._continue_execution("conv", request=DisconnectRequest()))
-    assert chunks == []
-
-
-@pytest.mark.asyncio
 async def test_semantic_config_fallback_and_execution_target_name_branches(monkeypatch):
     class LegacyManager:
         async def get_datasource_async(self, datasource_id):
@@ -431,34 +400,6 @@ async def test_stream_sql_generation_non_query_state_failure_loads_new_tables(mo
 
 
 @pytest.mark.asyncio
-async def test_continue_execution_error_and_pending_interrupt_paths(monkeypatch):
-    class ErrorGraph:
-        def astream(self, *_args, **_kwargs):
-            raise RuntimeError("continue failed")
-
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: ErrorGraph())
-    chunks = await collect_stream(handlers._continue_execution("conv"))
-    assert "continue failed" in "".join(chunks)
-
-    class PendingGraph:
-        async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(
-                values={"token_usage": {"total_tokens": 9}, "messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}])]},
-                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
-            )
-
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: PendingGraph())
-    chunks = await collect_stream(handlers._continue_execution("conv", modified_sql=None, action="approve"))
-    text = "".join(chunks)
-    assert "pending" in text
-    assert "message_end" in text
-
-
-@pytest.mark.asyncio
 async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
@@ -557,29 +498,6 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
 
 
 @pytest.mark.asyncio
-async def test_continue_execution_chunk_creates_buffer_and_finishes_without_token_usage(monkeypatch):
-    class Graph:
-        async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_only_chunk", "name": "semantic_query_tool", "args": '{"dsl":{"metrics":["订单数"]}}'}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="ok", msg_type="tool", tool_call_id="tc_only_chunk", name="semantic_query_tool"), {"langgraph_node": "tools"}
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={}, tasks=[])
-
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-
-    chunks = await collect_stream(handlers._continue_execution("conv", action="approve"))
-    text = "".join(chunks)
-
-    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in text
-    assert "message_end" in text
-    assert '"timestamp":' in text
-    assert '"usage"' not in text
-    assert text.rstrip().endswith("data: [DONE]")
-
-
-@pytest.mark.asyncio
 async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(monkeypatch):
     original_resolver = handlers._resolve_active_tool_call_id
 
@@ -614,33 +532,6 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
     assert "semantic_config_selected" not in text
     assert "semantic_config_select_required" not in text
     assert original_resolver(None, None, []) is None
-
-
-@pytest.mark.asyncio
-async def test_continue_execution_forced_missing_buffer_interrupt_without_usage(monkeypatch):
-    class Graph:
-        async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(tool_call_chunks=[{"id": None, "args": '{"forced":true}'}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="forced done", msg_type="tool", tool_call_id="forced"), {"langgraph_node": "tools"}
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(
-                values={"messages": [SimpleNamespace(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}])]},
-                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
-            )
-
-    monkeypatch.setattr(handlers, "_resolve_active_tool_call_id", lambda *_args: "forced")
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-
-    chunks = await collect_stream(handlers._continue_execution("conv", action="approve"))
-    text = "".join(chunks)
-
-    assert '"accumulated_args": {"forced": true}' in text
-    assert '"status": "pending"' in text
-    assert "message_end" in text
-    assert '"timestamp":' in text
-    assert '"usage"' not in text
 
 
 @pytest.mark.asyncio
@@ -818,36 +709,6 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
     assert "message_end" in text
     assert '"timestamp":' in text
     assert '"usage"' not in text
-
-
-@pytest.mark.asyncio
-async def test_continue_execution_thinking_duplicate_tool_and_empty_args(monkeypatch):
-    class Graph:
-        async def astream(self, *_args, **_kwargs):
-            yield FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "agent"}
-            yield FakeChunk(content="思考后输出", additional_kwargs={"reasoning_content": "继续想"}), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_calls=[
-                {"id": "tc_dup", "name": "semantic_query_tool"},
-                {"id": "tc_dup", "name": "semantic_query_tool"},
-            ]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc_empty", "name": "semantic_query_tool", "args": ""}]), {"langgraph_node": "agent"}
-            yield FakeChunk(content="empty args done", msg_type="tool", tool_call_id="tc_empty", name="semantic_query_tool"), {"langgraph_node": "tools"}
-            yield FakeChunk(content="missing buffer done", msg_type="tool", tool_call_id="missing", name="semantic_query_tool"), {"langgraph_node": "tools"}
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={}, tasks=[])
-
-    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
-    monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-
-    chunks = await collect_stream(handlers._continue_execution("conv", action="approve"))
-    text = "".join(chunks)
-
-    assert "event: thinking" in text
-    assert "思考后输出" in text
-    assert text.count('"tool_call_id": "tc_dup"') == 1
-    assert "empty args done" in text
-    assert "missing buffer done" in text
 
 
 @pytest.mark.asyncio

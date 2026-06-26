@@ -2,7 +2,6 @@
 SQL Generator 主图定义
 
 标准 Agent ↔ Tools 循环
-Human-in-the-Loop 通过工具内部的 interrupt() 函数实现
 
 支持语义查询模式：
 - query 模式统一添加指标集选择、DSL2SQL 和执行工具

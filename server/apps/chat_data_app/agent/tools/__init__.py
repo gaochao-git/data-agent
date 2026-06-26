@@ -2,7 +2,6 @@
 
 from .calculator import calculator_tool
 from .sql import (
-    SQL_APPROVAL_ENABLED,
     SemanticToolNames,
     build_semantic_prompt,
     execute_sql_direct,
@@ -17,7 +16,6 @@ from ...services.semantic_tools import create_semantic_config_selection_tools
 TOOLS = [semantic_query_tool, calculator_tool]
 
 __all__ = [
-    "SQL_APPROVAL_ENABLED",
     "SemanticToolNames",
     "TOOLS",
     "build_semantic_prompt",

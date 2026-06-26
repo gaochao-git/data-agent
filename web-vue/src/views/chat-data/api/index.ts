@@ -1252,29 +1252,6 @@ export function streamCompletion(conversationId: string, data: {
   })
 }
 
-/** 流式恢复执行 */
-export function streamResume(conversationId: string, data: {
-  action: 'approve' | 'edit' | 'reject'
-  modified_sql?: string
-  datasource_id?: string
-  semantic_config_id?: string
-  enable_thinking?: boolean
-}): Promise<Response> {
-  return requestStream({
-    url: `/agents/api/chatdata/conversations/${conversationId}/resume`,
-    method: 'POST',
-    data: {
-      action: data.action,
-      data: {
-        sql: data.action === 'edit' ? data.modified_sql : undefined,
-        datasource_id: data.datasource_id,
-        semantic_config_id: data.semantic_config_id,
-        enable_thinking: data.enable_thinking,
-      },
-    }
-  })
-}
-
 /** 流式快速生成 SQL */
 export function streamQuickSql(data: {
   query: string

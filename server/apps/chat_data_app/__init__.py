@@ -21,11 +21,10 @@ def _init_app() -> None:
         from .agent import get_chat_data_graph
         from .agent.data_analyze_graph import get_data_analyze_graph
         from .agent.sql_assist_graph import get_sql_assist_graph
-        from .handlers import data_analyze_completion_handler, sql_completion_handler, sql_resume_handler
+        from .handlers import data_analyze_completion_handler, sql_completion_handler
         from utils.lang_util.conversation_router import (
             register_agent,
             register_completion_handler,
-            register_resume_handler,
         )
     except Exception:
         traceback.print_exc()
@@ -37,7 +36,6 @@ def _init_app() -> None:
     register_agent(agent_id=DATA_ANALYZE_AGENT_ID, get_graph=get_data_analyze_graph)
     register_completion_handler(AGENT_ID, sql_completion_handler)
     register_completion_handler(DATA_ANALYZE_AGENT_ID, data_analyze_completion_handler)
-    register_resume_handler(AGENT_ID, sql_resume_handler)
 
 
 _init_app()

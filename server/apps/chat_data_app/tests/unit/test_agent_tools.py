@@ -1094,39 +1094,31 @@ def test_semantic_query_tool_accepts_temp_semantic_config_without_id(monkeypatch
     assert '"sql": "select temp"' in result
 
 
-def test_semantic_query_tool_approval_reject_and_rewrite_branches(monkeypatch):
+def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
     class FakeGenerator:
-        counter = 0
-
         def __init__(self, config):
             assert config["id"] == "cfg_a"
 
         def generate_sql(self, **_kwargs):
-            FakeGenerator.counter += 1
-            return {"success": True, "sql": f"select {FakeGenerator.counter}"}
+            return {"success": True, "sql": "select 1"}
 
     async def fake_load_config(*_args, **_kwargs):
         return {"id": "cfg_a", "metrics": [], "dimensions": []}
 
+    executed_sql = []
+
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
+        executed_sql.append(sql)
         return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
 
     state = {"semantic_config_id": "cfg_a"}
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
-    monkeypatch.setattr(agent_tools, "SQL_APPROVAL_ENABLED", True)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "reject"})
-    rejected = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
-    assert rejected == "用户取消了 SQL 执行"
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
 
-    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: {"action": "approve", "sql": "select 2"})
-    rewritten = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
-    assert '"sql": "select 2"' in rewritten
-
-    monkeypatch.setattr(agent_tools, "interrupt", lambda _payload: "approve")
-    default_approval = asyncio.run(agent_tools.semantic_query_tool.ainvoke({"dsl": {"metrics": ["指标"]}, "state": state}))
-    assert '"sql": "select 3"' in default_approval
+    assert executed_sql == ["select 1"]
+    assert '"sql": "select 1"' in result
 
 
 def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch():

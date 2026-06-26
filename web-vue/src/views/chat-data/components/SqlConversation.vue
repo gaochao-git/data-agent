@@ -1052,8 +1052,6 @@ const submitQuery = async (
         }
         handleAnalysisStreamEnd()
       },
-      // onPendingTool
-      () => {},
       // onRunningTool
       (toolInfo) => {
         if (toolInfo.tool_call_id) {

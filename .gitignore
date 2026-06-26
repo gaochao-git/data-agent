@@ -114,6 +114,7 @@ temp/
 *.rar
 
 server/.env
+server/conf/
 web/.env
 web-vue/.env
 web-vue-demo/.env

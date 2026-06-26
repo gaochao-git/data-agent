@@ -449,7 +449,7 @@
   - 是否保留同步主路径，仅对超长任务降级为后台运行
   - 是否拆为 `conversation` 与 `run task` 两层模型
   - 是否保留 SSE 负责短时增量反馈，长任务再转异步
-  - Human-in-the-Loop、checkpoint、会话历史如何与任务状态统一
+  - 人工确认节点、checkpoint、会话历史如何与任务状态统一
 
 ## 执行层建议
 

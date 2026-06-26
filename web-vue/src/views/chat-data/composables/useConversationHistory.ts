@@ -4,7 +4,7 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ToolCallInfo, Message, MessageSegment, PendingTool, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import type { ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
 import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
@@ -318,19 +318,14 @@ const applySemanticConfigSelectRequired = (message: Message, selectRequired: Sem
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>
   messages: Ref<Message[]>
-  setActiveMessageId?: (id: string | null) => void
-  setPendingTool?: (tool: PendingTool | null) => void
 }
 
 export function useConversationHistory({
   conversationId,
   messages,
-  setActiveMessageId,
-  setPendingTool,
 }: UseConversationHistoryOptions) {
   const isLoadingHistory = ref(false)
   const loadedConversationId = ref<string | null>(null)
-  const hasPendingTool = ref(false)
   const isFirstMessage = ref(true)
 
   // 加载历史消息
@@ -353,7 +348,6 @@ export function useConversationHistory({
       if (response.ok) {
         const data = await response.json()
         const historyMessages = data.data?.messages || []
-        const historyPendingTool = data.data?.pending_tool
         const historyTaskStages = normalizeTaskStages(data.data?.task_stages)
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
 
@@ -557,21 +551,6 @@ export function useConversationHistory({
 
           messages.value = displayMessages
           isFirstMessage.value = false
-
-          // 如果有待确认的工具，恢复状态
-          if (historyPendingTool && setPendingTool && setActiveMessageId) {
-            const lastAssistantMsg = displayMessages[displayMessages.length - 1]
-            if (lastAssistantMsg && lastAssistantMsg.role === 'assistant') {
-              setActiveMessageId(lastAssistantMsg.id)
-              setPendingTool({
-                tool_call_id: historyPendingTool.tool_call_id || '',
-                tool_name: historyPendingTool.tool_name || 'semantic_query_tool',
-                args: historyPendingTool.args || {},
-                message: historyPendingTool.message,
-              })
-              hasPendingTool.value = true
-            }
-          }
         }
       }
       loadedConversationId.value = convId
@@ -597,13 +576,11 @@ export function useConversationHistory({
   const resetHistory = () => {
     loadedConversationId.value = null
     isFirstMessage.value = true
-    hasPendingTool.value = false
   }
 
   return {
     isLoadingHistory,
     loadedConversationId,
-    hasPendingTool,
     isFirstMessage,
     loadHistory,
     resetHistory,

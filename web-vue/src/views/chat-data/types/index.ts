@@ -155,14 +155,6 @@ export interface ApiResponse<T> {
   data: T
 }
 
-// 待确认工具
-export interface PendingTool {
-  tool_call_id: string
-  tool_name: string
-  args: Record<string, unknown>
-  message?: string
-}
-
 // LangGraph 消息
 export interface ChatDataTokenUsage {
   used: number

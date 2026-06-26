@@ -4,10 +4,9 @@
  */
 
 import { ref } from 'vue'
-import { streamCompletion, streamResume } from '../api'
+import { streamCompletion } from '../api'
 import type {
   NL2SQLResult,
-  PendingTool,
   LangGraphMessage,
   SSEEventType,
   DashboardSpecPayload,
@@ -80,7 +79,6 @@ export function useSqlGenerator() {
     onResult?: (result: NL2SQLResult) => void,
     onStatus?: (status: string, message: string) => void,
     onError?: (error: string) => void,
-    onPendingTool?: (pendingTool: PendingTool) => void,
     onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void,
     semanticConfigId?: string | null,
     modelId?: string | null,
@@ -265,15 +263,7 @@ export function useSqlGenerator() {
             try {
               const data = JSON.parse(dataStr)
               // 根据 status 字段分发处理
-              if (data.status === 'pending') {
-                // 待确认的工具调用
-                onPendingTool?.({
-                  tool_call_id: data.tool_call_id || '',
-                  tool_name: data.tool_name,
-                  args: data.args || {},
-                  message: data.message,
-                })
-              } else if (data.status === 'running') {
+              if (data.status === 'running') {
                 // 工具开始执行
                 onRunningTool?.({
                   tool_name: data.tool_name,
@@ -340,163 +330,10 @@ export function useSqlGenerator() {
     }
   }
 
-  /**
-   * 恢复/继续执行
-   */
-  const onResume = async (
-    conversationId: string,
-    action: 'approve' | 'edit' | 'reject',
-    modifiedSql?: string,
-    onMessage?: (message: LangGraphMessage) => void,
-    onResult?: (result: NL2SQLResult) => void,
-    onError?: (error: string) => void,
-    onPendingTool?: (pendingTool: PendingTool) => void,
-    onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void,
-    datasourceId?: string,
-    semanticConfigId?: string,
-    enableThinking?: boolean
-  ): Promise<void> => {
-    loading.value = true
-    error.value = null
-
-    try {
-      const response = await streamResume(conversationId, {
-        action,
-        modified_sql: action === 'edit' ? modifiedSql : undefined,
-        datasource_id: datasourceId,
-        semantic_config_id: semanticConfigId,
-        enable_thinking: enableThinking === true,
-      })
-
-      if (!response.ok) {
-        // 尝试解析错误响应以获取更详细的错误信息
-        let errorMsg = `HTTP ${response.status}`
-        try {
-          const errorData = await response.json()
-          errorMsg = errorData.message || errorData.msg || errorData.detail || errorMsg
-        } catch {
-          // 忽略解析错误
-        }
-        throw new Error(errorMsg)
-      }
-
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('无法获取响应流')
-      }
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let streamEnded = false
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const { events, remaining } = parseSSEEvents(buffer)
-        buffer = remaining
-
-        for (const { event, data: dataStr } of events) {
-          // 处理结束事件
-          if (event === 'done' || dataStr === '[DONE]') {
-            streamEnded = true
-            break
-          }
-
-          // 处理错误事件
-          if (event === 'error') {
-            let errorMsg = dataStr
-            try {
-              const errorData = JSON.parse(dataStr)
-              errorMsg = errorData.error || errorData.message || errorMsg
-            } catch {
-              // 保留原始文本。
-            }
-            throw new Error(errorMsg)
-          }
-
-          if (event === 'thinking') {
-            try {
-              const data = JSON.parse(dataStr)
-              const content = typeof data?.content === 'string' ? data.content : ''
-              if (content) {
-                onMessage?.({
-                  type: 'thinking',
-                  content,
-                  timestamp: data?.timestamp,
-                  additional_kwargs: { reasoning_content: content },
-                } as LangGraphMessage)
-              }
-            } catch (err) {
-              console.error('解析 thinking 数据失败:', err, dataStr)
-            }
-            continue
-          }
-
-          // 处理 tool 事件
-          if (event === 'tool') {
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.status === 'pending') {
-                onPendingTool?.({
-                  tool_call_id: data.tool_call_id || '',
-                  tool_name: data.tool_name,
-                  args: data.args || {},
-                  message: data.message,
-                })
-              } else if (data.status === 'running') {
-                onRunningTool?.({
-                  tool_name: data.tool_name,
-                  tool_call_id: data.tool_call_id || '',
-                  args: data.args || {},
-                })
-              } else {
-                // completed/success 状态仍然是工具结果，显式标记为 tool，避免进入助手正文。
-                onMessage?.({ ...data, type: 'tool' } as LangGraphMessage)
-              }
-            } catch (err) {
-              console.error('解析 tool 数据失败:', err, dataStr)
-            }
-            continue
-          }
-
-          // 处理 message 事件
-          if (event === 'message') {
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.error) {
-                throw new Error(data.error)
-              }
-              onMessage?.(data as LangGraphMessage)
-            } catch (err) {
-              if (err instanceof Error && err.message !== dataStr) {
-                throw err
-              }
-              console.error('解析 SSE 数据失败:', err, dataStr)
-            }
-          }
-        }
-
-        if (streamEnded) break
-      }
-
-      // 流结束
-      onResult?.({} as NL2SQLResult)
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : '请求失败'
-      error.value = errorMsg
-      onError?.(errorMsg)
-    } finally {
-      loading.value = false
-    }
-  }
-
   return {
     loading,
     error,
     generateSqlStream,
     stopGeneration,
-    onResume,
   }
 }

@@ -19,7 +19,6 @@ from apps.chat_data_app.handlers import (
     _build_semantic_select_required_event,
     _extract_reasoning_content,
     _format_reasoning_for_display,
-    _continue_execution,
     _extract_select_semantic_config_payload,
     _format_execution_target_info,
     _format_sse,
@@ -43,7 +42,6 @@ from apps.chat_data_app.handlers import (
     data_analyze_completion_handler,
     prepare_data_analyze_workspace,
     sql_completion_handler,
-    sql_resume_handler,
 )
 from apps.chat_data_app.agent.tools import sql as agent_sql_tools
 
@@ -1441,68 +1439,7 @@ def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_co
     assert "event: done" in joined
 
 
-def test_continue_execution_streams_resume_events(monkeypatch):
-    import asyncio
-
-    fake_graph = _FakeGraph(
-        events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": "{\"dsl\":{\"metrics\":[\"订单数\"]}}"}]), {"langgraph_node": "agent"}),
-            (_FakeMessageChunk(content="执行完成", type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}),
-            (_FakeMessageChunk(content="继续完成"), {"langgraph_node": "agent"}),
-        ],
-        state=SimpleNamespace(tasks=[], values={"token_usage": {"total_tokens": 10}}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-
-    events = asyncio.run(_collect_async_iter(_continue_execution(
-        thread_id="conv_resume",
-        modified_sql="select 2",
-        action="approve",
-        semantic_config={"id": "cfg_a"},
-    )))
-
-    joined = "".join(events)
-    assert '"status": "running"' in joined
-    assert '"accumulated_args": {"dsl": {"metrics": ["订单数"]}}' in joined
-    assert "继续完成" in joined
-    assert events[-1] == "event: done\ndata: [DONE]\n\n"
-
-
-def test_continue_execution_pending_interrupt_error_and_disconnect(monkeypatch):
-    import asyncio
-
-    interrupt_state = SimpleNamespace(
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 3"}, "message": "继续确认"})])],
-        values={"token_usage": {"total_tokens": 7}, "messages": [SimpleNamespace(tool_calls=[{"id": "call_pending", "name": "semantic_query_tool"}])]},
-    )
-    pending_graph = _FakeGraph(events=[], state=interrupt_state)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: pending_graph)
-    pending_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_pending", modified_sql=None, action="approve")))
-    assert '"status": "pending"' in "".join(pending_events)
-    pending_text = "".join(pending_events)
-    assert 'event: message_end' in pending_text
-    assert '"usage": {"total_tokens": 7}' in pending_text
-    assert '"timestamp":' in pending_text
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: _FakeGraph(raise_on_stream=True))
-    error_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_error")))
-    assert 'event: error\ndata: {"error": "graph failed"}' in "".join(error_events)
-
-    class DisconnectRequest:
-        async def is_disconnected(self):
-            return True
-
-    disconnect_graph = _FakeGraph(events=[(_FakeMessageChunk(content="不应返回"), {"langgraph_node": "agent"})])
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: disconnect_graph)
-    disconnect_events = asyncio.run(_collect_async_iter(_continue_execution("conv_resume_disconnect", request=DisconnectRequest())))
-    assert disconnect_events == []
-
-
-def test_sql_completion_and_resume_handlers_wrap_streams(monkeypatch):
+def test_sql_completion_handler_wraps_stream(monkeypatch):
     import asyncio
 
     captured = {}
@@ -1515,14 +1452,8 @@ def test_sql_completion_and_resume_handlers_wrap_streams(monkeypatch):
         captured["stream_kwargs"] = kwargs
         yield _format_sse("done", "[DONE]")
 
-    async def fake_continue(**kwargs):
-        captured["continue_kwargs"] = kwargs
-        yield _format_sse("done", "[DONE]")
-
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", fake_get_or_create)
     monkeypatch.setattr("apps.chat_data_app.handlers._stream_sql_generation", fake_stream)
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg"}))
-    monkeypatch.setattr("apps.chat_data_app.handlers._continue_execution", fake_continue)
 
     response = asyncio.run(sql_completion_handler(
         conversation_id="conv_sql",
@@ -1537,18 +1468,6 @@ def test_sql_completion_and_resume_handlers_wrap_streams(monkeypatch):
     assert chunks == ["event: done\ndata: [DONE]\n\n"]
     assert captured["stream_kwargs"]["username"] == "测试用户"
     assert captured["stream_kwargs"]["member_datasource_ids"] == ["m1"]
-
-    resume = asyncio.run(sql_resume_handler(
-        "conv_sql",
-        action="edit",
-        data={"sql": "select 2", "datasource_id": "ds_a", "semantic_config_id": "cfg", "enable_thinking": True},
-    ))
-    chunks = asyncio.run(_collect_async_iter(resume.body_iterator))
-    assert chunks == ["event: done\ndata: [DONE]\n\n"]
-    assert captured["continue_kwargs"]["action"] == "approve"
-    assert captured["continue_kwargs"]["modified_sql"] == "select 2"
-    assert captured["continue_kwargs"]["semantic_config"] == {"id": "cfg"}
-    assert captured["continue_kwargs"]["enable_thinking"] is True
 
 
 def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monkeypatch):
