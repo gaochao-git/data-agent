@@ -8,7 +8,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import { cancelQueryTask, createConversation, deleteConversation, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
+import { cancelQueryTask, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import QuickQueries from './QuickQueries.vue'
@@ -870,8 +870,13 @@ let abortController: AbortController | null = null
 const aiGenerationSeq = ref(0)
 // 多轮对话 session
 const aiSessionId = ref<string>('')
-const showAiConversationHistoryDialog = ref(false)
+const showAiConversationHistoryPopover = ref(false)
 const aiConversationHistoryItems = ref<AiConversationRecord[]>([])
+const isLoadingAiConversationHistory = ref(false)
+const isLoadingMoreAiConversationHistory = ref(false)
+const aiConversationHistoryPage = ref(1)
+const aiConversationHistoryPageSize = 20
+const hasMoreAiConversationHistory = ref(false)
 const aiConversationBackendReady = ref(false)
 
 const readAiConversationHistory = (): AiConversationRecord[] => {
@@ -901,16 +906,65 @@ const getAiConversationTitle = (messages: AiChatMessage[]) => {
   return title.length > 32 ? `${title.slice(0, 32)}...` : title
 }
 
+const defaultAiConversationTitles = new Set(['', '新会话', '未命名会话'])
+const normalizeAiConversationTitle = (value: unknown) => {
+  const title = String(value || '').trim()
+  return title.length > 32 ? `${title.slice(0, 32)}...` : title
+}
+
+const isDefaultAiConversationTitle = (value: unknown) => {
+  return defaultAiConversationTitles.has(String(value || '').trim())
+}
+
+const normalizeAiConversationMessages = (messages: unknown): AiChatMessage[] => {
+  if (!Array.isArray(messages)) return []
+  return messages
+    .filter((message: any) => message?.role === 'user' || message?.role === 'assistant')
+    .map((message: any) => ({
+      role: message.role,
+      content: String(message.content || ''),
+      time: message.time,
+      isStreaming: false,
+    }))
+}
+
+const loadAiConversationMessages = async (conversationId: string) => {
+  const response = await getConversationHistory(conversationId)
+  const data = await response.json()
+  return normalizeAiConversationMessages(data?.data?.messages)
+}
+
 const getAiConversationHistoryItems = () => {
   const currentDatasourceId = props.datasourceId || ''
   return readAiConversationHistory().filter(item => item.datasourceId === currentDatasourceId)
 }
 
-const normalizeConversationList = (response: any) => {
+const normalizeConversationResponse = (response: any): { items: AiConversationRecord[]; hasMore: boolean } => {
   const raw = response?.data
-  if (Array.isArray(raw)) return raw
-  if (Array.isArray(raw?.conversations)) return raw.conversations
-  return []
+  const conversations = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.conversations)
+      ? raw.conversations
+      : []
+  const localHistoryMap = new Map(readAiConversationHistory().map(item => [item.id, item]))
+  const items = conversations.map((item: any) => {
+    const id = String(item?.id || item?.conversation_id || '').trim()
+    const localItem = localHistoryMap.get(id)
+    const messages = normalizeAiConversationMessages(item?.messages || localItem?.messages)
+    const messageTitle = messages.length > 0 ? getAiConversationTitle(messages) : ''
+    const titleCandidate = [item?.title, item?.first_message_preview, localItem?.title, messageTitle]
+      .map(normalizeAiConversationTitle)
+      .find(title => title && !isDefaultAiConversationTitle(title))
+    return {
+      id,
+      datasourceId: props.datasourceId || localItem?.datasourceId || '',
+      datasourceName: props.datasource?.group_name || localItem?.datasourceName || '',
+      title: titleCandidate || '未命名会话',
+      updatedAt: item?.update_time || item?.updated_at || item?.create_time || item?.created_at || localItem?.updatedAt || new Date().toISOString(),
+      messages,
+    }
+  }).filter((item: AiConversationRecord) => item.id)
+  return { items, hasMore: !Array.isArray(raw) && Boolean(raw?.has_more) }
 }
 
 const groupedAiConversationHistory = computed(() => {
@@ -934,25 +988,110 @@ const groupedAiConversationHistory = computed(() => {
 
 const refreshAiConversationHistoryItems = () => {
   aiConversationHistoryItems.value = getAiConversationHistoryItems()
+  hasMoreAiConversationHistory.value = false
 }
 
-const loadAiConversationHistoryItems = async () => {
+const hydrateAiConversationTitles = async (items: AiConversationRecord[]) => {
+  const targets = items.filter(item => isDefaultAiConversationTitle(item.title) && item.messages.length === 0)
+  if (targets.length === 0) return items
+  const titleEntries = await Promise.all(targets.map(async (item) => {
+    try {
+      const messages = await loadAiConversationMessages(item.id)
+      return [item.id, { title: getAiConversationTitle(messages), messages }] as const
+    } catch (err) {
+      console.error('加载 AI 辅助历史标题失败:', err)
+      return [item.id, null] as const
+    }
+  }))
+  const titleMap = new Map(titleEntries.filter(([, value]) => value).map(([id, value]) => [id, value!]))
+  return items.map(item => {
+    const hydrated = titleMap.get(item.id)
+    return hydrated ? { ...item, title: hydrated.title, messages: hydrated.messages } : item
+  })
+}
+
+const mergeAiConversationHistoryItems = (items: AiConversationRecord[]) => {
+  return Array.from(new Map(items.map(item => [item.id, item])).values())
+}
+
+const updateAiConversationTitleCache = (conversationId: string, title: string) => {
+  const normalizedTitle = normalizeAiConversationTitle(title)
+  if (!conversationId || !normalizedTitle || isDefaultAiConversationTitle(normalizedTitle)) return
+  aiConversationHistoryItems.value = aiConversationHistoryItems.value.map(item => (
+    item.id === conversationId ? { ...item, title: normalizedTitle } : item
+  ))
+  const updatedHistory = readAiConversationHistory().map(item => (
+    item.id === conversationId ? { ...item, title: normalizedTitle } : item
+  ))
+  writeAiConversationHistory(updatedHistory)
+}
+
+const generateAiConversationTitle = async (conversationId: string) => {
   try {
-    const response = await getConversations(SQL_ASSIST_AGENT_ID)
-    const conversations = normalizeConversationList(response)
-    aiConversationHistoryItems.value = conversations.map((item: any) => ({
-      id: item.id || item.conversation_id,
-      datasourceId: props.datasourceId || '',
-      datasourceName: props.datasource?.group_name || '',
-      title: item.title || '新会话',
-      updatedAt: item.update_time || item.create_time || new Date().toISOString(),
-      messages: [],
-    })).filter((item: AiConversationRecord) => item.id)
+    const response = await generateConversationTitle(conversationId)
+    if (response.status === 'success' && response.data?.title) {
+      updateAiConversationTitleCache(conversationId, response.data.title)
+      return response.data.title
+    }
+  } catch (err) {
+    console.error('生成 AI 辅助历史标题失败:', err)
+  }
+  return ''
+}
+
+const loadAiConversationHistoryItems = async (page = 1) => {
+  const isFirstPage = page === 1
+  if (isFirstPage ? isLoadingAiConversationHistory.value : isLoadingMoreAiConversationHistory.value) return
+  if (isFirstPage) {
+    isLoadingAiConversationHistory.value = true
+  } else {
+    isLoadingMoreAiConversationHistory.value = true
+  }
+  try {
+    const response = await getConversations(SQL_ASSIST_AGENT_ID, undefined, {
+      page,
+      page_size: aiConversationHistoryPageSize,
+    })
+    const { items, hasMore } = normalizeConversationResponse(response)
+    const hydratedItems = await hydrateAiConversationTitles(items)
+    aiConversationHistoryItems.value = isFirstPage
+      ? mergeAiConversationHistoryItems(hydratedItems)
+      : mergeAiConversationHistoryItems([...aiConversationHistoryItems.value, ...hydratedItems])
+    aiConversationHistoryPage.value = page
+    hasMoreAiConversationHistory.value = hasMore
     aiConversationBackendReady.value = true
   } catch (err) {
     console.error('获取 AI 辅助历史对话失败:', err)
     aiConversationBackendReady.value = false
-    refreshAiConversationHistoryItems()
+    if (isFirstPage) {
+      refreshAiConversationHistoryItems()
+    }
+  } finally {
+    if (isFirstPage) {
+      isLoadingAiConversationHistory.value = false
+    } else {
+      isLoadingMoreAiConversationHistory.value = false
+    }
+  }
+}
+
+const loadMoreAiConversationHistoryItems = async () => {
+  if (
+    isLoadingAiConversationHistory.value ||
+    isLoadingMoreAiConversationHistory.value ||
+    !hasMoreAiConversationHistory.value
+  ) {
+    return
+  }
+  await loadAiConversationHistoryItems(aiConversationHistoryPage.value + 1)
+}
+
+const handleAiConversationHistoryScroll = (event: Event) => {
+  const container = event.currentTarget as HTMLElement | null
+  if (!container) return
+  const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+  if (distanceToBottom <= 40) {
+    void loadMoreAiConversationHistoryItems()
   }
 }
 
@@ -1460,6 +1599,7 @@ const handleAiGenerate = async () => {
 
   const userMessage = aiQuery.value.trim()
   const generationSeq = aiGenerationSeq.value + 1
+  const isFirstAiMessage = aiMessages.value.filter(item => item.role === 'user').length === 0
   aiGenerationSeq.value = generationSeq
   const now = new Date()
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
@@ -1554,6 +1694,9 @@ const handleAiGenerate = async () => {
           lastMessage.isStreaming = false
         }
         saveCurrentAiConversation()
+        if (isFirstAiMessage && conversationId) {
+          void generateAiConversationTitle(conversationId)
+        }
         scrollAiOutputToBottom()
       }
     }
@@ -1643,10 +1786,9 @@ const clearAiMessages = () => {
   ElMessage.success('已新建会话')
 }
 
-const handleAiConversationHistory = async () => {
+const handleAiConversationHistoryPopoverShow = () => {
   saveCurrentAiConversation()
-  await loadAiConversationHistoryItems()
-  showAiConversationHistoryDialog.value = true
+  void loadAiConversationHistoryItems(1)
 }
 
 const handleLoadAiConversation = async (item: AiConversationRecord) => {
@@ -1663,54 +1805,16 @@ const handleLoadAiConversation = async (item: AiConversationRecord) => {
     aiMessages.value = item.messages.map(message => ({ ...message, isStreaming: false }))
   } else {
     try {
-      const response = await getConversationHistory(item.id)
-      const data = await response.json()
-      const historyMessages = data.data?.messages || []
-      aiMessages.value = historyMessages
-        .filter((message: any) => message.role === 'user' || message.role === 'assistant')
-        .map((message: any) => ({
-          role: message.role,
-          content: message.content || '',
-          isStreaming: false,
-        }))
+      aiMessages.value = await loadAiConversationMessages(item.id)
     } catch (err) {
       console.error('加载 AI 辅助历史对话失败:', err)
       aiMessages.value = []
     }
   }
   aiQuery.value = ''
-  showAiConversationHistoryDialog.value = false
+  showAiConversationHistoryPopover.value = false
   showAiPanel.value = true
   scrollAiOutputToBottom(true)
-}
-
-const handleDeleteAiConversation = async (item: AiConversationRecord) => {
-  if (aiConversationBackendReady.value) {
-    try {
-      await deleteConversation(item.id)
-    } catch (err) {
-      console.error('删除 AI 辅助历史对话失败:', err)
-      ElMessage.error('删除失败，请稍后重试')
-      return
-    }
-  }
-  const nextItems = readAiConversationHistory().filter(historyItem => historyItem.id !== item.id)
-  writeAiConversationHistory(nextItems)
-  refreshAiConversationHistoryItems()
-  if (aiConversationBackendReady.value) {
-    await loadAiConversationHistoryItems()
-  }
-  if (aiSessionId.value === item.id) {
-    if (isAiGenerating.value) {
-      handleStopGenerate()
-    }
-    isAiGenerating.value = false
-    abortController = null
-    aiMessages.value = []
-    aiQuery.value = ''
-    aiSessionId.value = safeRandomId()
-    aiConversationBackendReady.value = false
-  }
 }
 
 // 当前结果
@@ -2021,13 +2125,72 @@ defineExpose({
         <div v-if="showAiPanel" class="relative flex flex-col min-h-0 overflow-hidden bg-[#FAFAFA] border-l border-black/[0.06]" :style="{ width: `${100 - editorWidthPercent}%` }">
           <!-- AI 面板工具按钮 -->
           <div class="absolute top-3 left-3 flex items-center gap-3 z-10">
-            <button
-              class="w-8 h-8 flex items-center justify-center border border-black/[0.08] rounded-[15px] bg-white text-[#64748b] shadow-[0_4px_12px_rgba(15,23,42,0.12)] cursor-pointer transition-all duration-150 hover:-translate-y-px hover:text-[#1677FF]"
-              title="历史对话"
-              @click="handleAiConversationHistory"
+            <el-popover
+              v-model:visible="showAiConversationHistoryPopover"
+              trigger="hover"
+              placement="bottom-start"
+              :width="360"
+              :show-after="120"
+              :hide-after="150"
+              :offset="10"
+              popper-class="ai-history-popover"
+              @show="handleAiConversationHistoryPopoverShow"
             >
-              <i class="fa-solid fa-clock-rotate-left text-[16px]"></i>
-            </button>
+              <template #reference>
+                <button
+                  class="w-8 h-8 flex items-center justify-center border border-black/[0.08] rounded-[15px] bg-white text-[#64748b] shadow-[0_4px_12px_rgba(15,23,42,0.12)] cursor-pointer transition-all duration-150 hover:-translate-y-px hover:text-[#1677FF]"
+                  title="历史对话"
+                >
+                  <i class="fa-solid fa-clock-rotate-left text-[16px]"></i>
+                </button>
+              </template>
+
+              <div class="ai-history-panel">
+                <div class="px-4 py-3 border-b border-slate-100 text-base font-semibold text-slate-800">AI 生成 SQL 历史会话</div>
+                <div class="ai-history-list" @scroll="handleAiConversationHistoryScroll">
+                  <div v-if="isLoadingAiConversationHistory" class="flex flex-col items-center justify-center gap-2 px-4 py-10 text-gray-400 text-xs">
+                    <i class="fa-solid fa-spinner fa-spin text-lg opacity-70"></i>
+                    <span>加载中...</span>
+                  </div>
+                  <div v-else-if="aiConversationHistoryItems.length === 0" class="flex flex-col items-center justify-center gap-2 px-4 py-10 text-gray-400 text-xs">
+                    <i class="fa-regular fa-comments text-2xl opacity-50"></i>
+                    <span>暂无会话</span>
+                  </div>
+
+                  <template v-else>
+                    <template v-for="group in groupedAiConversationHistory" :key="group.label">
+                      <div class="mb-2">
+                        <div class="px-2 py-1 text-[11px] text-gray-400 font-medium">{{ group.label }}</div>
+                        <div
+                          v-for="item in group.items"
+                          :key="item.id"
+                          :class="[
+                            'group flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-150',
+                            aiSessionId === item.id ? 'bg-gradient-to-br from-[#1f82d9]/10 to-[#1f82d9]/[0.05]' : 'hover:bg-black/[0.04]'
+                          ]"
+                          @click="handleLoadAiConversation(item)"
+                        >
+                          <i :class="['fa-regular fa-message text-sm shrink-0', aiSessionId === item.id ? 'text-[#1f82d9]' : 'text-gray-400']"></i>
+                          <span
+                            :class="[
+                              'flex-1 text-[13px] overflow-hidden text-ellipsis whitespace-nowrap',
+                              aiSessionId === item.id ? 'text-[#1f82d9] font-medium' : 'text-gray-700'
+                            ]"
+                            :title="item.title"
+                          >
+                            {{ item.title }}
+                          </span>
+                        </div>
+                      </div>
+                    </template>
+                    <div v-if="isLoadingMoreAiConversationHistory" class="flex items-center justify-center gap-2 px-4 py-3 text-gray-400 text-xs">
+                      <i class="fa-solid fa-spinner fa-spin opacity-70"></i>
+                      <span>加载中...</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </el-popover>
             <button
               class="w-8 h-8 flex items-center justify-center border border-black/[0.08] rounded-[15px] bg-white text-[#334155] shadow-[0_4px_12px_rgba(15,23,42,0.12)] cursor-pointer transition-all duration-150 hover:-translate-y-px hover:text-[#1677FF]"
               title="新建会话"
@@ -2381,44 +2544,6 @@ defineExpose({
     </div>
   </el-dialog>
 
-  <el-dialog
-    :model-value="showAiConversationHistoryDialog"
-    title="AI 辅助历史对话"
-    width="360px"
-    class="ai-history-dialog"
-    append-to-body
-    @update:model-value="showAiConversationHistoryDialog = $event"
-  >
-    <div class="ai-history-list">
-      <div v-if="aiConversationHistoryItems.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
-        <i class="fa-regular fa-message text-2xl opacity-50"></i>
-        <span>暂无会话</span>
-      </div>
-
-      <template v-for="group in groupedAiConversationHistory" :key="group.label">
-        <div class="mb-2">
-          <div class="py-2 text-xs text-gray-400 font-medium uppercase tracking-wide">{{ group.label }}</div>
-          <div
-            v-for="item in group.items"
-            :key="item.id"
-            class="group flex items-center gap-2 py-3 cursor-pointer transition-all duration-150"
-            :class="aiSessionId === item.id ? 'text-blue-500 font-medium' : 'text-gray-800 hover:text-blue-500'"
-            @click="handleLoadAiConversation(item)"
-          >
-            <i :class="['fa-solid text-xs shrink-0', item.id.charCodeAt(0) % 2 === 0 ? 'fa-chart-line' : 'fa-table-cells']" :style="{ color: item.id.charCodeAt(0) % 2 === 0 ? '#9fd5d1' : '#9dd7c9' }"></i>
-            <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed" :title="item.title">{{ item.title }}</span>
-            <button
-              class="hidden group-hover:flex w-5 h-5 items-center justify-center border-none rounded bg-transparent text-gray-300 cursor-pointer hover:bg-red-50 hover:text-red-500"
-              title="删除"
-              @click.stop="handleDeleteAiConversation(item)"
-            >
-              <i class="fa-solid fa-xmark text-xs"></i>
-            </button>
-          </div>
-        </div>
-      </template>
-    </div>
-  </el-dialog>
 </template>
 
 <style scoped>
@@ -2456,31 +2581,16 @@ defineExpose({
 
 .ai-history-list {
   max-height: 420px;
-  min-height: 260px;
   overflow-y: auto;
-  padding: 8px 16px 16px;
+  padding: 8px;
 }
 
-:deep(.ai-history-dialog) {
-  border-radius: 20px;
-  overflow: hidden;
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
-}
-
-:deep(.ai-history-dialog .el-dialog__header) {
-  margin: 0;
-  padding: 24px 32px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-:deep(.ai-history-dialog .el-dialog__title) {
-  color: #1e293b;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-:deep(.ai-history-dialog .el-dialog__body) {
+:global(.ai-history-popover.el-popper) {
   padding: 0;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
 }
 
 /* Markdown 渲染样式 - 需要 :deep() 穿透 */
