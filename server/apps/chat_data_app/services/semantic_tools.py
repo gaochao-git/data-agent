@@ -115,6 +115,13 @@ def extract_semantic_config_id(state: Optional[Dict]) -> Optional[str]:
     return semantic_config_id or None
 
 
+def extract_datasource_group_context(state: Optional[Dict]) -> str:
+    """从 state 中提取当前数据源组智能问数说明。"""
+    if not state:
+        return ""
+    return str(state.get("datasource_group_context") or "").strip()
+
+
 def _is_semantic_config_directory_query(query: str) -> bool:
     """判断用户是否在询问当前可见指标集目录，而不是要选择一个指标集查数。"""
     text = str(query or "").strip()
@@ -375,6 +382,7 @@ def create_semantic_config_selection_tools(
                 user_query=user_query,
                 model_id=model_id,
                 user_id=bound_user_id,
+                datasource_group_context=extract_datasource_group_context(state),
             )
             selected_config_id = str((selection or {}).get("selected_config_id") or "").strip()
             selected_config = await load_runtime_semantic_config(datasource_id, selected_config_id) if selected_config_id else None

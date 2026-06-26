@@ -115,6 +115,8 @@ class SqlGeneratorState(TypedDict):
     require_explicit_member_selection: NotRequired[bool]
     # 当前可用执行对象说明，供大模型理解可查询范围
     execution_target_info: str
+    # 当前数据源组的智能问数说明，供大模型理解数据源组级规则和示例
+    datasource_group_context: NotRequired[str]
     # 当前可见指标集轻量目录说明，供大模型回答指标集范围类问题
     semantic_config_directory_info: str
     # 当前轮模型上下文 token 占用估算

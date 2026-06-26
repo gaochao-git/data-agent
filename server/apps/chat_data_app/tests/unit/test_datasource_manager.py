@@ -239,6 +239,7 @@ class _SaveStore:
             "template_datasource_id": "ORG_A",
             "group_name": "测试组",
             "ds_description": "",
+            "query_context": "旧说明",
             "source_type": "hive",
             "query_executor_type": "http",
             "source_config": {"database": "dw"},
@@ -776,6 +777,7 @@ def test_save_datasource_keeps_hive_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
+    assert fake_store.saved_kwargs["query_context"] == ""
     assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|dw\n机构B|ORG_B|http|dw"
     assert [item["member_datasource_id"] for item in saved["member_sources"]] == ["ORG_A", "ORG_B"]
 
@@ -811,6 +813,7 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
     ))
 
     assert fake_store.saved_kwargs is not None
+    assert fake_store.saved_kwargs["query_context"] == ""
     assert fake_store.saved_kwargs["member_sources_text"] == "机构A|ORG_A|http|test_db\n机构B|ORG_B|http|test_db"
 
 

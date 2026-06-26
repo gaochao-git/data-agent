@@ -286,6 +286,7 @@ class DatasourceGroupCreateRequest(BaseModel):
     """数据源组创建请求"""
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
+    query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
@@ -296,6 +297,7 @@ class DatasourceGroupUpdateRequest(BaseModel):
     """数据源组更新请求"""
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
+    query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")

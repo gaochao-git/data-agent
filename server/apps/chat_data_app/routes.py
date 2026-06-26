@@ -1084,6 +1084,7 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
             template_source_config=template_source,
             member_source_configs=member_sources,
             tables=tables,
+            query_context=(body.query_context or "").strip(),
             create_by=user_id,
             create_by_name=username,
         )
@@ -1246,6 +1247,7 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
             template_source_config=template_source,
             member_source_configs=member_sources,
             tables=tables,
+            query_context=(body.query_context or "").strip(),
             update_by=user_id,
             update_by_name=username,
         )

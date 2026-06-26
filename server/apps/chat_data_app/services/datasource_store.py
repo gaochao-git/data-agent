@@ -329,6 +329,7 @@ class DataSourceDBStore:
             "group_id": model.group_id,
             "group_name": model.group_name,
             "group_desc": model.group_desc,
+            "query_context": model.query_context,
             "source_type": model.source_type,
             "template_source": model.template_source,
             "member_sources_text": model.member_sources_text,
@@ -398,6 +399,7 @@ class DataSourceDBStore:
             "member_sources_text": row.get("member_sources_text") or "",
             "group_name": row.get("group_name") or "",
             "ds_description": row.get("group_desc") or "",
+            "query_context": row.get("query_context") or "",
             "source_type": row.get("source_type") or "",
             "query_executor_type": parsed_template.get("query_executor_type") or "direct",
             "create_time": _format_time(row.get("create_time")) or "",
@@ -840,6 +842,7 @@ class DataSourceDBStore:
         source_type: str = "",
         template_source: str = "",
         member_sources_text: Optional[str] = None,
+        query_context: Optional[str] = None,
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
@@ -849,6 +852,7 @@ class DataSourceDBStore:
             group_id=group_id,
             group_name=group_name,
             group_desc=group_desc,
+            query_context=query_context,
             source_type=source_type,
             template_source=template_source,
             member_sources_text=member_sources_text or template_source,
@@ -863,6 +867,7 @@ class DataSourceDBStore:
                 stmt.on_duplicate_key_update(
                     group_name=stmt.inserted.group_name,
                     group_desc=stmt.inserted.group_desc,
+                    query_context=stmt.inserted.query_context,
                     source_type=stmt.inserted.source_type,
                     template_source=stmt.inserted.template_source,
                     member_sources_text=stmt.inserted.member_sources_text,
@@ -877,6 +882,7 @@ class DataSourceDBStore:
         group_id: str,
         group_name: Any = _UNSET,
         group_desc: Any = _UNSET,
+        query_context: Any = _UNSET,
         source_type: Any = _UNSET,
         template_source: Any = _UNSET,
         member_sources_text: Any = _UNSET,
@@ -891,6 +897,8 @@ class DataSourceDBStore:
             values["group_name"] = group_name
         if group_desc is not _UNSET:
             values["group_desc"] = group_desc
+        if query_context is not _UNSET:
+            values["query_context"] = query_context
         if source_type is not _UNSET:
             values["source_type"] = source_type
         if template_source is not _UNSET:

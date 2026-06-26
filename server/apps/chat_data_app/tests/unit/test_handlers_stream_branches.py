@@ -304,9 +304,9 @@ async def test_semantic_config_fallback_and_execution_target_name_branches(monke
     monkeypatch.setattr(handlers, "get_datasource_manager", lambda: NamelessManager())
     info = await handlers._build_execution_target_info_async("ds_a")
 
-    assert "1. 机构名称：执行对象1" in info
-    assert "2. 机构名称：m2；成员数据源ID：m2" in info
-    assert "3. 机构名称：具名执行对象" in info
+    assert "1. 执行对象数据源名称：执行对象1" in info
+    assert "2. 执行对象数据源名称：m2；执行对象数据源ID：m2" in info
+    assert "3. 执行对象数据源名称：具名执行对象" in info
 
 
 @pytest.mark.asyncio

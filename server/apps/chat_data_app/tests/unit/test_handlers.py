@@ -318,14 +318,14 @@ def test_build_execution_target_info_async_formats_single_and_multi_targets(monk
     single = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"]))
     multi = asyncio.run(_build_execution_target_info_async("ds_a", None))
 
-    assert "当前可用范围只有 1 个可用执行对象" in single
-    assert "1. 机构名称：杭州库；成员数据源ID：m1" in single
-    assert "机构编码：ORG_HZ" in single
-    assert "2 个可用执行对象" in multi
-    assert "用户未指定机构，默认查询第 1 个机构" in multi
+    assert "当前可用范围只有 1 个可用执行对象数据源" in single
+    assert "1. 执行对象数据源名称：杭州库；执行对象数据源ID：m1" in single
+    assert "执行对象数据源编码：ORG_HZ" in single
+    assert "2 个可用执行对象数据源" in multi
+    assert "用户未指定执行对象数据源，默认查询第 1 个执行对象数据源" in multi
     assert "不要默认全部执行" in multi
-    assert "2. 机构名称：宁波库；成员数据源ID：m2" in multi
-    assert "机构编码：ORG_NB" in multi
+    assert "2. 执行对象数据源名称：宁波库；执行对象数据源ID：m2" in multi
+    assert "执行对象数据源编码：ORG_NB" in multi
 
 
 def test_build_execution_target_info_async_can_show_all_targets_when_selected(monkeypatch):
@@ -336,6 +336,7 @@ def test_build_execution_target_info_async_can_show_all_targets_when_selected(mo
     class FakeDatasourceManager:
         async def get_datasource_async(self, datasource_id):
             return {
+                "query_context": "当前数据源组按执行对象数据源分库",
                 "source_type": "hive",
                 "query_executor_type": "direct",
                 "member_sources": [
@@ -367,9 +368,9 @@ def test_build_execution_target_info_async_can_show_all_targets_when_selected(mo
     all_targets = asyncio.run(_build_execution_target_info_async("ds_a", ["m1"], include_all_available=True))
 
     assert calls == [["m1"], ["m1", "m2"]]
-    assert "只有 1 个可用执行对象" in selected_only
-    assert "2 个可用执行对象" in all_targets
-    assert "成员数据源ID：m2" in all_targets
+    assert "只有 1 个可用执行对象数据源" in selected_only
+    assert "2 个可用执行对象数据源" in all_targets
+    assert "执行对象数据源ID：m2" in all_targets
 
 
 def test_get_execution_targets_async_expands_all_members(monkeypatch):
@@ -416,8 +417,8 @@ def test_format_execution_target_info_prefers_long_exact_member_name():
     )
 
     assert matched_member_ids == ["ORG_CODE2"]
-    assert "## 用户问题中的执行对象匹配" in info
-    assert "member_datasource_id：ORG_CODE2" in info
+    assert "## 用户问题中的执行对象数据源匹配" in info
+    assert "执行对象数据源ID：ORG_CODE2" in info
 
 
 def test_format_execution_target_info_matches_all_execution_targets():
@@ -1197,6 +1198,7 @@ def test_stream_sql_generation_query_mode_exposes_all_available_members(monkeypa
     class FakeDatasourceManager:
         async def get_datasource_async(self, datasource_id):
             return {
+                "query_context": "当前数据源组按执行对象数据源分库",
                 "source_type": "hive",
                 "query_executor_type": "direct",
                 "member_sources": [
@@ -1242,8 +1244,9 @@ def test_stream_sql_generation_query_mode_exposes_all_available_members(monkeypa
 
     assert fake_graph.initial_state["member_datasource_ids"] == []
     assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1", "m2"]
-    assert "2 个可用执行对象" in fake_graph.initial_state["execution_target_info"]
-    assert "成员数据源ID：m2" in fake_graph.initial_state["execution_target_info"]
+    assert "2 个可用执行对象数据源" in fake_graph.initial_state["execution_target_info"]
+    assert "执行对象数据源ID：m2" in fake_graph.initial_state["execution_target_info"]
+    assert fake_graph.initial_state["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
 
 
 def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatch):
@@ -1281,8 +1284,8 @@ def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatc
 
     assert fake_graph.initial_state["member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1"]
-    assert "只有 1 个可用执行对象" in fake_graph.initial_state["execution_target_info"]
-    assert "成员数据源ID：m2" not in fake_graph.initial_state["execution_target_info"]
+    assert "只有 1 个可用执行对象数据源" in fake_graph.initial_state["execution_target_info"]
+    assert "执行对象数据源ID：m2" not in fake_graph.initial_state["execution_target_info"]
 
 
 def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
@@ -1376,7 +1379,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     joined = "".join(temp_events)
     assert "语义查询完成" in joined
     assert fake_graph.initial_state["tables_ddl_info"] == ""
-    assert "机构名称：对象" in fake_graph.initial_state["execution_target_info"]
+    assert "执行对象数据源名称：对象" in fake_graph.initial_state["execution_target_info"]
     assert fake_graph.initial_state["semantic_config_directory_info"] == ""
 
 

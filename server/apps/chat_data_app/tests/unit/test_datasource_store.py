@@ -39,6 +39,7 @@ def _group_model(group_id: str = "group_a", group_name: str = "订单组", is_de
         group_id=group_id,
         group_name=group_name,
         group_desc="描述",
+        query_context="智能问数说明",
         source_type="mysql",
         template_source="机构A|ORG_A|direct|127.0.0.1:3306:demo",
         member_sources_text="机构A|ORG_A|direct|127.0.0.1:3306:demo\n机构B|ORG_B|http|127.0.0.2:3306:demo",

@@ -16,6 +16,7 @@ from apps.chat_data_app.services.semantic_tools import (
     SemanticToolHandler,
     create_semantic_config_selection_tools,
     extract_datasource_id,
+    extract_datasource_group_context,
     extract_semantic_config_id,
     extract_user_query,
     format_semantic_config_directory_for_prompt,
@@ -35,6 +36,9 @@ def test_extract_datasource_id_from_state():
     assert extract_semantic_config_id(None) is None
     assert extract_semantic_config_id({"semantic_config_id": " sc_001 "}) == "sc_001"
     assert extract_semantic_config_id({"semantic_config_id": ""}) is None
+    assert extract_datasource_group_context({"datasource_group_context": "  分库说明  "}) == "分库说明"
+    assert extract_datasource_group_context({}) == ""
+    assert extract_datasource_group_context(None) == ""
 
 
 def test_extract_user_query_reads_last_human_message():
@@ -322,8 +326,20 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
 def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
     captured = {}
 
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
-        captured.update({"datasource_id": datasource_id, "user_query": user_query, "model_id": model_id, "user_id": user_id})
+    async def fake_select_semantic_config_for_query(
+        datasource_id,
+        user_query,
+        model_id=None,
+        user_id=None,
+        datasource_group_context=None,
+    ):
+        captured.update({
+            "datasource_id": datasource_id,
+            "user_query": user_query,
+            "model_id": model_id,
+            "user_id": user_id,
+            "datasource_group_context": datasource_group_context,
+        })
         return {
             "selected_config_id": "sc_a",
             "selected_config_name": "订单分析",
@@ -345,19 +361,23 @@ def test_select_semantic_config_tool_uses_bound_datasource_id(monkeypatch):
         datasource_id="ds_bound",
         user_id="u1",
     )[0]
-    result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
+    result = asyncio.run(tool.ainvoke({
+        "query": "查询订单金额",
+        "state": {"datasource_group_context": "当前数据源组按执行对象数据源分库"},
+    }))
     payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
 
     assert captured["datasource_id"] == "ds_bound"
     assert captured["user_query"] == "查询订单金额"
     assert captured["model_id"] == "model_a"
     assert captured["user_id"] == "u1"
+    assert captured["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
     assert captured["load_args"] == ("ds_bound", "sc_a")
     assert payload["selected"] is True
 
 
 def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monkeypatch):
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
         assert datasource_id == "ds_bound"
         return {
             "coverage": "partial",
@@ -398,7 +418,7 @@ def test_select_semantic_config_tool_returns_query_plan_semantic_summaries(monke
 def test_select_semantic_config_tool_skips_duplicate_and_missing_task_summaries(monkeypatch):
     loaded = []
 
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
         return {
             "coverage": "partial",
             "query_plan": {
@@ -431,7 +451,7 @@ def test_select_semantic_config_tool_skips_duplicate_and_missing_task_summaries(
 
 
 def test_select_semantic_config_tool_omits_empty_query_plan_semantic_summaries(monkeypatch):
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
         return {
             "coverage": "partial",
             "query_plan": {

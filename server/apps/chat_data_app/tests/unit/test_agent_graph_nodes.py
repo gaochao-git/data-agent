@@ -42,6 +42,8 @@ def test_mode_config_and_prompt_formatters():
     assert nodes.format_execution_target_info_for_llm("") == ""
     assert nodes.format_semantic_config_directory_info_for_llm("  ## 当前可见指标集目录  ") == "\n## 当前可见指标集目录\n"
     assert nodes.format_semantic_config_directory_info_for_llm("") == ""
+    assert nodes.format_datasource_group_context_for_llm("  规则说明  ") == "\n## 数据源组智能问数说明\n规则说明\n"
+    assert nodes.format_datasource_group_context_for_llm("") == ""
     assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
     assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context(None, "query")
     assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None, "query")
@@ -103,6 +105,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
         "query_results": [{"id": "r1", "sql": "select 1", "columns": ["c1"], "row_count": 1}],
         "mode": "query",
         "execution_target_info": "当前机构A",
+        "datasource_group_context": "当前数据源组按执行对象数据源分库",
         "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析",
     })
 
@@ -116,6 +119,8 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "当前已选择指标集" in system_prompt
     assert "semantic_config_id: sc_a" in system_prompt
     assert "当前机构A" in system_prompt
+    assert "数据源组智能问数说明" in system_prompt
+    assert "当前数据源组按执行对象数据源分库" in system_prompt
     assert "当前可见指标集目录" in system_prompt
     assert "1. 名称：订单分析" in system_prompt
     assert "可用的查询结果" in system_prompt

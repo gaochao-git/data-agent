@@ -288,6 +288,7 @@ class _FakeDatasourceManager:
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
+        query_context: str = "",
         update_by: str = "",
         update_by_name: str = "",
     ):
@@ -296,6 +297,7 @@ class _FakeDatasourceManager:
             return None
         item["group_name"] = group_name
         item["ds_description"] = group_desc
+        item["query_context"] = query_context
         item["source_type"] = source_type
         item["query_executor_type"] = template_source_config.get("query_executor_type") or "direct"
         item["source_config"] = dict(template_source_config)
@@ -319,6 +321,7 @@ class _FakeDatasourceManager:
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
+        query_context: str = "",
         update_by: str = "",
         update_by_name: str = "",
     ):
@@ -330,6 +333,7 @@ class _FakeDatasourceManager:
             template_source_config,
             member_source_configs=member_source_configs,
             tables=tables,
+            query_context=query_context,
             update_by=update_by,
             update_by_name=update_by_name,
         )
@@ -410,6 +414,7 @@ class _FakeDatasourceManager:
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
+        query_context: str = "",
         create_by: str = "",
     ):
         datasource_id = "ds_group_from_template"
@@ -420,6 +425,7 @@ class _FakeDatasourceManager:
             "member_datasource_ids": ["phy_template", "phy_member_a"],
             "group_name": group_name,
             "ds_description": group_desc,
+            "query_context": query_context,
             "source_type": source_type,
             "query_executor_type": template_source_config.get("query_executor_type") or "direct",
             "source_config": dict(template_source_config),
@@ -441,6 +447,7 @@ class _FakeDatasourceManager:
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
+        query_context: str = "",
         create_by: str = "",
         create_by_name: str = "",
     ):
@@ -451,6 +458,7 @@ class _FakeDatasourceManager:
             template_source_config,
             member_source_configs=member_source_configs,
             tables=tables,
+            query_context=query_context,
             create_by=create_by,
         )
 
@@ -3806,6 +3814,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
     payload = DatasourceGroupCreateRequest(
         group_name="模板组",
         group_desc="描述",
+        query_context="分库查询正反例",
         source_type="mysql",
         template_source={
             "org_name": "template_a",
@@ -3831,6 +3840,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
     assert data["status"] == "success"
     assert data["data"]["source_config"]["database"] == "db_template"
     assert data["data"]["member_datasource_ids"] == ["phy_template", "phy_member_a"]
+    assert data["data"]["query_context"] == "分库查询正反例"
     assert data["data"]["create_by"] == "creator_1"
     assert data["data"]["update_by"] == "creator_1"
 
@@ -3920,6 +3930,7 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
     payload = DatasourceGroupUpdateRequest(
         group_name="更新后的组",
         group_desc="新描述",
+        query_context="更新后的智能问数说明",
         source_type="mysql",
         template_source={
             "org_name": "template_new",
@@ -3946,6 +3957,7 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
     assert data["status"] == "success"
     assert data["data"]["group_name"] == "更新后的组"
     assert data["data"]["source_config"]["database"] == "db_template_new"
+    assert data["data"]["query_context"] == "更新后的智能问数说明"
     assert len(data["data"]["member_sources"]) == 2
     assert data["data"]["update_by"] == "updater_1"
 

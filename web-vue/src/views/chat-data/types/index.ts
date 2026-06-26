@@ -31,6 +31,7 @@ export interface DataSource {
   id: string
   group_name: string
   ds_description: string
+  query_context?: string
   ds_tables: TableInfo[]
   is_default?: boolean
   source_type?: string

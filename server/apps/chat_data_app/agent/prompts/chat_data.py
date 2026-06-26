@@ -10,6 +10,8 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 当前时间：{current_time}
 {execution_target_info}
 
+{datasource_group_context}
+
 {available_skills_context}
 
 {semantic_config_directory_info}

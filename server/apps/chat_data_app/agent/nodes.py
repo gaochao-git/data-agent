@@ -49,6 +49,14 @@ def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
     return f"\n{text}\n"
 
 
+def format_datasource_group_context_for_llm(context: str) -> str:
+    """格式化数据源组智能问数说明，供 system prompt 注入。"""
+    text = str(context or "").strip()
+    if not text:
+        return ""
+    return f"\n## 数据源组智能问数说明\n{text}\n"
+
+
 def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
     """给 LangChain 消息补充服务端时间戳，随 checkpoint 一起持久化。"""
     if not message:
@@ -188,6 +196,7 @@ def create_agent_node(
             "tables_ddl_info": tables_ddl_info,
             "current_time": current_time,
             "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
+            "datasource_group_context": format_datasource_group_context_for_llm(state.get("datasource_group_context") or ""),
             "available_skills_context": available_skills_context or "",
             "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(state.get("semantic_config_directory_info") or ""),
         }

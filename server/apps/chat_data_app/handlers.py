@@ -618,26 +618,27 @@ def _format_execution_target_info(execution_targets: list[dict], user_query: str
     if not matched_member_ids:
         matched_member_ids = _match_execution_targets_from_query(user_query, execution_targets)
 
-    lines = ["## 可用执行对象"]
+    lines = ["## 可用执行对象数据源"]
     if len(execution_targets) == 1:
-        lines.append("当前可用范围只有 1 个可用执行对象：")
+        lines.append("当前可用范围只有 1 个可用执行对象数据源：")
     else:
-        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象。请根据用户问题选择本次要查询的机构；如果用户未指定机构，默认查询第 1 个机构，不要默认全部执行。机构名称必须按完整名称或机构编码精确匹配，不能用前缀或包含关系替代：")
+        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象数据源。请根据用户问题选择本次要查询的执行对象数据源；如果用户未指定执行对象数据源，默认查询第 1 个执行对象数据源，不要默认全部执行。")
+        lines.append("执行对象数据源名称必须按完整名称或执行对象数据源编码精确匹配，不能用前缀或包含关系替代：")
 
     for index, target in enumerate(execution_targets, start=1):
         member_name = _execution_target_name(target, index)
         org_code = _execution_target_org_code(target)
         member_datasource_id = _execution_target_member_id(target)
         if org_code and org_code != str(member_name).strip():
-            line = f"{index}. 机构名称：{member_name}"
+            line = f"{index}. 执行对象数据源名称：{member_name}"
             if member_datasource_id:
-                line += f"；成员数据源ID：{member_datasource_id}"
+                line += f"；执行对象数据源ID：{member_datasource_id}"
             lines.append(line)
-            lines.append(f"   机构编码：{org_code}")
+            lines.append(f"   执行对象数据源编码：{org_code}")
         else:
-            line = f"{index}. 机构名称：{member_name}"
+            line = f"{index}. 执行对象数据源名称：{member_name}"
             if member_datasource_id:
-                line += f"；成员数据源ID：{member_datasource_id}"
+                line += f"；执行对象数据源ID：{member_datasource_id}"
             lines.append(line)
 
     if matched_member_ids:
@@ -647,17 +648,17 @@ def _format_execution_target_info(execution_targets: list[dict], user_query: str
             if _execution_target_member_id(target) in matched_member_ids
         ]
         lines.append("")
-        lines.append("## 用户问题中的执行对象匹配")
-        lines.append("已按用户原文精确匹配到以下机构；本次查询必须只使用这些机构对应的 member_datasource_ids：")
+        lines.append("## 用户问题中的执行对象数据源匹配")
+        lines.append("已按用户原文精确匹配到以下执行对象数据源；本次查询必须只使用这些执行对象数据源对应的执行对象数据源ID：")
         for index, target in matched_targets:
             member_name = _execution_target_name(target, index)
             member_datasource_id = _execution_target_member_id(target)
             org_code = _execution_target_org_code(target)
-            line = f"- 机构名称：{member_name}"
+            line = f"- 执行对象数据源名称：{member_name}"
             if org_code:
-                line += f"；机构编码：{org_code}"
+                line += f"；执行对象数据源编码：{org_code}"
             if member_datasource_id:
-                line += f"；member_datasource_id：{member_datasource_id}"
+                line += f"；执行对象数据源ID：{member_datasource_id}"
             lines.append(line)
 
     return "\n".join(lines), matched_member_ids
@@ -853,6 +854,13 @@ async def _stream_sql_generation(
             semantic_config_directory_info = ""
             if mode == "query" and not semantic_config:
                 semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
+            datasource_group_context = ""
+            if mode == "query" and datasource_id:
+                try:
+                    datasource = await get_datasource_manager().get_datasource_async(datasource_id)
+                    datasource_group_context = str((datasource or {}).get("query_context") or "").strip()
+                except Exception as err:
+                    logger.warning("读取数据源组智能问数说明失败: %s", err)
             execution_targets = await _get_execution_targets_async(
                 datasource_id,
                 member_datasource_ids,
@@ -887,6 +895,7 @@ async def _stream_sql_generation(
                 "matched_member_datasource_ids": matched_member_datasource_ids,
                 "require_explicit_member_selection": mode == "query",
                 "execution_target_info": all_execution_target_info,
+                "datasource_group_context": datasource_group_context,
                 "semantic_config_directory_info": semantic_config_directory_info,
             }
 

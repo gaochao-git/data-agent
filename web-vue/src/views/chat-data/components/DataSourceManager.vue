@@ -54,6 +54,7 @@ const groupSourceScrollTop = ref(0)
 const groupForm = ref({
   group_name: '',
   group_desc: '',
+  query_context: '',
   source_type: 'hive' as 'mysql' | 'hive',
   datasource_sources_text: '',
 })
@@ -852,6 +853,7 @@ const openGroupModal = () => {
   groupForm.value = {
     group_name: '',
     group_desc: '',
+    query_context: '',
     source_type: 'hive',
     datasource_sources_text: '',
   }
@@ -875,6 +877,7 @@ const openEditGroupModal = (ds: DataSource) => {
   groupForm.value = {
     group_name: ds.group_name || '',
     group_desc: ds.ds_description || '',
+    query_context: ds.query_context || '',
     source_type: sourceType,
     datasource_sources_text: memberSourcesText
       ? memberSourcesText
@@ -1102,6 +1105,7 @@ const handleCreateDatasourceGroup = async () => {
     const payload = {
       group_name: groupName,
       group_desc: groupForm.value.group_desc.trim(),
+      query_context: groupForm.value.query_context.trim(),
       source_type: groupForm.value.source_type,
       template_source: templateSource,
       template_table_names: groupDbTables.value.length > 0 ? Array.from(selectedGroupTables.value) : undefined,
@@ -1525,6 +1529,16 @@ defineExpose({
               <label class="w-12 shrink-0 text-sm text-slate-600">描述</label>
               <input v-model="groupForm.group_desc" type="text" maxlength="128" placeholder="可选" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
+          </div>
+          <div class="flex min-w-0 items-start gap-2">
+            <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">智能问数说明</label>
+            <textarea
+              v-model="groupForm.query_context"
+              maxlength="20000"
+              rows="4"
+              placeholder="可维护当前数据源组的查询规则、口径说明、正反例等，会注入智能问数上下文"
+              class="min-w-0 flex-1 resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            ></textarea>
           </div>
           <div class="flex items-center gap-2">
             <label class="w-20 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>

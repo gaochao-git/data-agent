@@ -183,16 +183,18 @@ def _summarize_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]]) -> str:
+def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]], datasource_group_context: str = "") -> str:
     """构造指标集选择提示词。"""
     payload = {
         "user_query": str(user_query or "").strip(),
+        "datasource_group_context": str(datasource_group_context or "").strip(),
         "semantic_configs": configs,
     }
     return (
         "你是智能问数指标集选择器。请只从给定 semantic_configs 中判断哪个指标集最适合回答用户问题。\n"
         "要求：\n"
         "1) 只能选择给定列表中的 id，不能编造指标集、指标、维度、业务口径或派生公式。\n"
+        "1.1) datasource_group_context 是当前数据源组的问数说明，用于理解执行对象数据源、分库规则和查询边界；它不能覆盖 semantic_configs 中真实存在的指标、维度和口径。\n"
         "2) 逐个检查所有 semantic_configs，判断每个指标集是否能完整覆盖用户问题所需的指标、维度、过滤条件和业务口径。coverage 只能是 full、partial、none；只有名称和口径都明确匹配，才算覆盖。\n"
         "3) 先判断用户问题是明细查询还是聚合统计：明细查询包括查询明细、查看列表、查看详情、列出记录、查询具体数据；聚合统计包括统计、数量、金额、趋势、排行、分组、TopN。\n"
         "4) 明细查询不要求 metrics，必须按 dimensions 判断展示字段和过滤字段是否可覆盖；只要该指标集的 dimensions 能表达用户要看的字段/条件，就可以 coverage=full。不要因为 metrics_total=0 就判定不支持明细查询。\n"
@@ -213,22 +215,23 @@ def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]]) -> st
     )
 
 
-def _estimate_selector_prompt_tokens(user_query: str, configs: List[Dict[str, Any]]) -> int:
+def _estimate_selector_prompt_tokens(user_query: str, configs: List[Dict[str, Any]], datasource_group_context: str = "") -> int:
     """估算选择器提示词 token 数。"""
-    return estimate_text_tokens(_build_selector_prompt(user_query, configs))
+    return estimate_text_tokens(_build_selector_prompt(user_query, configs, datasource_group_context))
 
 
 def _chunk_semantic_config_summaries(
     summaries: List[Dict[str, Any]],
     user_query: str,
     token_budget: int = SELECTOR_CHUNK_TOKEN_BUDGET,
+    datasource_group_context: str = "",
 ) -> List[List[Dict[str, Any]]]:
     """按完整指标集分片，禁止把单个指标集拆到两个分片。"""
     chunks: List[List[Dict[str, Any]]] = []
     current_chunk: List[Dict[str, Any]] = []
     safe_budget = max(int(token_budget or 0), 1)
     for summary in summaries:
-        single_tokens = _estimate_selector_prompt_tokens(user_query, [summary])
+        single_tokens = _estimate_selector_prompt_tokens(user_query, [summary], datasource_group_context)
         if single_tokens > SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT:
             logger.warning(
                 "单个指标集选择上下文超过限制但不会拆分: config_id=%s tokens=%s limit=%s",
@@ -239,7 +242,7 @@ def _chunk_semantic_config_summaries(
         if not current_chunk:
             current_chunk = [summary]
             continue
-        next_tokens = _estimate_selector_prompt_tokens(user_query, [*current_chunk, summary])
+        next_tokens = _estimate_selector_prompt_tokens(user_query, [*current_chunk, summary], datasource_group_context)
         if next_tokens > safe_budget:
             chunks.append(current_chunk)
             current_chunk = [summary]
@@ -306,10 +309,16 @@ def _collect_selection_candidates(selections: List[Dict[str, Any]], configs: Lis
     return sorted(candidates, key=_candidate_score, reverse=True)[:SELECTOR_MAX_REDUCER_CANDIDATES]
 
 
-def _build_reducer_prompt(user_query: str, chunk_results: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> str:
+def _build_reducer_prompt(
+    user_query: str,
+    chunk_results: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    datasource_group_context: str = "",
+) -> str:
     """构造分片结果汇总提示词。"""
     payload = {
         "user_query": str(user_query or "").strip(),
+        "datasource_group_context": str(datasource_group_context or "").strip(),
         "chunk_results": chunk_results,
         "candidates": candidates,
     }
@@ -317,6 +326,7 @@ def _build_reducer_prompt(user_query: str, chunk_results: List[Dict[str, Any]], 
         "你是智能问数指标集选择汇总器。输入来自多个并行分片，每个分片都包含完整指标集，候选项也都代表完整指标集。\n"
         "要求：\n"
         "1) 只能从 candidates 中选择 id，不能编造指标集、指标、维度、业务口径或派生公式。\n"
+        "1.1) datasource_group_context 是当前数据源组的问数说明，用于理解执行对象数据源、分库规则和查询边界；它不能覆盖 candidates 中真实存在的指标、维度和口径。\n"
         "2) 明细查询按 dimensions 判断覆盖度，不要求 metrics；聚合统计才要求 metrics。不要因为候选 metrics_total=0 就排除可覆盖明细查询的指标集；只有名称和口径都明确匹配，才算覆盖。\n"
         "3) 同比、环比、增长率这类问题，如果候选同时包含基础指标和时间维度，应视为可拆成基础查询后计算，coverage=full。\n"
         "4) candidates 必须包含所有 coverage=full 的指标集；如果没有 full，可返回最相关的 partial 候选。\n"
@@ -594,9 +604,10 @@ async def _select_semantic_config_chunk(
     llm: Any,
     user_query: str,
     chunk: List[Dict[str, Any]],
+    datasource_group_context: str = "",
 ) -> Dict[str, Any]:
     """选择单个分片内最匹配的指标集。"""
-    prompt = _build_selector_prompt(user_query, chunk)
+    prompt = _build_selector_prompt(user_query, chunk, datasource_group_context)
     content = await _invoke_selector_prompt(llm, prompt)
     return _parse_selection_response(content, chunk)
 
@@ -605,13 +616,14 @@ async def _select_semantic_config_chunks(
     llm: Any,
     user_query: str,
     chunks: List[List[Dict[str, Any]]],
+    datasource_group_context: str = "",
 ) -> List[Dict[str, Any]]:
     """并发执行多个指标集分片选择。"""
     semaphore = asyncio.Semaphore(SELECTOR_MAX_CONCURRENCY)
 
     async def run_chunk(chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
         async with semaphore:
-            return await _select_semantic_config_chunk(llm, user_query, chunk)
+            return await _select_semantic_config_chunk(llm, user_query, chunk, datasource_group_context)
 
     results = await asyncio.gather(*(run_chunk(chunk) for chunk in chunks), return_exceptions=True)
     selections: List[Dict[str, Any]] = []
@@ -628,6 +640,7 @@ async def _reduce_semantic_config_selections(
     user_query: str,
     selections: List[Dict[str, Any]],
     enabled_configs: List[Dict[str, Any]],
+    datasource_group_context: str = "",
 ) -> Dict[str, Any]:
     """汇总多个分片选择结果。"""
     if not selections:
@@ -644,6 +657,7 @@ async def _reduce_semantic_config_selections(
         user_query=user_query,
         chunk_results=[_build_chunk_result_payload(selection) for selection in selections],
         candidates=candidates,
+        datasource_group_context=datasource_group_context,
     )
     content = await _invoke_selector_prompt(llm, prompt)
     return _parse_selection_response(content, candidate_configs)
@@ -654,11 +668,13 @@ async def select_semantic_config_for_query(
     user_query: str,
     model_id: str | None = None,
     user_id: str | None = None,
+    datasource_group_context: str | None = None,
 ) -> Optional[Dict[str, Any]]:
     """用大模型从当前数据源组可用指标集中选择最匹配项。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_query = str(user_query or "").strip()
     normalized_user_id = str(user_id or "").strip()
+    normalized_group_context = str(datasource_group_context or "").strip()
     if not normalized_datasource_id or not normalized_query:
         return None
 
@@ -676,9 +692,9 @@ async def select_semantic_config_for_query(
 
     candidate_configs, directory_candidates = _retrieve_semantic_config_candidates(enabled_configs, normalized_query)
     summaries = [_summarize_semantic_config(config) for config in candidate_configs]
-    chunks = _chunk_semantic_config_summaries(summaries, normalized_query)
+    chunks = _chunk_semantic_config_summaries(summaries, normalized_query, datasource_group_context=normalized_group_context)
     chunk_tokens = [
-        _estimate_selector_prompt_tokens(normalized_query, chunk)
+        _estimate_selector_prompt_tokens(normalized_query, chunk, normalized_group_context)
         for chunk in chunks
     ]
     logger.info(
@@ -691,10 +707,16 @@ async def select_semantic_config_for_query(
     )
     llm = get_chat_data_llm(model=model_id, streaming=False, max_tokens=1200)
     if len(chunks) == 1:
-        selection = await _select_semantic_config_chunk(llm, normalized_query, chunks[0])
+        selection = await _select_semantic_config_chunk(llm, normalized_query, chunks[0], normalized_group_context)
     else:
-        chunk_selections = await _select_semantic_config_chunks(llm, normalized_query, chunks)
-        selection = await _reduce_semantic_config_selections(llm, normalized_query, chunk_selections, candidate_configs)
+        chunk_selections = await _select_semantic_config_chunks(llm, normalized_query, chunks, normalized_group_context)
+        selection = await _reduce_semantic_config_selections(
+            llm,
+            normalized_query,
+            chunk_selections,
+            candidate_configs,
+            normalized_group_context,
+        )
     selection["auto_selected"] = bool(selection.get("selected_config_id"))
     selection["retrieval"] = {
         "total_configs": len(enabled_configs),

@@ -658,6 +658,7 @@ export function getDatasourceSemanticHealth(datasourceId: string): Promise<ApiRe
 export function createDatasourceGroup(data: {
   group_name: string
   group_desc?: string
+  query_context?: string
   source_type: 'mysql' | 'hive'
   template_source: {
     org_name: string
@@ -688,6 +689,7 @@ export function createDatasourceGroup(data: {
 export function updateDatasourceGroup(datasourceId: string, data: {
   group_name: string
   group_desc?: string
+  query_context?: string
   source_type: 'mysql' | 'hive'
   template_source: {
     org_name: string

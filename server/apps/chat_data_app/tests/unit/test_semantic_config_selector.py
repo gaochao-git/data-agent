@@ -89,6 +89,27 @@ def test_selector_prompt_forbids_guessing_metric_dimension_business_definition()
         assert "缺少明确业务口径" in text
 
 
+def test_selector_prompt_includes_datasource_group_context_for_execution_target_rules():
+    context = "如果平安付已匹配为执行对象数据源，检索指标集时不要把平安付当作业务维度。"
+    prompt = _build_selector_prompt(
+        "平安付今日订单数",
+        [{"id": "sc_order", "name": "订单分析", "metrics": [{"name": "订单数"}], "dimensions": []}],
+        datasource_group_context=context,
+    )
+    reducer_prompt = selector._build_reducer_prompt(
+        "平安付今日订单数",
+        chunk_results=[],
+        candidates=[{"id": "sc_order", "name": "订单分析", "coverage": "full", "confidence": "high"}],
+        datasource_group_context=context,
+    )
+
+    for text in (prompt, reducer_prompt):
+        payload = json.loads(text.split("输入：\n", 1)[1])
+        assert payload["datasource_group_context"] == context
+        assert "datasource_group_context 是当前数据源组的问数说明" in text
+        assert "不能覆盖" in text
+
+
 def test_selector_prompt_prefers_warehouse_layer_order_for_multiple_full_matches():
     prompt = _build_selector_prompt("查询销售额", [
         {"id": "ads_order", "name": "ADS订单指标", "metrics": [{"name": "销售额"}], "dimensions": []},
@@ -791,7 +812,7 @@ def test_selector_reducer_edge_paths(monkeypatch):
 
 
 def test_selector_chunk_execution_skips_exception_results(monkeypatch):
-    async def fake_select(_llm, _query, chunk):
+    async def fake_select(_llm, _query, chunk, _datasource_group_context=""):
         if chunk[0]["id"] == "bad":
             raise RuntimeError("chunk failed")
         return {"selected_config_id": chunk[0]["id"], "coverage": "partial", "confidence": "low"}
