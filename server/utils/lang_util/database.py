@@ -14,9 +14,10 @@ from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
 from .db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
-from utils.logger import get_logger
+from utils.logger import get_alarm_logger, get_logger
 
 logger = get_logger(__name__)
+alarm_logger = get_alarm_logger()
 
 # ============ 配置 ============
 
@@ -97,6 +98,13 @@ async def _failover_database_endpoint(failed_endpoint, reason: Exception | None 
         )
         return
     await _dispose_engine()
+    alarm_logger.error(
+        "业务库运行中连接失败",
+        extra={
+            "request_type": "DATABASE",
+            "error_code": "DATABASE_CONNECTION_FAILED",
+        },
+    )
     logger.warning(
         "业务库连接节点切换: %s -> %s, reason=%s",
         previous.label(),
@@ -144,6 +152,13 @@ async def select_available_database_endpoint() -> None:
             _endpoint_selector.set_current(endpoint)
             logger.info("业务库当前连接节点: %s", endpoint.label())
             return
+    alarm_logger.error(
+        "业务库启动探测失败",
+        extra={
+            "request_type": "DATABASE",
+            "error_code": "DATABASE_CONNECTION_FAILED",
+        },
+    )
     raise ValueError("所有业务库节点均不可用")
 
 

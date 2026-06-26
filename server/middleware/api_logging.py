@@ -10,11 +10,10 @@ from urllib.parse import parse_qs
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from middleware.log_redaction import dump_masked_payload
-from utils.logger import clear_log_context, get_access_logger, get_alarm_logger, get_logger, set_log_context
+from utils.logger import clear_log_context, get_access_logger, get_logger, set_log_context
 
 logger = get_logger(__name__)
 access_logger = get_access_logger()
-alarm_logger = get_alarm_logger()
 
 DOWNLOAD_CONTENT_TYPES = {
     "application/octet-stream",
@@ -169,16 +168,6 @@ class _ResponseLogState:
         extra = self._base_extra(elapsed_ms=elapsed_ms, error_code="500")
         extra["ext2"] = dump_masked_payload(error_payload)
         access_logger.info("api_access_error", extra=extra)
-        alarm_logger.error(
-            f"{self.method} {self.path} failed: {exc}",
-            extra={
-                "request_id": self.request_id,
-                "request_type": self.method,
-                "error_code": "500",
-                "ext1": _access_ext1(self.client_ip, self.user_id),
-                "ext2": dump_masked_payload(error_payload),
-            },
-        )
         self.response_logged = True
 
 

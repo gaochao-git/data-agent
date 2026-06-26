@@ -474,6 +474,8 @@ def test_database_dispose_and_close_noop_branches(monkeypatch):
 def test_database_session_connection_error_advances_endpoint(monkeypatch):
     database._engine = None
     database._session_factory = None
+    alarm_records = []
+    monkeypatch.setattr(database.alarm_logger, "error", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
@@ -518,6 +520,27 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
     assert database._engine is None
     assert database._session_factory is None
     assert selector.current().label() == "127.0.0.2:3307"
+    assert alarm_records[0][0][0] == "业务库运行中连接失败"
+    assert alarm_records[0][1]["extra"] == {
+        "request_type": "DATABASE",
+        "error_code": "DATABASE_CONNECTION_FAILED",
+    }
+
+
+def test_database_startup_probe_failure_writes_alarm(monkeypatch):
+    alarm_records = []
+    monkeypatch.setattr(database.alarm_logger, "error", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")))
+    monkeypatch.setattr(database, "_probe_database_endpoint", lambda _endpoint: asyncio.sleep(0, result=False))
+
+    with pytest.raises(ValueError, match="所有业务库节点均不可用"):
+        asyncio.run(database.select_available_database_endpoint())
+
+    assert alarm_records[0][0][0] == "业务库启动探测失败"
+    assert alarm_records[0][1]["extra"] == {
+        "request_type": "DATABASE",
+        "error_code": "DATABASE_CONNECTION_FAILED",
+    }
 
 
 def test_database_session_rollback_connection_error_advances_endpoint(monkeypatch):
@@ -894,16 +917,13 @@ def test_pipe_log_formatter_and_context_helpers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
-    records = {"set": [], "clear": 0, "access_info": [], "alarm_error": [], "exception": []}
+    records = {"set": [], "clear": 0, "access_info": [], "exception": []}
 
     monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
         exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
     ))
     monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
         info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
-    ))
-    monkeypatch.setattr(api_logging_module, "alarm_logger", SimpleNamespace(
-        error=lambda msg, *args, **kwargs: records["alarm_error"].append((msg, args, kwargs)),
     ))
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
     monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
@@ -941,22 +961,18 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
     assert records["access_info"][0][0] == "api_access"
     assert records["access_info"][0][2]["extra"]["request_id"] == "req-abc"
     assert records["access_info"][0][2]["extra"]["error_code"] == "0"
-    assert records["alarm_error"] == []
     assert records["exception"] == []
 
 
 @pytest.mark.asyncio
-async def test_api_access_log_middleware_logs_alarm_on_error(monkeypatch):
-    records = {"set": [], "clear": 0, "access_info": [], "alarm_error": [], "exception": []}
+async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeypatch):
+    records = {"set": [], "clear": 0, "access_info": [], "exception": []}
 
     monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
         exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
     ))
     monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
         info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
-    ))
-    monkeypatch.setattr(api_logging_module, "alarm_logger", SimpleNamespace(
-        error=lambda msg, *args, **kwargs: records["alarm_error"].append((msg, args, kwargs)),
     ))
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
     monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
@@ -989,8 +1005,6 @@ async def test_api_access_log_middleware_logs_alarm_on_error(monkeypatch):
     assert records["clear"] == 1
     assert len(records["access_info"]) == 1
     assert records["access_info"][0][0] == "api_access_error"
-    assert len(records["alarm_error"]) == 1
-    assert records["alarm_error"][0][2]["extra"]["request_id"] == "req-err"
     assert records["exception"][0][0] == "[api_access] unhandled_error request_id=%s"
 
 
