@@ -2087,7 +2087,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <textarea
                     ref="textareaRef"
                     v-model="input"
-                    placeholder="请输入分析任务"
+                    placeholder="请输入分析任务，输入 / 可选择技能"
                     class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                     @keydown="handleKeyDown"
                     @focus="inputFocused = true"
@@ -2109,8 +2109,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     <div ref="agentSelectorRef" class="relative">
                       <button
                         type="button"
-                        class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                        style="background: rgba(0,0,0,0.03)"
+                        class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                         @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                       >
                         <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -2139,7 +2138,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         </button>
                       </div>
                     </div>
-                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-full" style="background: rgba(0,0,0,0.03)">
+                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
                       <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                       <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                         <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
@@ -2464,7 +2463,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 <textarea
                   ref="textareaRef"
                   v-model="input"
-                  placeholder="继续输入分析任务"
+                  placeholder="继续输入分析任务，输入 / 可选择技能"
                   class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                   @keydown="handleKeyDown"
                   @focus="inputFocused = true"
@@ -2486,8 +2485,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <div ref="agentSelectorRef" class="relative">
                     <button
                       type="button"
-                      class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                      style="background: rgba(0,0,0,0.03)"
+                      class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                       @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                     >
                       <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -2516,7 +2514,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       </button>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1.5 px-2 py-1 rounded-full" style="background: rgba(0,0,0,0.03)">
+                  <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
                     <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                     <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                       <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>

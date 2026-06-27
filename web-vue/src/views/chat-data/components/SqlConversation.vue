@@ -1799,7 +1799,7 @@ const handleViewAnalysis = (msg: Message) => {
                 <textarea
                   ref="textareaRef"
                   v-model="input"
-                  placeholder="请输入问题查询数据"
+                  placeholder="请输入问题查询数据，输入 / 可选择技能"
                   class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                   @keydown="handleKeyDown"
                   @focus="inputFocused = true"
@@ -1821,8 +1821,7 @@ const handleViewAnalysis = (msg: Message) => {
                   <div ref="agentSelectorRef" class="relative">
                     <button
                       type="button"
-                      class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                      style="background: rgba(0,0,0,0.03)"
+                      class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                       @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                     >
                       <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -1851,7 +1850,7 @@ const handleViewAnalysis = (msg: Message) => {
                       </button>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1.5 px-2 py-1 rounded-full" style="background: rgba(0,0,0,0.03)">
+                  <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
                     <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                     <select
                       v-model="selectedModel"
@@ -2193,7 +2192,7 @@ const handleViewAnalysis = (msg: Message) => {
               <textarea
                 ref="textareaRef"
                 v-model="input"
-                placeholder="请输入问题查询数据"
+                placeholder="请输入问题查询数据，输入 / 可选择技能"
                 class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                 @keydown="handleKeyDown"
                 @focus="inputFocused = true"
@@ -2215,8 +2214,7 @@ const handleViewAnalysis = (msg: Message) => {
                 <div ref="agentSelectorRef" class="relative">
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                    style="background: rgba(0,0,0,0.03)"
+                    class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                     @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                   >
                     <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -2245,7 +2243,7 @@ const handleViewAnalysis = (msg: Message) => {
                     </button>
                   </div>
                 </div>
-                <div class="flex items-center gap-1.5 px-2 py-1 rounded-full" style="background: rgba(0,0,0,0.03)">
+                <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
                   <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                   <select
                     v-model="selectedModel"
