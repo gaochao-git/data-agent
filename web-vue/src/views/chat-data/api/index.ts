@@ -1050,6 +1050,18 @@ export interface CancelQueryTaskResult {
   }>
 }
 
+export interface CancelRunningQueryHistoryResult {
+  total: number
+  cancelled: number
+  failed: number
+  executions?: Array<{
+    execution_id?: string
+    status?: string
+    success?: boolean
+    message?: string | null
+  }>
+}
+
 export interface QueryHistoryResult {
   execution_id: string
   query: string
@@ -1145,6 +1157,24 @@ export function cancelQueryTask(taskId: string): Promise<ApiResponse<CancelQuery
   })
 }
 
+/** 停止当前用户所有执行中的 SQL */
+export function cancelRunningQueryHistory(params?: { datasource_id?: string }): Promise<ApiResponse<CancelRunningQueryHistoryResult>> {
+  return request({
+    url: '/agents/api/chatdata/query-history/cancel-running',
+    method: 'post',
+    params
+  })
+}
+
+/** 停止全局所有执行中的 SQL */
+export function cancelGlobalRunningQueryHistory(params?: { datasource_id?: string }): Promise<ApiResponse<CancelRunningQueryHistoryResult>> {
+  return request({
+    url: '/agents/api/chatdata/admin/query-history/cancel-running',
+    method: 'post',
+    params
+  })
+}
+
 /** 获取单条 SQL 查询历史结果 */
 export function getQueryHistoryResult(executionId: string): Promise<ApiResponse<QueryHistoryResult>> {
   return request({
@@ -1194,9 +1224,32 @@ export function getQueryHistory(params: {
   page_size?: number
   source?: 'all' | 'sql' | 'agent' | 'builder' | 'dashboard'
   status?: 'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'
+  start_time?: string
+  end_time?: string
 }): Promise<ApiResponse<{ queries: SqlHistoryItem[]; total: number; page: number; page_size: number }>> {
   return request({
     url: '/agents/api/chatdata/query-history',
+    method: 'get',
+    params
+  })
+}
+
+/** 获取全局 SQL 查询历史 */
+export function getGlobalQueryHistory(params: {
+  datasource_id?: string
+  semantic_config_id?: string
+  user_id?: string
+  username?: string
+  keyword?: string
+  page?: number
+  page_size?: number
+  source?: 'all' | 'sql' | 'agent' | 'builder' | 'dashboard'
+  status?: 'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'
+  start_time?: string
+  end_time?: string
+}): Promise<ApiResponse<{ queries: SqlHistoryItem[]; total: number; page: number; page_size: number }>> {
+  return request({
+    url: '/agents/api/chatdata/admin/query-history',
     method: 'get',
     params
   })

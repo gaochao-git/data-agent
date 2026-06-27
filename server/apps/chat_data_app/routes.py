@@ -8,8 +8,8 @@ import os
 import asyncio
 import json
 import re
-from typing import Optional, Dict, List, Set, Any
-from datetime import datetime
+from typing import Optional, Dict, List, Set, Any, Tuple
+from datetime import datetime, time as datetime_time
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
@@ -122,6 +122,7 @@ CANCEL_TARGET_WAIT_SECONDS = 3
 CANCEL_TARGET_POLL_INTERVAL_SECONDS = 0.1
 _query_task_background_tasks: set[asyncio.Task] = set()
 QUERY_TASK_FINAL_STATUSES = {"succeeded", "failed", "cancelled", "partial_success"}
+RUNNING_SQL_STATUSES = {"pending", "running"}
 
 SOURCE_DEFAULT_PORTS = {
     "mysql": 3306,
@@ -192,6 +193,98 @@ def _normalize_query_history_status_filter(status: Optional[str]) -> Optional[st
     return None
 
 
+def _clean_optional_text(value: Optional[str]) -> str:
+    """规整可选文本筛选条件。"""
+    return str(value or "").strip()
+
+
+def _parse_query_history_time(value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
+    """解析查询历史时间筛选参数。"""
+    raw_value = _clean_optional_text(value)
+    if not raw_value:
+        return None
+    normalized = raw_value.replace("T", " ")
+    formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            if fmt == "%Y-%m-%d" and end_of_day:
+                return datetime.combine(parsed.date(), datetime_time.max)
+            return parsed
+        except ValueError:
+            continue
+    raise ValueError("时间格式错误，请使用 YYYY-MM-DD HH:mm:ss")
+
+
+def _append_query_history_time_conditions(
+    conditions: List[Any],
+    start_time: Optional[str],
+    end_time: Optional[str],
+) -> None:
+    """追加查询历史执行时间范围条件。"""
+    start_dt = _parse_query_history_time(start_time)
+    end_dt = _parse_query_history_time(end_time, end_of_day=True)
+    executed_time_expr = func.coalesce(
+        ChatDataQueryExecution.finished_time,
+        ChatDataQueryExecution.started_time,
+        ChatDataQueryExecution.create_time,
+    )
+    if start_dt:
+        conditions.append(executed_time_expr >= start_dt)
+    if end_dt:
+        conditions.append(executed_time_expr <= end_dt)
+
+
+def _append_query_history_source_condition(conditions: List[Any], source_filter: Optional[List[str]]) -> None:
+    """追加查询历史来源条件。"""
+    if not source_filter:
+        return
+    source_values = [item for item in source_filter if item]
+    if "" in source_filter:
+        conditions.append(or_(ChatDataQueryTask.query_type.in_(source_values), ChatDataQueryTask.query_type.is_(None)))
+        return
+    conditions.append(ChatDataQueryTask.query_type.in_(source_filter))
+
+
+def _append_query_history_status_condition(conditions: List[Any], status_filter: Optional[str]) -> None:
+    """追加查询历史状态条件。"""
+    if not status_filter:
+        return
+    if status_filter == "cancelled":
+        conditions.append(or_(ChatDataQueryTask.task_status == "cancelled", ChatDataQueryExecution.sql_status == "cancelled"))
+        return
+    conditions.append(and_(or_(ChatDataQueryTask.task_status.is_(None), ChatDataQueryTask.task_status != "cancelled"), ChatDataQueryExecution.sql_status == status_filter))
+
+
+def _append_admin_query_history_conditions(
+    conditions: List[Any],
+    *,
+    datasource_id: str,
+    semantic_config_id: str,
+    user_id: str,
+    username: str,
+    keyword: str,
+) -> None:
+    """追加后台历史 SQL 专属筛选条件。"""
+    if datasource_id:
+        conditions.append(ChatDataQueryExecution.datasource_id == datasource_id)
+    if user_id:
+        conditions.append(ChatDataQueryExecution.user_id == user_id)
+    if username:
+        username_keyword = f"%{username}%"
+        conditions.append(or_(
+            ChatDataQueryExecution.create_by_name.like(username_keyword),
+            ChatDataQueryExecution.update_by_name.like(username_keyword),
+            ChatDataQueryTask.create_by_name.like(username_keyword),
+            ChatDataQueryTask.update_by_name.like(username_keyword),
+            ChatDataQueryTask.request_payload.like(username_keyword),
+        ))
+    if keyword:
+        conditions.append(ChatDataQueryExecution.sql_text.like(f"%{keyword}%"))
+    if semantic_config_id:
+        conditions.append(ChatDataQueryTask.request_payload.like(f"%{semantic_config_id}%"))
+
+
 def _get_query_history_source(query_type: Optional[str]) -> str:
     """将查询类型映射为前端展示来源。"""
     normalized_type = str(query_type or "").strip().lower()
@@ -202,6 +295,33 @@ def _get_query_history_source(query_type: Optional[str]) -> str:
     if normalized_type == "dashboard":
         return "看板"
     return "SQL编辑器"
+
+
+def _build_query_history_payload(item: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> Dict[str, Any]:
+    """构造查询历史列表展示数据，不包含大结果集。"""
+    query_type = task.query_type if task else "sql"
+    task_status = str(task.task_status or "").strip().lower() if task else ""
+    operator_name = (
+        str(item.create_by_name or item.update_by_name or "").strip()
+        or (str(task.create_by_name or task.update_by_name or "").strip() if task else "")
+        or (_get_task_operator_name(_build_query_task_runtime_data(task)) if task else "")
+    )
+    display_sql_status = "cancelled" if task_status == "cancelled" else item.sql_status
+    payload = item.to_dict()
+    payload.pop("result_payload", None)
+    payload.update({
+        "query_type": query_type,
+        "task_status": task_status,
+        "sql_status": display_sql_status,
+        "title": "SQL查询",
+        "last_used": payload.get("finished_time") or payload.get("started_time") or payload.get("create_time"),
+        "executed_at": payload.get("finished_time") or payload.get("started_time") or payload.get("create_time"),
+        "source": _get_query_history_source(query_type),
+        "success_flag": 1 if display_sql_status == "succeeded" else 0,
+        "operator_name": operator_name,
+        "has_result": bool(item.result_payload or item.remote_task_id),
+    })
+    return payload
 
 
 def _is_http_query_execution(execution: ChatDataQueryExecution) -> bool:
@@ -652,6 +772,8 @@ async def get_query_history(
     page_size: int = 10,
     source: Optional[str] = None,
     status: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
 ):
     """获取当前用户的查询历史。"""
     try:
@@ -667,16 +789,9 @@ async def get_query_history(
                 ChatDataQueryExecution.user_id == user_id,
                 ChatDataQueryExecution.delete_flag == 0,
             ]
-            if source_filter:
-                if "" in source_filter:
-                    base_conditions.append(or_(ChatDataQueryTask.query_type.in_([item for item in source_filter if item]), ChatDataQueryTask.query_type.is_(None)))
-                else:
-                    base_conditions.append(ChatDataQueryTask.query_type.in_(source_filter))
-            if status_filter:
-                if status_filter == "cancelled":
-                    base_conditions.append(or_(ChatDataQueryTask.task_status == "cancelled", ChatDataQueryExecution.sql_status == "cancelled"))
-                else:
-                    base_conditions.append(and_(or_(ChatDataQueryTask.task_status.is_(None), ChatDataQueryTask.task_status != "cancelled"), ChatDataQueryExecution.sql_status == status_filter))
+            _append_query_history_source_condition(base_conditions, source_filter)
+            _append_query_history_status_condition(base_conditions, status_filter)
+            _append_query_history_time_conditions(base_conditions, start_time, end_time)
 
             count_stmt = (
                 select(func.count())
@@ -698,30 +813,7 @@ async def get_query_history(
             result = await db.execute(stmt)
             queries = []
             for item, task in result.all():
-                query_type = task.query_type if task else "sql"
-                task_status = str(task.task_status or "").strip().lower() if task else ""
-                task_operator_name = (
-                    str(item.create_by_name or item.update_by_name or "").strip()
-                    or (str(task.create_by_name or task.update_by_name or "").strip() if task else "")
-                    or (_get_task_operator_name(_build_query_task_runtime_data(task)) if task else "")
-                )
-                display_sql_status = "cancelled" if task_status == "cancelled" else item.sql_status
-                success_flag = 1 if display_sql_status == "succeeded" else 0
-                payload = item.to_dict()
-                payload.pop("result_payload", None)
-                payload.update({
-                    "query_type": query_type,
-                    "task_status": task_status,
-                    "sql_status": display_sql_status,
-                    "title": "SQL查询",
-                    "last_used": payload.get("finished_time") or payload.get("started_time") or payload.get("create_time"),
-                    "executed_at": payload.get("finished_time") or payload.get("started_time") or payload.get("create_time"),
-                    "source": _get_query_history_source(query_type),
-                    "success_flag": success_flag,
-                    "operator_name": task_operator_name,
-                    "has_result": bool(item.result_payload or item.remote_task_id),
-                })
-                queries.append(payload)
+                queries.append(_build_query_history_payload(item, task))
             return business_response(
                 data={
                     "queries": queries,
@@ -731,9 +823,127 @@ async def get_query_history(
                 },
                 msg="获取成功",
             )
+    except ValueError as e:
+        return business_response(msg=str(e), code=40001, status="error")
     except Exception as e:
         logger.error("获取查询历史失败: %s", e, exc_info=True)
         return business_response(msg="获取查询历史失败，请稍后重试", code=50016, status="error")
+
+
+@router.get("/admin/query-history")
+async def get_admin_query_history(
+    request: Request,
+    datasource_id: Optional[str] = None,
+    semantic_config_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    username: Optional[str] = None,
+    keyword: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+):
+    """获取后台全局 SQL 查询历史。"""
+    try:
+        _get_current_user(request)
+        normalized_page = max(1, page)
+        normalized_page_size = max(1, min(page_size, 100))
+        source_filter = _normalize_query_history_source_filter(source)
+        status_filter = _normalize_query_history_status_filter(status)
+        datasource_id = _clean_optional_text(datasource_id)
+        semantic_config_id = _clean_optional_text(semantic_config_id)
+        user_id = _clean_optional_text(user_id)
+        username = _clean_optional_text(username)
+        keyword = _clean_optional_text(keyword)
+        async with get_session() as db:
+            conditions = [ChatDataQueryExecution.delete_flag == 0]
+            _append_admin_query_history_conditions(
+                conditions,
+                datasource_id=datasource_id,
+                semantic_config_id=semantic_config_id,
+                user_id=user_id,
+                username=username,
+                keyword=keyword,
+            )
+            _append_query_history_source_condition(conditions, source_filter)
+            _append_query_history_status_condition(conditions, status_filter)
+            _append_query_history_time_conditions(conditions, start_time, end_time)
+
+            count_stmt = (
+                select(func.count())
+                .select_from(ChatDataQueryExecution)
+                .outerjoin(ChatDataQueryTask, ChatDataQueryTask.task_id == ChatDataQueryExecution.task_id)
+                .where(*conditions)
+            )
+            total_result = await db.execute(count_stmt)
+            total = int(total_result.scalar() or 0)
+
+            stmt = (
+                select(ChatDataQueryExecution, ChatDataQueryTask)
+                .outerjoin(ChatDataQueryTask, ChatDataQueryTask.task_id == ChatDataQueryExecution.task_id)
+                .where(*conditions)
+                .order_by(ChatDataQueryExecution.create_time.desc(), ChatDataQueryExecution.id.desc())
+                .offset((normalized_page - 1) * normalized_page_size)
+                .limit(normalized_page_size)
+            )
+            result = await db.execute(stmt)
+            return business_response(
+                data={
+                    "queries": [_build_query_history_payload(item, task) for item, task in result.all()],
+                    "total": total,
+                    "page": normalized_page,
+                    "page_size": normalized_page_size,
+                },
+                msg="获取成功",
+            )
+    except ValueError as e:
+        return business_response(msg=str(e), code=40001, status="error")
+    except Exception as e:
+        logger.error("获取全局查询历史失败: %s", e, exc_info=True)
+        return business_response(msg="获取全局查询历史失败，请稍后重试", code=50016, status="error")
+
+
+@router.post("/query-history/cancel-running")
+async def cancel_my_running_query_history(
+    request: Request,
+    datasource_id: Optional[str] = None,
+):
+    """停止当前用户所有执行中的 SQL。"""
+    try:
+        current_user = _get_current_user(request)
+        result = await _cancel_running_query_history(
+            datasource_id=datasource_id,
+            user_id=str(current_user.user_id),
+            operator_name=str(getattr(current_user, "username", "") or "").strip(),
+        )
+        return business_response(data=result, msg="停止请求已提交")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=40101, status="error")
+    except Exception as e:
+        logger.error("批量停止个人查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(msg="批量停止失败，请稍后重试", code=50010, status="error")
+
+
+@router.post("/admin/query-history/cancel-running")
+async def cancel_admin_running_query_history(
+    request: Request,
+    datasource_id: Optional[str] = None,
+):
+    """停止全局所有执行中的 SQL。"""
+    try:
+        current_user = _get_current_user(request)
+        result = await _cancel_running_query_history(
+            datasource_id=datasource_id,
+            operator_name=str(getattr(current_user, "username", "") or "").strip(),
+        )
+        return business_response(data=result, msg="停止请求已提交")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=40101, status="error")
+    except Exception as e:
+        logger.error("批量停止全局查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(msg="批量停止失败，请稍后重试", code=50010, status="error")
 
 
 @router.get("/query-history/{execution_id}/result")
@@ -2395,6 +2605,124 @@ def _build_cancel_task_status(execution_results: List[Dict[str, Any]]) -> str:
     if "kill_failed" in statuses:
         return "partial_success"
     return "cancelled"
+
+
+async def _list_running_query_executions(
+    *,
+    datasource_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]]:
+    """读取待批量停止的 SQL 执行记录。"""
+    conditions = [
+        ChatDataQueryExecution.delete_flag == 0,
+        ChatDataQueryExecution.sql_status.in_(sorted(RUNNING_SQL_STATUSES)),
+    ]
+    datasource_id = _clean_optional_text(datasource_id)
+    user_id = _clean_optional_text(user_id)
+    if datasource_id:
+        conditions.append(ChatDataQueryExecution.datasource_id == datasource_id)
+    if user_id:
+        conditions.append(ChatDataQueryExecution.user_id == user_id)
+    async with get_session() as db:
+        result = await db.execute(
+            select(ChatDataQueryExecution, ChatDataQueryTask)
+            .outerjoin(ChatDataQueryTask, ChatDataQueryTask.task_id == ChatDataQueryExecution.task_id)
+            .where(*conditions)
+            .order_by(ChatDataQueryExecution.create_time.asc(), ChatDataQueryExecution.id.asc())
+        )
+        return list(result.all())
+
+
+def _group_cancel_results_by_task(rows: List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]], execution_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """按任务归并停止结果。"""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for (execution, _task), cancel_result in zip(rows, execution_results):
+        task_id = str(execution.task_id or "").strip()
+        if task_id:
+            grouped.setdefault(task_id, []).append(cancel_result)
+    return grouped
+
+
+def _get_execution_cancel_operator_name(
+    execution: ChatDataQueryExecution,
+    task: Optional[ChatDataQueryTask],
+    fallback: Optional[str],
+) -> str:
+    """解析停止远端任务时使用的用户名称。"""
+    execution_operator = str(execution.create_by_name or execution.update_by_name or "").strip()
+    task_name = str(task.create_by_name or task.update_by_name or "").strip() if task else ""
+    task_operator = _get_task_operator_name(_build_query_task_runtime_data(task)) if task else ""
+    return execution_operator or task_name or task_operator or str(fallback or "").strip()
+
+
+async def _cancel_query_execution_for_batch(
+    execution: ChatDataQueryExecution,
+    *,
+    operator_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """批量停止场景下保护单条异常，避免一条失败中断整批。"""
+    try:
+        return await _cancel_query_execution(execution, operator_name=operator_name)
+    except Exception as err:
+        logger.error("批量停止单条 SQL 失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True)
+        await _update_query_execution(
+            execution.execution_id,
+            sql_status="kill_failed",
+            error_message="停止执行失败",
+            finished_time=datetime.now(),
+        )
+        return {
+            "execution_id": execution.execution_id,
+            "status": "kill_failed",
+            "success": False,
+            "message": "停止执行失败",
+        }
+
+
+async def _cancel_running_query_history(
+    *,
+    datasource_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """批量停止执行中的 SQL，并同步更新关联任务状态。"""
+    rows = await _list_running_query_executions(datasource_id=datasource_id, user_id=user_id)
+    if not rows:
+        return {"total": 0, "cancelled": 0, "failed": 0, "executions": []}
+
+    execution_results = await asyncio.gather(*[
+        _cancel_query_execution_for_batch(
+            execution,
+            operator_name=_get_execution_cancel_operator_name(execution, task, operator_name),
+        )
+        for execution, task in rows
+    ])
+    task_by_id = {
+        str(task.task_id or "").strip(): task
+        for _execution, task in rows
+        if task and str(task.task_id or "").strip()
+    }
+    for task_id, task_results in _group_cancel_results_by_task(rows, execution_results).items():
+        task = task_by_id.get(task_id)
+        task_status = str(task.task_status or "").strip().lower() if task else ""
+        if task_status in QUERY_TASK_FINAL_STATUSES:
+            continue
+        cancel_status = _build_cancel_task_status(task_results)
+        await _update_query_task(
+            task_id,
+            status=cancel_status,
+            progress_text=("已停止" if cancel_status == "cancelled" else "部分停止失败"),
+            error_message=(None if cancel_status == "cancelled" else "部分 SQL 停止失败"),
+            finished_time=datetime.now(),
+        )
+
+    failed_count = sum(1 for item in execution_results if not item.get("success"))
+    return {
+        "total": len(execution_results),
+        "cancelled": len(execution_results) - failed_count,
+        "failed": failed_count,
+        "executions": execution_results,
+    }
 
 
 async def _create_task_record(

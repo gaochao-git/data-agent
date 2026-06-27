@@ -52,7 +52,7 @@ def authenticate_request(req: Request) -> AuthenticatedUser:
     if not user_id or not username:
         raise AuthenticationError("Missing forwarded user headers.", status_code=401)
 
-    logger.info("[auth] service_user user_id=%s username=%s", user_id, username)
+    logger.info("user_id=%s username=%s", user_id, username)
     return AuthenticatedUser(user_id=user_id, username=username)
 
 

@@ -1,10 +1,10 @@
 # AGENTS.md
 
-本文件用于说明 Data Agent 项目的智能问数模块、开发规范与协作约定。修改前先阅读本文件、根目录 `README.md` 以及相关模块 README。
+本文件用于说明 ChatData 智能问数模块的开发规范与协作约定。修改前先阅读本文件、根目录 `README.md` 以及相关模块 README。
 
 ## 1. 模块范围
 
-当前项目以智能问数为核心：
+当前模块范围：
 - 后端应用：`server/apps/chat_data_app/`
 - 对话与 LangGraph 通用能力：`server/utils/lang_util/`
 - 上传文件服务：`server/utils/file_service/`

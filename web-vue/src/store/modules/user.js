@@ -5,7 +5,7 @@ const DEV_USER = {
   name: 'chatdata_user',
   nickName: 'chatdata_user',
   roles: ['admin'],
-  permissions: ['chatdata:datasource:manage'],
+  permissions: ['chatdata:admin:manage'],
 }
 
 const useUserStore = defineStore('user', {

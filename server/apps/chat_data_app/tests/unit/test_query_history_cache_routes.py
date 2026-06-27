@@ -73,6 +73,7 @@ async def _seed_query_history(session_factory):
                 request_payload=json.dumps({"operator_name": "可视化用户"}),
                 create_time=now,
                 update_time=now,
+                create_by_name="可视化用户",
             ),
             ChatDataQueryTask(
                 task_id="task_agent",
@@ -262,6 +263,263 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     ))
     all_body = _payload(all_response)
     assert all_body["data"]["total"] == 3
+
+
+def test_get_query_history_filters_by_executed_time_range(route_db):
+    asyncio.run(_seed_query_history(route_db))
+
+    response = asyncio.run(routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        start_time="2026-06-02 09:59:30",
+        end_time="2026-06-02 10:00:30",
+    ))
+
+    body = _payload(response)
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 1
+    assert body["data"]["queries"][0]["execution_id"] == "ex_builder"
+
+    invalid_response = asyncio.run(routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        start_time="bad-time",
+    ))
+    invalid_body = _payload(invalid_response)
+    assert invalid_body["status"] == "error"
+    assert invalid_body["code"] == 40001
+
+
+def test_get_admin_query_history_filters_globally(route_db):
+    asyncio.run(_seed_query_history(route_db))
+
+    response = asyncio.run(routes.get_admin_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        user_id="u2",
+        keyword="other",
+        source="sql",
+        status="succeeded",
+        page=1,
+        page_size=20,
+    ))
+
+    body = _payload(response)
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 1
+    item = body["data"]["queries"][0]
+    assert item["execution_id"] == "ex_other_user"
+    assert item["user_id"] == "u2"
+    assert item["query"] == "select other"
+    assert item["source"] == "SQL编辑器"
+    assert "result_payload" not in item
+
+    username_response = asyncio.run(routes.get_admin_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        username="可视化",
+        source="builder",
+        status="succeeded",
+    ))
+    username_body = _payload(username_response)
+    assert username_body["data"]["total"] == 1
+    assert username_body["data"]["queries"][0]["execution_id"] == "ex_builder"
+
+    time_response = asyncio.run(routes.get_admin_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        start_time="2026-06-02 09:59:30",
+        end_time="2026-06-02 10:00:30",
+    ))
+    time_body = _payload(time_response)
+    assert time_body["data"]["total"] == 2
+    assert {item["execution_id"] for item in time_body["data"]["queries"]} == {"ex_builder", "ex_other_user"}
+
+
+async def _seed_running_query_history(session_factory):
+    now = datetime(2026, 6, 2, 11, 0, 0)
+    async with session_factory() as session:
+        session.add_all([
+            ChatDataQueryTask(
+                task_id="task_u1_ds1",
+                task_type="sql",
+                datasource_id="ds1",
+                query_type="sql",
+                task_status="running",
+                request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
+                create_time=now,
+                update_time=now,
+                create_by="u1",
+                create_by_name="用户一",
+            ),
+            ChatDataQueryTask(
+                task_id="task_u2_ds1",
+                task_type="sql",
+                datasource_id="ds1",
+                query_type="sql",
+                task_status="running",
+                request_payload=json.dumps({"operator_name": "用户二", "user_id": "u2"}),
+                create_time=now,
+                update_time=now,
+                create_by="u2",
+                create_by_name="用户二",
+            ),
+            ChatDataQueryTask(
+                task_id="task_u1_ds2",
+                task_type="sql",
+                datasource_id="ds2",
+                query_type="sql",
+                task_status="running",
+                request_payload=json.dumps({"operator_name": "用户一", "user_id": "u1"}),
+                create_time=now,
+                update_time=now,
+                create_by="u1",
+                create_by_name="用户一",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_u1_ds1_pending",
+                task_id="task_u1_ds1",
+                user_id="u1",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员1",
+                executor_type="direct",
+                sql_text="select sleep(10)",
+                sql_status="pending",
+                create_time=now,
+                update_time=now,
+                create_by="u1",
+                create_by_name="用户一",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_u1_ds2_pending",
+                task_id="task_u1_ds2",
+                user_id="u1",
+                datasource_id="ds2",
+                member_datasource_id="m2",
+                member_name="成员2",
+                executor_type="direct",
+                sql_text="select sleep(20)",
+                sql_status="pending",
+                create_time=now,
+                update_time=now,
+                create_by="u1",
+                create_by_name="用户一",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_u2_ds1_pending",
+                task_id="task_u2_ds1",
+                user_id="u2",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员1",
+                executor_type="direct",
+                sql_text="select sleep(30)",
+                sql_status="pending",
+                create_time=now,
+                update_time=now,
+                create_by="u2",
+                create_by_name="用户二",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_u1_ds1_done",
+                task_id="",
+                user_id="u1",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员1",
+                executor_type="direct",
+                sql_text="select 1",
+                sql_status="succeeded",
+                create_time=now,
+                update_time=now,
+                create_by="u1",
+                create_by_name="用户一",
+            ),
+        ])
+        await session.commit()
+
+
+def test_cancel_my_running_query_history_only_current_user(route_db):
+    asyncio.run(_seed_running_query_history(route_db))
+
+    response = asyncio.run(routes.cancel_my_running_query_history(_make_request()))
+    body = _payload(response)
+
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 2
+    assert body["data"]["cancelled"] == 2
+    assert body["data"]["failed"] == 0
+
+    async def read_statuses():
+        async with route_db() as session:
+            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
+            return dict(execution_result.all()), dict(task_result.all())
+
+    execution_statuses, task_statuses = asyncio.run(read_statuses())
+    assert execution_statuses["ex_u1_ds1_pending"] == "cancelled"
+    assert execution_statuses["ex_u1_ds2_pending"] == "cancelled"
+    assert execution_statuses["ex_u2_ds1_pending"] == "pending"
+    assert execution_statuses["ex_u1_ds1_done"] == "succeeded"
+    assert task_statuses["task_u1_ds1"] == "cancelled"
+    assert task_statuses["task_u1_ds2"] == "cancelled"
+    assert task_statuses["task_u2_ds1"] == "running"
+
+
+def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
+    asyncio.run(_seed_running_query_history(route_db))
+
+    response = asyncio.run(routes.cancel_admin_running_query_history(_make_request(), datasource_id="ds1"))
+    body = _payload(response)
+
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 2
+    assert {item["execution_id"] for item in body["data"]["executions"]} == {"ex_u1_ds1_pending", "ex_u2_ds1_pending"}
+
+    async def read_statuses():
+        async with route_db() as session:
+            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
+            return dict(execution_result.all()), dict(task_result.all())
+
+    execution_statuses, task_statuses = asyncio.run(read_statuses())
+    assert execution_statuses["ex_u1_ds1_pending"] == "cancelled"
+    assert execution_statuses["ex_u2_ds1_pending"] == "cancelled"
+    assert execution_statuses["ex_u1_ds2_pending"] == "pending"
+    assert task_statuses["task_u1_ds1"] == "cancelled"
+    assert task_statuses["task_u2_ds1"] == "cancelled"
+    assert task_statuses["task_u1_ds2"] == "running"
+
+
+def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route_db, monkeypatch):
+    asyncio.run(_seed_running_query_history(route_db))
+    original_cancel = routes._cancel_query_execution
+
+    async def fake_cancel(execution, **kwargs):
+        if execution.execution_id == "ex_u1_ds1_pending":
+            raise RuntimeError("remote stop failed")
+        return await original_cancel(execution, **kwargs)
+
+    monkeypatch.setattr(routes, "_cancel_query_execution", fake_cancel)
+
+    response = asyncio.run(routes.cancel_my_running_query_history(_make_request()))
+    body = _payload(response)
+
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 2
+    assert body["data"]["cancelled"] == 1
+    assert body["data"]["failed"] == 1
+    results = {item["execution_id"]: item for item in body["data"]["executions"]}
+    assert results["ex_u1_ds1_pending"]["status"] == "kill_failed"
+    assert results["ex_u1_ds2_pending"]["status"] == "cancelled"
+
+    async def read_task_status():
+        async with route_db() as session:
+            result = await session.execute(select(ChatDataQueryTask.task_status).filter_by(task_id="task_u1_ds1"))
+            return result.scalar_one()
+
+    assert asyncio.run(read_task_status()) == "failed"
 
 
 def test_get_query_history_result_success_and_not_found(route_db):

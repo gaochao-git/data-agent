@@ -6,9 +6,9 @@
  * 支持 AI 生成 SQL
  */
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import { cancelQueryTask, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
+import { cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
 import AsyncQueryResult from './AsyncQueryResult.vue'
 import QuickQueries from './QuickQueries.vue'
@@ -625,12 +625,14 @@ const handleFavoriteSaved = () => {
 
 const showHistoryDialog = ref(false)
 const historyLoading = ref(false)
+const stoppingAllHistory = ref(false)
 const historyItems = ref<SqlHistoryItem[]>([])
 const historyCurrentPage = ref(1)
 const historyPageSize = ref(10)
 const historyTotal = ref(0)
 const historySourceFilter = ref<'all' | 'sql' | 'agent' | 'builder' | 'dashboard'>('all')
 const historyStatusFilter = ref<'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'>('all')
+const historyTimeRange = ref<[string, string] | null>(null)
 
 const loadQueryHistory = async () => {
   if (!props.datasourceId) {
@@ -646,6 +648,8 @@ const loadQueryHistory = async () => {
       page_size: historyPageSize.value,
       source: historySourceFilter.value,
       status: historyStatusFilter.value,
+      start_time: historyTimeRange.value?.[0],
+      end_time: historyTimeRange.value?.[1],
     })
     historyItems.value = response.data?.queries || []
     historyTotal.value = Number(response.data?.total || 0)
@@ -829,6 +833,45 @@ const handleCancelHistoryItem = async (item: SqlHistoryItem) => {
   } catch (err) {
     console.error('暂停查询任务失败:', err)
     ElMessage.error('暂停失败，请稍后重试')
+  }
+}
+
+const handleCancelAllRunningHistory = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要停止你所有正在执行的 SQL 吗？该操作会影响个人查询历史中的所有等待中和执行中任务。',
+      '停止个人所有执行中 SQL',
+      {
+        confirmButtonText: '停止',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  stoppingAllHistory.value = true
+  try {
+    const response = await cancelRunningQueryHistory()
+    if (response.status !== 'success') {
+      ElMessage.error(response.msg || '批量停止失败')
+      return
+    }
+    const data = response.data
+    if (!data || data.total === 0) {
+      ElMessage.info('当前没有正在执行的 SQL')
+    } else if (data.failed > 0) {
+      ElMessage.warning(`已提交 ${data.total} 条停止请求，${data.failed} 条停止失败`)
+    } else {
+      ElMessage.success(`已提交 ${data.cancelled} 条停止请求`)
+    }
+    await loadQueryHistory()
+  } catch (err) {
+    console.error('批量停止个人查询历史失败:', err)
+    ElMessage.error('批量停止失败，请稍后重试')
+  } finally {
+    stoppingAllHistory.value = false
   }
 }
 
@@ -2438,7 +2481,7 @@ defineExpose({
     @update:model-value="showHistoryDialog = $event"
   >
     <div class="mb-3 space-y-3">
-      <div class="flex items-center gap-4 rounded-md border border-[#eef1f6] bg-[#fafcff] px-3 py-2">
+      <div class="flex flex-wrap items-center gap-3 rounded-md border border-[#eef1f6] bg-[#fafcff] px-3 py-2">
         <label class="flex items-center gap-2 text-[13px] text-[#606266]">
           <span class="whitespace-nowrap">来源</span>
           <el-select
@@ -2472,7 +2515,21 @@ defineExpose({
             <el-option label="取消失败" value="kill_failed" />
           </el-select>
         </label>
+        <label class="flex items-center gap-2 text-[13px] text-[#606266]">
+          <span class="whitespace-nowrap">时间</span>
+          <el-date-picker
+            v-model="historyTimeRange"
+            type="datetimerange"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            range-separator="至"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
+            style="width: 360px"
+            @change="handleHistoryFilterChange"
+          />
+        </label>
         <el-button :loading="historyLoading" @click="loadQueryHistory">刷新</el-button>
+        <el-button type="danger" plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止个人执行中 SQL</el-button>
       </div>
     </div>
 

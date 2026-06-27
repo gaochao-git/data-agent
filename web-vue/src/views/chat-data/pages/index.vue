@@ -6,7 +6,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close } from '@element-plus/icons-vue'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
 import { getUserOrgList } from '@/api/psoss/records'
 import { getDatasources, getConversations, createConversation, generateConversationTitle, getSemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
@@ -24,7 +24,7 @@ import BuilderSidebar from '../components/sidebars/BuilderSidebar.vue'
 import EditorSidebar from '../components/sidebars/EditorSidebar.vue'
 import DashboardEditor from '../components/Dashboard/DashboardEditor.vue'
 import SemanticConfigPanel from '../components/SemanticConfigPanel.vue'
-import DataSourceManager from '../components/DataSourceManager.vue'
+import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
@@ -155,23 +155,17 @@ const loadUserOrgCodePermissions = async () => {
     userOrgCodePermissions.value = []
   }
 }
-// 数据源管理弹窗
-const showDatasourceModal = ref(false)
-const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
-const canManageDatasource = computed(() => {
+// 后台管理弹窗
+const showAdminModal = ref(false)
+const canManageAdmin = computed(() => {
   const permissions = userStore.permissions || []
-  return permissions.includes('*:*:*') || permissions.includes('chatdata:datasource:manage')
+  return permissions.includes('*:*:*') || permissions.includes('chatdata:admin:manage')
 })
+const canManageDatasource = canManageAdmin
 
 const openDatasourceManager = () => {
-  if (!canManageDatasource.value) return
-  showDatasourceModal.value = true
-}
-
-// 打开新建数据源组弹窗
-const openDatasourceGroupModal = () => {
-  if (!canManageDatasource.value) return
-  datasourceManagerRef.value?.openGroupModal()
+  if (!canManageAdmin.value) return
+  showAdminModal.value = true
 }
 
 const normalizeTableInfoList = (tables: unknown): TableInfo[] => {
@@ -525,7 +519,7 @@ const handleCloseMetricConfigTab = () => {
 const handleOpenSemanticConfig = (datasourceId?: string) => {
   if (!canManageDatasource.value) return
   semanticConfigDatasourceId.value = datasourceId || selectedDatasourceId.value
-  showDatasourceModal.value = false
+  showAdminModal.value = false
   isSemanticConfigPanelOpen.value = true
   if (semanticConfigDatasourceId.value) {
     void loadDatasourceSchema(semanticConfigDatasourceId.value)
@@ -1374,10 +1368,11 @@ onUnmounted(() => {
 
 <template>
   <!-- 高度 = 视口 - 主项目头部(导航栏50+标签栏32=82px)，按实际调整 -->
-  <div
-    class="chatdata-root flex flex-col w-full"
-    style="height: calc(100vh - 82px); background: linear-gradient(to bottom, #F9FAFB 0%, #F3F4F6 100%)"
-  >
+  <el-config-provider :locale="zhCn">
+    <div
+      class="chatdata-root flex flex-col w-full"
+      style="height: calc(100vh - 82px); background: linear-gradient(to bottom, #F9FAFB 0%, #F3F4F6 100%)"
+    >
     <!-- 未匹配数据源提示 -->
     <div v-if="noMatchedDatasource" class="flex-1 flex items-center justify-center">
       <div class="text-center text-gray-400">
@@ -1633,7 +1628,7 @@ onUnmounted(() => {
               v-if="canManageDatasource"
               class="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 shadow-sm hover:bg-slate-100 hover:text-slate-600 transition-all"
               :class="showSidebarContextBar ? '' : 'ml-auto'"
-              title="数据源组管理"
+              title="后台管理"
               @click="openDatasourceManager"
             >
               <i class="fa-solid fa-cog text-xs"></i>
@@ -1844,37 +1839,15 @@ onUnmounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 数据源组管理弹窗 -->
-    <el-dialog v-if="canManageDatasource" v-model="showDatasourceModal" width="min(1280px, 94vw)" :show-close="false">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-medium text-slate-700 m-0">
-            <i class="fa-solid fa-database mr-2 text-blue-500"></i>
-            数据源组管理
-          </h3>
-          <div class="flex items-center gap-2">
-            <el-button type="primary" size="small" round @click="openDatasourceGroupModal">
-              <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
-              新建
-            </el-button>
-            <el-button
-              :icon="Close"
-              circle
-              size="small"
-              @click="showDatasourceModal = false"
-            />
-          </div>
-        </div>
-      </template>
-      <div class="overflow-y-auto overflow-x-hidden" style="height: min(680px, 72vh)">
-        <DataSourceManager
-          ref="datasourceManagerRef"
-          @datasources-change="handleDatasourcesChange"
-          @open-semantic-config="handleOpenSemanticConfig"
-        />
-      </div>
-    </el-dialog>
-  </div>
+    <ChatDataAdminManager
+      v-if="canManageAdmin"
+      v-model="showAdminModal"
+      :datasources="allDatasources"
+      @datasources-change="handleDatasourcesChange"
+      @open-semantic-config="handleOpenSemanticConfig"
+    />
+    </div>
+  </el-config-provider>
 </template>
 
 <style>
