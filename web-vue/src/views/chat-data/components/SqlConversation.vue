@@ -422,7 +422,11 @@ const favoriteContent = ref('')
 const creatingDashboardMessageId = ref<string | null>(null)
 
 const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
-const trimSkillPrefix = (text: string) => String(text || '').replace(/^使用「[^」]+」技能[:：]\s*/, '').trim()
+const buildSkillRequestText = (text: string, skill: Pick<SkillInfo, 'name' | 'title' | 'description'> | null) => {
+  const normalizedText = String(text || '').trim()
+  if (!skill) return normalizedText
+  return `使用「${skill.name}」技能回答：${normalizedText}`
+}
 const skillCommandKeyword = computed(() => {
   if (selectedAgent.value !== 'chat_data') return null
   const match = input.value.match(/^\/([^\s/]*)/)
@@ -995,8 +999,8 @@ const submitQuery = async (
             description: selectedSkillSnapshot.description,
           }
         : null)
-  const normalizedQuery = effectiveSkill ? trimSkillPrefix(queryText) : queryText.trim()
-  const skillName = effectiveSkill?.name || null
+  const normalizedQuery = queryText.trim()
+  const requestText = buildSkillRequestText(normalizedQuery, effectiveSkill || null)
   const activeAgentId = 'chat_data'
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
@@ -1014,7 +1018,7 @@ const submitQuery = async (
     const userMessage: Message = {
       id: userMessageId,
       role: 'user',
-      content: normalizedQuery,
+      content: requestText,
       timestamp: new Date(),
       skill: effectiveSkill || undefined,
     }
@@ -1078,7 +1082,7 @@ const submitQuery = async (
 
   try {
     await generateSqlStream(
-      normalizedQuery,
+      requestText,
       true,
       selectedDatasource.value,
       convId,
@@ -1136,7 +1140,7 @@ const submitQuery = async (
       selectedModelValue.value,
       selectedMemberDatasourceIds.value,
       activeAgentId,
-      skillName,
+      null,
       (payload) => handleDashboardSpec(payload, assistantMessageId),
       undefined,
       (payload) => {
@@ -1228,7 +1232,6 @@ const handleKeyDown = (e: KeyboardEvent) => {
     }
     if (e.key === 'Escape') {
       e.preventDefault()
-      input.value = input.value.replace(/^\/[^\s/]*\s?/, '')
       highlightedSkillIndex.value = 0
       return
     }
@@ -1284,7 +1287,6 @@ const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dim
 const handleSkillSelect = (skill: SkillInfo) => {
   selectedSkill.value = skill
   resetSemanticQuestionDraft()
-  input.value = trimSkillPrefix(input.value)
   nextTick(() => textareaRef.value?.focus())
 }
 

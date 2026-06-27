@@ -249,6 +249,10 @@ const selectedMemberDatasourceIds = computed({
 const selectedModelValue = computed(() => modelOptions.value.find(m => m.id === selectedModel.value)?.value || selectedModel.value || null)
 const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
 const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '智能问数')
+const buildSkillRequestText = (text: string, skillName: string) => {
+  const normalizedText = String(text || '').trim()
+  return skillName ? `使用「${skillName}」技能回答：${normalizedText}` : normalizedText
+}
 const skillCommandKeyword = computed(() => {
   if (selectedAgent.value !== 'chat_data_data_analyze') return null
   const match = input.value.match(/^\/([^\s/]*)/)
@@ -1961,8 +1965,7 @@ const handleSubmit = async () => {
 
   const queryText = input.value.trim()
   const skillName = selectedSkill.value?.name || null
-  const skillTitle = selectedSkill.value?.title || selectedSkill.value?.name || ''
-  const requestText = skillName ? `使用「${skillTitle}」技能：${queryText}` : queryText
+  const requestText = buildSkillRequestText(queryText, skillName || '')
   const manualSemanticConfigId = props.semanticConfigSelection?.user_selected
     ? props.semanticConfigSelection.semantic_config_id
     : null

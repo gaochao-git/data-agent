@@ -120,6 +120,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "数据源组智能问数说明是当前数据源组的主要业务上下文" in system_prompt
     assert "业务知识技能默认不加载" in system_prompt
     assert "只有用户本轮显式引用技能" in system_prompt
+    assert "禁止再向用户确认是否加载" in system_prompt
     assert "必须先读取 `custom-query-skill` 主说明" not in system_prompt
     assert "必须先读取对应技能补充领域上下文" not in system_prompt
     assert "必须先读取对应技能补充业务判断" not in system_prompt
