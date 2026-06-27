@@ -18,24 +18,17 @@ from apps.chat_data_app.agent.tools import common
 from utils.lang_util import conversation
 
 
-def test_query_result_artifact_helpers_delegate_to_artifact_store(monkeypatch):
+def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
     captured = {}
 
     def fake_save_artifact(artifact_type, data, artifact_id=None, conversation_id=None):
         captured["save"] = (artifact_type, data, artifact_id, conversation_id)
         return "result_1"
 
-    def fake_load_artifact(artifact_type, result_id):
-        captured["load"] = (artifact_type, result_id)
-        return {"rows": [{"id": 1}]}
-
     monkeypatch.setattr(state, "save_artifact", fake_save_artifact)
-    monkeypatch.setattr(state, "load_artifact", fake_load_artifact)
 
     assert state.save_query_result({"rows": []}, conversation_id="conv_a") == "result_1"
-    assert state.load_query_result("result_1") == {"rows": [{"id": 1}]}
     assert captured["save"] == (state.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
-    assert captured["load"] == (state.ArtifactType.QUERY_RESULT, "result_1")
 
 
 def test_state_reducers_cover_empty_merge_append_dedupe_and_window():
@@ -46,28 +39,6 @@ def test_state_reducers_cover_empty_merge_append_dedupe_and_window():
 
     assert set(state.merge_table_names(["orders"], ["users", "orders"])) == {"orders", "users"}
     assert state.merge_table_names(None, None) == []
-
-    existing = [{"id": f"old_{index}", "sql": "select 1", "columns": [], "row_count": 0} for index in range(8)]
-    new = [
-        {"id": "old_0", "sql": "select 2", "columns": ["id"], "row_count": 1},
-        {"id": "new_1", "sql": "select 3", "columns": [], "row_count": 0},
-        {"id": "new_2", "sql": "select 4", "columns": [], "row_count": 0},
-    ]
-
-    merged = state.merge_query_results(existing, new)
-
-    assert len(merged) == 10
-    assert merged[0]["id"] == "old_0"
-    assert merged[-2]["id"] == "new_1"
-    assert merged[-1]["id"] == "new_2"
-    assert next(item for item in merged if item["id"] == "old_0")["sql"] == "select 2"
-
-    windowed = state.merge_query_results(
-        [{"id": f"item_{index}", "sql": "", "columns": [], "row_count": 0} for index in range(12)],
-        [],
-    )
-    assert len(windowed) == 10
-    assert windowed[0]["id"] == "item_2"
 
     assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
     assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]

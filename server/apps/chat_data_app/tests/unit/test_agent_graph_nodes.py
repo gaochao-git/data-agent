@@ -31,20 +31,12 @@ def test_mode_config_and_prompt_formatters():
     with pytest.raises(ValueError, match="不支持的模式配置"):
         config.get_mode_config(has_semantic=False, mode="missing")
 
-    result_text = nodes.format_query_results_for_llm([
-        {"id": "result_1", "sql": "select " + "x" * 120, "columns": ["订单ID", "销售额"], "row_count": 10},
-    ])
-    assert "result_id: `result_1`" in result_text
-    assert "..." in result_text
-    assert "列: 订单ID, 销售额" in result_text
-    assert nodes.format_query_results_for_llm([]) == ""
     assert nodes.format_execution_target_info_for_llm("  机构A  ") == "\n机构A\n"
     assert nodes.format_execution_target_info_for_llm("") == ""
     assert nodes.format_semantic_config_directory_info_for_llm("  ## 当前可见指标集目录  ") == "\n## 当前可见指标集目录\n"
     assert nodes.format_semantic_config_directory_info_for_llm("") == ""
     assert nodes.format_datasource_group_context_for_llm("  规则说明  ") == "\n## 数据源组智能问数说明\n规则说明\n"
     assert nodes.format_datasource_group_context_for_llm("") == ""
-    assert nodes.build_semantic_layer_context({"id": "sc_a"}, "generate") == ""
     assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context(None, "query")
     assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None, "query")
     assert "指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答" in nodes.build_semantic_layer_context(None, "query")
@@ -52,8 +44,8 @@ def test_mode_config_and_prompt_formatters():
     assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"}, "query")
     assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
     semantic_context = nodes.build_semantic_layer_context({"id": "sc_only"}, "query")
-    assert "先读取 `business-query` 主说明" in semantic_context
-    assert "必须先读取对应技能补充业务判断" in semantic_context
+    assert "只有用户本轮显式指定业务知识技能时，才读取对应技能" in semantic_context
+    assert "先读取 `custom-query-skill` 主说明" not in semantic_context
     assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context({}, "query")
     assert "semantic_config_id" not in nodes.build_semantic_layer_context({"name": "订单分析"}, "query")
     assert "当前已选择指标集。" in nodes.build_semantic_layer_context({"id": "", "name": ""}, "query")
@@ -97,12 +89,11 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
         ["dsl2sql_tool"],
         semantic_config={"id": "sc_a"},
         model_id=None,
-        available_skills_context="## 可用业务知识技能\n- business-query: 业务问数知识技能",
+        available_skills_context="## 可用业务知识技能\n- custom-query-skill: 自定义问数技能",
     )
     result = await agent_node({
         "messages": [HumanMessage(content="查询销售额")],
         "tables_ddl_info": "CREATE TABLE orders(id int)",
-        "query_results": [{"id": "r1", "sql": "select 1", "columns": ["c1"], "row_count": 1}],
         "mode": "query",
         "execution_target_info": "当前机构A",
         "datasource_group_context": "当前数据源组按执行对象数据源分库",
@@ -123,15 +114,15 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "当前数据源组按执行对象数据源分库" in system_prompt
     assert "当前可见指标集目录" in system_prompt
     assert "1. 名称：订单分析" in system_prompt
-    assert "可用的查询结果" in system_prompt
-    assert "business-query" in system_prompt
-    assert "没有明显匹配时不要硬加载" in system_prompt
+    assert "custom-query-skill" in system_prompt
     assert "基本边界" in system_prompt
     assert "当前指标集是唯一可执行事实源" in system_prompt
-    assert "业务知识技能只补充领域路由和业务判断方法" in system_prompt
-    assert "必须先读取 `business-query` 主说明" in system_prompt
-    assert "必须先读取对应技能补充领域上下文" in system_prompt
-    assert "必须先读取对应技能补充业务判断" in system_prompt
+    assert "数据源组智能问数说明是当前数据源组的主要业务上下文" in system_prompt
+    assert "业务知识技能默认不加载" in system_prompt
+    assert "只有用户本轮显式引用技能" in system_prompt
+    assert "必须先读取 `custom-query-skill` 主说明" not in system_prompt
+    assert "必须先读取对应技能补充领域上下文" not in system_prompt
+    assert "必须先读取对应技能补充业务判断" not in system_prompt
     assert "最终回答不要提及技能加载过程" in system_prompt
 
 

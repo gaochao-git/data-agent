@@ -411,6 +411,7 @@ class ChatDataSkill(Base):
     skill_title: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
     skill_desc: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
     skill_category: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    skill_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="analyze", server_default="analyze")
     skill_source: Mapped[str] = mapped_column(String(20), nullable=False, default="user", server_default="user")
     visibility_type: Mapped[str] = mapped_column(String(20), nullable=False, default="private", server_default="private")
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")

@@ -117,6 +117,17 @@ def test_chat_data_query_prompt_template_format_keeps_json_examples_valid():
     assert '"left":{"type":"metric","name":"指标A"}' in prompt
 
 
+def test_chat_data_query_prompt_defines_new_user_onboarding_role():
+    prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+
+    assert "数据向导" in prompt
+    assert "不知道能问什么" in prompt
+    assert "新用户上手引导" in prompt
+    assert "一次只推进一步" in prompt
+    assert "不能编造指标、维度、表、字段或查询结果" in prompt
+    assert "新用户引导时，可基于「当前可见指标集目录」" in prompt
+
+
 def test_chat_data_query_prompt_stops_when_question_exceeds_current_capability():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 

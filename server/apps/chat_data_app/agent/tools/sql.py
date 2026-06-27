@@ -309,6 +309,8 @@ async def semantic_query_tool(
     available_member_datasource_ids = _normalize_member_datasource_ids(state.get("available_member_datasource_ids"))
     matched_member_datasource_ids = _normalize_member_datasource_ids(state.get("matched_member_datasource_ids"))
     allowed_member_datasource_ids = state_member_datasource_ids or available_member_datasource_ids
+    if state.get("require_explicit_member_selection") and not allowed_member_datasource_ids:
+        return "semantic_query_tool 执行失败: 本次请求没有可用执行对象，请先选择有权限的数据源后再查询"
     if requested_member_datasource_ids:
         if matched_member_datasource_ids:
             invalid_matched_member_ids = [

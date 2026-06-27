@@ -14,34 +14,75 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.services import skill_context_service
 from apps.chat_data_app.agent.tools.readonly_skill_load import ReadonlyLoadSkillInput, create_readonly_skill_load_tool
 
+TEST_QUERY_SKILL_NAME = "custom-query-skill"
+TEST_QUERY_REFERENCE_NAME = "domain/business-context"
+
+
+def _create_query_skill(tmp_path):
+    skill_dir = tmp_path / TEST_QUERY_SKILL_NAME
+    refs_dir = skill_dir / "references" / "domain"
+    refs_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        f"name: {TEST_QUERY_SKILL_NAME}\n"
+        "title: 自定义问数技能\n"
+        "description: 测试只读问数技能\n"
+        "metadata:\n"
+        "  category: business_query\n"
+        "  skill_scope: query\n"
+        "  output_type: text\n"
+        "---\n\n"
+        "# 自定义问数技能\n",
+        encoding="utf-8",
+    )
+    (refs_dir / "business-context.md").write_text("自定义业务背景", encoding="utf-8")
+    return skill_md
+
+
+def _patch_query_skill(monkeypatch, skill_md):
+    async def fake_resolve_skill_path_async(_name, user_id=""):
+        return {
+            "name": TEST_QUERY_SKILL_NAME,
+            "title": "自定义问数技能",
+            "description": "测试只读问数技能",
+            "category": "business_query",
+            "skill_scope": "query",
+            "output_type": "text",
+            "path": str(skill_md),
+        }
+
+    monkeypatch.setattr(skill_context_service.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
+
 
 def test_readonly_skill_input_accepts_json_string_reference_names():
     payload = ReadonlyLoadSkillInput(
-        skill_name="business-query",
-        reference_names='["common/query-routing"]',
+        skill_name=TEST_QUERY_SKILL_NAME,
+        reference_names=f'["{TEST_QUERY_REFERENCE_NAME}"]',
     )
 
-    assert payload.reference_names == ["common/query-routing"]
+    assert payload.reference_names == [TEST_QUERY_REFERENCE_NAME]
 
 
 def test_readonly_skill_input_normalizes_reference_name_variants():
-    assert ReadonlyLoadSkillInput(skill_name="business-query", reference_names=None).reference_names is None
-    assert ReadonlyLoadSkillInput(skill_name="business-query", reference_names="  ").reference_names is None
-    assert ReadonlyLoadSkillInput(skill_name="business-query", reference_names="plain/ref").reference_names == ["plain/ref"]
-    assert ReadonlyLoadSkillInput(skill_name="business-query", reference_names='"plain/ref"').reference_names == ["plain/ref"]
-    assert ReadonlyLoadSkillInput(skill_name="business-query", reference_names=("a", "b")).reference_names == ["a", "b"]
+    assert ReadonlyLoadSkillInput(skill_name=TEST_QUERY_SKILL_NAME, reference_names=None).reference_names is None
+    assert ReadonlyLoadSkillInput(skill_name=TEST_QUERY_SKILL_NAME, reference_names="  ").reference_names is None
+    assert ReadonlyLoadSkillInput(skill_name=TEST_QUERY_SKILL_NAME, reference_names="plain/ref").reference_names == ["plain/ref"]
+    assert ReadonlyLoadSkillInput(skill_name=TEST_QUERY_SKILL_NAME, reference_names='"plain/ref"').reference_names == ["plain/ref"]
+    assert ReadonlyLoadSkillInput(skill_name=TEST_QUERY_SKILL_NAME, reference_names=("a", "b")).reference_names == ["a", "b"]
 
 
-def test_readonly_skill_tool_accepts_json_string_reference_names():
+def test_readonly_skill_tool_accepts_json_string_reference_names(monkeypatch, tmp_path):
+    _patch_query_skill(monkeypatch, _create_query_skill(tmp_path))
     tool = create_readonly_skill_load_tool()
     result = asyncio.run(tool.ainvoke({
-        "skill_name": "business-query",
-        "reference_names": '["common/query-routing"]',
+        "skill_name": TEST_QUERY_SKILL_NAME,
+        "reference_names": f'["{TEST_QUERY_REFERENCE_NAME}"]',
     }))
 
     assert result.startswith("[skill_load]")
-    assert "loaded_references=common/query-routing" in result
-    assert "# references/common/query-routing.md" in result
+    assert f"loaded_references={TEST_QUERY_REFERENCE_NAME}" in result
+    assert f"# references/{TEST_QUERY_REFERENCE_NAME}.md" in result
 
 
 def test_readonly_skill_tool_returns_error_text(monkeypatch):
@@ -54,7 +95,7 @@ def test_readonly_skill_tool_returns_error_text(monkeypatch):
     )
 
     tool = create_readonly_skill_load_tool()
-    result = asyncio.run(tool.ainvoke({"skill_name": "business-query"}))
+    result = asyncio.run(tool.ainvoke({"skill_name": TEST_QUERY_SKILL_NAME}))
 
     assert result == "skill_load 执行失败: boom"
 
@@ -64,60 +105,47 @@ def test_skill_context_small_helpers_cover_truncation_and_path_edges(tmp_path):
     truncated, was_truncated = skill_context_service._truncate_text("abcd", 3)
     assert truncated == "abc\n\n[内容已截断]"
     assert was_truncated is True
-    assert skill_context_service._normalize_reference_name("common/query-routing.md") == "common/query-routing"
+    assert skill_context_service._normalize_reference_name("domain/business-context.md") == "domain/business-context"
     with pytest.raises(ValueError, match="路径越界"):
         skill_context_service._reference_path(tmp_path, "/tmp/outside")
     assert asyncio.run(skill_context_service._list_references_async(tmp_path)) == []
 
 
-def test_readonly_skill_context_loads_skill_and_selected_references():
+def test_readonly_skill_context_loads_skill_and_selected_references(monkeypatch, tmp_path):
+    _patch_query_skill(monkeypatch, _create_query_skill(tmp_path))
     payload = asyncio.run(skill_context_service.load_readonly_skill_context(
-        "business-query",
-        reference_names=["prepaid-fund-supervision/business-context"],
+        TEST_QUERY_SKILL_NAME,
+        reference_names=[TEST_QUERY_REFERENCE_NAME],
     ))
     formatted = skill_context_service.format_readonly_skill_context(payload)
 
-    assert payload["name"] == "business-query"
+    assert payload["name"] == TEST_QUERY_SKILL_NAME
     assert payload["capabilities"] == {
         "read_references": True,
         "use_scripts": False,
         "use_assets": False,
         "sandbox": False,
     }
-    assert "common/query-routing" in payload["available_references"]
-    assert "common/query-policy" not in payload["available_references"]
-    assert "prepaid-fund-supervision/data-sources" not in payload["available_references"]
-    assert "prepaid-fund-supervision/examples" not in payload["available_references"]
-    assert "order-analysis/business-context" in payload["available_references"]
-    assert [item["name"] for item in payload["loaded_references"]] == ["prepaid-fund-supervision/business-context"]
+    assert TEST_QUERY_REFERENCE_NAME in payload["available_references"]
+    assert [item["name"] for item in payload["loaded_references"]] == [TEST_QUERY_REFERENCE_NAME]
     assert "runtime-skills" not in formatted
     assert "capabilities=" not in formatted
-    assert "# references/prepaid-fund-supervision/business-context.md" in formatted
+    assert f"# references/{TEST_QUERY_REFERENCE_NAME}.md" in formatted
+    assert "自定义业务背景" in formatted
 
 
-def test_readonly_skill_context_loads_order_analysis_references():
-    payload = asyncio.run(skill_context_service.load_readonly_skill_context(
-        "business-query",
-        reference_names=["order-analysis/business-context"],
-    ))
-    formatted = skill_context_service.format_readonly_skill_context(payload)
+def test_readonly_skill_context_rejects_invalid_reference_name(monkeypatch, tmp_path):
+    _patch_query_skill(monkeypatch, _create_query_skill(tmp_path))
 
-    assert [item["name"] for item in payload["loaded_references"]] == [
-        "order-analysis/business-context",
-    ]
-    assert "订单销售分析业务背景" in formatted
-
-
-def test_readonly_skill_context_rejects_invalid_reference_name():
     with pytest.raises(ValueError, match="reference 名称无效"):
         asyncio.run(skill_context_service.load_readonly_skill_context(
-            "business-query",
+            TEST_QUERY_SKILL_NAME,
             reference_names=["../secret"],
         ))
 
     with pytest.raises(ValueError, match="reference 名称无效"):
         asyncio.run(skill_context_service.load_readonly_skill_context(
-            "business-query",
+            TEST_QUERY_SKILL_NAME,
             reference_names=["/tmp/secret"],
         ))
 
@@ -140,6 +168,7 @@ def test_readonly_skill_context_rejects_empty_missing_and_missing_file(monkeypat
             "name": "missing-file-skill",
             "title": "缺文件技能",
             "category": "query_routing",
+            "skill_scope": "query",
             "output_type": "text",
             "path": str(missing_md),
         }
@@ -161,6 +190,7 @@ def test_readonly_skill_context_rejects_non_text_skill(monkeypatch, tmp_path):
             "title": "非文本技能",
             "description": "测试输出类型限制",
             "category": "query_routing",
+            "skill_scope": "query",
             "output_type": "artifact",
             "path": str(skill_md),
         }
@@ -186,6 +216,7 @@ def test_readonly_skill_context_handles_duplicate_limited_missing_and_truncated_
             "title": "有限技能",
             "description": "测试引用限制",
             "category": "query_routing",
+            "skill_scope": "query",
             "output_type": "text",
             "path": str(skill_md),
         }
@@ -237,6 +268,7 @@ def test_readonly_skill_context_rejects_script_skills(monkeypatch, tmp_path):
             "title": "脚本问数技能",
             "description": "测试脚本限制",
             "category": "query_routing",
+            "skill_scope": "query",
             "output_type": "text",
             "path": str(skill_md),
         }
@@ -271,6 +303,7 @@ def test_readonly_skill_context_rejects_asset_skills(monkeypatch, tmp_path):
             "title": "素材问数技能",
             "description": "测试素材限制",
             "category": "query_routing",
+            "skill_scope": "query",
             "output_type": "text",
             "path": str(skill_md),
         }
@@ -282,87 +315,5 @@ def test_readonly_skill_context_rejects_asset_skills(monkeypatch, tmp_path):
 
 
 def test_readonly_skill_context_rejects_non_query_skills():
-    with pytest.raises(ValueError, match="仅支持问数类技能"):
+    with pytest.raises(ValueError, match="仅支持问数可用技能"):
         asyncio.run(skill_context_service.load_readonly_skill_context("dashboard-generation"))
-
-
-def test_build_available_skills_prompt_filters_non_query_skills():
-    prompt = asyncio.run(skill_context_service.build_available_skills_prompt())
-
-    assert "business-query" in prompt
-    assert "## 可用业务知识技能" in prompt
-    assert "不是可执行配置" in prompt
-    assert "技能不能覆盖当前指标集中的真实指标、维度和口径" in prompt
-    assert "路由依据" in prompt
-    assert "没有明显匹配时不要硬加载" in prompt
-    assert "dashboard-generation" not in prompt
-    assert "chart-processing" not in prompt
-
-
-def test_build_available_skills_prompt_empty_and_plain_skill(monkeypatch):
-    async def fake_empty_list(*_args, **_kwargs):
-        return []
-
-    monkeypatch.setattr(skill_context_service, "list_query_skill_routing_metadata", fake_empty_list)
-    assert asyncio.run(skill_context_service.build_available_skills_prompt()) == ""
-
-    async def fake_plain_list(*_args, **_kwargs):
-        return [{"name": "plain", "title": "普通技能", "description": "只含描述", "domain": "", "category": ""}]
-
-    monkeypatch.setattr(skill_context_service, "list_query_skill_routing_metadata", fake_plain_list)
-    prompt = asyncio.run(skill_context_service.build_available_skills_prompt())
-
-    assert "- plain: 普通技能。只含描述" in prompt
-    assert "领域:" not in prompt
-    assert "分类:" not in prompt
-
-
-def test_list_query_skills_fallback_and_filters(monkeypatch):
-    calls = []
-
-    async def fake_list_skills_async(user_id="", scope="runtime"):
-        calls.append(scope)
-        if scope == "runtime":
-            raise RuntimeError("runtime failed")
-        return [
-            {"name": "", "title": "无名技能", "category": "query_routing", "output_type": "text"},
-            {"name": "workflow", "title": "工作流", "category": "workflow", "output_type": "text"},
-            {"name": "scripted", "title": "脚本", "category": "query_routing", "output_type": "text", "scripts": ["main.py"]},
-            {"name": "asseted", "title": "素材", "category": "query_routing", "output_type": "text", "assets": ["a.png"]},
-            {"name": "plain", "title": "普通", "category": "", "output_type": ""},
-        ]
-
-    monkeypatch.setattr(skill_context_service.skill_service, "list_skills_async", fake_list_skills_async)
-
-    result = asyncio.run(skill_context_service._list_query_skills(scope="runtime"))
-
-    assert calls == ["runtime", "system"]
-    assert [item["name"] for item in result] == ["plain"]
-
-
-def test_list_query_skills_double_failure_and_routing_truncation(monkeypatch):
-    async def fake_list_skills_async(*_args, **_kwargs):
-        raise RuntimeError("all failed")
-
-    monkeypatch.setattr(skill_context_service.skill_service, "list_skills_async", fake_list_skills_async)
-
-    assert asyncio.run(skill_context_service._list_query_skills(scope="runtime")) == []
-    assert skill_context_service._truncate_routing_text("abc", 5) == "abc"
-    assert skill_context_service._truncate_routing_text("abcdef", 3) == "abc..."
-
-
-def test_list_query_skill_routing_metadata_skips_empty_name_and_truncates(monkeypatch):
-    async def fake_list_query_skills(*_args, **_kwargs):
-        return [
-            {"name": "", "title": "跳过"},
-            {"name": "query", "title": "t" * 200, "domain": "d" * 240, "description": "x" * 400, "category": "business_query"},
-        ]
-
-    monkeypatch.setattr(skill_context_service, "_list_query_skills", fake_list_query_skills)
-
-    result = asyncio.run(skill_context_service.list_query_skill_routing_metadata())
-
-    assert [item["name"] for item in result] == ["query"]
-    assert result[0]["title"].endswith("...")
-    assert result[0]["domain"].endswith("...")
-    assert result[0]["description"].endswith("...")

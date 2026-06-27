@@ -7,16 +7,14 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from utils.logger import get_logger
 from .skill_service import resolve_skill_name, skill_service
-
-logger = get_logger(__name__)
 
 MAX_SKILL_CONTEXT_CHARS = 24_000
 MAX_REFERENCE_CHARS = 8_000
 MAX_REFERENCE_COUNT = 5
 REFERENCE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
 SUPPORTED_QUERY_SKILL_CATEGORIES = {"query_routing", "semantic_query", "business_query", "custom"}
+SUPPORTED_QUERY_SKILL_SCOPES = {"query", "all"}
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -46,14 +44,6 @@ def _reference_path(skill_dir: Path, reference_name: str) -> Path:
     if not (candidate == references_root or references_root in candidate.parents):
         raise ValueError(f"reference 路径越界: {reference_name}")
     return candidate
-
-
-def _is_supported_query_skill_metadata(metadata: Dict[str, Any]) -> bool:
-    category = str(metadata.get("category") or "").strip()
-    if category and category not in SUPPORTED_QUERY_SKILL_CATEGORIES:
-        return False
-    output_type = str(metadata.get("output_type") or "text").strip()
-    return not output_type or output_type == "text"
 
 
 async def _read_text_async(path: Path) -> str:
@@ -98,6 +88,9 @@ async def load_readonly_skill_context(
     skill_dir = skill_md_path.parent.resolve()
     if not await asyncio.to_thread(skill_md_path.exists):
         raise ValueError(f"技能文件不存在: {resolved_name}")
+    skill_scope = str(metadata.get("skill_scope") or "analyze").strip().lower()
+    if skill_scope not in SUPPORTED_QUERY_SKILL_SCOPES:
+        raise ValueError(f"智能问数只读 skill_load 仅支持问数可用技能: {resolved_name}")
     category = str(metadata.get("category") or "").strip()
     if category and category not in SUPPORTED_QUERY_SKILL_CATEGORIES:
         raise ValueError(f"智能问数只读 skill_load 仅支持问数类技能: {resolved_name}")
@@ -180,81 +173,3 @@ def format_readonly_skill_context(payload: Dict[str, Any]) -> str:
     for ref in payload.get("loaded_references") or []:
         lines.extend(["", f"# references/{ref.get('name')}.md", str(ref.get("content") or "").strip()])
     return "\n".join(lines).strip()
-
-
-async def build_available_skills_prompt(user_id: str = "", scope: str = "runtime") -> str:
-    """构造智能问数可用技能清单。"""
-    skills = await list_query_skill_routing_metadata(user_id=user_id, scope=scope)
-    if not skills:
-        return ""
-
-    lines = [
-        "## 可用业务知识技能",
-        "业务知识技能只补充领域路由和查询判断方法，不是可执行配置。",
-        "技能不能覆盖当前指标集中的真实指标、维度和口径；没有明显匹配时不要硬加载。",
-        "路由依据：技能 name/title/domain/description，以及当前指标集名称、描述、指标或维度中的领域词。",
-    ]
-    for item in skills:
-        name = str(item.get("name") or "").strip()
-        category = str(item.get("category") or "").strip()
-        domain = str(item.get("domain") or "").strip()
-        title = str(item.get("title") or name).strip()
-        desc = str(item.get("description") or "").strip()
-        details = []
-        if domain:
-            details.append(f"领域: {domain}")
-        if category:
-            details.append(f"分类: {category}")
-        suffix = f"；{'；'.join(details)}" if details else ""
-        lines.append(f"- {name}: {title}。{desc}{suffix}")
-    return "\n".join(lines)
-
-
-async def _list_query_skills(user_id: str = "", scope: str = "runtime") -> List[Dict[str, Any]]:
-    """读取并过滤智能问数可用技能元数据。"""
-    try:
-        skills = await skill_service.list_skills_async(user_id=user_id, scope=scope)
-    except Exception as exc:
-        logger.warning("读取可用技能列表失败，回退内置技能: %s", exc)
-        try:
-            skills = await skill_service.list_skills_async(scope="system")
-        except Exception as fallback_exc:
-            logger.warning("读取内置技能列表失败: %s", fallback_exc)
-            skills = []
-
-    result: List[Dict[str, Any]] = []
-    for item in skills:
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
-        if not _is_supported_query_skill_metadata(item):
-            continue
-        if item.get("scripts") or item.get("assets"):
-            continue
-        result.append(dict(item))
-    return result
-
-
-def _truncate_routing_text(value: Any, max_length: int = 300) -> str:
-    text = str(value or "").strip()
-    if len(text) <= max_length:
-        return text
-    return text[:max_length].rstrip() + "..."
-
-
-async def list_query_skill_routing_metadata(user_id: str = "", scope: str = "runtime") -> List[Dict[str, str]]:
-    """返回业务知识技能轻量路由信息，不加载 SKILL.md 正文。"""
-    skills = await _list_query_skills(user_id=user_id, scope=scope)
-    result: List[Dict[str, str]] = []
-    for item in skills:
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
-        result.append({
-            "name": name,
-            "title": _truncate_routing_text(item.get("title") or name, 120),
-            "domain": _truncate_routing_text(item.get("domain") or "", 180),
-            "description": _truncate_routing_text(item.get("description") or "", 300),
-            "category": _truncate_routing_text(item.get("category") or "", 80),
-        })
-    return result

@@ -7,17 +7,12 @@ from typing_extensions import NotRequired, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from utils.lang_util.artifact_store import save_artifact, load_artifact, ArtifactType
+from utils.lang_util.artifact_store import save_artifact, ArtifactType
 
 
 def save_query_result(data: dict, conversation_id: str | None = None) -> str:
     """保存查询结果，返回结果ID（使用公共 artifact_store）"""
     return save_artifact(ArtifactType.QUERY_RESULT, data, conversation_id=conversation_id)
-
-
-def load_query_result(result_id: str) -> dict | None:
-    """根据ID加载查询结果（使用公共 artifact_store）"""
-    return load_artifact(ArtifactType.QUERY_RESULT, result_id)
 
 
 def merge_tables_ddl(existing: str | None, new: str | None) -> str:
@@ -47,38 +42,9 @@ def merge_table_names(existing: list[str] | None, new: list[str] | None) -> list
     return list(existing_set | new_set)
 
 
-def merge_query_results(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
-    """
-    合并查询结果索引的 reducer
-
-    - 追加新结果到列表
-    - 按 ID 去重，保留最新的
-    - 最多保留 10 条历史结果
-    """
-    existing = existing or []
-    new = new or []
-
-    # 用字典按 ID 去重，新的覆盖旧的
-    result_map = {item["id"]: item for item in existing}
-    for item in new:
-        result_map[item["id"]] = item
-
-    # 转回列表，保留最近 10 条
-    merged = list(result_map.values())
-    return merged[-10:]
-
-
 def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
     """追加模型原生思考分段，供历史会话恢复。"""
     return list(existing or []) + list(new or [])
-
-
-class QueryResultIndex(TypedDict):
-    """查询结果索引，用于 LLM 选择"""
-    id: str           # 结果文件 ID
-    sql: str          # 执行的 SQL（便于 LLM 识别）
-    columns: list[str]  # 列名列表
-    row_count: int    # 行数
 
 
 class SqlGeneratorState(TypedDict):
@@ -91,8 +57,6 @@ class SqlGeneratorState(TypedDict):
     loaded_table_names: Annotated[list[str], merge_table_names]
     # 模式：generate=仅生成SQL，query=生成并执行
     mode: Literal["generate", "query"]
-    # 查询结果索引列表（ID + 摘要，便于 LLM 选择，实际数据存文件）
-    query_results: Annotated[list[QueryResultIndex], merge_query_results]
     # 数据源ID（用于真实SQL执行时获取数据源配置）
     datasource_id: str | None
     # 当前语义配置ID（用于查询历史学习按指标集归属过滤）

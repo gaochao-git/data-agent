@@ -42,6 +42,7 @@ class SkillDBStore:
             "skill_title": row.skill_title,
             "skill_desc": row.skill_desc,
             "skill_category": row.skill_category,
+            "skill_scope": getattr(row, "skill_scope", "analyze") or "analyze",
             "skill_source": row.skill_source,
             "visibility_type": row.visibility_type,
             "enabled_flag": row.enabled_flag,
@@ -204,6 +205,7 @@ class SkillDBStore:
                 skill_title=skill.get("skill_title") or "",
                 skill_desc=skill.get("skill_desc") or "",
                 skill_category=skill.get("skill_category") or "",
+                skill_scope=skill.get("skill_scope") or "analyze",
                 skill_source=skill.get("skill_source") or "user",
                 visibility_type=skill.get("visibility_type") or "private",
                 enabled_flag=int(skill.get("enabled_flag") or 1),
@@ -220,7 +222,7 @@ class SkillDBStore:
 
     async def update_skill_async(self, skill_id: str, values: Dict[str, Any], update_by: str = "", update_by_name: str = "") -> int:
         allowed = {
-            "skill_title", "skill_desc", "skill_category",
+            "skill_title", "skill_desc", "skill_category", "skill_scope",
             "visibility_type", "enabled_flag", "skill_publish_status",
             "current_skill_version_no", "skill_root_dir",
         }

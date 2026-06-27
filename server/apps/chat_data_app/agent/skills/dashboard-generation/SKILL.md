@@ -5,6 +5,7 @@ description: 基于用户需求、数据源、指标体系和语义工具，自�
 metadata:
   domain: 数据分析
   category: dashboard_generation
+  skill_scope: analyze
   output_type: dashboard
   input_schema:
     fields:

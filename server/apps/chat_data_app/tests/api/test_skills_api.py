@@ -17,7 +17,7 @@ class FakeSkillService:
         self.favorite_state = None
 
     async def list_skills_async(self, **kwargs):
-        return [{"skill_id": "skill_a", "skill_name": "analysis", "scope": kwargs.get("scope")}]
+        return [{"skill_id": "skill_a", "skill_name": "analysis", "scope": kwargs.get("scope"), "agent": kwargs.get("agent", "")}]
 
     async def get_skill_async(self, skill_name, **kwargs):
         if skill_name != "analysis":
@@ -77,11 +77,12 @@ def test_list_and_get_skills_api_contract(client, auth_headers, monkeypatch):
     fake_service = FakeSkillService()
     monkeypatch.setattr(skills_routes, "skill_service", fake_service)
 
-    list_response = client.get("/api/chatdata/skills", params={"scope": "mine"}, headers=auth_headers)
+    list_response = client.get("/api/chatdata/skills", params={"scope": "mine", "agent": "query"}, headers=auth_headers)
     detail_response = client.get("/api/chatdata/skills/analysis", headers=auth_headers)
 
     assert list_response.status_code == 200
     assert list_response.json()["data"]["skills"][0]["scope"] == "mine"
+    assert list_response.json()["data"]["skills"][0]["agent"] == "query"
     assert detail_response.status_code == 200
     assert detail_response.json()["data"]["skill_name"] == "analysis"
 
@@ -306,17 +307,20 @@ def test_skill_list_scopes_and_optional_user_fallback(monkeypatch):
 
     async def fake_list_skills_async(**kwargs):
         captured.append(kwargs)
-        return [{"skill_id": "skill_a", "scope": kwargs["scope"]}]
+        return [{"skill_id": "skill_a", "scope": kwargs["scope"], "agent": kwargs.get("agent", "")}]
 
     fake_service.list_skills_async = fake_list_skills_async
     monkeypatch.setattr(skills_routes, "skill_service", fake_service)
     monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: None)
 
     invalid_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, scope="bad")))
-    system_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, search="s", category="c", scope="system")))
+    system_scope = _response_payload(asyncio.run(skills_routes.list_skills(None, search="s", category="c", scope="system", agent="analyze")))
+    invalid_agent = _response_payload(asyncio.run(skills_routes.list_skills(None, agent="bad")))
 
     assert invalid_scope["data"]["skills"][0]["scope"] == "all"
     assert system_scope["data"]["skills"][0]["scope"] == "system"
+    assert system_scope["data"]["skills"][0]["agent"] == "analyze"
+    assert invalid_agent["data"]["skills"][0]["agent"] == ""
     assert captured[0]["user_id"] == ""
     assert captured[1]["search"] == "s"
     assert captured[1]["category"] == "c"

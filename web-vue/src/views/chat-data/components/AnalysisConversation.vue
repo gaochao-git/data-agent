@@ -1318,7 +1318,7 @@ const loadCommandSkills = async () => {
   if (commandSkills.value.length > 0 || isCommandSkillLoading.value) return
   try {
     isCommandSkillLoading.value = true
-    const response = await getSkills()
+    const response = await getSkills({ agent: 'analyze' })
     commandSkills.value = response.data?.skills || []
   } catch (err) {
     commandSkills.value = []
@@ -2921,7 +2921,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[640px] overflow-hidden">
-        <SkillManager :initial-skill-id="importedSkillIdForManager" />
+        <SkillManager :initial-skill-id="importedSkillIdForManager" default-skill-scope="analyze" agent="analyze" />
       </div>
     </el-dialog>
   </div>

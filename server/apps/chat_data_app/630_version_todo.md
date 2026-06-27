@@ -19,3 +19,16 @@ ALTER TABLE `chat_data_dashboard_panel`
 ALTER TABLE `datasource_group`
   ADD COLUMN `query_context` text COMMENT '智能问数说明' AFTER `group_desc`;
 ```
+
+### 3. 技能增加适用范围字段
+
+用途：区分技能适用于智能问数、智能分析或两者，避免智能问数加载脚本/素材类技能。
+
+```sql
+ALTER TABLE `chat_data_skill`
+  ADD COLUMN `skill_scope` varchar(32) NOT NULL DEFAULT 'analyze' COMMENT '适用范围: query/analyze/all' AFTER `skill_category`;
+
+UPDATE `chat_data_skill`
+SET `skill_scope` = 'analyze'
+WHERE `skill_name` IN ('chart-processing', 'dashboard-generation');
+```

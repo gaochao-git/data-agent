@@ -76,6 +76,7 @@ export interface SkillInfo {
   description?: string
   domain?: string
   category?: string
+  skill_scope?: 'query' | 'analyze' | 'all'
   output_type?: string
   input_schema?: Record<string, unknown>
   source?: 'system' | 'user'

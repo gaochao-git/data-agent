@@ -281,7 +281,7 @@ export function getAccuracyEvaluationRunDetail(runId: string): Promise<ApiRespon
 }
 
 /** 获取专家技能列表 */
-export function getSkills(params?: { search?: string; category?: string; scope?: 'all' | 'favorites' | 'mine' | 'system' }): Promise<ApiResponse<{ skills: SkillInfo[]; total: number }>> {
+export function getSkills(params?: { search?: string; category?: string; scope?: 'all' | 'favorites' | 'mine' | 'system'; agent?: 'query' | 'analyze' }): Promise<ApiResponse<{ skills: SkillInfo[]; total: number }>> {
   return request({
     url: `/agents/api/chatdata/skills`,
     method: 'get',
@@ -294,6 +294,7 @@ export function createSkill(data: {
   skill_title: string
   skill_desc?: string
   skill_category?: string
+  skill_scope?: 'query' | 'analyze' | 'all'
   visibility_type?: 'private' | 'global'
   content?: string
 }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
@@ -315,6 +316,7 @@ export function updateSkill(skillId: string, data: {
   skill_title: string
   skill_desc?: string
   skill_category?: string
+  skill_scope?: 'query' | 'analyze' | 'all'
   visibility_type?: 'private' | 'global'
   content?: string
 }): Promise<ApiResponse<SkillInfo & { content?: string }>> {

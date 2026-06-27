@@ -853,6 +853,43 @@ def test_semantic_query_tool_requires_explicit_member_ids_when_multiple_availabl
     assert "多个可用执行对象时必须传入本次要查询的 member_datasource_ids" in result
 
 
+def test_semantic_query_tool_rejects_empty_available_member_scope(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    async def fail_execute_sql_real(*_args, **_kwargs):
+        raise AssertionError("should not execute without request-visible member ids")
+
+    state = {
+        "datasource_id": "ds_a",
+        "member_datasource_ids": [],
+        "available_member_datasource_ids": [],
+        "require_explicit_member_selection": True,
+        "semantic_config_id": "cfg_a",
+        "messages": [HumanMessage(content="查订单")],
+    }
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
+
+    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": {"metrics": ["订单数"]},
+        "state": state,
+    }))
+
+    assert "本次请求没有可用执行对象" in result
+
+
 def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 

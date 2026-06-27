@@ -23,6 +23,8 @@ import {
 import type { SkillInfo, SkillVersionInfo } from '../types'
 
 type SkillFileDir = 'references' | 'assets' | 'scripts'
+type SkillScope = 'query' | 'analyze' | 'all'
+type SkillAgent = 'query' | 'analyze'
 type SkillFileForm = {
   dir_name: SkillFileDir
   file_path: string
@@ -39,6 +41,8 @@ type SkillFileTreeNode = {
 
 const props = defineProps<{
   initialSkillId?: string | null
+  defaultSkillScope?: SkillScope
+  agent?: SkillAgent
 }>()
 
 const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
@@ -70,6 +74,7 @@ const form = reactive({
   skill_title: '',
   skill_desc: '',
   skill_category: 'custom',
+  skill_scope: 'analyze' as SkillScope,
   visibility_type: 'private' as 'private' | 'global',
   content: '',
 })
@@ -81,11 +86,17 @@ const scopeOptions = [
   { key: 'system', label: '系统' },
 ] as const
 
+const skillScopeOptions: Array<{ value: SkillScope; label: string }> = [
+  { value: 'analyze', label: '智能分析' },
+  { value: 'query', label: '智能问数' },
+  { value: 'all', label: '两者' },
+]
+
 const displayedSkills = computed(() => {
   const text = keyword.value.trim().toLowerCase()
   if (!text) return skills.value
   return skills.value.filter((skill) => {
-    const content = `${skill.name} ${skill.title || ''} ${skill.description || ''} ${skill.category || ''}`.toLowerCase()
+    const content = `${skill.name} ${skill.title || ''} ${skill.description || ''}`.toLowerCase()
     return content.includes(text)
   })
 })
@@ -120,6 +131,13 @@ const skillDirDescriptions: Record<SkillFileDir, string> = {
   scripts: '可复用脚本和工具代码',
 }
 const getSkillDirDescription = (dirName?: SkillFileDir) => (dirName ? skillDirDescriptions[dirName] || '' : '')
+const canCreateFileInDir = (dirName?: SkillFileDir) => {
+  if (!dirName) return false
+  return !(props.agent === 'query' && dirName === 'scripts')
+}
+const availableFileDirs = computed<SkillFileDir[]>(() => (
+  props.agent === 'query' ? ['references', 'assets'] : ['references', 'assets', 'scripts']
+))
 const buildFixedDirNode = (dirName: SkillFileDir, files: string[]): SkillFileTreeNode => {
   const root: SkillFileTreeNode = {
     key: dirName,
@@ -190,6 +208,10 @@ const getVisibilityLabel = (visibility?: string) => {
   return visibility === 'global' ? '全局' : '私有'
 }
 
+const getSkillScopeLabel = (scope?: string) => {
+  return skillScopeOptions.find(item => item.value === scope)?.label || '智能分析'
+}
+
 const canActivateVersion = (version: SkillVersionInfo) => {
   return Boolean(selectedSkill.value?.source === 'user' && !version.current && version.version_publish_status === 'published')
 }
@@ -222,6 +244,7 @@ const resetForm = () => {
   form.skill_title = ''
   form.skill_desc = ''
   form.skill_category = 'custom'
+  form.skill_scope = props.defaultSkillScope || 'analyze'
   form.visibility_type = 'private'
   form.content = ''
 }
@@ -240,6 +263,7 @@ const openEditPanel = () => {
   form.skill_title = skill.title || skill.name || ''
   form.skill_desc = skill.description || ''
   form.skill_category = skill.category || 'custom'
+  form.skill_scope = (skill.skill_scope || 'analyze') as SkillScope
   form.visibility_type = skill.visibility_type === 'global' ? 'global' : 'private'
   form.content = ''
   showCreatePanel.value = true
@@ -248,7 +272,7 @@ const openEditPanel = () => {
 const loadSkills = async () => {
   loading.value = true
   try {
-    const response = await getSkills({ scope: activeScope.value })
+    const response = await getSkills({ scope: activeScope.value, agent: props.agent })
     skills.value = response.data?.skills || []
     if (selectedSkill.value && !skills.value.some(item => item.name === selectedSkill.value?.name || item.skill_id === selectedSkill.value?.skill_id)) {
       selectedSkill.value = null
@@ -367,6 +391,7 @@ const getDefaultFileName = (dirName: SkillFileDir) => {
 }
 
 const openCreateFilePanel = (dirName: SkillFileDir, parentPath = '') => {
+  if (!canCreateFileInDir(dirName)) return
   resetFileForm()
   fileForm.dir_name = dirName
   fileForm.file_path = parentPath ? `${parentPath}/${getDefaultFileName(dirName)}` : getDefaultFileName(dirName)
@@ -420,6 +445,7 @@ const handleSaveFile = async () => {
         skill_title: selectedSkill.value?.title || selectedSkill.value?.name || '',
         skill_desc: selectedSkill.value?.description || '',
         skill_category: selectedSkill.value?.category || 'custom',
+        skill_scope: selectedSkill.value?.skill_scope || 'analyze',
         visibility_type: selectedSkill.value?.visibility_type === 'global' ? 'global' : 'private',
         content: fileForm.content,
       })
@@ -500,6 +526,7 @@ const handleCreate = async () => {
         skill_title: form.skill_title,
         skill_desc: form.skill_desc,
         skill_category: form.skill_category,
+        skill_scope: form.skill_scope,
         visibility_type: form.visibility_type,
       })
       : await createSkill({
@@ -507,6 +534,7 @@ const handleCreate = async () => {
         skill_title: form.skill_title,
         skill_desc: form.skill_desc,
         skill_category: form.skill_category,
+        skill_scope: form.skill_scope,
         visibility_type: form.visibility_type,
         content: form.content,
       })
@@ -711,6 +739,7 @@ watch(() => props.initialSkillId, (skillId) => {
               <div class="flex items-center gap-2">
                 <span class="truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
                 <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ getSkillCreatorLabel(skill) }}</span>
+                <span class="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">{{ getSkillScopeLabel(skill.skill_scope) }}</span>
                 <span v-if="skill.source === 'user'" class="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">{{ getSkillStatusLabel(skill) }}</span>
                 <span v-if="getSkillDraftLabel(skill)" class="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600">{{ getSkillDraftLabel(skill) }}</span>
               </div>
@@ -758,12 +787,16 @@ watch(() => props.initialSkillId, (skillId) => {
               v-model="form.skill_name"
               :disabled="Boolean(editingSkillId)"
               class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none placeholder:text-slate-300 disabled:bg-slate-50 disabled:text-slate-400"
-              placeholder="请输入技能名称"
+              placeholder="小写字母和中划线，需以字母开头和结尾"
             />
-            <span v-if="!editingSkillId" class="mt-1 block text-[11px] text-slate-400">支持小写字母和中划线，需以字母开头和结尾。</span>
           </label>
           <label class="text-xs text-slate-500">标题<input v-model="form.skill_title" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none" /></label>
-          <label class="text-xs text-slate-500">分类<input v-model="form.skill_category" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none" /></label>
+          <label class="text-xs text-slate-500">
+            适用范围
+            <select v-model="form.skill_scope" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none">
+              <option v-for="item in skillScopeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+            </select>
+          </label>
           <label class="text-xs text-slate-500">可见范围<select v-model="form.visibility_type" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none"><option value="private">私有</option><option value="global">全局</option></select></label>
         </div>
         <label class="mt-4 block text-xs text-slate-500">描述<input v-model="form.skill_desc" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none" /></label>
@@ -796,7 +829,7 @@ watch(() => props.initialSkillId, (skillId) => {
           </button>
         </div>
         <div class="mb-4 grid grid-cols-2 gap-3 text-xs">
-          <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">分类</div><div class="mt-1 truncate text-slate-700">{{ selectedSkill.category || '-' }}</div></div>
+          <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">适用范围</div><div class="mt-1 truncate text-slate-700">{{ getSkillScopeLabel(selectedSkill.skill_scope) }}</div></div>
           <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">可见范围</div><div class="mt-1 truncate text-slate-700">{{ getVisibilityLabel(selectedSkill.visibility_type) }}</div></div>
         </div>
         <div v-if="selectedSkill.source === 'user'" class="mb-4 rounded-lg border border-slate-200 bg-white p-3">
@@ -885,7 +918,7 @@ watch(() => props.initialSkillId, (skillId) => {
                     {{ getSkillDirDescription(data.dirName) }}
                   </span>
                   <button
-                    v-if="canManageFiles && data.type === 'dir' && data.dirName"
+                    v-if="canManageFiles && data.type === 'dir' && data.dirName && canCreateFileInDir(data.dirName)"
                     type="button"
                     class="h-6 rounded border border-slate-200 bg-white px-2 text-xs text-slate-600"
                     @click="openCreateFilePanel(data.dirName, data.path)"
@@ -953,7 +986,7 @@ watch(() => props.initialSkillId, (skillId) => {
         ></div>
         <div v-else>
           <div v-if="canEditSelectedFile && selectedFileNode?.type === 'file'" class="mb-2 grid grid-cols-[160px_1fr] gap-3">
-            <label class="text-xs text-slate-500">目录<select v-model="fileForm.dir_name" class="mt-1 h-8 w-full rounded border border-slate-200 bg-white px-2 text-xs outline-none"><option value="references">references</option><option value="assets">assets</option><option value="scripts">scripts</option></select></label>
+            <label class="text-xs text-slate-500">目录<select v-model="fileForm.dir_name" class="mt-1 h-8 w-full rounded border border-slate-200 bg-white px-2 text-xs outline-none"><option v-for="dirName in availableFileDirs" :key="dirName" :value="dirName">{{ dirName }}</option></select></label>
             <label class="text-xs text-slate-500">文件路径<input v-model="fileForm.file_path" class="mt-1 h-8 w-full rounded border border-slate-200 bg-white px-2 font-mono text-xs outline-none" placeholder="请输入文件名或相对路径，例如 guide.md" /></label>
           </div>
           <textarea

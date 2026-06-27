@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 @router.get("/skills")
-async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None):
+async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None, agent: Optional[str] = None):
     """获取可用专家技能列表。"""
     try:
         user = _optional_current_user(request)
@@ -23,7 +23,10 @@ async def list_skills(request: Request, search: Optional[str] = None, category: 
         normalized_scope = str(scope or "all").strip().lower()
         if normalized_scope not in {"all", "favorites", "mine", "system"}:
             normalized_scope = "all"
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user))
+        normalized_agent = str(agent or "").strip().lower()
+        if normalized_agent not in {"query", "analyze"}:
+            normalized_agent = ""
+        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user), agent=normalized_agent)
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
     except Exception as e:
         logger.error("获取技能列表失败: %s", e, exc_info=True)
@@ -338,4 +341,3 @@ async def get_skill(skill_name: str, request: Request):
     except Exception as e:
         logger.error("获取技能详情失败: skill_name=%s error=%s", skill_name, e, exc_info=True)
         return business_response(msg="获取技能详情失败，请稍后重试", code=50033, status="error")
-

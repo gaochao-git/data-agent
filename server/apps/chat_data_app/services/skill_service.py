@@ -24,12 +24,46 @@ SKILL_ALIASES = {
     "风险分析技能": "dashboard-generation",
     "看板生成技能": "dashboard-generation",
 }
+VALID_SKILL_SCOPES = {"query", "analyze", "all"}
+QUERY_SKILL_CATEGORIES = {"", "custom", "query_routing", "business_query"}
 
 
 def resolve_skill_name(name: str) -> str:
     """解析技能别名，兼容前端残留标题或旧技能名。"""
     normalized = str(name or "").strip()
     return SKILL_ALIASES.get(normalized, normalized)
+
+
+def _normalize_skill_scope(value: Any, default: str = "analyze") -> str:
+    """归一化技能适用范围。"""
+    scope = str(value or default).strip().lower()
+    return scope if scope in VALID_SKILL_SCOPES else default
+
+
+def _is_query_readonly_skill(item: Dict[str, Any]) -> bool:
+    """智能问数只能展示文本型、无脚本素材的问数类技能。"""
+    skill_scope = _normalize_skill_scope(item.get("skill_scope"), default="analyze")
+    if skill_scope not in {"query", "all"}:
+        return False
+    output_type = str(item.get("output_type") or "text").strip()
+    if output_type and output_type != "text":
+        return False
+    category = str(item.get("category") or "").strip()
+    if category not in QUERY_SKILL_CATEGORIES:
+        return False
+    if item.get("scripts") or item.get("assets"):
+        return False
+    return True
+
+
+def _matches_skill_agent(item: Dict[str, Any], agent: str = "") -> bool:
+    """按智能体适用范围过滤技能列表。"""
+    normalized_agent = str(agent or "").strip().lower()
+    if normalized_agent == "query":
+        return _is_query_readonly_skill(item)
+    if normalized_agent == "analyze":
+        return _normalize_skill_scope(item.get("skill_scope"), default="analyze") in {"analyze", "all"}
+    return True
 
 
 def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
@@ -127,6 +161,7 @@ def _skill_row_to_info(row: Dict[str, Any], user_names: Optional[Dict[str, str]]
         "title": row.get("skill_title") or row.get("skill_name"),
         "description": row.get("skill_desc") or "",
         "category": row.get("skill_category") or "",
+        "skill_scope": _normalize_skill_scope(row.get("skill_scope"), default="analyze"),
         "output_type": "text",
         "source": row.get("skill_source") or "user",
         "visibility_type": row.get("visibility_type") or "private",
@@ -173,6 +208,7 @@ def _builtin_metadata_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
         "description": item.get("description") or "",
         "domain": item.get("domain") or "",
         "category": item.get("category") or "",
+        "skill_scope": _normalize_skill_scope(item.get("skill_scope") or item.get("metadata", {}).get("skill_scope"), default="analyze"),
         "output_type": item.get("output_type") or "text",
         "input_schema": item.get("input_schema") or {},
         "source": "system",
@@ -190,6 +226,7 @@ def _build_skill_md(payload: Dict[str, Any]) -> str:
     skill_title = str(payload.get("skill_title") or payload.get("title") or skill_name).strip()
     skill_desc = str(payload.get("skill_desc") or payload.get("description") or "").strip()
     skill_category = str(payload.get("skill_category") or payload.get("category") or "custom").strip()
+    skill_scope = _normalize_skill_scope(payload.get("skill_scope"), default="analyze")
     content = str(payload.get("content") or "").strip()
     if content.startswith("---"):
         return content + "\n"
@@ -201,6 +238,7 @@ def _build_skill_md(payload: Dict[str, Any]) -> str:
         f"description: {skill_desc}\n"
         "metadata:\n"
         f"  category: {skill_category}\n"
+        f"  skill_scope: {skill_scope}\n"
         "  output_type: text\n"
         "---\n\n"
         f"{body.rstrip()}\n"
@@ -266,6 +304,7 @@ class SkillService:
                     "skill_title": item.get("title") or skill_name,
                     "skill_desc": item.get("description") or "",
                     "skill_category": item.get("category") or "",
+                    "skill_scope": _normalize_skill_scope(item.get("skill_scope") or item.get("metadata", {}).get("skill_scope"), default="analyze"),
                     "visibility_type": "global",
                     "enabled_flag": 1,
                     "skill_publish_status": "published",
@@ -282,6 +321,7 @@ class SkillService:
                         "skill_title": values["skill_title"],
                         "skill_desc": values["skill_desc"],
                         "skill_category": values["skill_category"],
+                        "skill_scope": values["skill_scope"],
                         "skill_source": "system",
                         "visibility_type": "global",
                         "enabled_flag": 1,
@@ -308,14 +348,19 @@ class SkillService:
                 logger.error("同步系统技能失败: skill_name=%s error=%s", skill_name, err, exc_info=True)
         return {"synced": synced, "total": len(metadata)}
 
-    async def list_skills_async(self, search: Optional[str] = None, category: Optional[str] = None, user_id: str = "", scope: str = "all", user_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    async def list_skills_async(self, search: Optional[str] = None, category: Optional[str] = None, user_id: str = "", scope: str = "all", user_names: Optional[Dict[str, str]] = None, agent: str = "") -> List[Dict[str, Any]]:
         db_rows = await self._safe_db_skills_async(user_id=user_id)
         keyword = str(search or "").strip().lower()
         normalized_category = str(category or "").strip()
         skills: List[Dict[str, Any]] = []
-        source_rows = [_skill_row_to_info(row, user_names=user_names) for row in db_rows] if db_rows is not None else []
-        existing_names = {str(item.get("name") or "") for item in source_rows}
         builtin_metadata = await asyncio.to_thread(load_metadata)
+        builtin_names = {str(item.get("name") or "") for item in builtin_metadata.values()}
+        source_rows = [
+            _skill_row_to_info(row, user_names=user_names)
+            for row in (db_rows or [])
+            if not (row.get("skill_source") == "system" and str(row.get("skill_name") or "") not in builtin_names)
+        ] if db_rows is not None else []
+        existing_names = {str(item.get("name") or "") for item in source_rows}
         for item in builtin_metadata.values():
             builtin = _builtin_metadata_to_info(item)
             if str(builtin.get("name") or "") not in existing_names:
@@ -328,6 +373,8 @@ class SkillService:
             if scope == "system" and item.get("source") != "system":
                 continue
             if scope == "runtime" and item.get("source") == "user" and not int(item.get("current_version_no") or 0):
+                continue
+            if not _matches_skill_agent(item, agent=agent):
                 continue
             if normalized_category and item.get("category") != normalized_category:
                 continue
@@ -362,6 +409,7 @@ class SkillService:
             "description": skill.get("description") or "",
             "domain": skill.get("domain") or "",
             "category": skill.get("category") or "",
+            "skill_scope": _normalize_skill_scope(skill.get("skill_scope") or (metadata or {}).get("skill_scope") or (metadata or {}).get("metadata", {}).get("skill_scope"), default="analyze"),
             "output_type": skill.get("output_type") or "text",
             "input_schema": skill.get("input_schema") or {},
             "content": skill.get("content") or "",
@@ -418,6 +466,7 @@ class SkillService:
             "skill_title": normalized_payload.get("skill_title") or normalized_payload.get("title") or parsed.get("title") or skill_name,
             "skill_desc": normalized_payload.get("skill_desc") or normalized_payload.get("description") or parsed.get("description") or "",
             "skill_category": normalized_payload.get("skill_category") or normalized_payload.get("category") or parsed.get("category") or "custom",
+            "skill_scope": _normalize_skill_scope(normalized_payload.get("skill_scope") or parsed.get("skill_scope") or parsed.get("metadata", {}).get("skill_scope"), default="analyze"),
             "skill_source": "user",
             "visibility_type": visibility_type,
             "enabled_flag": 1,
@@ -458,6 +507,7 @@ class SkillService:
             "skill_title": parsed.get("title") or parsed.get("name") or resolved_source.name,
             "skill_desc": parsed.get("description") or "",
             "skill_category": parsed.get("category") or "custom",
+            "skill_scope": _normalize_skill_scope(parsed.get("skill_scope") or parsed.get("metadata", {}).get("skill_scope"), default="analyze"),
             "visibility_type": "private",
             "content": content,
         }, user_id=user_id, operator_name=operator_name)
@@ -491,6 +541,7 @@ class SkillService:
             "skill_title": f"{source_title} 副本",
             "skill_desc": source_skill.get("skill_desc") or parsed.get("description") or "",
             "skill_category": source_skill.get("skill_category") or parsed.get("category") or "custom",
+            "skill_scope": _normalize_skill_scope(source_skill.get("skill_scope") or parsed.get("skill_scope") or parsed.get("metadata", {}).get("skill_scope"), default="analyze"),
             "visibility_type": "private",
             "content": content,
         }, user_id=user_id, operator_name=operator_name)
@@ -528,6 +579,7 @@ class SkillService:
             "skill_title": normalized_payload.get("skill_title") or parsed.get("title") or skill.get("skill_name"),
             "skill_desc": payload.get("skill_desc") if payload.get("skill_desc") is not None else skill.get("skill_desc"),
             "skill_category": payload.get("skill_category") if payload.get("skill_category") is not None else skill.get("skill_category"),
+            "skill_scope": _normalize_skill_scope(payload.get("skill_scope") if payload.get("skill_scope") is not None else skill.get("skill_scope"), default="analyze"),
             "visibility_type": visibility_type,
             "skill_publish_status": "published" if current_version_no > 0 else "draft",
         }, update_by=user_id, update_by_name=operator_name)
@@ -691,6 +743,7 @@ class SkillService:
                 "title": row.get("skill_title") or row.get("skill_name"),
                 "description": row.get("skill_desc") or "",
                 "category": row.get("skill_category") or "",
+                "skill_scope": _normalize_skill_scope(row.get("skill_scope"), default="analyze"),
                 "output_type": "text",
                 "path": str(skill_path),
                 "source": row.get("skill_source") or "user",
@@ -726,6 +779,7 @@ class SkillService:
             "description": metadata.get("description") or "",
             "domain": metadata.get("domain") or "",
             "category": metadata.get("category") or "",
+            "skill_scope": _normalize_skill_scope(metadata.get("skill_scope"), default="analyze"),
             "output_type": metadata.get("output_type") or "text",
             "input_schema": metadata.get("input_schema") or {},
             "content": _strip_frontmatter(text),

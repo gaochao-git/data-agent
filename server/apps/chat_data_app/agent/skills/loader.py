@@ -34,6 +34,7 @@ class SkillMetadata(TypedDict):
     description: str
     domain: str
     category: str
+    skill_scope: str
     output_type: str
     input_schema: dict[str, Any]
     path: str  # SKILL.md 文件路径
@@ -46,6 +47,7 @@ class Skill(TypedDict):
     description: str
     domain: str
     category: str
+    skill_scope: str
     output_type: str
     input_schema: dict[str, Any]
     content: str
@@ -110,6 +112,7 @@ def parse_metadata(skill_path: Path) -> SkillMetadata | None:
         description=frontmatter.get("description", ""),
         domain=frontmatter.get("domain") or metadata.get("domain") or "",
         category=frontmatter.get("category") or metadata.get("category") or "",
+        skill_scope=frontmatter.get("skill_scope") or metadata.get("skill_scope") or "analyze",
         output_type=frontmatter.get("output_type") or metadata.get("output_type") or "text",
         input_schema=input_schema,
         path=str(skill_path)
@@ -201,6 +204,7 @@ def activate_skill(name: str) -> Skill | None:
         description=meta["description"],
         domain=meta.get("domain") or "",
         category=meta.get("category") or "",
+        skill_scope=meta.get("skill_scope") or "analyze",
         output_type=meta.get("output_type") or "text",
         input_schema=meta.get("input_schema") or {},
         content=content

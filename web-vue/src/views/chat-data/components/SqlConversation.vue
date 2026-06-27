@@ -7,7 +7,7 @@ import { ref, computed, watch, nextTick, toRef, onMounted, onUnmounted } from 'v
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo } from '../types'
-import { createDashboardFromSpec, getChatDataConfig } from '../api'
+import { createDashboardFromSpec, getChatDataConfig, getSkills } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
@@ -20,6 +20,7 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import AnalysisPanel from './AnalysisPanel.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
+import SkillManager from './SkillManager.vue'
 import type { AnalysisData } from './AnalysisPanel.vue'
 import { hideSemanticConfigSelectionPayloads } from '../utils'
 
@@ -411,17 +412,48 @@ onMounted(() => {
 // 收藏
 const conversationFavoriteRefreshKey = ref(0)
 const selectedSkill = ref<SkillInfo | null>(null)
+const commandSkills = ref<SkillInfo[]>([])
+const isCommandSkillLoading = ref(false)
+const isSkillManagerOpen = ref(false)
+const highlightedSkillIndex = ref(0)
 const showFavoriteModal = ref(false)
 const favoriteTitle = ref('')
 const favoriteContent = ref('')
 const creatingDashboardMessageId = ref<string | null>(null)
 
-const resolveSkillNameFromText = (text: string): string | null => {
-  const match = String(text || '').match(/^使用「([^」]+)」技能[:：]/)
-  const title = match?.[1]?.trim()
-  if (!title) return null
-  if (title === '看板生成技能' || title === '风险分析技能' || title === '机构画像分析') return 'dashboard-generation'
-  return null
+const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
+const trimSkillPrefix = (text: string) => String(text || '').replace(/^使用「[^」]+」技能[:：]\s*/, '').trim()
+const skillCommandKeyword = computed(() => {
+  if (selectedAgent.value !== 'chat_data') return null
+  const match = input.value.match(/^\/([^\s/]*)/)
+  return match ? (match[1] || '').toLowerCase() : null
+})
+const displayedCommandSkills = computed(() => {
+  const keyword = skillCommandKeyword.value
+  if (keyword === null) return []
+  const result = keyword
+    ? commandSkills.value.filter(skill =>
+        String(skill.title || skill.name || '').toLowerCase().includes(keyword) ||
+        String(skill.description || '').toLowerCase().includes(keyword) ||
+        String(skill.category || '').toLowerCase().includes(keyword)
+      )
+    : commandSkills.value
+  return result.slice(0, 8)
+})
+const showSkillCommand = computed(() => skillCommandKeyword.value !== null)
+
+const loadCommandSkills = async () => {
+  if (commandSkills.value.length || isCommandSkillLoading.value) return
+  isCommandSkillLoading.value = true
+  try {
+    const response = await getSkills({ agent: 'query' })
+    commandSkills.value = response.data?.skills || []
+  } catch (err) {
+    console.error('获取专家技能失败:', err)
+    commandSkills.value = []
+  } finally {
+    isCommandSkillLoading.value = false
+  }
 }
 
 const openFavoriteModalFromQuestion = (question: string) => {
@@ -477,6 +509,15 @@ watch(selectedAgent, (agentId) => {
   if (agentId !== props.conversationAgentId) {
     emit('agentChange', agentId)
   }
+})
+
+watch(skillCommandKeyword, (keyword) => {
+  if (keyword === null) {
+    highlightedSkillIndex.value = 0
+    return
+  }
+  highlightedSkillIndex.value = 0
+  loadCommandSkills()
 })
 
 const selectAgent = (agent: typeof agentOptions.value[number]) => {
@@ -926,6 +967,7 @@ const submitQuery = async (
     semanticConfigSelection?: SemanticConfigSelectionInfo | null
     assistantMessageId?: string
     appendUserMessage?: boolean
+    messageSkill?: Message['skill'] | null
   } = {}
 ) => {
   if (!queryText.trim() || isGenerating.value || !selectedDatasource.value) return
@@ -943,8 +985,18 @@ const submitQuery = async (
     return
   }
 
-  const normalizedQuery = queryText.trim()
-  const skillName = null
+  const selectedSkillSnapshot = selectedSkill.value
+  const effectiveSkill = options.messageSkill !== undefined
+    ? options.messageSkill
+    : (selectedSkillSnapshot
+        ? {
+            name: selectedSkillSnapshot.name,
+            title: selectedSkillSnapshot.title,
+            description: selectedSkillSnapshot.description,
+          }
+        : null)
+  const normalizedQuery = effectiveSkill ? trimSkillPrefix(queryText) : queryText.trim()
+  const skillName = effectiveSkill?.name || null
   const activeAgentId = 'chat_data'
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
@@ -963,7 +1015,8 @@ const submitQuery = async (
       id: userMessageId,
       role: 'user',
       content: normalizedQuery,
-      timestamp: new Date()
+      timestamp: new Date(),
+      skill: effectiveSkill || undefined,
     }
     const assistantMessage: Message = {
       id: assistantMessageId,
@@ -973,6 +1026,7 @@ const submitQuery = async (
       isStreaming: true,
       toolCalls: [],
       semanticConfigSelection: effectiveSemanticConfigSelection || undefined,
+      skill: effectiveSkill || undefined,
     }
     messages.value.push(userMessage, assistantMessage)
   } else if (assistantMessageId) {
@@ -984,10 +1038,12 @@ const submitQuery = async (
       msg.toolCalls = []
       msg.semanticConfigSelectRequired = undefined
       msg.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
+      msg.skill = effectiveSkill || undefined
     }
   }
 
   input.value = ''
+  selectedSkill.value = null
   resetSemanticQuestionDraft()
   isGenerating.value = true
   toolCallsMap.value.clear()
@@ -1016,6 +1072,7 @@ const submitQuery = async (
     }
     isGenerating.value = false
     input.value = normalizedQuery
+    selectedSkill.value = selectedSkillSnapshot
     return
   }
 
@@ -1133,6 +1190,7 @@ const handleSemanticConfigCandidateClick = async (msg: Message, candidate: Seman
     semanticConfigSelection: selection,
     assistantMessageId: msg.id,
     appendUserMessage: false,
+    messageSkill: msg.skill || null,
   })
 }
 
@@ -1151,6 +1209,30 @@ const handleStop = () => {
 
 // 键盘事件
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (showSkillCommand.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      highlightedSkillIndex.value = Math.min(highlightedSkillIndex.value + 1, Math.max(displayedCommandSkills.value.length - 1, 0))
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      highlightedSkillIndex.value = Math.max(highlightedSkillIndex.value - 1, 0)
+      return
+    }
+    if ((e.key === 'Enter' || e.key === 'Tab') && displayedCommandSkills.value[highlightedSkillIndex.value]) {
+      e.preventDefault()
+      const skill = displayedCommandSkills.value[highlightedSkillIndex.value]
+      if (skill) selectCommandSkill(skill)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      input.value = input.value.replace(/^\/[^\s/]*\s?/, '')
+      highlightedSkillIndex.value = 0
+      return
+    }
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSubmit()
@@ -1202,8 +1284,20 @@ const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dim
 const handleSkillSelect = (skill: SkillInfo) => {
   selectedSkill.value = skill
   resetSemanticQuestionDraft()
-  const title = skill.title || skill.name
-  input.value = `使用「${title}」技能：`
+  input.value = trimSkillPrefix(input.value)
+  nextTick(() => textareaRef.value?.focus())
+}
+
+const selectCommandSkill = (skill: SkillInfo) => {
+  selectedSkill.value = skill
+  resetSemanticQuestionDraft()
+  input.value = input.value.replace(/^\/[^\s/]*\s?/, '')
+  highlightedSkillIndex.value = 0
+  nextTick(() => textareaRef.value?.focus())
+}
+
+const clearSelectedSkill = () => {
+  selectedSkill.value = null
   nextTick(() => textareaRef.value?.focus())
 }
 
@@ -1689,12 +1783,22 @@ const handleViewAnalysis = (msg: Message) => {
                 inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
               ]"
             >
-              <div class="flex items-start min-h-[54px] px-4 pt-4 pb-2">
+              <div class="min-h-[54px] px-4 pt-4 pb-2">
+                <div
+                  v-if="selectedSkillTitle"
+                  class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
+                >
+                  <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
+                  <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
+                  <button type="button" class="text-blue-400 hover:text-blue-700" @click="clearSelectedSkill">
+                    <i class="fa-solid fa-xmark text-[10px]"></i>
+                  </button>
+                </div>
                 <textarea
                   ref="textareaRef"
                   v-model="input"
                   placeholder="请输入问题查询数据"
-                  class="w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
+                  class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                   @keydown="handleKeyDown"
                   @focus="inputFocused = true"
                   @blur="inputFocused = false"
@@ -1702,6 +1806,16 @@ const handleViewAnalysis = (msg: Message) => {
               </div>
               <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
                 <div class="flex items-center gap-2">
+                  <button
+                    v-if="selectedAgent === 'chat_data'"
+                    type="button"
+                    class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                    title="技能管理"
+                    @click="isSkillManagerOpen = true"
+                  >
+                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
+                    <span>技能</span>
+                  </button>
                   <div ref="agentSelectorRef" class="relative">
                     <button
                       type="button"
@@ -1777,6 +1891,39 @@ const handleViewAnalysis = (msg: Message) => {
                 </button>
               </div>
             </div>
+            <div
+              v-if="showSkillCommand"
+              class="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+            >
+              <div v-if="isCommandSkillLoading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
+              <div v-else-if="displayedCommandSkills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
+              <template v-else>
+                <button
+                  v-for="(skill, index) in displayedCommandSkills"
+                  :key="skill.name"
+                  type="button"
+                  :class="[
+                    'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
+                    index === highlightedSkillIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
+                  ]"
+                  @mousedown.prevent="selectCommandSkill(skill)"
+                >
+                  <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
+                    <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
+                  </span>
+                  <span
+                    :class="[
+                      'shrink-0 rounded-md px-2 py-0.5 text-[11px] leading-5',
+                      skill.source === 'system' ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'
+                    ]"
+                  >
+                    {{ skill.source === 'system' ? '系统' : '用户' }}
+                  </span>
+                </button>
+              </template>
+            </div>
           </form>
 
           <!-- 常用推荐 -->
@@ -1785,7 +1932,7 @@ const handleViewAnalysis = (msg: Message) => {
             :key="recommendationContentType"
             :datasource-id="selectedDatasource"
             mode="conversation"
-            :content-type="recommendationContentType"
+            content-type="queries"
             :refresh-trigger="conversationFavoriteRefreshKey"
             :max-items="8"
             @select-query="handleQuickQuerySelect"
@@ -2030,12 +2177,22 @@ const handleViewAnalysis = (msg: Message) => {
               inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
             ]"
           >
-            <div class="flex items-start min-h-[54px] px-4 pt-4 pb-2">
+            <div class="min-h-[54px] px-4 pt-4 pb-2">
+              <div
+                v-if="selectedSkillTitle"
+                class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
+              >
+                <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
+                <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
+                <button type="button" class="text-blue-400 hover:text-blue-700" @click="clearSelectedSkill">
+                  <i class="fa-solid fa-xmark text-[10px]"></i>
+                </button>
+              </div>
               <textarea
                 ref="textareaRef"
                 v-model="input"
                 placeholder="请输入问题查询数据"
-                class="w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
+                class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                 @keydown="handleKeyDown"
                 @focus="inputFocused = true"
                 @blur="inputFocused = false"
@@ -2043,6 +2200,16 @@ const handleViewAnalysis = (msg: Message) => {
             </div>
             <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
               <div class="flex items-center gap-2">
+                <button
+                  v-if="selectedAgent === 'chat_data'"
+                  type="button"
+                  class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  title="技能管理"
+                  @click="isSkillManagerOpen = true"
+                >
+                  <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
+                  <span>技能</span>
+                </button>
                 <div ref="agentSelectorRef" class="relative">
                   <button
                     type="button"
@@ -2214,6 +2381,39 @@ const handleViewAnalysis = (msg: Message) => {
               </button>
             </div>
           </div>
+          <div
+            v-if="showSkillCommand"
+            class="absolute left-0 right-0 bottom-full z-20 mb-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+          >
+            <div v-if="isCommandSkillLoading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
+            <div v-else-if="displayedCommandSkills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
+            <template v-else>
+              <button
+                v-for="(skill, index) in displayedCommandSkills"
+                :key="skill.name"
+                type="button"
+                :class="[
+                  'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
+                  index === highlightedSkillIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
+                ]"
+                @mousedown.prevent="selectCommandSkill(skill)"
+              >
+                <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
+                  <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
+                </span>
+                <span
+                  :class="[
+                    'shrink-0 rounded-md px-2 py-0.5 text-[11px] leading-5',
+                    skill.source === 'system' ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'
+                  ]"
+                >
+                  {{ skill.source === 'system' ? '系统' : '用户' }}
+                </span>
+              </button>
+            </template>
+          </div>
         </form>
         <div class="text-center pt-1.5 text-xs text-gray-400">内容由AI生成，请仔细甄别</div>
       </div>
@@ -2269,6 +2469,11 @@ const handleViewAnalysis = (msg: Message) => {
       :initial-content="favoriteContent"
       @saved="handleFavoriteSaved"
     />
+    <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
+      <div class="h-[72vh]">
+        <SkillManager default-skill-scope="query" agent="query" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 

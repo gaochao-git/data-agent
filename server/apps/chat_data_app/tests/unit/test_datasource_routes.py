@@ -2756,7 +2756,7 @@ def test_build_execution_target_info_contains_selected_members(monkeypatch):
 
     info = asyncio.run(_build_execution_target_info_async("ds_a", ["phy_a", "phy_b"]))
 
-    assert "可用执行对象" in info
+    assert "当前用户已选择的执行对象数据源" in info
     assert "投诉举报1" in info
     assert "投诉举报2" in info
 

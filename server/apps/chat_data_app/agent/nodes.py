@@ -11,26 +11,10 @@ from utils.logger import get_logger
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
 from .middleware.token_usage_middleware import build_request_breakdown, build_token_usage_payload, count_messages_tokens, count_tools_tokens, get_context_window
 from .config import get_mode_config, filter_tools_by_config
-from .state import SqlGeneratorState, QueryResultIndex
+from .state import SqlGeneratorState
 from .tools import TOOLS
 
 logger = get_logger(__name__)
-
-
-def format_query_results_for_llm(query_results: list[QueryResultIndex]) -> str:
-    """将查询结果索引格式化为 LLM 可读的文本"""
-    if not query_results:
-        return ""
-
-    lines = ["\n## 可用的查询结果\n"]
-    for i, qr in enumerate(query_results, 1):
-        lines.append(f"### 结果 {i}")
-        lines.append(f"result_id: `{qr['id']}`")
-        lines.append(f"SQL: `{qr['sql'][:100]}{'...' if len(qr['sql']) > 100 else ''}`")
-        lines.append(f"列: {', '.join(qr['columns'])}")
-        lines.append(f"行数: {qr['row_count']}\n")
-
-    return "\n".join(lines)
 
 
 def format_execution_target_info_for_llm(execution_target_info: str) -> str:
@@ -149,7 +133,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         header += f"（semantic_config_id: {config_id}）"
     header += (
         "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
-        "如可用业务知识技能中存在 `business-query`，先读取 `business-query` 主说明判断领域路由；如当前指标集名称/描述、指标/维度或用户问题与某个技能明显同域，必须先读取对应技能补充业务判断；最终回答不要提及技能加载过程。\n\n"
+        "优先使用数据源组说明和当前指标集理解用户问题；只有用户本轮显式指定业务知识技能时，才读取对应技能补充查询判断；最终回答不要提及技能加载过程。\n\n"
     )
     return header + build_semantic_prompt(semantic_config, mode)
 
@@ -179,7 +163,6 @@ def create_agent_node(
 
         messages = list(state["messages"])
         tables_ddl_info = state.get("tables_ddl_info") or ""
-        query_results = state.get("query_results") or []
         mode = state.get("mode", "generate")  # 默认为 generate 模式
 
         # 获取模式配置
@@ -205,10 +188,6 @@ def create_agent_node(
 
         # 格式化提示词
         system_prompt = config.base_prompt.format(**prompt_params)
-
-        # 如果有查询结果，追加到提示词（仅 query 模式有效）
-        if query_results and mode == "query":
-            system_prompt += format_query_results_for_llm(query_results)
 
         prompt_length = len(system_prompt)
         logger.info(f"[agent] system_prompt 长度: {prompt_length} 字符, mode={mode}, semantic={bool(semantic_config)}")

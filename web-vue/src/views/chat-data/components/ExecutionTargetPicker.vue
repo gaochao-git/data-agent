@@ -30,12 +30,15 @@ const searchText = ref('')
 const pendingSelectedIds = ref<string[]>([])
 const selectedIdSet = computed(() => new Set(pendingSelectedIds.value))
 const allSelected = computed(() => props.targets.length > 0 && pendingSelectedIds.value.length === props.targets.length)
+const getTargetName = (target: ExecutionTargetOption) => target.org_name || target.label || target.member_datasource_id
+const getTargetOrgCode = (target: ExecutionTargetOption) => target.org_code || target.member_datasource_id || '-'
 const filteredTargets = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
   if (!keyword) return props.targets
   return props.targets.filter((item) => {
-    const label = String(item.org_name || item.label || '').toLowerCase()
-    return label.includes(keyword)
+    const label = String(getTargetName(item)).toLowerCase()
+    const orgCode = String(getTargetOrgCode(item)).toLowerCase()
+    return label.includes(keyword) || orgCode.includes(keyword)
   })
 })
 
@@ -163,9 +166,14 @@ const handleConfirm = () => {
           />
         </template>
       </el-table-column>
-      <el-table-column prop="org_name" label="名称" min-width="320">
+      <el-table-column prop="org_name" label="名称" min-width="220">
         <template #default="{ row }">
-          {{ row.org_name || row.label }}
+          {{ getTargetName(row) }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="org_code" label="机构编码" min-width="180">
+        <template #default="{ row }">
+          {{ getTargetOrgCode(row) }}
         </template>
       </el-table-column>
     </el-table>
@@ -230,9 +238,14 @@ const handleConfirm = () => {
             />
           </template>
         </el-table-column>
-        <el-table-column prop="org_name" label="名称" min-width="320">
+        <el-table-column prop="org_name" label="名称" min-width="180">
           <template #default="{ row }">
-            {{ row.org_name || row.label }}
+            {{ getTargetName(row) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="org_code" label="机构编码" min-width="160">
+          <template #default="{ row }">
+            {{ getTargetOrgCode(row) }}
           </template>
         </el-table-column>
       </el-table>

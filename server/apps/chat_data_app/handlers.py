@@ -32,7 +32,6 @@ from .services.datasource_manager import get_datasource_manager
 from .services.data_analyze_context import build_data_analyze_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
-from .services.skill_context_service import build_available_skills_prompt
 from .services.semantic_tools import (
     format_semantic_config_directory_for_prompt,
     list_runtime_semantic_config_directory,
@@ -606,85 +605,153 @@ def _query_requests_all_execution_targets(user_query: str | None) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
-def _format_execution_target_info(execution_targets: list[dict], user_query: str | None = None) -> tuple[str, list[str]]:
+def _append_execution_target_detail_lines(lines: list[str], index: int, target: dict) -> None:
+    """追加单条执行对象数据源明细。"""
+    member_name = _execution_target_name(target, index)
+    org_code = _execution_target_org_code(target)
+    member_datasource_id = _execution_target_member_id(target)
+    if org_code and org_code != str(member_name).strip():
+        line = f"{index}. 执行对象数据源名称：{member_name}"
+        if member_datasource_id:
+            line += f"；执行对象数据源ID：{member_datasource_id}"
+        lines.append(line)
+        lines.append(f"   执行对象数据源编码：{org_code}")
+        return
+    line = f"{index}. 执行对象数据源名称：{member_name}"
+    if member_datasource_id:
+        line += f"；执行对象数据源ID：{member_datasource_id}"
+    lines.append(line)
+
+
+def _format_execution_target_catalog(execution_targets: list[dict]) -> str:
+    """将完整执行对象清单格式化为数据源组上下文。"""
+    if not execution_targets:
+        return ""
+    lines = ["## 数据源组执行对象数据源"]
+    if len(execution_targets) == 1:
+        lines.append("当前数据源组只有 1 个执行对象数据源：")
+    else:
+        lines.append(f"当前数据源组有 {len(execution_targets)} 个执行对象数据源：")
+    for index, target in enumerate(execution_targets, start=1):
+        _append_execution_target_detail_lines(lines, index, target)
+    return "\n".join(lines)
+
+
+def _match_execution_targets_from_query_only(
+    execution_targets: list[dict],
+    user_query: str | None,
+) -> list[str]:
+    """仅从用户原文解析执行对象匹配，不含前端显式选择。"""
+    if _query_requests_all_execution_targets(user_query):
+        return [
+            _execution_target_member_id(target)
+            for target in execution_targets
+            if _execution_target_member_id(target)
+        ]
+    return _match_execution_targets_from_query(user_query, execution_targets)
+
+
+def _normalize_member_datasource_ids(member_datasource_ids: list[str] | None) -> list[str]:
+    return [
+        str(item).strip()
+        for item in member_datasource_ids or []
+        if str(item).strip()
+    ]
+
+
+def _append_user_selected_execution_targets_to_context(
+    query_context: str,
+    execution_targets: list[dict],
+    member_datasource_ids: list[str],
+) -> str:
+    """用户显式选择执行对象时，追加到数据源组智能问数说明末尾。"""
+    selected_member_ids = _normalize_member_datasource_ids(member_datasource_ids)
+    if not selected_member_ids:
+        return str(query_context or "").strip()
+
+    selected_id_set = set(selected_member_ids)
+    selected_targets = [
+        (index, target)
+        for index, target in enumerate(execution_targets, start=1)
+        if _execution_target_member_id(target) in selected_id_set
+    ]
+    if not selected_targets:
+        return str(query_context or "").strip()
+
+    lines: list[str] = []
+    base_context = str(query_context or "").strip()
+    if base_context:
+        lines.extend([base_context, ""])
+    lines.append("## 当前用户已选择的执行对象数据源")
+    lines.append("本次查询必须只使用以下 member_datasource_ids：")
+    for index, target in selected_targets:
+        member_name = _execution_target_name(target, index)
+        member_id = _execution_target_member_id(target)
+        org_code = _execution_target_org_code(target)
+        line = f"- {member_name}"
+        if member_id:
+            line += f"（member_datasource_id: {member_id}）"
+        if org_code and org_code != member_name:
+            line += f"；编码：{org_code}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _resolve_execution_target_selection(
+    execution_targets: list[dict],
+    user_query: str | None = None,
+    explicit_member_datasource_ids: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """解析本轮执行对象范围，返回 (effective_member_ids, query_matched_member_ids)。"""
+    explicit_member_ids = _normalize_member_datasource_ids(explicit_member_datasource_ids)
+    query_matched_member_ids = _match_execution_targets_from_query_only(execution_targets, user_query)
+    if explicit_member_ids:
+        return list(dict.fromkeys(explicit_member_ids)), query_matched_member_ids
+    return list(dict.fromkeys(query_matched_member_ids)), query_matched_member_ids
+
+
+def _format_execution_target_info(
+    execution_targets: list[dict],
+    user_query: str | None = None,
+    explicit_member_datasource_ids: list[str] | None = None,
+) -> tuple[str, list[str]]:
+    """generate 模式构造 execution_target_info；query 模式由数据源组说明承载。"""
     if not execution_targets:
         return "", []
 
-    matched_member_ids = [
-        _execution_target_member_id(target)
-        for target in execution_targets
-        if _query_requests_all_execution_targets(user_query) and _execution_target_member_id(target)
-    ]
-    if not matched_member_ids:
-        matched_member_ids = _match_execution_targets_from_query(user_query, execution_targets)
+    effective_member_ids, query_matched_member_ids = _resolve_execution_target_selection(
+        execution_targets,
+        user_query=user_query,
+        explicit_member_datasource_ids=explicit_member_datasource_ids,
+    )
+    explicit_member_ids = _normalize_member_datasource_ids(explicit_member_datasource_ids)
+    if not explicit_member_ids:
+        if not effective_member_ids:
+            return "", query_matched_member_ids
+        return _format_execution_target_catalog(execution_targets), query_matched_member_ids
 
-    lines = ["## 可用执行对象数据源"]
-    if len(execution_targets) == 1:
-        lines.append("当前可用范围只有 1 个可用执行对象数据源：")
-    else:
-        lines.append(f"当前可用范围有 {len(execution_targets)} 个可用执行对象数据源。请根据用户问题选择本次要查询的执行对象数据源；如果用户未指定执行对象数据源，默认查询第 1 个执行对象数据源，不要默认全部执行。")
-        lines.append("执行对象数据源名称必须按完整名称或执行对象数据源编码精确匹配，不能用前缀或包含关系替代：")
-
-    for index, target in enumerate(execution_targets, start=1):
-        member_name = _execution_target_name(target, index)
-        org_code = _execution_target_org_code(target)
-        member_datasource_id = _execution_target_member_id(target)
-        if org_code and org_code != str(member_name).strip():
-            line = f"{index}. 执行对象数据源名称：{member_name}"
-            if member_datasource_id:
-                line += f"；执行对象数据源ID：{member_datasource_id}"
-            lines.append(line)
-            lines.append(f"   执行对象数据源编码：{org_code}")
-        else:
-            line = f"{index}. 执行对象数据源名称：{member_name}"
-            if member_datasource_id:
-                line += f"；执行对象数据源ID：{member_datasource_id}"
-            lines.append(line)
-
-    if matched_member_ids:
-        matched_targets = [
-            (index, target)
-            for index, target in enumerate(execution_targets, start=1)
-            if _execution_target_member_id(target) in matched_member_ids
-        ]
-        lines.append("")
-        lines.append("## 用户问题中的执行对象数据源匹配")
-        lines.append("已按用户原文精确匹配到以下执行对象数据源；本次查询必须只使用这些执行对象数据源对应的执行对象数据源ID：")
-        for index, target in matched_targets:
-            member_name = _execution_target_name(target, index)
-            member_datasource_id = _execution_target_member_id(target)
-            org_code = _execution_target_org_code(target)
-            line = f"- 执行对象数据源名称：{member_name}"
-            if org_code:
-                line += f"；执行对象数据源编码：{org_code}"
-            if member_datasource_id:
-                line += f"；执行对象数据源ID：{member_datasource_id}"
-            lines.append(line)
-
-    return "\n".join(lines), matched_member_ids
+    selected_info = _append_user_selected_execution_targets_to_context(
+        "",
+        execution_targets,
+        explicit_member_ids,
+    )
+    return selected_info, effective_member_ids
 
 
 async def _get_execution_targets_async(
     datasource_id: str | None,
     member_datasource_ids: list[str] | None = None,
-    include_all_available: bool = False,
 ) -> list[dict]:
     if not datasource_id:
         return []
+    normalized_member_ids = _normalize_member_datasource_ids(member_datasource_ids)
+    if not normalized_member_ids:
+        return []
     try:
         ds_manager = get_datasource_manager()
-        if include_all_available:
-            datasource = await ds_manager.get_datasource_async(datasource_id)
-            if datasource and hasattr(ds_manager, "_build_execution_datasource_targets"):
-                all_member_ids = [
-                    _execution_target_member_id(member)
-                    for member in datasource.get("member_sources") or []
-                    if _execution_target_member_id(member)
-                ]
-                return ds_manager._build_execution_datasource_targets(datasource, all_member_ids)
         return await ds_manager.get_execution_datasources_async(
             datasource_id,
-            member_datasource_ids,
+            normalized_member_ids,
         )
     except Exception as err:
         logger.warning(f"构造执行对象说明失败: {err}")
@@ -694,13 +761,21 @@ async def _get_execution_targets_async(
 async def _build_execution_target_info_async(
     datasource_id: str | None,
     member_datasource_ids: list[str] | None = None,
-    include_all_available: bool = False,
     user_query: str | None = None,
 ) -> str:
-    """异步构造可用执行对象说明，避免同步读取数据源配置。"""
-    execution_targets = await _get_execution_targets_async(datasource_id, member_datasource_ids, include_all_available)
-    info, _matched_member_ids = _format_execution_target_info(execution_targets, user_query)
-    return info
+    """异步构造执行对象说明；只使用本次请求已传入的执行对象，避免绕过前端权限过滤。"""
+    all_execution_targets = await _get_execution_targets_async(
+        datasource_id,
+        member_datasource_ids,
+    )
+    info, _matched_member_ids = _format_execution_target_info(
+        all_execution_targets,
+        user_query,
+        member_datasource_ids,
+    )
+    if info:
+        return info
+    return _format_execution_target_catalog(all_execution_targets)
 
 
 async def _build_semantic_config_directory_info_async(
@@ -721,20 +796,19 @@ async def _build_semantic_config_directory_info_async(
 
 async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
     """构造智能问数业务知识技能上下文，显式指定的技能必须让模型稳定可见。"""
-    context = await build_available_skills_prompt(user_id=user_id or "")
+    _ = user_id
     normalized_skill_names = [
         str(item or "").strip()
         for item in skill_names or []
         if str(item or "").strip()
     ]
     if not normalized_skill_names:
-        return context
+        return ""
     requested = "、".join(f"`{name}`" for name in dict.fromkeys(normalized_skill_names))
-    requested_context = (
+    return (
         "## 本轮指定业务知识技能\n"
-        f"用户本轮明确指定以下业务知识技能：{requested}。确定唯一指标集后，先调用 `skill_load` 加载对应技能，再继续查询规划。"
+        f"用户本轮明确指定以下业务知识技能：{requested}。确定唯一指标集后，只读取这些指定技能，再继续查询规划；不要读取未指定技能。"
     )
-    return f"{context}\n\n{requested_context}".strip() if context else requested_context
 
 
 async def _stream_sql_generation(
@@ -861,21 +935,40 @@ async def _stream_sql_generation(
                     datasource_group_context = str((datasource or {}).get("query_context") or "").strip()
                 except Exception as err:
                     logger.warning("读取数据源组智能问数说明失败: %s", err)
-            execution_targets = await _get_execution_targets_async(
+            explicit_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
+            all_execution_targets = await _get_execution_targets_async(
                 datasource_id,
-                member_datasource_ids,
-                include_all_available=(mode == "query" and not member_datasource_ids),
+                explicit_member_datasource_ids,
             )
-            all_execution_target_info, matched_member_datasource_ids = _format_execution_target_info(
-                execution_targets,
-                user_query if mode == "query" else None,
-            )
-            all_member_datasource_ids = [
+            available_member_datasource_ids = [
                 _execution_target_member_id(target)
-                for target in execution_targets
+                for target in all_execution_targets
                 if _execution_target_member_id(target)
             ] if mode == "query" else []
-
+            selected_member_datasource_ids = available_member_datasource_ids if mode == "query" else explicit_member_datasource_ids
+            query_matched_member_datasource_ids = (
+                _match_execution_targets_from_query_only(all_execution_targets, user_query)
+                if mode == "query"
+                else []
+            )
+            effective_member_datasource_ids, _ = _resolve_execution_target_selection(
+                all_execution_targets,
+                user_query if mode == "query" else None,
+                selected_member_datasource_ids if mode == "query" else explicit_member_datasource_ids,
+            )
+            if mode == "query" and selected_member_datasource_ids:
+                datasource_group_context = _append_user_selected_execution_targets_to_context(
+                    datasource_group_context,
+                    all_execution_targets,
+                    selected_member_datasource_ids,
+                )
+            selected_execution_target_info = ""
+            if mode != "query":
+                selected_execution_target_info, _ = _format_execution_target_info(
+                    all_execution_targets,
+                    user_query,
+                    member_datasource_ids,
+                )
             initial_state = {
                 "messages": [HumanMessage(
                     content=user_query,
@@ -890,11 +983,11 @@ async def _stream_sql_generation(
                 "user_id": user_id,
                 "operator_name": username or "",
                 "conversation_id": thread_id,
-                "member_datasource_ids": member_datasource_ids or [],
-                "available_member_datasource_ids": all_member_datasource_ids,
-                "matched_member_datasource_ids": matched_member_datasource_ids,
+                "member_datasource_ids": selected_member_datasource_ids,
+                "available_member_datasource_ids": available_member_datasource_ids,
+                "matched_member_datasource_ids": query_matched_member_datasource_ids if mode == "query" else effective_member_datasource_ids,
                 "require_explicit_member_selection": mode == "query",
-                "execution_target_info": all_execution_target_info,
+                "execution_target_info": selected_execution_target_info,
                 "datasource_group_context": datasource_group_context,
                 "semantic_config_directory_info": semantic_config_directory_info,
             }
@@ -1187,7 +1280,7 @@ async def data_analyze_completion_handler(
             workspace_paths, data_context_file = await prepare_data_analyze_workspace(conversation_id, data_context)
             log_phase("ensure_workspace")
             try:
-                available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime")
+                available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="analyze")
                 available_skills_xml = format_skills_prompt([dict(item) for item in available_skills])
             except Exception as err:
                 logger.warning("DataAnalyze 技能列表加载失败，回退代码目录: %s", err)

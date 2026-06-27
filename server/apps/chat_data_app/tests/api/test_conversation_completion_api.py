@@ -76,16 +76,6 @@ def _patch_completion_dependencies(monkeypatch, graph):
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
     monkeypatch.setattr(handler_module, "get_chat_data_graph", lambda **_kwargs: graph)
-    monkeypatch.setattr(
-        handler_module,
-        "_build_execution_target_info_async",
-        lambda *_args, **_kwargs: asyncio.sleep(0, result=""),
-    )
-    monkeypatch.setattr(
-        handler_module,
-        "build_available_skills_prompt",
-        lambda **_kwargs: asyncio.sleep(0, result="## 可用业务知识技能\n- business-query"),
-    )
 
 
 def _post_completion(client, auth_headers, conversation_id, query, options=None):
@@ -226,14 +216,14 @@ def test_completion_api_passes_explicit_skill_names_to_query_state(client, auth_
         options={
             "mode": "query",
             "datasource_id": "ds_a",
-            "skill_names": ["business-query", "business-query", "custom-query"],
+            "skill_names": ["custom-query-skill", "custom-query-skill", "risk-query-skill"],
         },
     )
 
     assert response.status_code == 200
     assert "完成" in response.text
     human_message = graph.initial_state["messages"][0]
-    assert human_message.additional_kwargs["skill_names"] == ["business-query", "custom-query"]
+    assert human_message.additional_kwargs["skill_names"] == ["custom-query-skill", "risk-query-skill"]
 
 
 class ToolCallingLLM:
