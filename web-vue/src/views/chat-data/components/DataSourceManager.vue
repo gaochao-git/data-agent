@@ -1522,11 +1522,11 @@ defineExpose({
         <div class="space-y-2.5">
           <div class="grid grid-cols-2 gap-3">
             <div class="flex min-w-0 items-center gap-2">
-              <label class="w-16 shrink-0 text-sm text-slate-600">组名称<span class="text-red-500">*</span></label>
+              <label class="w-24 shrink-0 text-sm text-slate-600">组名称<span class="text-red-500">*</span></label>
               <input v-model="groupForm.group_name" type="text" maxlength="128" placeholder="请输入数据源组名称" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
             <div class="flex min-w-0 items-center gap-2">
-              <label class="w-12 shrink-0 text-sm text-slate-600">描述</label>
+              <label class="w-24 shrink-0 text-sm text-slate-600">描述</label>
               <input v-model="groupForm.group_desc" type="text" maxlength="128" placeholder="可选" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
           </div>
@@ -1541,7 +1541,7 @@ defineExpose({
             ></textarea>
           </div>
           <div class="flex items-center gap-2">
-            <label class="w-20 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>
+            <label class="w-24 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>
             <div class="flex items-center gap-2">
               <button
                 type="button"
