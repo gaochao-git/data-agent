@@ -55,8 +55,8 @@ const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
 const dataAnalyzeEnabled = ref(false)
 const agentOptions = computed(() => [
-  { id: 'chat_data', label: '智能问数', disabled: false },
-  { id: 'chat_data_data_analyze', label: '智能分析', disabled: !dataAnalyzeEnabled.value },
+  { id: 'chat_data', label: '问数', disabled: false },
+  { id: 'chat_data_data_analyze', label: '分析', disabled: !dataAnalyzeEnabled.value },
 ] as const)
 const selectedAgent = ref<'chat_data' | 'chat_data_data_analyze'>(
   'chat_data'
@@ -248,7 +248,7 @@ const selectedMemberDatasourceIds = computed({
 })
 const selectedModelValue = computed(() => modelOptions.value.find(m => m.id === selectedModel.value)?.value || selectedModel.value || null)
 const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
-const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '智能问数')
+const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '问数')
 const buildSkillRequestText = (text: string, skillName: string) => {
   const normalizedText = String(text || '').trim()
   return skillName ? `使用「${skillName}」技能回答：${normalizedText}` : normalizedText
@@ -2099,7 +2099,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     <button
                       v-if="selectedAgent === 'chat_data_data_analyze'"
                       type="button"
-                      class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                      class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                       title="技能管理"
                       @click="isSkillManagerOpen = true"
                     >
@@ -2109,7 +2109,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     <div ref="agentSelectorRef" class="relative">
                       <button
                         type="button"
-                        class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
+                        class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                         @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                       >
                         <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -2138,7 +2138,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         </button>
                       </div>
                     </div>
-                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
+                    <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
                       <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                       <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                         <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
@@ -2148,7 +2148,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     <button
                       type="button"
                       :class="[
-                        'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                        'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
                         enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
                       ]"
                       :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
@@ -2156,7 +2156,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       @click="enableDeepThinking = !enableDeepThinking"
                     >
                       <i class="fa-solid fa-brain text-[10px]"></i>
-                      <span>深度思考</span>
+                      <span>思考</span>
                     </button>
                   </div>
                   <button
@@ -2475,7 +2475,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <button
                     v-if="selectedAgent === 'chat_data_data_analyze'"
                     type="button"
-                    class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                    class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                     title="技能管理"
                     @click="isSkillManagerOpen = true"
                   >
@@ -2485,7 +2485,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <div ref="agentSelectorRef" class="relative">
                     <button
                       type="button"
-                      class="flex items-center gap-1.5 px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
+                      class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
                       @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                     >
                       <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
@@ -2514,7 +2514,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       </button>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1.5 px-2 py-1 rounded-full hover:bg-black/[0.05]">
+                  <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
                     <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                     <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                       <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
@@ -2524,7 +2524,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <button
                     type="button"
                     :class="[
-                      'flex items-center gap-1.5 px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
+                      'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
                       enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
                     ]"
                     :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
@@ -2532,7 +2532,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     @click="enableDeepThinking = !enableDeepThinking"
                   >
                     <i class="fa-solid fa-brain text-[10px]"></i>
-                    <span>深度思考</span>
+                    <span>思考</span>
                   </button>
                   <div v-if="tokenUsageDisplay" class="relative">
                     <button
