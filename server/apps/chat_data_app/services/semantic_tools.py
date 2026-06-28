@@ -103,6 +103,11 @@ def extract_datasource_id(state: Optional[Dict]) -> Optional[str]:
     """从 state 中提取当前数据源ID。"""
     if not state:
         return None
+    execution_context = state.get("execution_context")
+    if isinstance(execution_context, dict):
+        datasource_id = str(execution_context.get("datasource_id") or "").strip()
+        if datasource_id:
+            return datasource_id
     datasource_id = str(state.get("datasource_id") or "").strip()
     return datasource_id or None
 
@@ -119,6 +124,11 @@ def extract_datasource_group_context(state: Optional[Dict]) -> str:
     """从 state 中提取当前数据源组智能问数说明。"""
     if not state:
         return ""
+    prompt_context = state.get("prompt_context")
+    if isinstance(prompt_context, dict):
+        context = str(prompt_context.get("datasource_group_context") or "").strip()
+        if context:
+            return context
     return str(state.get("datasource_group_context") or "").strip()
 
 

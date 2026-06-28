@@ -665,22 +665,19 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", fail_get_all_tables)
     monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="## 当前可见指标集目录\n1. 名称：订单分析"))
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_auto_semantic_tool",
         user_query="5+5等于多少",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
     assert "5+5=10" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
-    assert fake_graph.initial_state["tables_ddl_info"] == ""
-    assert fake_graph.initial_state["semantic_config_directory_info"] == "## 当前可见指标集目录\n1. 名称：订单分析"
+    assert fake_graph.initial_state["prompt_context"]["semantic_config_directory_info"] == "## 当前可见指标集目录\n1. 名称：订单分析"
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
     assert called["tables"] is False
@@ -716,7 +713,6 @@ def test_stream_sql_generation_emits_semantic_selection_event_from_tool(monkeypa
         thread_id="conv_select_tool_event",
         user_query="按机构查询交易金额",
         datasource_id="ds_a",
-        mode="query",
     )))
 
     joined = "".join(events)
@@ -752,7 +748,6 @@ def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(mon
         thread_id="conv_user_selected_semantic",
         user_query="商品数量有多少",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_test",
         semantic_config_selection=selection,
     )))
@@ -785,7 +780,6 @@ def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
         thread_id="conv_query_skill_names",
         user_query="查询金额",
         datasource_id="ds_a",
-        mode="query",
         skill_names=["custom-query-skill", "risk-query-skill"],
     )))
 
@@ -825,7 +819,6 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
         thread_id="conv_select_required_tool_event",
         user_query="查询金额",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
@@ -868,7 +861,6 @@ def test_stream_sql_generation_does_not_emit_select_required_for_query_plan(monk
         thread_id="conv_query_plan_tool_event",
         user_query="查询订单金额和用户数",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
@@ -916,7 +908,6 @@ def test_stream_sql_generation_does_not_emit_select_required_for_cross_join_plan
         thread_id="conv_cross_join_required_plan",
         user_query="按用户等级关联订单金额",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
@@ -942,7 +933,6 @@ def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch
         thread_id="conv_selected_semantic_no_precheck",
         user_query="查询明细",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_order",
     )))
 
@@ -969,7 +959,6 @@ def test_stream_sql_generation_keeps_supported_selected_config(monkeypatch):
         thread_id="conv_keep_semantic",
         user_query="查询订单金额",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_order",
     )))
 
@@ -996,7 +985,6 @@ def test_stream_sql_generation_runs_after_user_selects_ambiguous_candidate(monke
         thread_id="conv_selected_ambiguous_semantic",
         user_query="商品数量是多少",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_order",
     )))
 
@@ -1022,7 +1010,6 @@ def test_stream_sql_generation_does_not_preblock_selected_config(monkeypatch):
         thread_id="conv_no_preblock_semantic",
         user_query="查询退款金额",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_order",
     )))
 
@@ -1062,7 +1049,6 @@ def test_stream_sql_generation_blocks_ambiguous_semantic_configs(monkeypatch):
         thread_id="conv_ambiguous_semantic",
         user_query="查询金额",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
@@ -1104,7 +1090,6 @@ def test_stream_sql_generation_blocks_cross_config_required(monkeypatch):
         thread_id="conv_cross_semantic",
         user_query="查询订单金额和商品库存",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id=None,
     )))
 
@@ -1131,9 +1116,6 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders", "columns": []}]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.llm_select_tables", lambda _query, _tables: asyncio.sleep(0, result=["orders"]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_tables_create_format", lambda _tables, _names: "CREATE TABLE orders (id int)")
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_a",
@@ -1141,7 +1123,6 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
         datasource_id="ds_a",
         user_id="user_a",
         username="测试用户",
-        mode="generate",
     )))
 
     joined = "".join(events)
@@ -1153,7 +1134,7 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     assert '"usage": {"total_tokens": 12}' in joined
     assert '"timestamp":' in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
-    assert fake_graph.initial_state["datasource_id"] == "ds_a"
+    assert fake_graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
     assert fake_graph.initial_state["operator_name"] == "测试用户"
 
 
@@ -1205,16 +1186,15 @@ def test_stream_sql_generation_query_mode_uses_only_request_visible_members(monk
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=["m1"],
-        mode="query",
         semantic_config_id="cfg_a",
     )))
 
-    assert fake_graph.initial_state["member_datasource_ids"] == ["m1"]
-    assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1"]
-    assert fake_graph.initial_state["matched_member_datasource_ids"] == ["m1"]
-    assert "当前用户已选择的执行对象数据源" in fake_graph.initial_state["datasource_group_context"]
-    assert "member_datasource_id: m1" in fake_graph.initial_state["datasource_group_context"]
-    assert "m2" not in fake_graph.initial_state["datasource_group_context"]
+    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
+    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
+    datasource_group_context = fake_graph.initial_state["prompt_context"]["datasource_group_context"]
+    assert "当前用户已选择的执行对象数据源" in datasource_group_context
+    assert "member_datasource_id: m1" in datasource_group_context
+    assert "m2" not in datasource_group_context
 
 
 def test_stream_sql_generation_query_mode_does_not_expand_empty_member_scope(monkeypatch):
@@ -1257,14 +1237,12 @@ def test_stream_sql_generation_query_mode_does_not_expand_empty_member_scope(mon
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=[],
-        mode="query",
         semantic_config_id="cfg_a",
     )))
 
-    assert fake_graph.initial_state["member_datasource_ids"] == []
-    assert fake_graph.initial_state["available_member_datasource_ids"] == []
-    assert fake_graph.initial_state["matched_member_datasource_ids"] == []
-    assert fake_graph.initial_state["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
+    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
+    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
+    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
 
 
 def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatch):
@@ -1315,15 +1293,14 @@ def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatc
         datasource_id="ds_a",
         user_id="user_a",
         member_datasource_ids=["m1"],
-        mode="query",
         semantic_config_id="cfg_a",
     )))
 
-    assert fake_graph.initial_state["member_datasource_ids"] == ["m1"]
-    assert fake_graph.initial_state["available_member_datasource_ids"] == ["m1"]
-    assert "当前用户已选择的执行对象数据源" in fake_graph.initial_state["datasource_group_context"]
-    assert "member_datasource_id: m1" in fake_graph.initial_state["datasource_group_context"]
-    assert "m2" not in fake_graph.initial_state["datasource_group_context"]
+    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
+    datasource_group_context = fake_graph.initial_state["prompt_context"]["datasource_group_context"]
+    assert "当前用户已选择的执行对象数据源" in datasource_group_context
+    assert "member_datasource_id: m1" in datasource_group_context
+    assert "m2" not in datasource_group_context
 
 
 def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
@@ -1340,15 +1317,11 @@ def test_stream_sql_generation_emits_pending_interrupt(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders", "columns": []}]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.llm_select_tables", lambda _query, _tables: asyncio.sleep(0, result=["orders"]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_tables_create_format", lambda _tables, _names: "CREATE TABLE orders (id int)")
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_interrupt",
         user_query="查订单数",
         datasource_id="ds_a",
-        mode="generate",
     )))
 
     joined = "".join(events)
@@ -1365,15 +1338,11 @@ def test_stream_sql_generation_emits_error_when_graph_fails(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: _FakeGraph(raise_on_stream=True))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders", "columns": []}]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.llm_select_tables", lambda _query, _tables: asyncio.sleep(0, result=["orders"]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_tables_create_format", lambda _tables, _names: "CREATE TABLE orders (id int)")
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_error",
         user_query="查订单数",
         datasource_id="ds_a",
-        mode="generate",
     )))
 
     joined = "".join(events)
@@ -1389,10 +1358,9 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
         thread_id="conv_missing_semantic",
         user_query="查订单",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_missing",
     )))
-    assert "query 模式未找到可用语义配置" in "".join(missing_events)
+    assert "智能问数未找到可用指标集" in "".join(missing_events)
 
     fake_graph = _FakeGraph(events=[(_FakeMessageChunk(content="语义查询完成"), {"langgraph_node": "agent"})])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1410,15 +1378,13 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
         thread_id="conv_temp",
         user_query="查订单",
         datasource_id="ds_a",
-        mode="query",
         semantic_config_id="cfg_temp",
         temp_semantic_config={"id": "cfg_temp"},
     )))
     joined = "".join(temp_events)
     assert "语义查询完成" in joined
-    assert fake_graph.initial_state["tables_ddl_info"] == ""
-    assert fake_graph.initial_state["datasource_group_context"] == ""
-    assert fake_graph.initial_state["semantic_config_directory_info"] == ""
+    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"] == ""
+    assert fake_graph.initial_state["prompt_context"]["semantic_config_directory_info"] == ""
 
 
 def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch):
@@ -1430,14 +1396,11 @@ def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch)
 
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="不应返回"), {"langgraph_node": "agent"})],
-        state=SimpleNamespace(tasks=[], values={"loaded_table_names": ["orders"]}),
+        state=SimpleNamespace(tasks=[], values={}),
     )
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders", "columns": []}]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.llm_select_tables", lambda _query, _tables: asyncio.sleep(0, result=["orders"]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_tables_create_format", lambda *_args: "should not build")
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_disconnect",
@@ -1447,7 +1410,7 @@ def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch)
     )))
 
     assert events == []
-    assert fake_graph.initial_state["loaded_table_names"] == []
+    assert "loaded_table_names" not in fake_graph.initial_state
 
 
 def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_content(monkeypatch):
@@ -1463,9 +1426,6 @@ def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_co
     ])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders", "columns": []}]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.llm_select_tables", lambda _query, _tables: asyncio.sleep(0, result=["orders"]))
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_tables_create_format", lambda *_args: "DDL")
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
         thread_id="conv_state_fail",

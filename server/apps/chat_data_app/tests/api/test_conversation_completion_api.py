@@ -157,8 +157,8 @@ def test_completion_api_streams_multi_config_query_plan_without_select_required(
     assert "event: message_end" in text
     assert text.rstrip().endswith("data: [DONE]")
 
-    assert graph.initial_state["mode"] == "query"
-    assert graph.initial_state["datasource_id"] == "ds_a"
+    assert "mode" not in graph.initial_state
+    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
     assert graph.initial_state["messages"][0].additional_kwargs["timestamp"]
 
 

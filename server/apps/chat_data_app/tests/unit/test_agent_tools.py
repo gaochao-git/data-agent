@@ -835,7 +835,7 @@ def test_semantic_query_tool_requires_explicit_member_ids_when_multiple_availabl
 
     state = {
         "datasource_id": "ds_a",
-        "member_datasource_ids": ["m1", "m2"],
+        "available_member_datasource_ids": ["m1", "m2"],
         "require_explicit_member_selection": True,
         "semantic_config_id": "cfg_a",
         "messages": [HumanMessage(content="查订单")],

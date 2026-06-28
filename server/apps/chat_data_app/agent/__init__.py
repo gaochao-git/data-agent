@@ -1,5 +1,5 @@
 """
-SQL Generator Agent
+智能问数 Agent
 
 标准 LangGraph 目录结构:
 - state.py: 状态定义和 reducer
@@ -9,7 +9,7 @@ SQL Generator Agent
 - tools/: 工具包
 """
 
-from .state import SqlGeneratorState
+from .state import ChatDataAgentState
 from .chat_data_graph import get_chat_data_graph
 from .nodes import agent_node, create_agent_node
 from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE, TABLE_SELECTOR_PROMPT
@@ -22,7 +22,7 @@ from .tools import (
 )
 
 __all__ = [
-    "SqlGeneratorState",
+    "ChatDataAgentState",
     "get_chat_data_graph",
     "get_checkpointer",
     "agent_node",

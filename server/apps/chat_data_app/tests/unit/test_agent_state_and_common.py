@@ -31,15 +31,7 @@ def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
     assert captured["save"] == (state.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
 
 
-def test_state_reducers_cover_empty_merge_append_dedupe_and_window():
-    assert state.merge_tables_ddl(None, None) == ""
-    assert state.merge_tables_ddl("old", None) == "old"
-    assert state.merge_tables_ddl(None, "new") == "new"
-    assert state.merge_tables_ddl("old", "new") == "old\n\nnew"
-
-    assert set(state.merge_table_names(["orders"], ["users", "orders"])) == {"orders", "users"}
-    assert state.merge_table_names(None, None) == []
-
+def test_state_reducers_cover_reasoning_append():
     assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
     assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
 

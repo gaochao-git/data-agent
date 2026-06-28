@@ -1102,11 +1102,6 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
             initial_state = {
                 "messages": [HumanMessage(content=payload.query, additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})],
                 "tables_ddl_info": tables_ddl_info,
-                "loaded_table_names": table_names,
-                "mode": "generate",
-                "datasource_id": payload.datasource_id,
-                "user_id": current_user_id,
-                "member_datasource_ids": payload.member_datasource_ids or [],
             }
             async with get_checkpointer() as checkpointer:
                 graph = get_sql_assist_graph(

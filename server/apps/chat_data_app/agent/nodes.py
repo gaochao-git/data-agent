@@ -1,6 +1,4 @@
-"""
-SQL Generator 节点定义
-"""
+"""智能问数主图节点定义。"""
 
 from datetime import datetime
 from typing import Any, Callable
@@ -10,8 +8,8 @@ from langchain_core.messages import SystemMessage
 from utils.logger import get_logger
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
 from .middleware.token_usage_middleware import build_request_breakdown, build_token_usage_payload, count_messages_tokens, count_tools_tokens, get_context_window
-from .config import get_mode_config, filter_tools_by_config
-from .state import SqlGeneratorState
+from .prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+from .state import ChatDataAgentState
 from .tools import TOOLS
 
 logger = get_logger(__name__)
@@ -31,6 +29,16 @@ def format_datasource_group_context_for_llm(context: str) -> str:
     if not text:
         return ""
     return f"\n## 数据源组智能问数说明\n{text}\n"
+
+
+def _get_prompt_context_value(state: ChatDataAgentState, key: str) -> str:
+    """读取提示词上下文，兼容旧 checkpoint 的顶层字段。"""
+    prompt_context = state.get("prompt_context")
+    if isinstance(prompt_context, dict):
+        value = prompt_context.get(key)
+        if value:
+            return str(value)
+    return str(state.get(key) or "")
 
 
 def timestamp_message(message: Any, timestamp: str | None = None) -> Any:
@@ -106,10 +114,8 @@ def normalize_response_tool_call_names(message: Any, tools: list) -> Any:
         return message
 
 
-def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str:
+def build_semantic_layer_context(semantic_config: dict | None) -> str:
     """构建统一语义层上下文。"""
-    if mode != "query":
-        return ""
     if not semantic_config:
         return (
             "## 当前指标集\n"
@@ -127,7 +133,7 @@ def build_semantic_layer_context(semantic_config: dict | None, mode: str) -> str
         "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
         "优先使用数据源组说明和当前指标集理解用户问题；只有用户本轮显式指定业务知识技能时，才读取对应技能补充查询判断；最终回答不要提及技能加载过程。\n\n"
     )
-    return header + build_semantic_prompt(semantic_config, mode)
+    return header + build_semantic_prompt(semantic_config, "query")
 
 
 def create_agent_node(
@@ -142,48 +148,39 @@ def create_agent_node(
 
     Args:
         tools: 可用工具列表
-        semantic_config: 语义配置（可选，语义模式时根据 mode 动态生成提示词）
+        semantic_config: 语义配置（可选，传入时在 system prompt 中注入当前指标集信息）
 
     Returns:
         agent 节点函数
     """
-    async def agent_node(state: SqlGeneratorState) -> dict[str, Any]:
+    async def agent_node(state: ChatDataAgentState) -> dict[str, Any]:
         """
         Agent 节点 - 调用 LLM 生成响应（可能包含工具调用）
         """
         logger.info("Agent 处理用户请求")
 
         messages = list(state["messages"])
-        tables_ddl_info = state.get("tables_ddl_info") or ""
-        mode = state.get("mode", "generate")  # 默认为 generate 模式
-
-        # 获取模式配置
-        config = get_mode_config(has_semantic=bool(semantic_config), mode=mode)
-
-        # 根据配置过滤工具
-        active_tools = filter_tools_by_config(tools, config)
+        active_tools = tools
 
         # 当前时间
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 构建提示词参数
         prompt_params = {
-            "tables_ddl_info": tables_ddl_info,
             "current_time": current_time,
-            "datasource_group_context": format_datasource_group_context_for_llm(state.get("datasource_group_context") or ""),
+            "datasource_group_context": format_datasource_group_context_for_llm(_get_prompt_context_value(state, "datasource_group_context")),
             "available_skills_context": available_skills_context or "",
-            "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(state.get("semantic_config_directory_info") or ""),
-            "sql_dialect": str(state.get("sql_dialect") or "SQL").strip() or "SQL",
+            "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(_get_prompt_context_value(state, "semantic_config_directory_info")),
         }
 
-        prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)
+        prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config)
 
         # 格式化提示词
-        system_prompt = config.base_prompt.format(**prompt_params)
+        system_prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.format(**prompt_params)
 
         prompt_length = len(system_prompt)
-        logger.info(f"[agent] system_prompt 长度: {prompt_length} 字符, mode={mode}, semantic={bool(semantic_config)}")
-        # logger.info(f"[agent] runtime system_prompt (mode={mode}, semantic={bool(semantic_config)}):\n{system_prompt}")
+        logger.info(f"[agent] system_prompt 长度: {prompt_length} 字符, semantic={bool(semantic_config)}")
+        # logger.info(f"[agent] runtime system_prompt (semantic={bool(semantic_config)}):\n{system_prompt}")
 
         # 构建消息列表
         llm_messages = [SystemMessage(content=system_prompt)] + messages

@@ -1,5 +1,5 @@
 """
-SQL Generator 主图定义
+智能问数主图定义
 
 标准 Agent ↔ Tools 循环
 
@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from utils.logger import get_logger
-from .state import SqlGeneratorState
+from .state import ChatDataAgentState
 from .nodes import create_agent_node
 from .tools import TOOLS, create_semantic_config_selection_tools
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
@@ -33,7 +33,6 @@ def get_chat_data_graph(
     checkpointer=None,
     semantic_config: dict | None = None,
     model_id: str | None = None,
-    mode: str | None = None,
     enable_thinking: bool | None = None,
     user_id: str | None = None,
     available_skills_context: str | None = None,
@@ -49,16 +48,11 @@ def get_chat_data_graph(
     Returns:
         编译后的 LangGraph 图
     """
-    effective_mode = mode or ("query" if semantic_config else None)
-    if effective_mode == "query":
-        tools = [
-            create_readonly_skill_load_tool(user_id=user_id or ""),
-            *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config, user_id=user_id),
-            *TOOLS,
-        ]
-    else:
-        tools = TOOLS
-        semantic_config = None
+    tools = [
+        create_readonly_skill_load_tool(user_id=user_id or ""),
+        *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config, user_id=user_id),
+        *TOOLS,
+    ]
 
     # 创建 agent 节点，传入 semantic_config（而不是 semantic_prompt）
     agent_node = create_agent_node(
@@ -70,7 +64,7 @@ def get_chat_data_graph(
     )
 
     # 构建图
-    builder = StateGraph(SqlGeneratorState)
+    builder = StateGraph(ChatDataAgentState)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", ToolNode(tools, handle_tool_errors=_format_tool_error))
 

@@ -194,7 +194,6 @@ async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeyp
         user_query="查销售额",
         datasource_id="ds",
         user_id="u1",
-        mode="query",
         semantic_config_selection={
             "semantic_config_id": "cfg",
             "matched_metrics": ["销售额", ""],
@@ -233,7 +232,6 @@ async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
         user_query="你好",
         datasource_id="ds",
         user_id="u1",
-        mode="query",
     ))
 
     text = "".join(chunks)
@@ -253,9 +251,8 @@ async def test_stream_sql_generation_missing_semantic_config_and_graph_error(mon
         user_query="查销售额",
         datasource_id="ds",
         semantic_config_id="missing",
-        mode="query",
     ))
-    assert "query 模式未找到可用语义配置" in "".join(chunks)
+    assert "智能问数未找到可用指标集" in "".join(chunks)
 
     class BadCheckpointer:
         async def __aenter__(self):
@@ -302,91 +299,69 @@ async def test_semantic_config_fallback_and_execution_target_name_branches(monke
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_non_query_reuses_loaded_tables_and_handles_disconnect(monkeypatch):
+async def test_stream_sql_generation_disconnect_uses_clean_query_state(monkeypatch):
     class Graph:
         def __init__(self):
             self.initial_state = None
 
         async def aget_state(self, _config):
-            return SimpleNamespace(values={"loaded_table_names": ["orders"], "token_usage": {"total_tokens": 5}}, tasks=[])
+            return SimpleNamespace(values={"token_usage": {"total_tokens": 5}}, tasks=[])
 
         async def astream(self, initial_state, *_args, **_kwargs):
             self.initial_state = initial_state
             yield FakeChunk(content="answer", msg_type="ai"), {"langgraph_node": "agent"}
 
     class DisconnectAfterFirst:
-        def __init__(self):
-            self.calls = 0
-
         async def is_disconnected(self):
-            self.calls += 1
-            return self.calls == 1
+            return True
 
     graph = Graph()
 
-    async def get_all_tables(_datasource_id):
-        return [{"table_name": "orders"}, {"table_name": "users"}]
-
-    async def select_tables(_query, _all_tables):
-        return ["orders"]
-
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: graph)
-    monkeypatch.setattr(handlers, "get_all_tables_async", get_all_tables)
-    monkeypatch.setattr(handlers, "llm_select_tables", select_tables)
-    monkeypatch.setattr(handlers, "get_tables_create_format", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("DDL should be reused")))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
-        mode="raw",
         request=DisconnectAfterFirst(),
     ))
 
     assert chunks == []
-    assert graph.initial_state["tables_ddl_info"] == ""
-    assert graph.initial_state["loaded_table_names"] == []
+    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
+    assert "tables_ddl_info" not in graph.initial_state
+    assert "loaded_table_names" not in graph.initial_state
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_non_query_state_failure_loads_new_tables(monkeypatch):
+async def test_stream_sql_generation_initial_state_uses_context_groups(monkeypatch):
     class Graph:
         def __init__(self):
             self.initial_state = None
 
         async def aget_state(self, _config):
-            raise RuntimeError("state unavailable")
+            return SimpleNamespace(values={}, tasks=[])
 
         async def astream(self, initial_state, *_args, **_kwargs):
             self.initial_state = initial_state
-            yield FakeChunk(content="raw answer", msg_type="ai"), {"langgraph_node": "agent"}
+            yield FakeChunk(content="query answer", msg_type="ai"), {"langgraph_node": "agent"}
 
     graph = Graph()
-    ddl_calls = []
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: graph)
-    monkeypatch.setattr(handlers, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders"}]))
-    monkeypatch.setattr(handlers, "llm_select_tables", lambda *_args, **_kwargs: asyncio.sleep(0, result=["orders"]))
-
-    def fake_ddl(all_tables, table_names):
-        ddl_calls.append((all_tables, table_names))
-        return "create table orders(id int)"
-
-    monkeypatch.setattr(handlers, "get_tables_create_format", fake_ddl)
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
-        mode="raw",
     ))
 
-    assert "raw answer" in "".join(chunks)
-    assert graph.initial_state["tables_ddl_info"] == "create table orders(id int)"
-    assert graph.initial_state["loaded_table_names"] == ["orders"]
-    assert ddl_calls[0][1] == ["orders"]
+    assert "query answer" in "".join(chunks)
+    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
+    assert graph.initial_state["prompt_context"]["datasource_group_context"] == ""
+    assert "tables_ddl_info" not in graph.initial_state
+    assert "loaded_table_names" not in graph.initial_state
 
 
 @pytest.mark.asyncio
@@ -407,7 +382,6 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="query",
     ))
     text = "".join(chunks)
     assert "semantic_query_tool" in text
@@ -436,21 +410,16 @@ async def test_stream_sql_generation_non_query_missing_semantic_config_and_no_se
     monkeypatch.setattr(handlers, "_get_semantic_config_async", no_semantic)
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: graph)
-    monkeypatch.setattr(handlers, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders"}]))
-    monkeypatch.setattr(handlers, "llm_select_tables", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
-    monkeypatch.setattr(handlers, "get_tables_create_format", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no tables selected")))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="generate",
         semantic_config_id="missing",
     ))
 
-    assert "fallback answer" in "".join(chunks)
-    assert graph.initial_state["tables_ddl_info"] == ""
-    assert graph.initial_state["loaded_table_names"] == []
+    assert "智能问数未找到可用指标集" in "".join(chunks)
+    assert graph.initial_state is None
 
 
 @pytest.mark.asyncio
@@ -475,7 +444,6 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="query",
     ))
     text = "".join(chunks)
 
@@ -510,7 +478,6 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="query",
     ))
     text = "".join(chunks)
 
@@ -655,7 +622,6 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="query",
     ))
     text = "".join(chunks)
 
@@ -685,7 +651,6 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
-        mode="query",
     ))
     text = "".join(chunks)
 

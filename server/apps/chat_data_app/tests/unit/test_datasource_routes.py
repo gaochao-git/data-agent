@@ -844,7 +844,9 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
 
     class FakeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None):
-            assert initial_state["datasource_id"] == "ds_a"
+            assert initial_state["tables_ddl_info"] == "CREATE TABLE orders(id bigint)"
+            assert "datasource_id" not in initial_state
+            assert "member_datasource_ids" not in initial_state
             assert config["configurable"]["thread_id"] == "conv_a"
             assert stream_mode == "messages"
             yield FakeChunk("忽略"), {"langgraph_node": "other"}
@@ -2837,7 +2839,9 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     assert captured["agent_id"] == routes.SQL_ASSIST_AGENT_ID
     assert captured["conversation_id"] == "conv_sql_assist"
     assert captured["config"]["configurable"]["thread_id"] == "conv_sql_assist"
-    assert captured["initial_state"]["member_datasource_ids"] == ["phy_b"]
+    assert captured["initial_state"]["tables_ddl_info"] == "CREATE TABLE users(id bigint);"
+    assert "member_datasource_ids" not in captured["initial_state"]
+    assert "datasource_id" not in captured["initial_state"]
 
 
 def test_update_datasource_meta_rejects_duplicate_name(monkeypatch):

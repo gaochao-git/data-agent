@@ -242,6 +242,47 @@ async def _resolve_semantic_query_config(
     return await load_runtime_semantic_config(datasource_id, semantic_config_id)
 
 
+def _get_execution_context(state: dict | None) -> dict[str, Any]:
+    """读取执行上下文，兼容旧 checkpoint 的顶层字段。"""
+    if not state:
+        return {}
+    context = state.get("execution_context")
+    if isinstance(context, dict):
+        return context
+    return state
+
+
+def _get_datasource_id_from_state(state: dict | None) -> str | None:
+    context = _get_execution_context(state)
+    datasource_id = str(context.get("datasource_id") or "").strip()
+    if datasource_id:
+        return datasource_id
+    datasource_id = str((state or {}).get("datasource_id") or "").strip()
+    return datasource_id or None
+
+
+def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[str], list[str], bool]:
+    context = _get_execution_context(state)
+    selected_member_ids = _normalize_member_datasource_ids(
+        context.get("member_datasource_ids")
+        or (state or {}).get("member_datasource_ids")
+    )
+    available_member_ids = _normalize_member_datasource_ids(
+        context.get("available_member_datasource_ids")
+        or (state or {}).get("available_member_datasource_ids")
+        or selected_member_ids
+    )
+    matched_member_ids = _normalize_member_datasource_ids(
+        context.get("matched_member_datasource_ids")
+        or (state or {}).get("matched_member_datasource_ids")
+    )
+    require_explicit = bool(
+        context.get("require_explicit_member_selection")
+        or (state or {}).get("require_explicit_member_selection")
+    )
+    return selected_member_ids, available_member_ids, matched_member_ids, require_explicit
+
+
 @tool(args_schema=SemanticQueryInput)
 async def semantic_query_tool(
     dsl: dict | None = None,
@@ -267,7 +308,7 @@ async def semantic_query_tool(
         return "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
     state = state or {}
 
-    datasource_id = state.get("datasource_id")
+    datasource_id = _get_datasource_id_from_state(state)
     state_config = state.get("semantic_config")
     state_config_id = str((state_config or {}).get("id") or "").strip() if isinstance(state_config, dict) else ""
     semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or state_config_id or "").strip() or None
@@ -305,11 +346,9 @@ async def semantic_query_tool(
     user_id = str(state.get("user_id") or "").strip() or None
     operator_name = str(state.get("operator_name") or "").strip() or None
     requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    state_member_datasource_ids = _normalize_member_datasource_ids(state.get("member_datasource_ids"))
-    available_member_datasource_ids = _normalize_member_datasource_ids(state.get("available_member_datasource_ids"))
-    matched_member_datasource_ids = _normalize_member_datasource_ids(state.get("matched_member_datasource_ids"))
-    allowed_member_datasource_ids = state_member_datasource_ids or available_member_datasource_ids
-    if state.get("require_explicit_member_selection") and not allowed_member_datasource_ids:
+    selected_member_datasource_ids, available_member_datasource_ids, matched_member_datasource_ids, require_explicit_member_selection = _get_member_scope_from_state(state)
+    allowed_member_datasource_ids = available_member_datasource_ids
+    if require_explicit_member_selection and not allowed_member_datasource_ids:
         return "semantic_query_tool 执行失败: 本次请求没有可用执行对象，请先选择有权限的数据源后再查询"
     if requested_member_datasource_ids:
         if matched_member_datasource_ids:
@@ -332,12 +371,14 @@ async def semantic_query_tool(
             if invalid_member_ids:
                 return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
         effective_member_datasource_ids = requested_member_datasource_ids
-    elif state.get("require_explicit_member_selection") and len(allowed_member_datasource_ids) > 1:
+    elif selected_member_datasource_ids:
+        effective_member_datasource_ids = selected_member_datasource_ids
+    elif require_explicit_member_selection and len(allowed_member_datasource_ids) > 1:
         return "semantic_query_tool 执行失败: 多个可用执行对象时必须传入本次要查询的 member_datasource_ids；如果用户未明确机构范围，请先确认查询哪个机构或是否查询全部"
     else:
-        effective_member_datasource_ids = state_member_datasource_ids
+        effective_member_datasource_ids = available_member_datasource_ids
     if (
-        state.get("require_explicit_member_selection")
+        require_explicit_member_selection
         and len(available_member_datasource_ids) > 1
         and len(effective_member_datasource_ids) == 1
         and not matched_member_datasource_ids

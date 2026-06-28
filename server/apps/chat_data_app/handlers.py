@@ -22,9 +22,6 @@ from utils.lang_util import conversation
 from .agent import (
     get_chat_data_graph,
     get_checkpointer,
-    get_all_tables_async,
-    get_tables_create_format,
-    llm_select_tables,
 )
 from .agent import data_analyze_graph
 from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
@@ -725,7 +722,6 @@ async def _stream_sql_generation(
     user_id: str | None = None,
     username: str | None = None,
     member_datasource_ids: list[str] | None = None,
-    mode: str = "generate",
     semantic_config_id: str | None = None,
     temp_semantic_config: dict | None = None,
     request: Request | None = None,
@@ -734,7 +730,7 @@ async def _stream_sql_generation(
     enable_thinking: bool | None = None,
     skill_names: list[str] | None = None,
 ):
-    """流式执行 SQL 生成"""
+    """流式执行智能问数。"""
     datasource_id = str(datasource_id or "").strip() or None
     semantic_config_id = str(semantic_config_id or "").strip() or None
     normalized_skill_names = []
@@ -742,7 +738,7 @@ async def _stream_sql_generation(
         skill_name = str(item or "").strip()
         if skill_name and skill_name not in normalized_skill_names:
             normalized_skill_names.append(skill_name)
-    logger.info(f"开始执行，thread_id: {thread_id}, mode: {mode}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
+    logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
 
     # 获取语义配置
     # 优先级：temp_semantic_config > semantic_config_id
@@ -757,16 +753,14 @@ async def _stream_sql_generation(
         if semantic_config:
             logger.info(f"使用语义模式: {semantic_config.get('name', semantic_config.get('id'))}")
         else:
-            logger.warning("query 模式未找到可用语义配置")
-            if mode == "query":
-                yield _format_sse("error", {"error": f"query 模式未找到可用语义配置: {semantic_config_id}"})
-                yield _format_sse("done", "[DONE]")
-                return
-    elif mode == "query":
-        logger.info("query 模式未手动选择指标集，将由模型按需调用选择工具")
+            logger.warning("智能问数未找到可用指标集")
+            yield _format_sse("error", {"error": f"智能问数未找到可用指标集: {semantic_config_id}"})
+            yield _format_sse("done", "[DONE]")
+            return
+    else:
+        logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
 
-    if mode == "query":
-        logger.info("query 模式使用统一语义工具链")
+    logger.info("智能问数使用统一语义工具链")
     if semantic_config and not semantic_config_id:
         semantic_config_id = str(semantic_config.get("id") or "").strip() or None
 
@@ -786,45 +780,10 @@ async def _stream_sql_generation(
                 checkpointer=checkpointer,
                 semantic_config=semantic_config,
                 model_id=model_id,
-                mode=mode,
                 enable_thinking=enable_thinking,
                 user_id=user_id,
-                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names) if mode == "query" else "",
+                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names),
             )
-
-            # 语义模式不需要表结构，semantic_to_sql_tool 内部已封装
-            # NL2SQL 模式需要加载表结构给 LLM
-            tables_ddl_info = ""
-            new_loaded_names = []
-
-            if mode != "query" and not semantic_config:
-                # NL2SQL 模式：加载表结构
-                all_tables = await get_all_tables_async(datasource_id)
-
-                # 获取历史状态，检查已加载的表
-                loaded_table_names: set[str] = set()
-                try:
-                    state = await graph.aget_state(config)
-                    if state and state.values:
-                        loaded_table_names = set(state.values.get("loaded_table_names") or [])
-                        logger.debug(f"历史已加载的表: {loaded_table_names}")
-                except Exception as e:
-                    logger.debug(f"获取历史状态失败（可能是新会话）: {e}")
-
-                # 根据用户问题选择需要的表
-                selected_table_names = await llm_select_tables(user_query, all_tables)
-                logger.debug(f"本次需要的表: {selected_table_names}")
-
-                # 计算需要新加载的表
-                new_table_names = set(selected_table_names) - loaded_table_names
-                logger.debug(f"需要新加载的表: {new_table_names}")
-
-                # 构建本次传入的状态
-                if new_table_names:
-                    tables_ddl_info = get_tables_create_format(all_tables, list(new_table_names))
-                    new_loaded_names = list(new_table_names)
-                elif selected_table_names:
-                    logger.debug("复用历史表结构信息")
 
             human_message_kwargs = {"timestamp": _get_timestamp()}
             if semantic_selection_event:
@@ -833,74 +792,53 @@ async def _stream_sql_generation(
                 human_message_kwargs["skill_names"] = normalized_skill_names
 
             semantic_config_directory_info = ""
-            if mode == "query" and not semantic_config:
+            if not semantic_config:
                 semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
             datasource_group_context = ""
-            if mode == "query" and datasource_id:
+            if datasource_id:
                 try:
                     datasource = await get_datasource_manager().get_datasource_async(datasource_id)
                     datasource_group_context = str((datasource or {}).get("query_context") or "").strip()
                 except Exception as err:
                     logger.warning("读取数据源组智能问数说明失败: %s", err)
             explicit_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-            selected_member_datasource_ids = explicit_member_datasource_ids
-            available_member_datasource_ids: list[str] = []
-            matched_member_datasource_ids: list[str] = []
-            if mode == "query":
-                all_execution_targets = await _get_execution_targets_async(
-                    datasource_id,
-                    explicit_member_datasource_ids,
+            all_execution_targets = await _get_execution_targets_async(
+                datasource_id,
+                explicit_member_datasource_ids,
+            )
+            available_member_datasource_ids = [
+                _execution_target_member_id(target)
+                for target in all_execution_targets
+                if _execution_target_member_id(target)
+            ]
+            selected_member_datasource_ids = available_member_datasource_ids
+            matched_member_datasource_ids = _match_execution_targets_from_query_only(all_execution_targets, user_query)
+            if selected_member_datasource_ids:
+                datasource_group_context = _append_user_selected_execution_targets_to_context(
+                    datasource_group_context,
+                    all_execution_targets,
+                    selected_member_datasource_ids,
                 )
-                available_member_datasource_ids = [
-                    _execution_target_member_id(target)
-                    for target in all_execution_targets
-                    if _execution_target_member_id(target)
-                ]
-                selected_member_datasource_ids = available_member_datasource_ids
-                matched_member_datasource_ids = _match_execution_targets_from_query_only(all_execution_targets, user_query)
-                if selected_member_datasource_ids:
-                    datasource_group_context = _append_user_selected_execution_targets_to_context(
-                        datasource_group_context,
-                        all_execution_targets,
-                        selected_member_datasource_ids,
-                    )
-            elif selected_member_datasource_ids:
-                matched_member_datasource_ids = selected_member_datasource_ids
-            sql_dialect = "SQL"
-            if mode != "query" and datasource_id:
-                try:
-                    datasource = await get_datasource_manager().get_datasource_async(datasource_id)
-                    source_type = str((datasource or {}).get("source_type") or "").strip().lower()
-                    sql_dialect = {
-                        "mysql": "MySQL",
-                        "hive": "Hive SQL",
-                    }.get(source_type, source_type.upper() if source_type else "SQL")
-                except Exception as err:
-                    logger.warning(
-                        "读取数据源方言失败，普通 SQL 生成链路使用默认 SQL 方言: %s",
-                        err,
-                    )
             initial_state = {
                 "messages": [HumanMessage(
                     content=user_query,
                     additional_kwargs=human_message_kwargs
                 )],
-                "tables_ddl_info": tables_ddl_info,
-                "loaded_table_names": new_loaded_names,
-                "mode": mode,
-                "datasource_id": datasource_id,  # 传递数据源ID，用于真实SQL执行
+                "execution_context": {
+                    "datasource_id": datasource_id,
+                    "available_member_datasource_ids": available_member_datasource_ids,
+                    "matched_member_datasource_ids": matched_member_datasource_ids,
+                    "require_explicit_member_selection": True,
+                },
                 "semantic_config_id": semantic_config_id,
                 "semantic_config": semantic_config,
                 "user_id": user_id,
                 "operator_name": username or "",
                 "conversation_id": thread_id,
-                "member_datasource_ids": selected_member_datasource_ids,
-                "available_member_datasource_ids": available_member_datasource_ids,
-                "matched_member_datasource_ids": matched_member_datasource_ids,
-                "require_explicit_member_selection": mode == "query",
-                "datasource_group_context": datasource_group_context,
-                "semantic_config_directory_info": semantic_config_directory_info,
-                "sql_dialect": sql_dialect,
+                "prompt_context": {
+                    "datasource_group_context": datasource_group_context,
+                    "semantic_config_directory_info": semantic_config_directory_info,
+                },
             }
 
             # 用于跟踪已发送 running 状态的工具
@@ -1105,11 +1043,10 @@ async def sql_completion_handler(
     request: Request | None = None
 ) -> StreamingResponse:
     """
-    sql_generator 的 completion 处理器
+    智能问数 completion 处理器。
     """
     options_data = options or {}
     datasource_id = str(options_data.get("datasource_id") or "").strip() or None
-    mode = options_data.get("mode", "generate")
     semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None  # 语义配置 ID（可选）
     model_id = options_data.get("model_id")  # 模型选择（可选）
     enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
@@ -1134,7 +1071,6 @@ async def sql_completion_handler(
             user_id=user_id,
             username=username,
             member_datasource_ids=member_datasource_ids,
-            mode=mode,
             semantic_config_id=semantic_config_id,
             request=request,
             model_id=model_id,
