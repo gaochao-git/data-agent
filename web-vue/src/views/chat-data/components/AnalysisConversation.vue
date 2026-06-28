@@ -31,6 +31,7 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
+  selectedModelId?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -40,12 +41,14 @@ const props = withDefaults(defineProps<Props>(), {
   executionTargets: () => [],
   executionTargetMultiple: true,
   selectedMemberDatasourceIds: () => [],
+  selectedModelId: '',
 })
 
 const emit = defineEmits<{
   firstMessageComplete: [conversationId: string]
   agentChange: [agentId: 'chat_data' | 'chat_data_data_analyze']
   'update:selectedMemberDatasourceIds': [value: string[]]
+  'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
 }>()
@@ -67,7 +70,10 @@ const recommendationContentType = computed<'skills' | 'queries'>(() =>
   selectedAgent.value === 'chat_data_data_analyze' ? 'skills' : 'queries'
 )
 const modelOptions = ref<ChatDataModelOption[]>([])
-const selectedModel = ref('')
+const selectedModel = computed({
+  get: () => props.selectedModelId || '',
+  set: (value: string) => emit('update:selectedModelId', value),
+})
 const { enableDeepThinking } = useDeepThinking()
 
 const messages = ref<Message[]>([])
@@ -1349,7 +1355,6 @@ const loadModelOptions = async () => {
     }
   } catch (err) {
     modelOptions.value = []
-    selectedModel.value = ''
     console.error('加载模型列表失败:', err)
   }
 }

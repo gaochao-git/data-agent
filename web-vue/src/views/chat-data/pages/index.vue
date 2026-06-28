@@ -94,6 +94,7 @@ const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
 const userOrgCodePermissions = ref<string[]>([])
 const CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY = 'chat-data:conversation-semantic-config'
+const CONVERSATION_MODEL_STORAGE_KEY = 'chat-data:conversation-model'
 
 const hasMappedDatasource = computed(() => {
   const parentName = parentComponentName.value
@@ -549,6 +550,8 @@ const showConversationListPanel = ref(true)
 const showHistoryPopover = ref(false)
 const hasEnteredConversationOnce = ref(false)
 const conversationsLoaded = ref(false)
+const selectedConversationModelId = ref('')
+const conversationModelStorageUserKey = computed(() => currentUser.value.id || currentUser.value.name || 'default')
 let historyPopoverHideTimer: ReturnType<typeof setTimeout> | null = null
 let conversationLoadSeq = 0
 
@@ -896,6 +899,40 @@ const writeConversationSemanticConfigSelection = (datasourceId: string, configId
   }
 }
 
+const getConversationModelStorageUserKey = () => {
+  return conversationModelStorageUserKey.value
+}
+
+const readConversationModelSelection = () => {
+  if (typeof window === 'undefined') return ''
+  try {
+    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    if (!raw) return ''
+    const data = JSON.parse(raw) as Record<string, string>
+    return String(data?.[getConversationModelStorageUserKey()] || '').trim()
+  } catch (err) {
+    return ''
+  }
+}
+
+const writeConversationModelSelection = (modelId: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.localStorage.getItem(CONVERSATION_MODEL_STORAGE_KEY)
+    const data = raw ? JSON.parse(raw) as Record<string, string> : {}
+    const userKey = getConversationModelStorageUserKey()
+    const normalizedModelId = String(modelId || '').trim()
+    if (normalizedModelId) {
+      data[userKey] = normalizedModelId
+    } else {
+      delete data[userKey]
+    }
+    window.localStorage.setItem(CONVERSATION_MODEL_STORAGE_KEY, JSON.stringify(data))
+  } catch (err) {
+    // 本地存储不可用时保持当前页面内状态即可
+  }
+}
+
 const loadSemanticConfigs = async () => {
   if (!selectedDatasourceId.value) {
     semanticConfigs.value = []
@@ -1236,6 +1273,23 @@ watch(selectedDatasourceId, () => {
   conversationSelectedSemanticConfigId.value = null
   loadSemanticConfigs()
 }, { immediate: true })
+
+watch(
+  conversationModelStorageUserKey,
+  () => {
+    const savedModelId = readConversationModelSelection()
+    if (savedModelId) {
+      selectedConversationModelId.value = savedModelId
+    } else if (selectedConversationModelId.value) {
+      writeConversationModelSelection(selectedConversationModelId.value)
+    }
+  },
+  { immediate: true }
+)
+
+watch(selectedConversationModelId, (modelId) => {
+  writeConversationModelSelection(modelId)
+})
 
 watch(
   [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|')],
@@ -1685,6 +1739,7 @@ onUnmounted(() => {
                   :execution-targets="executionTargets"
                   :execution-target-multiple="true"
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
+                  v-model:selected-model-id="selectedConversationModelId"
                   hide-header
                   hide-datasource-selector
                   hide-execution-target-selector
@@ -1713,6 +1768,7 @@ onUnmounted(() => {
                     :execution-targets="executionTargets"
                     :execution-target-multiple="true"
                     :selected-member-datasource-ids="conversationMemberDatasourceIds"
+                    v-model:selected-model-id="selectedConversationModelId"
                     class="h-full"
                     @first-message-complete="handleFirstMessageComplete"
                     @agent-change="handleAgentChange"

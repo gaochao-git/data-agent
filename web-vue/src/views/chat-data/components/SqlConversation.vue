@@ -60,6 +60,7 @@ interface Props {
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
   hideExecutionTargetSelector?: boolean
+  selectedModelId?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -75,6 +76,7 @@ const props = withDefaults(defineProps<Props>(), {
   showAnalysisPanel: true,
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false,
+  selectedModelId: '',
 })
 
 const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
@@ -118,6 +120,7 @@ const emit = defineEmits<{
   dashboardCreated: [dashboard: Dashboard]
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
   'update:selectedMemberDatasourceIds': [value: string[]]
+  'update:selectedModelId': [value: string]
 }>()
 
 // ===== 分析面板状态（内部管理） =====
@@ -251,7 +254,10 @@ const recommendationContentType = computed<'skills' | 'queries'>(() =>
 )
 const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '问数')
 const modelOptions = ref<ChatDataModelOption[]>([])
-const selectedModel = ref('')
+const selectedModel = computed({
+  get: () => props.selectedModelId || '',
+  set: (value: string) => emit('update:selectedModelId', value),
+})
 const { enableDeepThinking } = useDeepThinking()
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelOpen = ref(false)
@@ -399,7 +405,6 @@ const loadModelOptions = async () => {
     }
   } catch (err) {
     modelOptions.value = []
-    selectedModel.value = ''
     console.error('加载模型列表失败:', err)
   }
 }
