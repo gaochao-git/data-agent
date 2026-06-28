@@ -32,7 +32,43 @@ const filters = ref({
   time_range: null as [string, string] | null,
 })
 
+const defaultVisibleColumnKeys = [
+  'time',
+  'source',
+  'status',
+  'user',
+  'member',
+  'duration',
+  'sql',
+  'actions',
+]
+
+const visibleColumnKeys = ref<string[]>([...defaultVisibleColumnKeys])
+
+const columnOptions = [
+  { key: 'time', label: '时间', defaultVisible: true },
+  { key: 'source', label: '来源', defaultVisible: true },
+  { key: 'status', label: '状态', defaultVisible: true },
+  { key: 'user', label: '用户', defaultVisible: true },
+  { key: 'member', label: '执行对象', defaultVisible: true },
+  { key: 'duration', label: '耗时', defaultVisible: true },
+  { key: 'sql', label: 'SQL', defaultVisible: true },
+  { key: 'actions', label: '操作', defaultVisible: true },
+  { key: 'execution_id', label: '执行ID' },
+  { key: 'task_id', label: '任务ID' },
+  { key: 'datasource_id', label: '数据源ID' },
+  { key: 'member_datasource_id', label: '成员ID' },
+  { key: 'query_type', label: '查询类型' },
+  { key: 'task_status', label: '任务状态' },
+  { key: 'row_count', label: '结果行数' },
+  { key: 'started_time', label: '开始时间' },
+  { key: 'finished_time', label: '结束时间' },
+  { key: 'error', label: '错误信息' },
+]
+
 const datasourceOptions = computed(() => props.datasources || [])
+const visibleColumnSet = computed(() => new Set(visibleColumnKeys.value))
+const visibleColumnCount = computed(() => Math.max(1, visibleColumnKeys.value.length))
 
 const sourceOptions = [
   { label: '全部来源', value: 'all' },
@@ -77,8 +113,10 @@ const formatTime = (value?: string | null) => {
   return String(value).replace('T', ' ').slice(0, 19)
 }
 
+const isColumnVisible = (key: string) => visibleColumnSet.value.has(key)
 const getStatusText = (item: SqlHistoryItem) => statusTextMap[item.sql_status || ''] || item.sql_status || '-'
 const getStatusClass = (item: SqlHistoryItem) => statusClassMap[item.sql_status || ''] || 'bg-slate-100 text-slate-600'
+const getTaskStatusText = (item: SqlHistoryItem) => statusTextMap[item.task_status || ''] || item.task_status || '-'
 const formatDurationSeconds = (value?: number | null) => {
   const milliseconds = Number(value)
   if (!Number.isFinite(milliseconds)) return '-'
@@ -93,6 +131,11 @@ const cleanDisplayError = (value?: string | null) => {
     .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
     .replace(/\[(?:\d{1,3};)*\d{1,3}m/g, '')
   return withoutAnsiEscapes.trim() || '暂无错误信息'
+}
+
+const formatNullableText = (value?: string | number | null) => {
+  const text = String(value ?? '').trim()
+  return text || '-'
 }
 
 const loadHistories = async () => {
@@ -164,7 +207,7 @@ const stopRunningSql = async () => {
   try {
     await ElMessageBox.confirm(
       `确定要停止${scopeText}所有正在执行的 SQL 吗？该操作会停止等待中和执行中的任务。`,
-      '停止执行中 SQL',
+      '停止SQL',
       {
         confirmButtonText: '停止',
         cancelButtonText: '取消',
@@ -265,12 +308,31 @@ defineExpose({
         <button class="h-8 rounded bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700" @click="handleSearch">查询</button>
         <button class="h-8 rounded border border-slate-200 px-3 text-xs text-slate-600 hover:bg-slate-50" @click="handleReset">重置</button>
         <button
-          class="h-8 rounded border border-red-200 px-3 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+          class="h-8 rounded border border-slate-200 px-3 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           :disabled="stoppingRunning"
           @click="stopRunningSql"
         >
-          {{ stoppingRunning ? '停止中...' : (filters.datasource_id ? '停止当前数据源执行中 SQL' : '停止全局执行中 SQL') }}
+          {{ stoppingRunning ? '停止中...' : '停止SQL' }}
         </button>
+        <el-dropdown trigger="click" :hide-on-click="false">
+          <button class="h-8 rounded border border-slate-200 px-3 text-xs text-slate-600 hover:bg-slate-50">
+            字段显示
+            <i class="fa-solid fa-chevron-down ml-1 text-[10px] text-slate-400"></i>
+          </button>
+          <template #dropdown>
+            <div class="w-48 px-2 py-2">
+              <el-checkbox-group v-model="visibleColumnKeys" class="global-sql-history-column-menu">
+                <el-checkbox
+                  v-for="column in columnOptions"
+                  :key="column.key"
+                  :label="column.key"
+                >
+                  {{ column.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+            </div>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -278,39 +340,69 @@ defineExpose({
       <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
         <thead class="sticky top-0 z-10 bg-slate-50 text-slate-500">
           <tr>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">时间</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">来源</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">状态</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">用户</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">执行对象</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">耗时</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">SQL</th>
-            <th class="border-b border-slate-100 px-3 py-2 font-medium">操作</th>
+            <th v-if="isColumnVisible('time')" class="border-b border-slate-100 px-3 py-2 font-medium">时间</th>
+            <th v-if="isColumnVisible('source')" class="border-b border-slate-100 px-3 py-2 font-medium">来源</th>
+            <th v-if="isColumnVisible('status')" class="border-b border-slate-100 px-3 py-2 font-medium">状态</th>
+            <th v-if="isColumnVisible('user')" class="border-b border-slate-100 px-3 py-2 font-medium">用户</th>
+            <th v-if="isColumnVisible('member')" class="border-b border-slate-100 px-3 py-2 font-medium">执行对象</th>
+            <th v-if="isColumnVisible('duration')" class="border-b border-slate-100 px-3 py-2 font-medium">耗时</th>
+            <th v-if="isColumnVisible('sql')" class="border-b border-slate-100 px-3 py-2 font-medium">SQL</th>
+            <th v-if="isColumnVisible('execution_id')" class="border-b border-slate-100 px-3 py-2 font-medium">执行ID</th>
+            <th v-if="isColumnVisible('task_id')" class="border-b border-slate-100 px-3 py-2 font-medium">任务ID</th>
+            <th v-if="isColumnVisible('datasource_id')" class="border-b border-slate-100 px-3 py-2 font-medium">数据源ID</th>
+            <th v-if="isColumnVisible('member_datasource_id')" class="border-b border-slate-100 px-3 py-2 font-medium">成员ID</th>
+            <th v-if="isColumnVisible('query_type')" class="border-b border-slate-100 px-3 py-2 font-medium">查询类型</th>
+            <th v-if="isColumnVisible('task_status')" class="border-b border-slate-100 px-3 py-2 font-medium">任务状态</th>
+            <th v-if="isColumnVisible('row_count')" class="border-b border-slate-100 px-3 py-2 font-medium">结果行数</th>
+            <th v-if="isColumnVisible('started_time')" class="border-b border-slate-100 px-3 py-2 font-medium">开始时间</th>
+            <th v-if="isColumnVisible('finished_time')" class="border-b border-slate-100 px-3 py-2 font-medium">结束时间</th>
+            <th v-if="isColumnVisible('error')" class="border-b border-slate-100 px-3 py-2 font-medium">错误信息</th>
+            <th v-if="isColumnVisible('actions')" class="border-b border-slate-100 px-3 py-2 font-medium">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="8" class="px-3 py-12 text-center text-slate-400">
+            <td :colspan="visibleColumnCount" class="px-3 py-12 text-center text-slate-400">
               <i class="fa-solid fa-spinner fa-spin mr-1"></i>
               加载中...
             </td>
           </tr>
           <tr v-else-if="histories.length === 0">
-            <td colspan="8" class="px-3 py-12 text-center text-slate-400">暂无历史 SQL</td>
+            <td :colspan="visibleColumnCount" class="px-3 py-12 text-center text-slate-400">暂无历史 SQL</td>
           </tr>
           <tr v-for="item in histories" v-else :key="item.execution_id || item.id" class="hover:bg-slate-50">
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatTime(item.executed_at || item.last_used) }}</td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.source || '-' }}</td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2">
+            <td v-if="isColumnVisible('time')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatTime(item.executed_at || item.last_used) }}</td>
+            <td v-if="isColumnVisible('source')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.source || '-' }}</td>
+            <td v-if="isColumnVisible('status')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2">
               <span :class="['rounded-full px-2 py-0.5', getStatusClass(item)]">{{ getStatusText(item) }}</span>
             </td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.operator_name || item.user_id || '-' }}</td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.member_name || item.member_datasource_id || '-' }}</td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatDurationSeconds(item.execution_time_ms) }}</td>
-            <td class="max-w-[460px] border-b border-slate-50 px-3 py-2">
+            <td v-if="isColumnVisible('user')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.operator_name || item.user_id || '-' }}</td>
+            <td v-if="isColumnVisible('member')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.member_name || item.member_datasource_id || '-' }}</td>
+            <td v-if="isColumnVisible('duration')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatDurationSeconds(item.execution_time_ms) }}</td>
+            <td v-if="isColumnVisible('sql')" class="max-w-[460px] border-b border-slate-50 px-3 py-2">
               <div class="truncate font-mono text-[11px] text-slate-700" :title="item.query">{{ item.query }}</div>
             </td>
-            <td class="whitespace-nowrap border-b border-slate-50 px-3 py-2">
+            <td v-if="isColumnVisible('execution_id')" class="max-w-[220px] border-b border-slate-50 px-3 py-2">
+              <div class="truncate text-slate-500" :title="item.execution_id">{{ formatNullableText(item.execution_id) }}</div>
+            </td>
+            <td v-if="isColumnVisible('task_id')" class="max-w-[220px] border-b border-slate-50 px-3 py-2">
+              <div class="truncate text-slate-500" :title="item.task_id">{{ formatNullableText(item.task_id) }}</div>
+            </td>
+            <td v-if="isColumnVisible('datasource_id')" class="max-w-[180px] border-b border-slate-50 px-3 py-2">
+              <div class="truncate text-slate-500" :title="item.datasource_id">{{ formatNullableText(item.datasource_id) }}</div>
+            </td>
+            <td v-if="isColumnVisible('member_datasource_id')" class="max-w-[180px] border-b border-slate-50 px-3 py-2">
+              <div class="truncate text-slate-500" :title="item.member_datasource_id">{{ formatNullableText(item.member_datasource_id) }}</div>
+            </td>
+            <td v-if="isColumnVisible('query_type')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatNullableText(item.query_type) }}</td>
+            <td v-if="isColumnVisible('task_status')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ getTaskStatusText(item) }}</td>
+            <td v-if="isColumnVisible('row_count')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ item.result_row_count ?? '-' }}</td>
+            <td v-if="isColumnVisible('started_time')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatTime(item.started_time) }}</td>
+            <td v-if="isColumnVisible('finished_time')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatTime(item.finished_time) }}</td>
+            <td v-if="isColumnVisible('error')" class="max-w-[320px] border-b border-slate-50 px-3 py-2">
+              <div class="truncate text-slate-500" :title="item.error_message || ''">{{ item.error_message || '-' }}</div>
+            </td>
+            <td v-if="isColumnVisible('actions')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2">
               <button class="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50" @click="copySql(item.query)">复制 SQL</button>
               <button v-if="item.error_message" class="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50" @click="showError(item)">错误</button>
             </td>
@@ -360,6 +452,20 @@ defineExpose({
 .global-sql-history-time-picker {
   width: 320px;
   height: 32px;
+}
+
+.global-sql-history-column-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.global-sql-history-column-menu :deep(.el-checkbox) {
+  width: 100%;
+  margin-right: 0;
 }
 
 .error-detail-text {

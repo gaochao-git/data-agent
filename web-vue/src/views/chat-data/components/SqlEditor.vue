@@ -633,6 +633,40 @@ const historyTotal = ref(0)
 const historySourceFilter = ref<'all' | 'sql' | 'agent' | 'builder' | 'dashboard'>('all')
 const historyStatusFilter = ref<'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'>('all')
 const historyTimeRange = ref<[string, string] | null>(null)
+const defaultVisibleHistoryColumnKeys = [
+  'source',
+  'query',
+  'executed_at',
+  'operator',
+  'member',
+  'duration',
+  'status',
+  'error',
+  'actions',
+]
+const visibleHistoryColumnKeys = ref<string[]>([...defaultVisibleHistoryColumnKeys])
+const historyColumnOptions = [
+  { key: 'source', label: '来源' },
+  { key: 'query', label: '执行语句' },
+  { key: 'executed_at', label: '执行时间' },
+  { key: 'operator', label: '执行人员' },
+  { key: 'member', label: '执行对象' },
+  { key: 'duration', label: '执行耗时' },
+  { key: 'status', label: '执行状态' },
+  { key: 'error', label: '错误信息' },
+  { key: 'actions', label: '操作' },
+  { key: 'execution_id', label: '执行ID' },
+  { key: 'task_id', label: '任务ID' },
+  { key: 'datasource_id', label: '数据源ID' },
+  { key: 'member_datasource_id', label: '成员ID' },
+  { key: 'query_type', label: '查询类型' },
+  { key: 'task_status', label: '任务状态' },
+  { key: 'row_count', label: '结果行数' },
+  { key: 'started_time', label: '开始时间' },
+  { key: 'finished_time', label: '结束时间' },
+]
+const visibleHistoryColumnSet = computed(() => new Set(visibleHistoryColumnKeys.value))
+const isHistoryColumnVisible = (key: string) => visibleHistoryColumnSet.value.has(key)
 
 const loadQueryHistory = async () => {
   if (!props.datasourceId) {
@@ -703,6 +737,11 @@ const formatHistoryDuration = (value?: number | null) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
   const normalized = Number(value)
   return `${(normalized / 1000).toFixed(2)}秒`
+}
+
+const formatHistoryNullableText = (value?: string | number | null) => {
+  const text = String(value ?? '').trim()
+  return text || '-'
 }
 
 const getHistoryStatusTagType = (item: SqlHistoryItem) => {
@@ -844,7 +883,7 @@ const handleCancelAllRunningHistory = async () => {
   try {
     await ElMessageBox.confirm(
       '确定要停止你所有正在执行的 SQL 吗？该操作会影响个人查询历史中的所有等待中和执行中任务。',
-      '停止个人所有执行中 SQL',
+      '停止SQL',
       {
         confirmButtonText: '停止',
         cancelButtonText: '取消',
@@ -2533,7 +2572,26 @@ defineExpose({
           />
         </label>
         <el-button :loading="historyLoading" @click="loadQueryHistory">刷新</el-button>
-        <el-button type="danger" plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止个人执行中 SQL</el-button>
+        <el-button plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止SQL</el-button>
+        <el-dropdown trigger="click" :hide-on-click="false">
+          <el-button plain>
+            字段显示
+            <i class="fa-solid fa-chevron-down ml-1 text-[10px] text-slate-400"></i>
+          </el-button>
+          <template #dropdown>
+            <div class="w-48 px-2 py-2">
+              <el-checkbox-group v-model="visibleHistoryColumnKeys" class="sql-history-column-menu">
+                <el-checkbox
+                  v-for="column in historyColumnOptions"
+                  :key="column.key"
+                  :label="column.key"
+                >
+                  {{ column.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+            </div>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -2544,47 +2602,92 @@ defineExpose({
       height="520"
       empty-text="暂无查询历史"
     >
-      <el-table-column label="来源" width="120" align="center">
+      <el-table-column v-if="isHistoryColumnVisible('source')" label="来源" width="120" align="center">
         <template #default="{ row }">
           {{ getHistorySourceText(row) }}
         </template>
       </el-table-column>
-      <el-table-column prop="query" label="执行语句" min-width="360">
+      <el-table-column v-if="isHistoryColumnVisible('query')" prop="query" label="执行语句" min-width="360">
         <template #default="{ row }">
           <div class="history-sql-cell" :title="row.query">{{ row.query }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="执行时间" width="180">
+      <el-table-column v-if="isHistoryColumnVisible('executed_at')" label="执行时间" width="180">
         <template #default="{ row }">
           {{ formatHistoryTime(row.executed_at || row.last_used) }}
         </template>
       </el-table-column>
-      <el-table-column label="执行人员" width="140" align="center">
+      <el-table-column v-if="isHistoryColumnVisible('operator')" label="执行人员" width="140" align="center">
         <template #default="{ row }">
           {{ row.operator_name || '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="执行对象" width="160" align="center">
+      <el-table-column v-if="isHistoryColumnVisible('member')" label="执行对象" width="160" align="center">
         <template #default="{ row }">
           <span :title="getHistoryExecutionTargetText(row)">{{ getHistoryExecutionTargetText(row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="执行耗时" width="120" align="center">
+      <el-table-column v-if="isHistoryColumnVisible('duration')" label="执行耗时" width="120" align="center">
         <template #default="{ row }">
           {{ formatHistoryDuration(row.execution_time_ms) }}
         </template>
       </el-table-column>
-      <el-table-column label="执行状态" width="100" align="center">
+      <el-table-column v-if="isHistoryColumnVisible('status')" label="执行状态" width="100" align="center">
         <template #default="{ row }">
           <el-tag :type="getHistoryStatusTagType(row)" size="small">{{ getHistoryStatusText(row) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="error_message" label="错误信息" min-width="220">
+      <el-table-column v-if="isHistoryColumnVisible('error')" prop="error_message" label="错误信息" min-width="220">
         <template #default="{ row }">
           <div class="history-error-cell" :title="row.error_message || ''">{{ row.error_message || '-' }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="360" align="center" fixed="right">
+      <el-table-column v-if="isHistoryColumnVisible('execution_id')" label="执行ID" width="220">
+        <template #default="{ row }">
+          <div class="history-id-cell" :title="row.execution_id">{{ formatHistoryNullableText(row.execution_id) }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('task_id')" label="任务ID" width="220">
+        <template #default="{ row }">
+          <div class="history-id-cell" :title="row.task_id">{{ formatHistoryNullableText(row.task_id) }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('datasource_id')" label="数据源ID" width="180">
+        <template #default="{ row }">
+          <div class="history-id-cell" :title="row.datasource_id">{{ formatHistoryNullableText(row.datasource_id) }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('member_datasource_id')" label="成员ID" width="180">
+        <template #default="{ row }">
+          <div class="history-id-cell" :title="row.member_datasource_id">{{ formatHistoryNullableText(row.member_datasource_id) }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('query_type')" label="查询类型" width="120" align="center">
+        <template #default="{ row }">
+          {{ formatHistoryNullableText(row.query_type) }}
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('task_status')" label="任务状态" width="120" align="center">
+        <template #default="{ row }">
+          {{ formatHistoryNullableText(row.task_status) }}
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('row_count')" label="结果行数" width="120" align="center">
+        <template #default="{ row }">
+          {{ row.result_row_count ?? '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('started_time')" label="开始时间" width="180">
+        <template #default="{ row }">
+          {{ formatHistoryTime(row.started_time) }}
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('finished_time')" label="结束时间" width="180">
+        <template #default="{ row }">
+          {{ formatHistoryTime(row.finished_time) }}
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isHistoryColumnVisible('actions')" label="操作" width="360" align="center" fixed="right">
         <template #default="{ row }">
           <div class="history-action-cell">
             <el-button v-if="isHistoryItemCancellable(row)" type="danger" link @click="handleCancelHistoryItem(row)">暂停</el-button>
@@ -2636,6 +2739,14 @@ defineExpose({
   white-space: nowrap;
 }
 
+.history-id-cell {
+  overflow: hidden;
+  color: #6b7280;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .history-action-cell {
   display: flex;
   align-items: center;
@@ -2643,6 +2754,20 @@ defineExpose({
   gap: 18px;
   min-width: 320px;
   white-space: nowrap;
+}
+
+.sql-history-column-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.sql-history-column-menu :deep(.el-checkbox) {
+  width: 100%;
+  margin-right: 0;
 }
 
 .ai-history-list {

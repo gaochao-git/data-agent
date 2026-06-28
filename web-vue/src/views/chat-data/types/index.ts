@@ -408,6 +408,8 @@ export interface SqlHistoryItem {
   sql_status?: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'
   last_used?: string | null
   executed_at?: string | null
+  started_time?: string | null
+  finished_time?: string | null
   execution_time_ms?: number | null
   result_row_count?: number | null
   has_result?: boolean
