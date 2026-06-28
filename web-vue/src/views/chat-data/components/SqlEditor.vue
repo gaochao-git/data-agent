@@ -2149,7 +2149,7 @@ defineExpose({
             @click="showAiPanel = !showAiPanel"
           >
             <i class="fa-regular fa-lightbulb"></i>
-            <span>AI生成SQL</span>
+            <span>SQL助手</span>
           </button>
           <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="openFavoriteModal">
             <i class="fa-regular fa-star"></i>

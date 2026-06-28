@@ -17,17 +17,12 @@ from sqlalchemy import and_, func, or_, select
 
 from auth import AuthenticationError
 from .schema import (
-    NL2SQLRequest,
     QuickSqlRequest,
     ExecuteSqlRequest,
     QueryTaskCreateRequest,
     CompileSemanticBuilderSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
-    TableListResponse,
-    TableInfoRequest,
-    TableInfoResponse,
-    TableInfoResult,
     DbConnectionRequest,
     DatasourceColumnDictGenerateRequest,
     DatasourceColumnDictUpdateRequest,
@@ -47,10 +42,8 @@ from .services import query_runtime
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
 from .semantic.utils import parse_llm_json
 from .services.llm_config import get_chat_data_llm
-from .handlers import _stream_sql_generation, _build_execution_target_info_async
 from .agent import get_all_tables_async, get_tables_create_format
 from .agent.sql_assist_graph import get_sql_assist_graph
-from .agent.prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from utils.lang_util.database import get_session
 from utils.lang_util import conversation
 from utils.lang_util.models import (
@@ -67,47 +60,6 @@ from .route_modules.data_analyze_workspace import router as data_analyze_workspa
 from .route_modules.skills import router as skills_router
 from .route_modules.dashboard import DashboardRuntime, configure_dashboard_runtime, router as dashboard_router
 from .route_modules.semantic_config import router as semantic_config_router
-from .route_modules.config import (
-    list_chat_data_models,
-    get_chat_data_config,
-)
-from .route_modules.evaluation import (
-    run_accuracy_evaluation,
-    run_accuracy_evaluation_stream,
-    list_accuracy_evaluation_runs,
-    get_accuracy_evaluation_run_detail,
-    get_scene_evaluation_cases,
-    save_scene_evaluation_cases,
-    generate_scene_evaluation_cases,
-    draft_scene_evaluation_case,
-)
-from .route_modules.data_analyze_workspace import (
-    list_data_analyze_workspace_files,
-    read_data_analyze_workspace_file,
-    import_data_analyze_workspace_skill,
-)
-from .route_modules.skills import (
-    list_skills,
-    list_my_skills,
-    list_favorite_skills,
-    create_user_skill,
-    update_user_skill,
-    delete_user_skill,
-    copy_user_skill,
-    publish_user_skill,
-    list_skill_versions,
-    get_skill_version,
-    list_skill_version_files,
-    read_skill_version_file,
-    save_skill_version_file,
-    delete_skill_version_file,
-    rollback_skill_version,
-    favorite_skill,
-    unfavorite_skill,
-    sync_system_skills,
-    reload_skills,
-    get_skill,
-)
 from .route_modules.dashboard import (
     _run_dashboard_batch_task,
     _run_dashboard_panel_task,
@@ -1124,15 +1076,6 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
             table_names = [t.get("table_name") for t in tables]
             tables_ddl_info = get_tables_create_format(tables, table_names)
 
-            # 构建 prompt
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            execution_target_info = await _build_execution_target_info_async(payload.datasource_id, payload.member_datasource_ids)
-            system_prompt = SQL_GENERATOR_PROMPT_GENERATE.format(
-                current_time=current_time,
-                execution_target_info=execution_target_info,
-                tables_ddl_info=tables_ddl_info,
-                sql_dialect=sql_dialect,
-            )
             if not payload.conversation_id:
                 yield f"data: {json.dumps({'type': 'error', 'message': '缺少 SQL 辅助会话ID'}, ensure_ascii=False)}\n\n"
                 return
@@ -1164,13 +1107,11 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
                 "datasource_id": payload.datasource_id,
                 "user_id": current_user_id,
                 "member_datasource_ids": payload.member_datasource_ids or [],
-                "execution_target_info": execution_target_info,
             }
             async with get_checkpointer() as checkpointer:
                 graph = get_sql_assist_graph(
                     checkpointer,
                     sql_dialect=sql_dialect,
-                    execution_target_info=execution_target_info,
                 )
                 async for chunk, metadata in graph.astream(initial_state, config=config, stream_mode="messages"):
                     if metadata.get("langgraph_node") != "sql_assist":

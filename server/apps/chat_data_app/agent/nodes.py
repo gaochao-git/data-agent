@@ -17,14 +17,6 @@ from .tools import TOOLS
 logger = get_logger(__name__)
 
 
-def format_execution_target_info_for_llm(execution_target_info: str) -> str:
-    """格式化执行对象信息，供 system prompt 注入。"""
-    text = str(execution_target_info or "").strip()
-    if not text:
-        return ""
-    return f"\n{text}\n"
-
-
 def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
     """格式化当前可见指标集轻量目录，供 system prompt 注入。"""
     text = str(directory_info or "").strip()
@@ -178,10 +170,10 @@ def create_agent_node(
         prompt_params = {
             "tables_ddl_info": tables_ddl_info,
             "current_time": current_time,
-            "execution_target_info": format_execution_target_info_for_llm(state.get("execution_target_info") or ""),
             "datasource_group_context": format_datasource_group_context_for_llm(state.get("datasource_group_context") or ""),
             "available_skills_context": available_skills_context or "",
             "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(state.get("semantic_config_directory_info") or ""),
+            "sql_dialect": str(state.get("sql_dialect") or "SQL").strip() or "SQL",
         }
 
         prompt_params["semantic_layer_config"] = build_semantic_layer_context(semantic_config, mode)

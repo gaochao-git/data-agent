@@ -31,8 +31,6 @@ def test_mode_config_and_prompt_formatters():
     with pytest.raises(ValueError, match="不支持的模式配置"):
         config.get_mode_config(has_semantic=False, mode="missing")
 
-    assert nodes.format_execution_target_info_for_llm("  机构A  ") == "\n机构A\n"
-    assert nodes.format_execution_target_info_for_llm("") == ""
     assert nodes.format_semantic_config_directory_info_for_llm("  ## 当前可见指标集目录  ") == "\n## 当前可见指标集目录\n"
     assert nodes.format_semantic_config_directory_info_for_llm("") == ""
     assert nodes.format_datasource_group_context_for_llm("  规则说明  ") == "\n## 数据源组智能问数说明\n规则说明\n"
@@ -95,8 +93,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
         "messages": [HumanMessage(content="查询销售额")],
         "tables_ddl_info": "CREATE TABLE orders(id int)",
         "mode": "query",
-        "execution_target_info": "当前机构A",
-        "datasource_group_context": "当前数据源组按执行对象数据源分库",
+        "datasource_group_context": "当前数据源组按执行对象数据源分库\n当前机构A",
         "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析",
     })
 
@@ -391,10 +388,10 @@ async def test_sql_assist_node_and_graph(monkeypatch):
     fake_llm = FakeLLM("select 1")
     monkeypatch.setattr(sql_assist_graph, "get_chat_data_llm", lambda streaming=True: fake_llm)
 
-    node = sql_assist_graph.create_sql_assist_node("Hive", "机构A")
+    node = sql_assist_graph.create_sql_assist_node("Hive")
     result = await node({"messages": [HumanMessage(content="帮我写SQL")], "tables_ddl_info": "CREATE TABLE orders(id int)"})
 
     assert result["messages"][0].content == "select 1"
     system_prompt = fake_llm.messages[0].content
     assert "CREATE TABLE orders" in system_prompt
-    assert "机构A" in system_prompt
+    assert "机构A" not in system_prompt

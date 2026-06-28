@@ -106,7 +106,6 @@ def test_chat_data_query_prompt_defines_nl2sql_fallback_boundary():
 def test_chat_data_query_prompt_template_format_keeps_json_examples_valid():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.format(
         current_time="2026-06-24 10:00:00",
-        execution_target_info="",
         datasource_group_context="",
         available_skills_context="",
         semantic_config_directory_info="",

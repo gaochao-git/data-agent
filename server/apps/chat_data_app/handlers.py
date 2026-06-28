@@ -605,38 +605,6 @@ def _query_requests_all_execution_targets(user_query: str | None) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
-def _append_execution_target_detail_lines(lines: list[str], index: int, target: dict) -> None:
-    """追加单条执行对象数据源明细。"""
-    member_name = _execution_target_name(target, index)
-    org_code = _execution_target_org_code(target)
-    member_datasource_id = _execution_target_member_id(target)
-    if org_code and org_code != str(member_name).strip():
-        line = f"{index}. 执行对象数据源名称：{member_name}"
-        if member_datasource_id:
-            line += f"；执行对象数据源ID：{member_datasource_id}"
-        lines.append(line)
-        lines.append(f"   执行对象数据源编码：{org_code}")
-        return
-    line = f"{index}. 执行对象数据源名称：{member_name}"
-    if member_datasource_id:
-        line += f"；执行对象数据源ID：{member_datasource_id}"
-    lines.append(line)
-
-
-def _format_execution_target_catalog(execution_targets: list[dict]) -> str:
-    """将完整执行对象清单格式化为数据源组上下文。"""
-    if not execution_targets:
-        return ""
-    lines = ["## 数据源组执行对象数据源"]
-    if len(execution_targets) == 1:
-        lines.append("当前数据源组只有 1 个执行对象数据源：")
-    else:
-        lines.append(f"当前数据源组有 {len(execution_targets)} 个执行对象数据源：")
-    for index, target in enumerate(execution_targets, start=1):
-        _append_execution_target_detail_lines(lines, index, target)
-    return "\n".join(lines)
-
-
 def _match_execution_targets_from_query_only(
     execution_targets: list[dict],
     user_query: str | None,
@@ -697,47 +665,6 @@ def _append_user_selected_execution_targets_to_context(
     return "\n".join(lines)
 
 
-def _resolve_execution_target_selection(
-    execution_targets: list[dict],
-    user_query: str | None = None,
-    explicit_member_datasource_ids: list[str] | None = None,
-) -> tuple[list[str], list[str]]:
-    """解析本轮执行对象范围，返回 (effective_member_ids, query_matched_member_ids)。"""
-    explicit_member_ids = _normalize_member_datasource_ids(explicit_member_datasource_ids)
-    query_matched_member_ids = _match_execution_targets_from_query_only(execution_targets, user_query)
-    if explicit_member_ids:
-        return list(dict.fromkeys(explicit_member_ids)), query_matched_member_ids
-    return list(dict.fromkeys(query_matched_member_ids)), query_matched_member_ids
-
-
-def _format_execution_target_info(
-    execution_targets: list[dict],
-    user_query: str | None = None,
-    explicit_member_datasource_ids: list[str] | None = None,
-) -> tuple[str, list[str]]:
-    """generate 模式构造 execution_target_info；query 模式由数据源组说明承载。"""
-    if not execution_targets:
-        return "", []
-
-    effective_member_ids, query_matched_member_ids = _resolve_execution_target_selection(
-        execution_targets,
-        user_query=user_query,
-        explicit_member_datasource_ids=explicit_member_datasource_ids,
-    )
-    explicit_member_ids = _normalize_member_datasource_ids(explicit_member_datasource_ids)
-    if not explicit_member_ids:
-        if not effective_member_ids:
-            return "", query_matched_member_ids
-        return _format_execution_target_catalog(execution_targets), query_matched_member_ids
-
-    selected_info = _append_user_selected_execution_targets_to_context(
-        "",
-        execution_targets,
-        explicit_member_ids,
-    )
-    return selected_info, effective_member_ids
-
-
 async def _get_execution_targets_async(
     datasource_id: str | None,
     member_datasource_ids: list[str] | None = None,
@@ -756,26 +683,6 @@ async def _get_execution_targets_async(
     except Exception as err:
         logger.warning(f"构造执行对象说明失败: {err}")
         return []
-
-
-async def _build_execution_target_info_async(
-    datasource_id: str | None,
-    member_datasource_ids: list[str] | None = None,
-    user_query: str | None = None,
-) -> str:
-    """异步构造执行对象说明；只使用本次请求已传入的执行对象，避免绕过前端权限过滤。"""
-    all_execution_targets = await _get_execution_targets_async(
-        datasource_id,
-        member_datasource_ids,
-    )
-    info, _matched_member_ids = _format_execution_target_info(
-        all_execution_targets,
-        user_query,
-        member_datasource_ids,
-    )
-    if info:
-        return info
-    return _format_execution_target_catalog(all_execution_targets)
 
 
 async def _build_semantic_config_directory_info_async(
@@ -936,39 +843,43 @@ async def _stream_sql_generation(
                 except Exception as err:
                     logger.warning("读取数据源组智能问数说明失败: %s", err)
             explicit_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-            all_execution_targets = await _get_execution_targets_async(
-                datasource_id,
-                explicit_member_datasource_ids,
-            )
-            available_member_datasource_ids = [
-                _execution_target_member_id(target)
-                for target in all_execution_targets
-                if _execution_target_member_id(target)
-            ] if mode == "query" else []
-            selected_member_datasource_ids = available_member_datasource_ids if mode == "query" else explicit_member_datasource_ids
-            query_matched_member_datasource_ids = (
-                _match_execution_targets_from_query_only(all_execution_targets, user_query)
-                if mode == "query"
-                else []
-            )
-            effective_member_datasource_ids, _ = _resolve_execution_target_selection(
-                all_execution_targets,
-                user_query if mode == "query" else None,
-                selected_member_datasource_ids if mode == "query" else explicit_member_datasource_ids,
-            )
-            if mode == "query" and selected_member_datasource_ids:
-                datasource_group_context = _append_user_selected_execution_targets_to_context(
-                    datasource_group_context,
-                    all_execution_targets,
-                    selected_member_datasource_ids,
+            selected_member_datasource_ids = explicit_member_datasource_ids
+            available_member_datasource_ids: list[str] = []
+            matched_member_datasource_ids: list[str] = []
+            if mode == "query":
+                all_execution_targets = await _get_execution_targets_async(
+                    datasource_id,
+                    explicit_member_datasource_ids,
                 )
-            selected_execution_target_info = ""
-            if mode != "query":
-                selected_execution_target_info, _ = _format_execution_target_info(
-                    all_execution_targets,
-                    user_query,
-                    member_datasource_ids,
-                )
+                available_member_datasource_ids = [
+                    _execution_target_member_id(target)
+                    for target in all_execution_targets
+                    if _execution_target_member_id(target)
+                ]
+                selected_member_datasource_ids = available_member_datasource_ids
+                matched_member_datasource_ids = _match_execution_targets_from_query_only(all_execution_targets, user_query)
+                if selected_member_datasource_ids:
+                    datasource_group_context = _append_user_selected_execution_targets_to_context(
+                        datasource_group_context,
+                        all_execution_targets,
+                        selected_member_datasource_ids,
+                    )
+            elif selected_member_datasource_ids:
+                matched_member_datasource_ids = selected_member_datasource_ids
+            sql_dialect = "SQL"
+            if mode != "query" and datasource_id:
+                try:
+                    datasource = await get_datasource_manager().get_datasource_async(datasource_id)
+                    source_type = str((datasource or {}).get("source_type") or "").strip().lower()
+                    sql_dialect = {
+                        "mysql": "MySQL",
+                        "hive": "Hive SQL",
+                    }.get(source_type, source_type.upper() if source_type else "SQL")
+                except Exception as err:
+                    logger.warning(
+                        "读取数据源方言失败，普通 SQL 生成链路使用默认 SQL 方言: %s",
+                        err,
+                    )
             initial_state = {
                 "messages": [HumanMessage(
                     content=user_query,
@@ -985,11 +896,11 @@ async def _stream_sql_generation(
                 "conversation_id": thread_id,
                 "member_datasource_ids": selected_member_datasource_ids,
                 "available_member_datasource_ids": available_member_datasource_ids,
-                "matched_member_datasource_ids": query_matched_member_datasource_ids if mode == "query" else effective_member_datasource_ids,
+                "matched_member_datasource_ids": matched_member_datasource_ids,
                 "require_explicit_member_selection": mode == "query",
-                "execution_target_info": selected_execution_target_info,
                 "datasource_group_context": datasource_group_context,
                 "semantic_config_directory_info": semantic_config_directory_info,
+                "sql_dialect": sql_dialect,
             }
 
             # 用于跟踪已发送 running 状态的工具

@@ -44,7 +44,6 @@ from apps.chat_data_app.routes import (
     update_datasource_meta,
     update_mapped_modules,
 )
-from apps.chat_data_app.handlers import _build_execution_target_info_async
 from apps.chat_data_app.schema import (
     DashboardFromSpecRequest,
     DbConnectionRequest,
@@ -829,8 +828,6 @@ def test_quick_sql_endpoint_returns_errors_for_missing_tables_and_conversation(m
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="默认执行对象"))
-
     missing_conversation_response = asyncio.run(routes.quick_sql_endpoint(QuickSqlRequest(
         query="帮我生成 SQL",
         datasource_id="ds_a",
@@ -848,7 +845,6 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     class FakeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None):
             assert initial_state["datasource_id"] == "ds_a"
-            assert initial_state["execution_target_info"] == "默认执行对象"
             assert config["configurable"]["thread_id"] == "conv_a"
             assert stream_mode == "messages"
             yield FakeChunk("忽略"), {"langgraph_node": "other"}
@@ -869,7 +865,6 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="默认执行对象"))
     monkeypatch.setattr(routes.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
     monkeypatch.setattr(routes, "get_sql_assist_graph", lambda *_args, **_kwargs: FakeGraph())
@@ -916,7 +911,6 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="默认执行对象"))
     monkeypatch.setattr(routes.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
     monkeypatch.setattr(routes, "get_sql_assist_graph", lambda *_args, **_kwargs: FakeGraph())
@@ -948,7 +942,6 @@ def test_quick_sql_endpoint_rejects_foreign_conversation_and_streams_errors(monk
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="默认执行对象"))
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
 
     monkeypatch.setattr(routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result="other_agent"))
@@ -1011,7 +1004,6 @@ def test_quick_sql_endpoint_creates_new_owned_conversation(monkeypatch):
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
     ]))
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
     monkeypatch.setattr(routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
     created = []
     monkeypatch.setattr(routes.conversation, "get_or_create_conversation", lambda *args, **_kwargs: asyncio.sleep(0, result=created.append(args) or {}))
@@ -2744,7 +2736,7 @@ def test_update_layout_only_updates_current_dashboard_panels(monkeypatch):
     assert "layout" not in service.panels["panel_c"]
 
 
-def test_build_execution_target_info_contains_selected_members(monkeypatch):
+def test_execution_target_context_contains_selected_members(monkeypatch):
     from apps.chat_data_app import handlers
 
     manager = _FakeDatasourceManager()
@@ -2754,7 +2746,8 @@ def test_build_execution_target_info_contains_selected_members(monkeypatch):
     ]
     monkeypatch.setattr(handlers, "get_datasource_manager", lambda: manager)
 
-    info = asyncio.run(_build_execution_target_info_async("ds_a", ["phy_a", "phy_b"]))
+    targets = asyncio.run(handlers._get_execution_targets_async("ds_a", ["phy_a", "phy_b"]))
+    info = handlers._append_user_selected_execution_targets_to_context("", targets, ["phy_a", "phy_b"])
 
     assert "当前用户已选择的执行对象数据源" in info
     assert "投诉举报1" in info
@@ -2821,12 +2814,8 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     async def _fake_get_all_tables(_datasource_id):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
-    async def _fake_build_execution_target_info(_datasource_id, _member_ids):
-        return "## 可用执行对象\n1. 成员B"
-
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
-    monkeypatch.setattr(routes, "_build_execution_target_info_async", _fake_build_execution_target_info)
     monkeypatch.setattr(routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
     monkeypatch.setattr(routes.conversation, "get_or_create_conversation", _fake_get_or_create_conversation)
@@ -2848,7 +2837,6 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     assert captured["agent_id"] == routes.SQL_ASSIST_AGENT_ID
     assert captured["conversation_id"] == "conv_sql_assist"
     assert captured["config"]["configurable"]["thread_id"] == "conv_sql_assist"
-    assert captured["initial_state"]["execution_target_info"] == "## 可用执行对象\n1. 成员B"
     assert captured["initial_state"]["member_datasource_ids"] == ["phy_b"]
 
 

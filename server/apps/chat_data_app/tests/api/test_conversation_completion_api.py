@@ -307,7 +307,6 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
     monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda **_kwargs: asyncio.sleep(0, result=""))
     monkeypatch.setattr(handler_module, "get_datasource_manager", lambda: manager)
     for module in (routes, semantic_builder_compiler, semantic_tools):

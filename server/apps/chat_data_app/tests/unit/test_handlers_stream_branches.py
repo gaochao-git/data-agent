@@ -188,10 +188,6 @@ async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeyp
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    async def empty_execution_target_info(*_args, **_kwargs):
-        return ""
-
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", empty_execution_target_info)
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -231,11 +227,6 @@ async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-
-    async def empty_execution_target_info(*_args, **_kwargs):
-        return ""
-
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", empty_execution_target_info)
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -302,7 +293,8 @@ async def test_semantic_config_fallback_and_execution_target_name_branches(monke
             ]
 
     monkeypatch.setattr(handlers, "get_datasource_manager", lambda: NamelessManager())
-    info = await handlers._build_execution_target_info_async("ds_a", ["m1", "m2", "m3"])
+    targets = await handlers._get_execution_targets_async("ds_a", ["m1", "m2", "m3"])
+    info = handlers._append_user_selected_execution_targets_to_context("", targets, ["m1", "m2", "m3"])
 
     assert "m2（member_datasource_id: m2）" in info
     assert "执行对象1" not in info
@@ -343,7 +335,6 @@ async def test_stream_sql_generation_non_query_reuses_loaded_tables_and_handles_
     monkeypatch.setattr(handlers, "get_all_tables_async", get_all_tables)
     monkeypatch.setattr(handlers, "llm_select_tables", select_tables)
     monkeypatch.setattr(handlers, "get_tables_create_format", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("DDL should be reused")))
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="执行对象"))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -384,7 +375,6 @@ async def test_stream_sql_generation_non_query_state_failure_loads_new_tables(mo
         return "create table orders(id int)"
 
     monkeypatch.setattr(handlers, "get_tables_create_format", fake_ddl)
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -412,7 +402,6 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -450,7 +439,6 @@ async def test_stream_sql_generation_non_query_missing_semantic_config_and_no_se
     monkeypatch.setattr(handlers, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[{"table_name": "orders"}]))
     monkeypatch.setattr(handlers, "llm_select_tables", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(handlers, "get_tables_create_format", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no tables selected")))
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -482,7 +470,6 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -518,7 +505,6 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
     monkeypatch.setattr(handlers, "_resolve_active_tool_call_id", lambda *_args: "forced")
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -664,7 +650,6 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",
@@ -695,7 +680,6 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "get_chat_data_graph", lambda **_kwargs: Graph())
-    monkeypatch.setattr(handlers, "_build_execution_target_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
 
     chunks = await collect_stream(handlers._stream_sql_generation(
         thread_id="conv",

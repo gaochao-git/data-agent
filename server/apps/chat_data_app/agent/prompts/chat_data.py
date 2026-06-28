@@ -10,7 +10,6 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 
 # 上下文
 当前时间：{current_time}
-{execution_target_info}
 
 {datasource_group_context}
 
@@ -110,10 +109,12 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - DSL 路径下，`semantic_query_tool` 必须使用 `dsl={{...}}` 包裹完整语义 DSL。
 - SQL 路径下，`semantic_query_tool` 使用顶层 `sql` 参数，不能同时传入 `dsl`。
 - `dimensions` 支持简单格式和时间粒度格式；时间粒度使用 `time_grain`，可选 year/quarter/month/week/day/hour。
+- `operator` 使用 SQL 风格操作符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`、`IN`、`NOT IN`、`LIKE`、`NOT LIKE`、`STARTS WITH`、`ENDS WITH`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`EMPTY STRING`；不要使用 `equals`、`notEquals` 这类枚举名。
+- 结构化 `left/right` 表达式的外层 `operator` 只支持比较符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`；`IN`、`LIKE`、`BETWEEN` 等只用于固定值过滤。
 - `filters` 支持固定值过滤：`dimension`、`operator`、`value`、`value_type`；`value_type` 仅允许 `literal` / `sql_function`。
-- `filters` 也支持字段间比较或字段与表达式比较：使用结构化 `left/right`；表达式操作数只支持 `dimension`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。不要把“维度B * 10”这类表达式字符串放进固定值过滤的 `value`。
+- `filters` 也支持字段间比较或字段与表达式比较：使用结构化 `left/right`；`left` 只支持 `{{"type":"dimension","name":"维度名"}}`；`right` 操作数只支持 `dimension`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。不要把“维度B * 10”这类表达式字符串放进固定值过滤的 `value`。
 - 日期/时间维度过滤时，筛选值必须和该维度当前查询使用的表达式口径一致：如果维度表达式或 `time_grain` 已把原始值格式化为展示格式，`value` 必须使用转换后的展示格式；如果没有日期格式化转换，`value` 必须使用数据库原始存储格式。范围过滤优先使用半开区间，避免漏掉结束日当天非零时分秒数据。
-- `having` 用于聚合结果过滤。固定值过滤使用 `metric/operator/value`；指标间比较或指标与表达式比较使用结构化 `left/right`，表达式操作数只支持 `metric`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。涉及指标结果的比较必须放在 `having`，不要放在 `filters`；不要把“指标B * 10”这类表达式字符串放进固定值过滤的 `value`。
+- `having` 用于聚合结果过滤。固定值过滤使用 `metric/operator/value`；指标间比较或指标与表达式比较使用结构化 `left/right`，`left` 只支持 `{{"type":"metric","name":"指标名"}}`；`right` 操作数只支持 `metric`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。涉及指标结果的比较必须放在 `having`，不要放在 `filters`；不要把“指标B * 10”这类表达式字符串放进固定值过滤的 `value`。
 - `order_by.field` 只能使用当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
 
 # DSL 示例

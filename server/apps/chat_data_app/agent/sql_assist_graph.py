@@ -11,12 +11,11 @@ from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from ..services.llm_config import get_chat_data_llm
 
 
-def create_sql_assist_node(sql_dialect: str, execution_target_info: str):
+def create_sql_assist_node(sql_dialect: str):
     """创建只生成 SQL 的轻量节点。"""
     async def sql_assist_node(state: SqlGeneratorState) -> dict[str, Any]:
         system_prompt = SQL_GENERATOR_PROMPT_GENERATE.format(
             current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            execution_target_info=execution_target_info,
             tables_ddl_info=state.get("tables_ddl_info") or "",
             sql_dialect=sql_dialect,
         )
@@ -27,9 +26,9 @@ def create_sql_assist_node(sql_dialect: str, execution_target_info: str):
     return sql_assist_node
 
 
-def get_sql_assist_graph(checkpointer=None, sql_dialect: str = "MySQL", execution_target_info: str = ""):
+def get_sql_assist_graph(checkpointer=None, sql_dialect: str = "MySQL"):
     """编译 SQL 辅助专用图。"""
     builder = StateGraph(SqlGeneratorState)
-    builder.add_node("sql_assist", create_sql_assist_node(sql_dialect, execution_target_info))
+    builder.add_node("sql_assist", create_sql_assist_node(sql_dialect))
     builder.add_edge(START, "sql_assist")
     return builder.compile(checkpointer=checkpointer)

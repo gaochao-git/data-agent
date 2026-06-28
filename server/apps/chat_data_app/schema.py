@@ -563,16 +563,18 @@ class ExecuteSemanticInput(BaseModel):
     )
     filters: List[Dict] = Field(
         default=[],
-        description='''WHERE 过滤条件，支持两种格式：
+        description='''WHERE 过滤条件，支持三种格式：
 1. 平铺格式（简单场景）: [{"dimension": "维度名", "operator": "=", "value": "值"}]
 2. 结构化表达式（字段间比较，不传 SQL 字符串）: [{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"dimension","name":"字段B"},"right":{"type":"literal","value":10}}}]
-3. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]'''
+3. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]
+operator 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL，不使用 equals/notEquals；结构化表达式外层 operator 只支持 =、!=、<>、>、<、>=、<='''
     )
     having: List[Dict] = Field(
         default=[],
         description='''HAVING 过滤条件列表（过滤聚合结果）：
 1. 固定值过滤: [{"metric": "指标名", "operator": ">", "value": 10}]
-2. 指标间比较或指标与表达式比较: [{"left":{"type":"metric","name":"指标A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"metric","name":"指标B"},"right":{"type":"literal","value":10}}}]'''
+2. 指标间比较或指标与表达式比较: [{"left":{"type":"metric","name":"指标A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"metric","name":"指标B"},"right":{"type":"literal","value":10}}}]
+3. operator 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL，不使用 equals/notEquals；结构化表达式外层 operator 只支持 =、!=、<>、>、<、>=、<='''
     )
     order_by: List[Dict] = Field(
         default=[],
@@ -602,7 +604,7 @@ class SemanticQueryInput(BaseModel):
     """查询工具的输入参数。优先接收 DSL；DSL 无法表达时接收只读 SQL。"""
     dsl: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；与 sql 二选一",
+        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；operator 使用 SQL 风格操作符，不使用 equals/notEquals；与 sql 二选一",
     )
     sql: Optional[str] = Field(
         default=None,

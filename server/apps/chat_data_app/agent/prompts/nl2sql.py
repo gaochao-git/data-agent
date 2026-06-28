@@ -25,7 +25,6 @@ SQL_GENERATOR_PROMPT_GENERATE = """# 角色
 
 # 上下文
 当前时间：{current_time}
-{execution_target_info}
 
 ## 可用数据表
 {tables_ddl_info}
