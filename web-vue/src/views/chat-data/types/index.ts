@@ -16,6 +16,16 @@ export interface TableInfo {
 }
 
 // 列信息
+export interface DatasourceColumnDictInfo {
+  enum_values?: Array<{
+    value: string
+    label?: string
+  }>
+  synonyms?: string[]
+  storage_format?: string
+  unit?: string
+}
+
 export interface ColumnInfo {
   name: string
   type: string
@@ -24,6 +34,7 @@ export interface ColumnInfo {
   description: string
   primary_key?: boolean
   nullable?: boolean
+  column_dict?: DatasourceColumnDictInfo
 }
 
 // 数据源
@@ -402,6 +413,7 @@ export interface SqlHistoryItem {
   has_result?: boolean
   success_flag?: number
   error_message?: string | null
+  user_id?: string | null
   operator_name?: string | null
   source?: string
 }

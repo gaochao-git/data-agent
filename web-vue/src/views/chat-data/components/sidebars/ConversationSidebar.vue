@@ -8,6 +8,14 @@ import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstan
 import { getSemanticConfigs } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
 import { getSemanticConfigTableCount } from '../../utils'
+import {
+  buildFieldDictSection,
+  createTooltipSection,
+  extractMetricFieldName as extractMetricSourceFieldName,
+  findColumnDict,
+  type FieldTooltipSection
+} from '../../utils/fieldDict'
+import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
 interface ConversationItem {
@@ -108,8 +116,9 @@ const tooltipState = reactive({
   visible: false,
   x: 0,
   y: 0,
-  lines: [] as string[],
+  sections: [] as FieldTooltipSection[],
 })
+const { getColumnDict, loadTablesColumnDicts, resetColumnDictCache } = useColumnDictCache()
 let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const clearTooltipHideTimer = () => {
@@ -118,12 +127,12 @@ const clearTooltipHideTimer = () => {
   tooltipHideTimer = null
 }
 
-const showTooltip = (e: MouseEvent, lines: string[]) => {
+const showTooltip = (e: MouseEvent, sections: FieldTooltipSection[]) => {
   clearTooltipHideTimer()
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   tooltipState.x = rect.right + 8
   tooltipState.y = rect.top + rect.height / 2
-  tooltipState.lines = lines
+  tooltipState.sections = sections
   tooltipState.visible = true
 }
 
@@ -330,12 +339,21 @@ const handleSelectConfig = (configId: string | null) => {
   emit('selectDataset', configId)
 }
 
+const getConfigTableNames = (config: SemanticConfigItem) => [
+  ...(config.dimensions || []).map(item => item.table),
+  ...(config.metrics || []).map(item => item.table),
+]
+
 const toggleConfig = (configId: string) => {
   const next = new Set(expandedConfigIds.value)
   if (next.has(configId)) {
     next.delete(configId)
   } else {
     next.add(configId)
+    const config = semanticConfigs.value.find(item => item.id === configId)
+    if (config) {
+      void loadTablesColumnDicts(props.datasourceId, getConfigTableNames(config))
+    }
   }
   expandedConfigIds.value = next
 }
@@ -346,26 +364,13 @@ const getDimensionIconType = (dimension: SemanticDimension): 'string' | 'number'
   return 'string'
 }
 
-const appendMetadataSupplementLines = (lines: string[], metadataSupplement?: string) => {
+const buildMetadataSupplementSection = (metadataSupplement?: string) => {
   const content = String(metadataSupplement || '').trim()
-  if (!content) return
-  lines.push('元数据补充')
-  content
+  if (!content) return null
+  return createTooltipSection('元数据补充', content
     .split(/\n+/)
     .map(item => item.trim())
-    .filter(Boolean)
-    .forEach(item => lines.push(item))
-}
-
-const extractMetricFieldName = (expression?: string) => {
-  const expr = String(expression || '').trim()
-  if (!expr) return '-'
-  const inner = expr.match(/\((.*)\)/)?.[1] || expr
-  const cleaned = inner.replace(/DISTINCT/ig, '').replace(/`/g, '').trim()
-  if (!cleaned) return '-'
-  const first = cleaned.split(',')[0]?.trim() || ''
-  const parts = first.split('.')
-  return parts[parts.length - 1] || '-'
+    .filter(Boolean))
 }
 
 const getTableDescription = (tableName?: string) => {
@@ -395,34 +400,45 @@ const getTableRoleLabel = (table?: string, alias?: string) => {
 
 const buildDimensionTooltip = (dimension: SemanticDimension) => {
   const expression = dimension.expression || `\`${dimension.column}\``
-  const lines = [
-    '基础信息',
-    `数据源表：${getTableRoleLabel(dimension.table, dimension.table_alias)}`,
-    `数据表备注：${getTableDescription(dimension.table)}`,
-    ...buildTableBusinessDescLines(dimension.table),
-    `显示名称：${dimension.name || '-'}`,
-    `字段名称：${dimension.column || '-'}`,
-    `表达式：${expression}`,
-  ]
-  if (dimension.description) lines.push(`描述：${dimension.description}`)
-  appendMetadataSupplementLines(lines, dimension.metadata_supplement)
-  return lines
+  const fieldDict = getColumnDict(props.datasourceId, dimension.table, dimension.column)
+    || findColumnDict(props.tables, dimension.table, dimension.column)
+  return [
+    createTooltipSection('表信息', [
+      `数据源表：${getTableRoleLabel(dimension.table, dimension.table_alias)}`,
+      `数据表备注：${getTableDescription(dimension.table)}`,
+      ...buildTableBusinessDescLines(dimension.table),
+    ]),
+    createTooltipSection('字段信息', [
+      `显示名称：${dimension.name || '-'}`,
+      `字段名称：${dimension.column || '-'}`,
+      `表达式：${expression}`,
+      dimension.description ? `描述：${dimension.description}` : '',
+    ]),
+    buildFieldDictSection(fieldDict),
+    buildMetadataSupplementSection(dimension.metadata_supplement),
+  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const buildMetricTooltip = (metric: SemanticMetric) => {
   const expression = metric.expression || ''
-  const lines = [
-    '基础信息',
-    `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-    `数据表备注：${getTableDescription(metric.table)}`,
-    ...buildTableBusinessDescLines(metric.table),
-    `显示名称：${metric.name || '-'}`,
-    `字段名称：${extractMetricFieldName(expression)}`,
-    `表达式：${expression || '-'}`,
-  ]
-  if (metric.description) lines.push(`描述：${metric.description}`)
-  appendMetadataSupplementLines(lines, metric.metadata_supplement)
-  return lines
+  const fieldName = extractMetricSourceFieldName(metric)
+  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
+    || findColumnDict(props.tables, metric.table, fieldName)
+  return [
+    createTooltipSection('表信息', [
+      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
+      `数据表备注：${getTableDescription(metric.table)}`,
+      ...buildTableBusinessDescLines(metric.table),
+    ]),
+    createTooltipSection('字段信息', [
+      `显示名称：${metric.name || '-'}`,
+      `字段名称：${fieldName || '-'}`,
+      `表达式：${expression || '-'}`,
+      metric.description ? `描述：${metric.description}` : '',
+    ]),
+    buildFieldDictSection(fieldDict),
+    buildMetadataSupplementSection(metric.metadata_supplement),
+  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const handleFillMetric = (metric: SemanticMetric) => {
@@ -437,6 +453,7 @@ const handleFillDimension = (dimension: SemanticDimension) => {
 watch(() => props.datasourceId, () => {
   selectedConfigId.value = null
   expandedConfigIds.value = new Set()
+  resetColumnDictCache()
   if (props.semanticConfigs === undefined) {
     loadSemanticConfigs()
     return
@@ -753,7 +770,14 @@ onUnmounted(() => {
     >
       <div class="absolute top-1/2 -translate-y-1/2" style="left: -10px; width: 10px; height: 16px; background: rgba(255,255,255,0.15); clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
       <div class="absolute top-1/2 -translate-y-1/2" style="left: -9px; width: 9px; height: 14px; background: #373839; clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
-      <div v-for="(line, idx) in tooltipState.lines" :key="idx" class="leading-relaxed">{{ line }}</div>
+      <div
+        v-for="section in tooltipState.sections"
+        :key="section.title"
+        class="space-y-1 border-t border-white/10 py-1 first:border-t-0 first:pt-0 last:pb-0"
+      >
+        <div class="text-[12px] font-semibold text-white">{{ section.title }}</div>
+        <div v-for="line in section.lines" :key="line" class="leading-relaxed text-white/90">{{ line }}</div>
+      </div>
     </div>
   </Teleport>
 </template>

@@ -150,6 +150,7 @@ const handleDragEnd = () => {
 
       <template v-else>
         <SemanticDatasetPanel
+          :datasource-id="datasource?.id || ''"
           :semantic-config="semanticConfig"
           :semantic-configs="semanticConfigs"
           :selected-dataset-id="selectedDatasetId"

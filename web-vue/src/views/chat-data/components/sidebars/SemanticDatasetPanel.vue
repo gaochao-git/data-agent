@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 import type { SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
+import {
+  buildFieldDictSection,
+  createTooltipSection,
+  extractMetricFieldName as extractMetricSourceFieldName,
+  findColumnDict,
+  type FieldTooltipSection
+} from '../../utils/fieldDict'
+import { useColumnDictCache } from '../../composables/useColumnDictCache'
 
 interface Props {
+  datasourceId?: string
   semanticConfig?: SemanticConfigItem | null
   semanticConfigs?: SemanticConfigItem[]
   selectedDatasetId?: string | null
@@ -12,6 +21,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  datasourceId: '',
   semanticConfig: null,
   tables: () => [],
   loading: false
@@ -30,8 +40,9 @@ const tooltipState = reactive({
   visible: false,
   x: 0,
   y: 0,
-  lines: [] as string[]
+  sections: [] as FieldTooltipSection[]
 })
+const { getColumnDict, loadTablesColumnDicts, resetColumnDictCache } = useColumnDictCache()
 let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const clearTooltipHideTimer = () => {
@@ -40,12 +51,12 @@ const clearTooltipHideTimer = () => {
   tooltipHideTimer = null
 }
 
-const showTooltip = (e: MouseEvent, lines: string[]) => {
+const showTooltip = (e: MouseEvent, sections: FieldTooltipSection[]) => {
   clearTooltipHideTimer()
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   tooltipState.x = rect.right + 8
   tooltipState.y = rect.top + rect.height / 2
-  tooltipState.lines = lines
+  tooltipState.sections = sections
   tooltipState.visible = true
 }
 
@@ -159,45 +170,54 @@ const handleFillQuestion = (fieldName: string | undefined, fieldType: 'dimension
   emit('fillQuestion', { fieldName: normalizedName, fieldType })
 }
 
-const appendMetadataSupplementLines = (lines: string[], metadataSupplement?: string) => {
+const buildMetadataSupplementSection = (metadataSupplement?: string) => {
   const content = String(metadataSupplement || '').trim()
-  if (!content) return
-  lines.push('元数据补充')
-  content
+  if (!content) return null
+  return createTooltipSection('元数据补充', content
     .split(/\n+/)
     .map(item => item.trim())
-    .filter(Boolean)
-    .forEach(item => lines.push(item))
+    .filter(Boolean))
 }
 
 const buildDimensionTooltip = (dim: SemanticDimension) => {
   const expression = dim.expression || `\`${dim.column}\``
-  const lines = [
-    '基础信息',
-    `数据源表：${getTableRoleLabel(dim.table, dim.table_alias)}`,
-    `数据表备注：${getTableDescription(dim.table)}`,
-    ...buildTableBusinessDescLines(dim.table),
-    `显示名称：${dim.name}`,
-    `字段名称：${dim.column}`,
-    `表达式：${expression}`,
-  ]
-  appendMetadataSupplementLines(lines, dim.metadata_supplement)
-  return lines
+  const fieldDict = getColumnDict(props.datasourceId, dim.table, dim.column)
+    || findColumnDict(props.tables, dim.table, dim.column)
+  return [
+    createTooltipSection('表信息', [
+      `数据源表：${getTableRoleLabel(dim.table, dim.table_alias)}`,
+      `数据表备注：${getTableDescription(dim.table)}`,
+      ...buildTableBusinessDescLines(dim.table),
+    ]),
+    createTooltipSection('字段信息', [
+      `显示名称：${dim.name || '-'}`,
+      `字段名称：${dim.column || '-'}`,
+      `表达式：${expression}`,
+    ]),
+    buildFieldDictSection(fieldDict),
+    buildMetadataSupplementSection(dim.metadata_supplement),
+  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const buildMetricTooltip = (metric: SemanticConfigItem['metrics'][number]) => {
   const expression = metric.expression || ''
-  const lines = [
-    '基础信息',
-    `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
-    `数据表备注：${getTableDescription(metric.table)}`,
-    ...buildTableBusinessDescLines(metric.table),
-    `显示名称：${metric.name}`,
-    `字段名称：${extractFieldName(expression)}`,
-    `表达式：${expression || '-'}`,
-  ]
-  appendMetadataSupplementLines(lines, metric.metadata_supplement)
-  return lines
+  const fieldName = extractMetricSourceFieldName(metric)
+  const fieldDict = getColumnDict(props.datasourceId, metric.table, fieldName)
+    || findColumnDict(props.tables, metric.table, fieldName)
+  return [
+    createTooltipSection('表信息', [
+      `数据源表：${getTableRoleLabel(metric.table, metric.table_alias)}`,
+      `数据表备注：${getTableDescription(metric.table)}`,
+      ...buildTableBusinessDescLines(metric.table),
+    ]),
+    createTooltipSection('字段信息', [
+      `显示名称：${metric.name || '-'}`,
+      `字段名称：${fieldName || extractFieldName(expression)}`,
+      `表达式：${expression || '-'}`,
+    ]),
+    buildFieldDictSection(fieldDict),
+    buildMetadataSupplementSection(metric.metadata_supplement),
+  ].filter(Boolean) as FieldTooltipSection[]
 }
 
 const filteredDimensions = computed(() => {
@@ -264,6 +284,11 @@ const selectDataset = (datasetId: string) => {
   datasetKeyword.value = ''
 }
 
+const getConfigTableNames = (config?: SemanticConfigItem | null) => [
+  ...((config?.dimensions || []).map(item => item.table)),
+  ...((config?.metrics || []).map(item => item.table)),
+]
+
 const handleDocumentClick = (event: MouseEvent) => {
   if (!datasetDropdownVisible.value) return
   const target = event.target as Node
@@ -273,7 +298,16 @@ const handleDocumentClick = (event: MouseEvent) => {
 
 onMounted(() => {
   document.addEventListener('click', handleDocumentClick)
+  void loadTablesColumnDicts(props.datasourceId, getConfigTableNames(props.semanticConfig))
 })
+
+watch(
+  () => [props.datasourceId, props.semanticConfig?.id],
+  () => {
+    resetColumnDictCache()
+    void loadTablesColumnDicts(props.datasourceId, getConfigTableNames(props.semanticConfig))
+  }
+)
 
 onUnmounted(() => {
   clearTooltipHideTimer()
@@ -440,7 +474,14 @@ onUnmounted(() => {
     >
       <div class="absolute top-1/2 -translate-y-1/2" style="left: -10px; width: 10px; height: 16px; background: rgba(255,255,255,0.15); clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
       <div class="absolute top-1/2 -translate-y-1/2" style="left: -9px; width: 9px; height: 14px; background: #373839; clip-path: polygon(100% 0, 100% 100%, 0 50%);"></div>
-      <div v-for="(line, idx) in tooltipState.lines" :key="idx" class="leading-relaxed">{{ line }}</div>
+      <div
+        v-for="section in tooltipState.sections"
+        :key="section.title"
+        class="space-y-1 border-t border-white/10 py-1 first:border-t-0 first:pt-0 last:pb-0"
+      >
+        <div class="text-[12px] font-semibold text-white">{{ section.title }}</div>
+        <div v-for="line in section.lines" :key="line" class="leading-relaxed text-white/90">{{ line }}</div>
+      </div>
     </div>
   </Teleport>
 </template>

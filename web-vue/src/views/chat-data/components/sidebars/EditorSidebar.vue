@@ -4,6 +4,9 @@
  * 用于SQL查询模式，点击箭头插入表名/字段名
  */
 import { ref, computed, reactive, watch, onUnmounted } from 'vue'
+import type { DatasourceColumnDictInfo } from '../../types'
+import { buildFieldDictSection, createTooltipSection, type FieldTooltipSection } from '../../utils/fieldDict'
+import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
 // 悬浮提示状态
@@ -11,13 +14,7 @@ const tooltipState = reactive({
   visible: false,
   x: 0,
   y: 0,
-  type: '' as 'table' | 'column',
-  content: {
-    name: '',
-    label: '',
-    columnType: '',
-    businessDesc: ''
-  }
+  sections: [] as FieldTooltipSection[]
 })
 let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
 
@@ -28,13 +25,12 @@ const clearTooltipHideTimer = () => {
 }
 
 // 显示 tooltip（右侧弹出）
-const showTooltip = (e: MouseEvent, type: 'table' | 'column', data: any) => {
+const showTooltip = (e: MouseEvent, sections: FieldTooltipSection[]) => {
   clearTooltipHideTimer()
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   tooltipState.x = rect.right + 8
   tooltipState.y = rect.top + rect.height / 2
-  tooltipState.type = type
-  tooltipState.content = data
+  tooltipState.sections = sections
   tooltipState.visible = true
 }
 
@@ -64,7 +60,9 @@ interface ColumnInfo {
   name: string
   type: string
   mysql_type?: string
+  hive_type?: string
   description?: string
+  column_dict?: DatasourceColumnDictInfo
 }
 
 interface TableInfo {
@@ -102,6 +100,11 @@ const searchText = ref('')
 const expandedTables = ref<Set<string>>(new Set())
 const collapsedGroups = ref<Set<string>>(new Set())
 const tableLabelMode = ref<'name' | 'description'>('name')
+const { getColumnDict, loadTableColumnDicts, resetColumnDictCache } = useColumnDictCache()
+
+const getCachedColumnDict = (tableName: string, columnName: string) => {
+  return getColumnDict(props.datasource?.id || '', tableName, columnName)
+}
 
 const getTableDisplayLabel = (table: TableInfo) => {
   if (tableLabelMode.value === 'description') {
@@ -117,11 +120,30 @@ const getTableHoverLabel = (table: TableInfo) => {
   return table.description || table.table_name
 }
 
-const buildTableTooltipData = (table: TableInfo) => ({
-  name: getTableHoverLabel(table),
-  label: tableLabelMode.value === 'description' ? '表名' : '备注',
-  businessDesc: table.business_desc || ''
-})
+const buildTableTooltipSections = (table: TableInfo) => {
+  return [
+    createTooltipSection('表信息', [
+      `${tableLabelMode.value === 'description' ? '表名' : '备注'}：${getTableHoverLabel(table)}`,
+      table.business_desc ? `表业务说明：${table.business_desc}` : '',
+    ]),
+  ].filter(Boolean) as FieldTooltipSection[]
+}
+
+const buildColumnTooltipSections = (table: TableInfo, col: ColumnInfo) => {
+  const cachedDict = getCachedColumnDict(table.table_name, col.name)
+  return [
+    createTooltipSection('表信息', [
+      `数据源表：${table.table_name}`,
+      table.description ? `数据表备注：${table.description}` : '',
+      table.business_desc ? `表业务说明：${table.business_desc}` : '',
+    ]),
+    createTooltipSection('字段信息', [
+      `${tableLabelMode.value === 'description' ? '列名' : '备注'}：${getColumnHoverLabel(col)}`,
+      `类型：${col.mysql_type || col.hive_type || col.type || '-'}`,
+    ]),
+    buildFieldDictSection(cachedDict || col.column_dict),
+  ].filter(Boolean) as FieldTooltipSection[]
+}
 
 const getColumnDisplayLabel = (col: ColumnInfo) => {
   if (tableLabelMode.value === 'description') {
@@ -175,12 +197,13 @@ const groupedTables = computed(() => {
 })
 
 // 切换表展开
-const toggleTable = (tableName: string) => {
+const toggleTable = (tableName: string, physicalTableName = tableName) => {
   const newSet = new Set(expandedTables.value)
   if (newSet.has(tableName)) {
     newSet.delete(tableName)
   } else {
     newSet.add(tableName)
+    void loadTableColumnDicts(props.datasource?.id || '', physicalTableName)
   }
   expandedTables.value = newSet
 }
@@ -202,6 +225,7 @@ watch(
   () => {
     expandedTables.value = new Set()
     collapsedGroups.value = new Set()
+    resetColumnDictCache()
   }
 )
 
@@ -273,7 +297,7 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
           <div
             class="group flex items-center h-[28px] px-4 rounded transition-colors duration-100 cursor-pointer hover:bg-[#f0f1f3]"
             @click="toggleTable(table.table_name)"
-            @mouseenter="showTooltip($event, 'table', buildTableTooltipData(table))"
+            @mouseenter="showTooltip($event, buildTableTooltipSections(table))"
             @mouseleave="hideTooltip"
           >
             <i :class="['fa-solid fa-chevron-right text-[10px] text-[#57585a] mr-1.5 transition-transform duration-150', expandedTables.has(table.table_name) && 'rotate-90']"></i>
@@ -296,7 +320,7 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
               v-for="col in table.columns"
               :key="col.name"
               class="group flex items-center h-[28px] px-4 rounded transition-colors duration-100 cursor-pointer hover:bg-[#f0f1f3]"
-              @mouseenter="showTooltip($event, 'column', { name: getColumnHoverLabel(col), label: tableLabelMode === 'description' ? '列名' : '备注', columnType: col.mysql_type || col.type })"
+              @mouseenter="showTooltip($event, buildColumnTooltipSections(table, col))"
               @mouseleave="hideTooltip"
             >
               <FieldTypeIcon :type="getFieldType(col)" class="text-[#165DFF] mr-1.5" />
@@ -332,8 +356,8 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
               <!-- 表头 -->
               <div
                 class="group flex items-center h-[28px] px-4 rounded transition-colors duration-100 cursor-pointer hover:bg-[#f0f1f3]"
-                @click="toggleTable(`${group.name}:${table.table_name}`)"
-                @mouseenter="showTooltip($event, 'table', buildTableTooltipData(table))"
+                @click="toggleTable(`${group.name}:${table.table_name}`, table.table_name)"
+                @mouseenter="showTooltip($event, buildTableTooltipSections(table))"
                 @mouseleave="hideTooltip"
               >
                 <i :class="['fa-solid fa-chevron-right text-[10px] text-[#57585a] mr-1.5 transition-transform duration-150', expandedTables.has(`${group.name}:${table.table_name}`) && 'rotate-90']"></i>
@@ -355,7 +379,7 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
                   v-for="col in table.columns"
                   :key="col.name"
                   class="group flex items-center h-[28px] px-4 rounded transition-colors duration-100 cursor-pointer hover:bg-[#f0f1f3]"
-                  @mouseenter="showTooltip($event, 'column', { name: getColumnHoverLabel(col), label: tableLabelMode === 'description' ? '列名' : '备注', columnType: col.mysql_type || col.type })"
+                  @mouseenter="showTooltip($event, buildColumnTooltipSections(table, col))"
                   @mouseleave="hideTooltip"
                 >
                   <FieldTypeIcon :type="getFieldType(col)" class="text-[#165DFF] mr-1.5" />
@@ -386,26 +410,14 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
       >
         <!-- 左侧三角箭头 -->
         <div class="absolute top-1/2 -translate-y-1/2" style="left: -6px; width: 0; height: 0; border: 6px solid transparent; border-right-color: #373839;"></div>
-        <div v-if="tooltipState.type === 'table'" class="leading-relaxed">
-          <div>
-            <span class="text-white/70">{{ tooltipState.content.label || '表名' }}：</span>
-            <span class="font-mono">{{ tooltipState.content.name }}</span>
-          </div>
-          <div v-if="tooltipState.content.businessDesc">
-            <span class="text-white/70">表业务说明：</span>
-            <span>{{ tooltipState.content.businessDesc }}</span>
-          </div>
+        <div
+          v-for="section in tooltipState.sections"
+          :key="section.title"
+          class="space-y-1 border-t border-white/10 py-1 first:border-t-0 first:pt-0 last:pb-0"
+        >
+          <div class="text-[12px] font-semibold text-white">{{ section.title }}</div>
+          <div v-for="line in section.lines" :key="line" class="leading-relaxed text-white/90">{{ line }}</div>
         </div>
-        <template v-else>
-          <div class="leading-relaxed">
-            <span class="text-white/70">{{ tooltipState.content.label || '列名' }}：</span>
-            <span class="font-mono">{{ tooltipState.content.name }}</span>
-          </div>
-          <div class="leading-relaxed">
-            <span class="text-white/70">类型：</span>
-            <span class="font-mono">{{ tooltipState.content.columnType }}</span>
-          </div>
-        </template>
       </div>
     </Teleport>
   </div>
