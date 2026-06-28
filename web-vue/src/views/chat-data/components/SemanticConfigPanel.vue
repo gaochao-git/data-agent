@@ -60,6 +60,7 @@ interface TableScopeEntry {
 }
 
 const tableScopes = ref<Record<string, TableScopeEntry[]>>({})
+const defaultDimensionScopeAliases = ref<Record<string, string[]>>({})
 const draggingTableName = ref('')
 const tableSearchKeyword = ref('')
 const tableLabelMode = ref<'name' | 'description'>('name')
@@ -243,6 +244,17 @@ const syncTableScopes = () => {
     next[config.id] = existed.length > 0 ? existed : deriveScopeFromConfig(config)
   })
   tableScopes.value = next
+  const nextDefaultAliases: Record<string, string[]> = {}
+  Object.entries(defaultDimensionScopeAliases.value).forEach(([configId, aliases]) => {
+    const scopeEntries = next[configId]
+    if (!scopeEntries) return
+    const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
+    const keptAliases = aliases.filter(alias => scopeAliasSet.has(alias))
+    if (keptAliases.length > 0) {
+      nextDefaultAliases[configId] = keptAliases
+    }
+  })
+  defaultDimensionScopeAliases.value = nextDefaultAliases
 }
 
 const applyDefaultModelConfigCollapse = (configId?: string | null) => {
@@ -261,6 +273,37 @@ const getScopeTables = (configId: string) => {
 
 const getScopeEntries = (configId: string) => {
   return normalizeScopeEntries((tableScopes.value[configId] || []) as Array<TableScopeEntry | string>)
+}
+
+const getDefaultDimensionAliasSet = (configId: string) => {
+  return new Set(defaultDimensionScopeAliases.value[configId] || [])
+}
+
+const markDefaultDimensionScopeAlias = (configId: string, alias: string) => {
+  if (!configId || !alias) return
+  const current = getDefaultDimensionAliasSet(configId)
+  if (current.has(alias)) return
+  defaultDimensionScopeAliases.value = {
+    ...defaultDimensionScopeAliases.value,
+    [configId]: [...current, alias],
+  }
+}
+
+const clearDefaultDimensionScopeAliases = (configId: string, aliases?: string[]) => {
+  if (!configId) return
+  const current = getDefaultDimensionAliasSet(configId)
+  const nextMap = { ...defaultDimensionScopeAliases.value }
+  if (!aliases) {
+    delete nextMap[configId]
+  } else {
+    aliases.forEach(alias => current.delete(alias))
+    if (current.size > 0) {
+      nextMap[configId] = [...current]
+    } else {
+      delete nextMap[configId]
+    }
+  }
+  defaultDimensionScopeAliases.value = nextMap
 }
 
 const getScopeEntryByAlias = (configId: string, alias?: string) => {
@@ -344,6 +387,7 @@ const handleTableDragEnd = () => {
 const addScopeTable = (configId: string, tableName: string) => {
   const entries = getScopeEntries(configId)
   const alias = generateScopeAlias(tableName, entries)
+  markDefaultDimensionScopeAlias(configId, alias)
   toggleScopeEntry(configId, { table: tableName, alias }, true)
 }
 
@@ -351,6 +395,7 @@ const addScopeTable = (configId: string, tableName: string) => {
 const removeScopeTable = (configId: string, alias: string) => {
   const entry = getScopeEntryByAlias(configId, alias)
   if (!entry) return
+  clearDefaultDimensionScopeAliases(configId, [entry.alias])
   toggleScopeEntry(configId, entry, false)
 }
 
@@ -494,6 +539,7 @@ const handleDeleteConfig = async (configId: string, configName: string) => {
     const nextSignatures = { ...savedConfigSignatures.value }
     delete nextSignatures[configId]
     savedConfigSignatures.value = nextSignatures
+    clearDefaultDimensionScopeAliases(configId)
     const currentSelectedId = props.selectedConfigId || expandedId.value
     const nextSelectedId = currentSelectedId === configId
       ? newConfigs[0]?.id || null
@@ -2215,11 +2261,12 @@ const buildDimensionExpression = (func: string, column: string) => {
   return quoted
 }
 
-const buildFieldRows = (configId: string) => {
+const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
   const config = configs.value.find(c => c.id === configId)
   if (!config) return []
   const scopeEntries = getScopeEntries(configId)
   const scopeAliasSet = new Set(scopeEntries.map(entry => entry.alias))
+  const defaultDimensionAliasSet = applyDefaultDimensions ? getDefaultDimensionAliasSet(configId) : new Set<string>()
 
   const dimensionSet = new Set<string>()
   const dimensionByColumnMap = new Map<string, SemanticDimension>()
@@ -2321,7 +2368,7 @@ const buildFieldRows = (configId: string) => {
         column: col.name,
         sourceColumn: col.name,
         columnType: col.mysql_type || col.type || '',
-        isDimension: dimensionSet.has(key),
+        isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
         isMetric: !!metricInfo,
         displayName,
         columnComment,
@@ -2426,7 +2473,7 @@ const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
 const loadFieldRows = (configId: string) => {
   fieldRows.value = buildFieldRows(configId)
   fieldRowsConfigId.value = configId
-  fieldRowsSnapshot.value = buildFieldRowsEditSignature(fieldRows.value)
+  fieldRowsSnapshot.value = buildFieldRowsEditSignature(buildFieldRows(configId, false))
   void refreshFieldColumnDictVisibleMap()
 }
 
@@ -2481,6 +2528,7 @@ const applyFieldSetting = (showToast = true) => {
     dimensions: nextDimensions,
     metrics: nextMetrics
   })
+  clearDefaultDimensionScopeAliases(configId)
   fieldRowsSnapshot.value = buildFieldRowsEditSignature(fieldRows.value)
   if (showToast) {
     ElMessage.success('字段设置已应用')
