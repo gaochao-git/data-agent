@@ -7,6 +7,7 @@ import { ref, computed, watch, useAttrs } from 'vue'
 import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
+import ResultTabs from './ResultTabs.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
 import { getConversationArtifact } from '../api'
 
@@ -59,6 +60,12 @@ interface VisualizationConfig {
 
 type ResultChartType = Extract<ChartType, 'bar' | 'horizontal_bar' | 'line' | 'area' | 'pie' | 'funnel' | 'graph'>
 type ViewMode = 'vertical' | 'card' | ChartType
+type ResultTabItem = {
+  key: string | number
+  label: string
+  title?: string
+  status?: 'success' | 'error' | 'none'
+}
 
 interface Props {
   resultData: string
@@ -158,6 +165,16 @@ const artifactId = computed(() => {
 })
 const memberResults = computed(() => queryResult.value?.results || [])
 const hasMultipleMemberResults = computed(() => memberResults.value.length > 1)
+const memberResultTabs = computed<ResultTabItem[]>(() =>
+  memberResults.value.map((item, index) => ({
+    key: item.member_datasource_id || item.member_name || index,
+    label: item.member_name || item.member_datasource_id || `结果${index + 1}`,
+    title: item.member_name && item.member_datasource_id
+      ? `${item.member_name}（${item.member_datasource_id}）`
+      : item.member_name || item.member_datasource_id || `结果${index + 1}`,
+    status: item.success === false ? 'error' : 'success',
+  }))
+)
 const activeResult = computed<MemberQueryResult | MultiQueryResult | null>(() => {
   if (!memberResults.value.length) return queryResult.value
   return memberResults.value[activeMemberResultIndex.value] || memberResults.value[0] || queryResult.value
@@ -450,21 +467,12 @@ const getDimensionKey = (dim: string | { name: string }): string => {
       </div>
 
       <template v-else>
-      <div v-if="hasMultipleMemberResults" class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-black/[0.04] bg-gradient-to-br from-slate-50 to-slate-100 overflow-x-auto">
-        <button
-          v-for="(item, index) in memberResults"
-          :key="item.member_datasource_id || item.member_name || index"
-          :class="[
-            'shrink-0 h-7 px-3 rounded-md border text-xs transition-all duration-150',
-            activeMemberResultIndex === index
-              ? 'border-[#1f82d9] bg-[#e8f3ff] text-[#1f82d9]'
-              : 'border-black/10 bg-white text-gray-600 hover:border-[#1f82d9]/40 hover:text-[#1f82d9]'
-          ]"
-          @click="activeMemberResultIndex = index"
-        >
-          {{ item.member_name || item.member_datasource_id || `结果${index + 1}` }}
-        </button>
-      </div>
+      <ResultTabs
+        v-if="hasMultipleMemberResults"
+        v-model:active-index="activeMemberResultIndex"
+        :tabs="memberResultTabs"
+        show-status
+      />
 
       <!-- 查询失败 -->
       <div v-if="activeResult && !activeResult.success" class="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">

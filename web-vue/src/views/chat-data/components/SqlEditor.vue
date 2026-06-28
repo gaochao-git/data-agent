@@ -15,6 +15,7 @@ import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
+import ResultTabs from './ResultTabs.vue'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
@@ -47,6 +48,12 @@ type SqlEditorSSEEventType = 'message' | 'error'
 type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean }
 type AiMessageSegment = { type: 'markdown' | 'sql'; content: string }
 type SqlContextFunctionGroup = 'string' | 'date' | 'condition'
+type ResultTabItem = {
+  key: string | number
+  label: string
+  title?: string
+  status?: 'success' | 'error' | 'none'
+}
 type SqlContextFunction = {
   key: string
   label: string
@@ -512,6 +519,16 @@ interface QueryResultItem {
 }
 const results = ref<QueryResultItem[]>([])
 const activeResultIndex = ref(0)
+const resultTabs = computed<ResultTabItem[]>(() =>
+  results.value.map((result, index) => ({
+    key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
+    label: result.title || `结果${index + 1}`,
+    title: result.memberName && result.memberDatasourceId
+      ? `${result.memberName}（${result.memberDatasourceId}）`
+      : result.title || result.sql || `结果${index + 1}`,
+    status: result.error ? 'error' : 'success',
+  }))
+)
 const queryHistoryRefreshKey = ref(0)
 const errorDetailsExpanded = ref(false)
 
@@ -2422,24 +2439,12 @@ defineExpose({
     <!-- 结果区域 -->
     <div class="flex-1 flex flex-col min-h-[100px] overflow-hidden bg-white">
       <!-- 结果 Tabs（多结果时显示） -->
-      <div v-if="results.length > 1" class="px-4 py-3 bg-gradient-to-br from-gray-50 to-slate-50 border-b border-black/[0.06]">
-        <div class="flex items-center gap-1.5 p-1 bg-black/[0.04] rounded-xl w-fit">
-          <button
-            v-for="(result, index) in results"
-            :key="index"
-            :class="[
-              'flex items-center gap-2 px-4 py-2 border-none rounded-[10px] bg-transparent text-[13px] font-medium text-gray-500 cursor-pointer transition-all duration-200 whitespace-nowrap',
-              activeResultIndex === index ? 'bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white shadow-[0_2px_8px_rgba(31,130,217,0.3)]' : 'hover:bg-white/60 hover:text-gray-700'
-            ]"
-            :title="result.sql"
-            @click="activeResultIndex = index"
-          >
-            <i v-if="result.error" class="fa-solid fa-circle-xmark text-[10px] text-red-500"></i>
-            <i v-else class="fa-solid fa-circle-check text-[10px] text-emerald-500"></i>
-            <span>{{ result.title || `结果${index + 1}` }}</span>
-          </button>
-        </div>
-      </div>
+      <ResultTabs
+        v-if="results.length > 1"
+        v-model:active-index="activeResultIndex"
+        :tabs="resultTabs"
+        show-status
+      />
 
       <!-- 结果内容 -->
       <div class="flex-1 min-h-0 flex flex-col overflow-hidden">

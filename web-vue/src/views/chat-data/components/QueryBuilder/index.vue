@@ -13,6 +13,7 @@ import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import QueryFavoriteModal from '../QueryFavoriteModal.vue'
 import ExecutionTargetPicker from '../ExecutionTargetPicker.vue'
+import ResultTabs from '../ResultTabs.vue'
 import AdvancedFilterTree from './AdvancedFilterTree.vue'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 import IconSetting from '../icons/IconSetting.vue'
@@ -91,6 +92,13 @@ interface FilterCondition {
   logic: 'AND' | 'OR'
   aggFunc?: string  // 如果设置，则为 HAVING 条件
   aggId?: string
+}
+
+type ResultTabItem = {
+  key: string | number
+  label: string
+  title?: string
+  status?: 'success' | 'error' | 'none'
 }
 
 type FilterLogic = 'AND' | 'OR'
@@ -277,6 +285,15 @@ const resultTabs = ref<Array<{
   memberName?: string
 }>>([])
 const activeResultTabIndex = ref(0)
+const displayResultTabs = computed<ResultTabItem[]>(() =>
+  resultTabs.value.map((result, index) => ({
+    key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
+    label: result.title || `结果${index + 1}`,
+    title: result.memberName && result.memberDatasourceId
+      ? `${result.memberName}（${result.memberDatasourceId}）`
+      : result.title || `结果${index + 1}`,
+  }))
+)
 
 const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
   const members = props.datasource?.member_sources || []
@@ -5060,21 +5077,12 @@ defineExpose({
       <div class="flex-1 min-h-[100px] flex flex-col overflow-hidden bg-white">
         <!-- 结果区域 -->
         <div v-if="resultData" class="bg-white flex-1 flex flex-col overflow-hidden">
-          <div v-if="resultTabs.length > 1" class="px-4 py-3 bg-gradient-to-br from-gray-50 to-slate-50 border-b border-black/[0.06]">
-            <div class="flex items-center gap-1.5 p-1 bg-black/[0.04] rounded-xl w-fit">
-              <button
-                v-for="(result, index) in resultTabs"
-                :key="`${result.memberDatasourceId || result.title}-${index}`"
-                :class="[
-                  'flex items-center gap-2 px-4 py-2 border-none rounded-[10px] bg-transparent text-[13px] font-medium text-gray-500 cursor-pointer transition-all duration-200 whitespace-nowrap',
-                  activeResultTabIndex === index ? 'bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white shadow-[0_2px_8px_rgba(31,130,217,0.3)]' : 'hover:bg-white/60 hover:text-gray-700'
-                ]"
-                @click="activateResultTab(index)"
-              >
-                <span>{{ result.title }}</span>
-              </button>
-            </div>
-          </div>
+          <ResultTabs
+            v-if="resultTabs.length > 1"
+            :active-index="activeResultTabIndex"
+            :tabs="displayResultTabs"
+            @update:active-index="activateResultTab"
+          />
           <AsyncQueryResult
             :key="`${activeResultTabIndex}-${resultTabs[activeResultTabIndex]?.memberDatasourceId || 'single'}`"
             :result-data="resultData"
