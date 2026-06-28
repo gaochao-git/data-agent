@@ -596,14 +596,12 @@ const percentGroupField = ref('')
 const compareMetricField = ref('')
 const compareBaselineMode = ref<'first' | 'max' | 'min' | 'avg'>('first')
 
-// 基本格式（占位）
+// 结果表格格式
 const chartFormatCollapsed = ref(false)
 const chartFormat = reactive({
   showIndex: false,
   autoWrap: false,
-  transpose: false,
   metricsFirst: false,
-  mergeCells: false,
 })
 
 const parseResultEnvelope = (result: string | null) => {
@@ -658,7 +656,7 @@ const resultSemanticParams = computed(() => {
   }
 })
 
-// 翻页器（占位）
+// 结果表格前端分页
 const chartPaginationCollapsed = ref(false)
 const chartPagination = reactive({
   enabled: false,
@@ -4320,13 +4318,7 @@ defineExpose({
                     <input type="checkbox" v-model="chartFormat.autoWrap" class="accent-[#165DFF] w-3.5 h-3.5" />自动换行
                   </label>
                   <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-[#57585a]">
-                    <input type="checkbox" v-model="chartFormat.transpose" class="accent-[#165DFF] w-3.5 h-3.5" />行列转置
-                  </label>
-                  <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-[#57585a]">
                     <input type="checkbox" v-model="chartFormat.metricsFirst" class="accent-[#165DFF] w-3.5 h-3.5" />指标在前
-                  </label>
-                  <label class="flex items-center gap-1.5 cursor-pointer text-[12px] text-[#57585a] col-span-2">
-                    <input type="checkbox" v-model="chartFormat.mergeCells" class="accent-[#165DFF] w-3.5 h-3.5" />维度列单元格合并
                   </label>
                 </div>
               </div>

@@ -1459,21 +1459,21 @@ onUnmounted(() => {
 
     <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
     <div v-if="!noMatchedDatasource && viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
-      <div class="h-12 shrink-0 flex items-center gap-3 border-b border-slate-200 bg-white px-4">
-        <span class="text-[13px] font-medium text-slate-700">数据源组</span>
+      <div class="h-12 shrink-0 flex flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4">
+        <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
         <select
           v-model="selectedDatasourceId"
-          class="h-8 min-w-[260px] max-w-[420px] rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-800 outline-none"
+          class="h-8 w-[320px] max-w-[28vw] shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-800 outline-none"
         >
           <option v-if="datasources.length === 0" value="">暂无数据源</option>
           <option v-for="ds in datasources" :key="ds.id" :value="ds.id">
             {{ ds.group_name }}
           </option>
         </select>
-        <span class="ml-4 text-[13px] font-medium text-slate-700">指标集</span>
+        <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           v-model="selectedSemanticConfigId"
-          class="w-[720px] max-w-[calc(100vw-560px)]"
+          class="min-w-0 flex-1"
           filterable
           :loading="loadingSemanticConfigs"
           :disabled="loadingSemanticConfigs || semanticConfigs.length === 0"

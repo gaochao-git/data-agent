@@ -3518,15 +3518,15 @@ const saveOntologyRules = () => {
         </button>
         <div class="text-sm font-semibold text-gray-800">指标集管理</div>
       </div>
-      <div class="flex min-w-0 flex-1 items-center gap-3">
-        <span class="text-[13px] font-medium text-slate-700">数据源组</span>
-        <div class="h-9 min-w-[220px] max-w-[360px] flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
+      <div class="flex min-w-0 flex-1 flex-nowrap items-center gap-3">
+        <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
+        <div class="h-9 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
           {{ datasourceName || '暂无数据源' }}
         </div>
-        <span class="ml-2 text-[13px] font-medium text-slate-700">指标集</span>
+        <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
           :model-value="activeConfig?.id || ''"
-          class="w-[720px] max-w-[calc(100vw-680px)]"
+          class="min-w-0 flex-1"
           filterable
           :disabled="loading || configs.length === 0"
           :title="activeConfig ? formatConfigOptionLabel(activeConfig) : ''"

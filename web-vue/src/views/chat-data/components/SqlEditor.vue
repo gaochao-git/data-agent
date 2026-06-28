@@ -747,6 +747,10 @@ const getHistorySourceText = (item: SqlHistoryItem) => {
   return 'SQL编辑器'
 }
 
+const getHistoryExecutionTargetText = (item: SqlHistoryItem) => {
+  return item.member_name || item.member_datasource_id || '-'
+}
+
 const handleRunHistoryItem = async (item: SqlHistoryItem) => {
   if (!isHistoryItemRunnable(item)) {
     ElMessage.warning('查询仍在执行中，请完成后再运行')
@@ -2558,6 +2562,11 @@ defineExpose({
       <el-table-column label="执行人员" width="140" align="center">
         <template #default="{ row }">
           {{ row.operator_name || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="执行对象" width="160" align="center">
+        <template #default="{ row }">
+          <span :title="getHistoryExecutionTargetText(row)">{{ getHistoryExecutionTargetText(row) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="执行耗时" width="120" align="center">
