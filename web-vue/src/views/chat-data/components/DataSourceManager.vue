@@ -7,22 +7,21 @@ import { ref, computed, onMounted, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getDatasources,
-  deleteDatasource,
-  getDbTables,
-  setDefaultDatasource,
-  unsetDefaultDatasource,
-  updateDatasource,
-  updateMappedModules,
-  createDatasourceGroup,
-  updateDatasourceGroup,
-  getDatasourceTableGroups,
-  updateDatasourceTableGroups,
-  updateDatasourceTableBusinessDesc,
+  deleteAdminDatasource,
+  getAdminDbTables,
+  setAdminDefaultDatasource,
+  unsetAdminDefaultDatasource,
+  updateAdminMappedModules,
+  createAdminDatasourceGroup,
+  updateAdminDatasourceGroup,
+  getAdminDatasourceTableGroups,
+  updateAdminDatasourceTableGroups,
+  updateAdminDatasourceTableBusinessDesc,
   getDatasourceColumnDict,
   getDatasourceTableColumnDicts,
-  updateDatasourceColumnDict,
-  generateDatasourceColumnDict,
-  getDatasourceSemanticHealth,
+  updateAdminDatasourceColumnDict,
+  generateAdminDatasourceColumnDict,
+  getAdminDatasourceSemanticHealth,
 } from '../api'
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
 import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
@@ -171,7 +170,7 @@ const saveMappingModules = async () => {
   if (!mappingDsId.value) return
   savingMapping.value = true
   try {
-    const res = await updateMappedModules(mappingDsId.value, mappingModules.value)
+    const res = await updateAdminMappedModules(mappingDsId.value, mappingModules.value)
     if (res.status === 'success') {
       ElMessage.success('映射模块已保存')
       closeMappingPopover()
@@ -257,7 +256,7 @@ const openTableGroupModal = async (ds: DataSource) => {
   editingTableGroupInput.value = ''
   loadingTableGroups.value = true
   try {
-    const res = await getDatasourceTableGroups(ds.id)
+    const res = await getAdminDatasourceTableGroups(ds.id)
     if (res.status === 'success') {
       tableGroupRows.value = normalizeTableGroupRows(res.data?.groups || [])
       activeTableGroupName.value = tableGroupRows.value[0]?.table_group_name || ''
@@ -354,7 +353,7 @@ const saveTableGroups = async () => {
   try {
     const payload = normalizeTableGroupRows(tableGroupRows.value)
       .filter(group => group.table_group_name.trim() && group.table_names.length > 0)
-    const res = await updateDatasourceTableGroups(tableGroupDs.value.id, payload)
+    const res = await updateAdminDatasourceTableGroups(tableGroupDs.value.id, payload)
     if (res.status === 'success') {
       ElMessage.success('表分组已保存')
       await fetchDatasources()
@@ -437,7 +436,7 @@ const saveTableBusinessDesc = async (ds: DataSource, table: TableInfo) => {
   const businessDesc = tableBusinessDescInput.value.trim()
   savingTableBusinessDescKey.value = tableKey
   try {
-    const res = await updateDatasourceTableBusinessDesc(ds.id, table.table_name, businessDesc)
+    const res = await updateAdminDatasourceTableBusinessDesc(ds.id, table.table_name, businessDesc)
     if (res.status === 'success') {
       applyTableBusinessDesc(ds.id, table.table_name, res.data?.table?.business_desc || businessDesc)
       ElMessage.success('表业务说明已保存')
@@ -575,7 +574,7 @@ const generateColumnDict = async () => {
   const tableName = context.table.table_name
   const columnName = context.column.name
   try {
-    const res = await generateDatasourceColumnDict(
+    const res = await generateAdminDatasourceColumnDict(
       dsId,
       tableName,
       columnName,
@@ -626,7 +625,7 @@ const saveColumnDict = async () => {
   }
   savingColumnDict.value = true
   try {
-    const res = await updateDatasourceColumnDict(
+    const res = await updateAdminDatasourceColumnDict(
       context.datasource.id,
       context.table.table_name,
       context.column.name,
@@ -784,7 +783,7 @@ const getHealthStatusBadgeClass = (status?: string) => {
 const handleCheckSemanticHealth = async (ds: DataSource) => {
   checkingHealthId.value = ds.id
   try {
-    const res = await getDatasourceSemanticHealth(ds.id)
+    const res = await getAdminDatasourceSemanticHealth(ds.id)
     if (res.status !== 'success' || !res.data) {
       ElMessage.error(res.msg || '校验失败')
       return
@@ -811,7 +810,7 @@ const handleDelete = async (ds: DataSource) => {
   }
 
   try {
-    const res = await deleteDatasource(ds.id)
+    const res = await deleteAdminDatasource(ds.id)
     if (res.status === 'success') {
       ElMessage.success('删除成功')
       fetchDatasources()
@@ -829,8 +828,8 @@ const handleToggleDefault = async (ds: DataSource) => {
   try {
     const isDefault = ds.is_default
     const res = isDefault
-      ? await unsetDefaultDatasource(ds.id)
-      : await setDefaultDatasource(ds.id)
+      ? await unsetAdminDefaultDatasource(ds.id)
+      : await setAdminDefaultDatasource(ds.id)
     if (res.status === 'success') {
       ElMessage.success(isDefault ? '已取消默认' : '已设为默认')
       fetchDatasources()
@@ -1028,7 +1027,7 @@ const fetchGroupDbTables = async () => {
       payload.host = templateSource.host || ''
       payload.port = templateSource.port
     }
-    const res = await getDbTables(payload)
+    const res = await getAdminDbTables(payload)
     if (res.status === 'success') {
       const tables = res.data.tables || []
       groupDbTables.value = tables
@@ -1112,8 +1111,8 @@ const handleCreateDatasourceGroup = async () => {
       member_sources: memberSources,
     }
     const res = editingGroupId.value
-      ? await updateDatasourceGroup(editingGroupId.value, payload)
-      : await createDatasourceGroup(payload)
+      ? await updateAdminDatasourceGroup(editingGroupId.value, payload)
+      : await createAdminDatasourceGroup(payload)
     if (res.status === 'success') {
       ElMessage.success(editingGroupId.value ? '数据源组更新成功' : '数据源组创建成功')
       showGroupModal.value = false

@@ -7,7 +7,7 @@ def test_update_datasource_meta_api_contract(client, fake_datasource_manager, mo
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.patch(
-        "/api/chatdata/datasources/ds_a",
+        "/api/chatdata/admin/datasources/ds_a",
         json={"name": "数据源A-改名", "description": "新的描述"},
         headers=auth_headers,
     )
@@ -24,7 +24,7 @@ def test_update_datasource_mapped_modules_api_contract(client, fake_datasource_m
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.patch(
-        "/api/chatdata/datasources/ds_a/mapped-modules",
+        "/api/chatdata/admin/datasources/ds_a/mapped-modules",
         json={"mapped_modules": ["智能问数", "可视化查询"]},
         headers=auth_headers,
     )
@@ -39,9 +39,9 @@ def test_update_datasource_mapped_modules_api_contract(client, fake_datasource_m
 def test_table_groups_read_and_save_api_contract(client, fake_datasource_manager, monkeypatch, auth_headers):
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
 
-    list_response = client.get("/api/chatdata/datasources/ds_a/table-groups")
+    list_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups")
     save_response = client.put(
-        "/api/chatdata/datasources/ds_a/table-groups",
+        "/api/chatdata/admin/datasources/ds_a/table-groups",
         json={"groups": [{"table_group_name": "订单域", "table_names": ["orders"]}]},
         headers=auth_headers,
     )
@@ -67,12 +67,12 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
 
     list_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
     save_response = client.put(
-        "/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict",
+        "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict",
         json={"dict": {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}},
         headers=auth_headers,
     )
     generate_response = client.post(
-        "/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict/generate",
+        "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict/generate",
         json={"text": "订单状态：1 表示有效，0 表示无效"},
         headers=auth_headers,
     )
@@ -92,7 +92,7 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, monkey
 
     get_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict")
     generate_response = client.post(
-        "/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict/generate",
+        "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict/generate",
         json={"text": "订单状态：1 表示有效"},
     )
 
@@ -103,8 +103,8 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, monkey
 def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_manager, monkeypatch, auth_headers):
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
 
-    set_response = client.post("/api/chatdata/datasources/ds_a/set-default", headers=auth_headers)
-    clear_response = client.delete("/api/chatdata/datasources/ds_a/set-default", headers=auth_headers)
+    set_response = client.post("/api/chatdata/admin/datasources/ds_a/set-default", headers=auth_headers)
+    clear_response = client.delete("/api/chatdata/admin/datasources/ds_a/set-default", headers=auth_headers)
 
     assert set_response.status_code == 200
     assert set_response.json()["data"] == {"datasource_id": "ds_a", "is_default": True}
@@ -116,7 +116,7 @@ def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_m
 def test_delete_datasource_api_contract(client, fake_datasource_manager, monkeypatch, auth_headers):
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
 
-    response = client.delete("/api/chatdata/datasources/ds_a", headers=auth_headers)
+    response = client.delete("/api/chatdata/admin/datasources/ds_a", headers=auth_headers)
 
     assert response.status_code == 200
     payload = response.json()

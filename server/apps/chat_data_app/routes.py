@@ -1229,7 +1229,7 @@ async def get_datasources(request: Request, include_tables: bool = True):
         )
 
 
-@router.post("/datasources/groups")
+@router.post("/admin/datasources/groups")
 async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request):
     """创建数据源组。"""
     try:
@@ -1317,7 +1317,7 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
         )
 
 
-@router.patch("/datasources/{datasource_id}")
+@router.patch("/admin/datasources/{datasource_id}")
 async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateRequest, request: Request):
     """
     更新数据源元信息（名称、描述）
@@ -1384,7 +1384,7 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
         )
 
 
-@router.put("/datasources/{datasource_id}/group-config")
+@router.put("/admin/datasources/{datasource_id}/group-config")
 async def update_datasource_group_config(datasource_id: str, body: DatasourceGroupUpdateRequest, request: Request):
     """更新数据源组配置。"""
     try:
@@ -1486,7 +1486,7 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
         )
 
 
-@router.patch("/datasources/{datasource_id}/mapped-modules")
+@router.patch("/admin/datasources/{datasource_id}/mapped-modules")
 async def update_mapped_modules(datasource_id: str, body: dict, request: Request):
     """
     更新数据源的模块映射
@@ -1524,7 +1524,7 @@ async def update_mapped_modules(datasource_id: str, body: dict, request: Request
         )
 
 
-@router.get("/datasources/{datasource_id}/table-groups")
+@router.get("/admin/datasources/{datasource_id}/table-groups")
 async def get_datasource_table_groups(datasource_id: str):
     """获取数据源内表分组。"""
     try:
@@ -1550,7 +1550,7 @@ async def get_datasource_table_groups(datasource_id: str):
         )
 
 
-@router.get("/datasources/{datasource_id}/semantic-health")
+@router.get("/admin/datasources/{datasource_id}/semantic-health")
 async def get_datasource_semantic_health(datasource_id: str):
     """校验数据源物理表结构与指标集配置是否一致。"""
     try:
@@ -1583,7 +1583,7 @@ async def get_datasource_semantic_health(datasource_id: str):
         )
 
 
-@router.put("/datasources/{datasource_id}/table-groups")
+@router.put("/admin/datasources/{datasource_id}/table-groups")
 async def update_datasource_table_groups(datasource_id: str, body: DatasourceTableGroupsUpdateRequest, request: Request):
     """覆盖保存数据源内表分组。"""
     try:
@@ -1611,7 +1611,7 @@ async def update_datasource_table_groups(datasource_id: str, body: DatasourceTab
         )
 
 
-@router.put("/datasources/{datasource_id}/tables/{table_name}/business-desc")
+@router.put("/admin/datasources/{datasource_id}/tables/{table_name}/business-desc")
 async def update_datasource_table_business_desc(datasource_id: str, table_name: str, body: DatasourceTableBusinessDescUpdateRequest, request: Request):
     """更新数据源内单张表的业务说明。"""
     try:
@@ -1708,7 +1708,7 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
         )
 
 
-@router.put("/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
+@router.put("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
 async def update_datasource_column_dict(datasource_id: str, table_name: str, column_name: str, body: DatasourceColumnDictUpdateRequest, request: Request):
     """覆盖保存数据源字段数据字典。"""
     try:
@@ -1798,7 +1798,7 @@ def _parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
     }
 
 
-@router.post("/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict/generate")
+@router.post("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict/generate")
 async def generate_datasource_column_dict(datasource_id: str, table_name: str, column_name: str, body: DatasourceColumnDictGenerateRequest, request: Request):
     """根据文本生成字段数据字典候选值，不直接保存。"""
     try:
@@ -1844,7 +1844,7 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
         )
 
 
-@router.post("/datasources/{datasource_id}/set-default")
+@router.post("/admin/datasources/{datasource_id}/set-default")
 async def set_default_datasource(datasource_id: str, request: Request):
     """
     设置默认数据源
@@ -1881,7 +1881,7 @@ async def set_default_datasource(datasource_id: str, request: Request):
         )
 
 
-@router.delete("/datasources/{datasource_id}/set-default")
+@router.delete("/admin/datasources/{datasource_id}/set-default")
 async def clear_default_datasource(datasource_id: str, request: Request):
     """
     取消默认数据源
@@ -1918,7 +1918,7 @@ async def clear_default_datasource(datasource_id: str, request: Request):
         )
 
 
-@router.delete("/datasources/{datasource_id}")
+@router.delete("/admin/datasources/{datasource_id}")
 async def delete_datasource(datasource_id: str, request: Request):
     """
     删除数据源组
@@ -2056,7 +2056,7 @@ async def get_schema(
 
 # ============ 数据库同步接口 ============
 
-@router.post("/datasources/db-tables")
+@router.post("/admin/datasources/db-tables")
 async def get_db_tables(request: DbConnectionRequest, http_request: Request = None):
     """
     获取数据库中的表列表（用于选择要同步的表）

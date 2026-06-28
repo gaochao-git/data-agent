@@ -38,6 +38,45 @@ export {
 
 // ============ 数据源 API ============
 
+const CHATDATA_API_PREFIX = '/agents/api/chatdata'
+const DATASOURCE_API_PREFIX = `${CHATDATA_API_PREFIX}/datasources`
+const ADMIN_DATASOURCE_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/datasources`
+
+type DatasourceListParams = { include_tables?: boolean }
+type DatasourceMetaUpdatePayload = { name?: string; description?: string }
+type DbTablesRequestPayload = {
+  source_type: string
+  query_executor_type?: 'direct' | 'http'
+  org_code?: string
+  org_name?: string
+  host?: string
+  port?: number
+  database: string
+}
+type DatasourceGroupPayload = {
+  group_name: string
+  group_desc?: string
+  query_context?: string
+  source_type: 'mysql' | 'hive'
+  template_source: {
+    org_name: string
+    org_code: string
+    query_executor_type: 'direct' | 'http'
+    host?: string
+    port?: number
+    database: string
+  }
+  template_table_names?: string[]
+  member_sources?: Array<{
+    org_name: string
+    org_code: string
+    query_executor_type: 'direct' | 'http'
+    host?: string
+    port?: number
+    database: string
+  }>
+}
+
 // ============ 技能 API ============
 
 export interface ChatDataRuntimeConfig {
@@ -437,71 +476,63 @@ export function createDashboardFromSpec(data: {
 }
 
 /** 获取数据源列表 */
-export function getDatasources(params?: { include_tables?: boolean }): Promise<ApiResponse<{ datasources: DataSource[] }>> {
+export function getDatasources(params?: DatasourceListParams): Promise<ApiResponse<{ datasources: DataSource[] }>> {
   return request({
-    url: `/agents/api/chatdata/datasources`,
+    url: DATASOURCE_API_PREFIX,
     method: 'get',
     params
   })
 }
 
 /** 删除数据源 */
-export function deleteDatasource(id: string): Promise<ApiResponse<null>> {
+export function deleteAdminDatasource(id: string): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${id}`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${id}`,
     method: 'delete'
   })
 }
 
 /** 获取数据库表列表（用于同步前选择表） */
-export function getDbTables(data: {
-  source_type: string
-  query_executor_type?: 'direct' | 'http'
-  org_code?: string
-  org_name?: string
-  host?: string
-  port?: number
-  database: string
-}): Promise<ApiResponse<{ tables: string[] }>> {
+export function getAdminDbTables(data: DbTablesRequestPayload): Promise<ApiResponse<{ tables: string[] }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/db-tables`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/db-tables`,
     method: 'post',
     data
   })
 }
 
 /** 设置默认数据源 */
-export function setDefaultDatasource(dsId: string): Promise<ApiResponse<null>> {
+export function setAdminDefaultDatasource(dsId: string): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${dsId}/set-default`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${dsId}/set-default`,
     method: 'post'
   })
 }
 
 /** 取消默认数据源 */
-export function unsetDefaultDatasource(dsId: string): Promise<ApiResponse<null>> {
+export function unsetAdminDefaultDatasource(dsId: string): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${dsId}/set-default`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${dsId}/set-default`,
     method: 'delete'
   })
 }
 
 /** 更新数据源元信息 */
-export function updateDatasource(
+export function updateAdminDatasource(
   datasourceId: string,
-  data: { name?: string; description?: string }
+  data: DatasourceMetaUpdatePayload
 ): Promise<ApiResponse<DataSource>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}`,
     method: 'patch',
     data
   })
 }
 
 /** 更新数据源映射模块 */
-export function updateMappedModules(datasourceId: string, mappedModules: string[]): Promise<ApiResponse<null>> {
+export function updateAdminMappedModules(datasourceId: string, mappedModules: string[]): Promise<ApiResponse<null>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/mapped-modules`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/mapped-modules`,
     method: 'patch',
     data: { mapped_modules: mappedModules }
   })
@@ -524,16 +555,16 @@ export interface DatasourceColumnDictPayload {
   unit: string
 }
 
-export function getDatasourceTableGroups(datasourceId: string): Promise<ApiResponse<{ datasource_id: string; groups: DatasourceTableGroupItem[] }>> {
+export function getAdminDatasourceTableGroups(datasourceId: string): Promise<ApiResponse<{ datasource_id: string; groups: DatasourceTableGroupItem[] }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/table-groups`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/table-groups`,
     method: 'get'
   })
 }
 
-export function updateDatasourceTableGroups(datasourceId: string, groups: DatasourceTableGroupItem[]): Promise<ApiResponse<{ datasource_id: string; groups: DatasourceTableGroupItem[] }>> {
+export function updateAdminDatasourceTableGroups(datasourceId: string, groups: DatasourceTableGroupItem[]): Promise<ApiResponse<{ datasource_id: string; groups: DatasourceTableGroupItem[] }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/table-groups`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/table-groups`,
     method: 'put',
     data: { groups }
   })
@@ -545,7 +576,7 @@ export function getDatasourceColumnDict(
   columnName: string
 ): Promise<ApiResponse<{ datasource_id: string; table_name: string; column_name: string; dict: DatasourceColumnDictPayload }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict`,
+    url: `${DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict`,
     method: 'get'
   })
 }
@@ -555,44 +586,44 @@ export function getDatasourceTableColumnDicts(
   tableName: string
 ): Promise<ApiResponse<{ datasource_id: string; table_name: string; dicts: Record<string, DatasourceColumnDictPayload> }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/tables/${encodeURIComponent(tableName)}/column-dicts`,
+    url: `${DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/column-dicts`,
     method: 'get'
   })
 }
 
-export function updateDatasourceColumnDict(
+export function updateAdminDatasourceColumnDict(
   datasourceId: string,
   tableName: string,
   columnName: string,
   dict: DatasourceColumnDictPayload
 ): Promise<ApiResponse<{ datasource_id: string; table_name: string; column_name: string; dict: DatasourceColumnDictPayload }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict`,
     method: 'put',
     data: { dict }
   })
 }
 
-export function generateDatasourceColumnDict(
+export function generateAdminDatasourceColumnDict(
   datasourceId: string,
   tableName: string,
   columnName: string,
   text: string
 ): Promise<ApiResponse<{ datasource_id: string; table_name: string; column_name: string; dict: DatasourceColumnDictPayload }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict/generate`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict/generate`,
     method: 'post',
     data: { text }
   })
 }
 
-export function updateDatasourceTableBusinessDesc(
+export function updateAdminDatasourceTableBusinessDesc(
   datasourceId: string,
   tableName: string,
   businessDesc: string
 ): Promise<ApiResponse<{ datasource_id: string; table: DataSource['ds_tables'][number] }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/tables/${encodeURIComponent(tableName)}/business-desc`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/business-desc`,
     method: 'put',
     data: { business_desc: businessDesc }
   })
@@ -649,70 +680,26 @@ export interface DatasourceSemanticHealthResult {
   }
 }
 
-export function getDatasourceSemanticHealth(datasourceId: string): Promise<ApiResponse<DatasourceSemanticHealthResult>> {
+export function getAdminDatasourceSemanticHealth(datasourceId: string): Promise<ApiResponse<DatasourceSemanticHealthResult>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-health`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-health`,
     method: 'get'
   })
 }
 
 /** 创建数据源组 */
-export function createDatasourceGroup(data: {
-  group_name: string
-  group_desc?: string
-  query_context?: string
-  source_type: 'mysql' | 'hive'
-  template_source: {
-    org_name: string
-    org_code: string
-    query_executor_type: 'direct' | 'http'
-    host?: string
-    port?: number
-    database: string
-  }
-  template_table_names?: string[]
-  member_sources?: Array<{
-    org_name: string
-    org_code: string
-    query_executor_type: 'direct' | 'http'
-    host?: string
-    port?: number
-    database: string
-  }>
-}): Promise<ApiResponse<DataSource>> {
+export function createAdminDatasourceGroup(data: DatasourceGroupPayload): Promise<ApiResponse<DataSource>> {
   return request({
-    url: `/agents/api/chatdata/datasources/groups`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/groups`,
     method: 'post',
     data
   })
 }
 
 /** 更新数据源组 */
-export function updateDatasourceGroup(datasourceId: string, data: {
-  group_name: string
-  group_desc?: string
-  query_context?: string
-  source_type: 'mysql' | 'hive'
-  template_source: {
-    org_name: string
-    org_code: string
-    query_executor_type: 'direct' | 'http'
-    host?: string
-    port?: number
-    database: string
-  }
-  template_table_names?: string[]
-  member_sources?: Array<{
-    org_name: string
-    org_code: string
-    query_executor_type: 'direct' | 'http'
-    host?: string
-    port?: number
-    database: string
-  }>
-}): Promise<ApiResponse<DataSource>> {
+export function updateAdminDatasourceGroup(datasourceId: string, data: DatasourceGroupPayload): Promise<ApiResponse<DataSource>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/group-config`,
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/group-config`,
     method: 'put',
     data
   })
