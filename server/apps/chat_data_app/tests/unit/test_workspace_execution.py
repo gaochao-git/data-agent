@@ -661,6 +661,8 @@ def test_sandbox_file_api_helpers_and_read_file_edges(monkeypatch):
                 raise IsADirectoryError(path)
             if path.endswith("binary.bin"):
                 return b"\x00\x01"
+            if "中文.dashboard.json" in path:
+                raise RuntimeError("SDK download failed")
             return b"line1\nline2\n"
 
     class FakeSandbox:
@@ -672,6 +674,17 @@ def test_sandbox_file_api_helpers_and_read_file_edges(monkeypatch):
     asyncio.run(workspace_execution._write_sandbox_file(sandbox=FakeSandbox(), path="/tmp/a.txt", data=b"abc"))
     assert writes == [("/tmp/a.txt", b"abc", 0o644)]
     assert asyncio.run(workspace_execution._read_sandbox_file_bytes(sandbox=FakeSandbox(), path="/workspace/a.txt")) == b"line1\nline2\n"
+
+    async def fake_run_sandbox_python_json(**kwargs):
+        assert kwargs["payload"]["path"] == "/mnt/user-data/outputs/中文.dashboard.json"
+        return {"content_b64": "5Lit5paH"}
+
+    monkeypatch.setattr(workspace_execution, "run_sandbox_python_json", fake_run_sandbox_python_json)
+    assert asyncio.run(workspace_execution._read_sandbox_file_bytes_with_fallback(
+        session=session_ref.current,
+        path="/mnt/user-data/outputs/中文.dashboard.json",
+    )) == "中文".encode("utf-8")
+
     assert asyncio.run(workspace_execution.sandbox_read_text_file(session_ref=session_ref, file_path="/workspace/missing.txt", offset=0, limit=1))["exists"] is False
     assert asyncio.run(workspace_execution.sandbox_read_text_file(session_ref=session_ref, file_path="/workspace/dir", offset=0, limit=1))["is_dir"] is True
     assert asyncio.run(workspace_execution.sandbox_read_text_file(session_ref=session_ref, file_path="/workspace/binary.bin", offset=0, limit=1))["is_binary"] is True

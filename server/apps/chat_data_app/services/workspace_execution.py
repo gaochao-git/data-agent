@@ -310,6 +310,27 @@ async def _read_sandbox_file_bytes(*, sandbox: Any, path: str) -> bytes:
     return bytes(await reader(path))
 
 
+async def _read_sandbox_file_bytes_with_fallback(*, session: SandboxExecutionSession, path: str) -> bytes:
+    try:
+        return await _read_sandbox_file_bytes(sandbox=session.sandbox, path=path)
+    except (FileNotFoundError, IsADirectoryError):
+        raise
+    except Exception as exc:
+        logger.warning("OpenSandbox files.read_bytes 失败，尝试沙箱内读取: path=%s error=%s", path, exc)
+        result = await run_sandbox_python_json(
+            session=session,
+            payload={"path": path},
+            script_body=r'''
+from pathlib import Path
+import base64
+path = Path(payload["path"])
+data = path.read_bytes()
+print(json.dumps({"content_b64": base64.b64encode(data).decode("ascii")}, ensure_ascii=False))
+''',
+        )
+        return base64.b64decode(str(result.get("content_b64") or ""))
+
+
 def _extract_command_output(execution: Any, command_status: Any | None, status_lookup_error: str = "") -> tuple[int, str, str]:
     stdout = "\n".join(str(getattr(item, "text", "")) for item in getattr(getattr(execution, "logs", None), "stdout", []) or [] if str(getattr(item, "text", "")))
     stderr_parts = [str(getattr(item, "text", "")) for item in getattr(getattr(execution, "logs", None), "stderr", []) or [] if str(getattr(item, "text", ""))]
@@ -563,7 +584,7 @@ async def sandbox_read_text_file(*, session_ref: SandboxExecutionSessionRef, fil
     session = require_sandbox_session(session_ref)
     target = sandbox_visible_path(file_path)
     try:
-        data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
+        data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
     except FileNotFoundError:
         return {"exists": False, "path": sandbox_path_to_visible(target)}
     except IsADirectoryError:
@@ -724,7 +745,7 @@ async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, f
     if not _is_outputs_sandbox_path(target):
         return {}
     try:
-        data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
+        data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
     except Exception:
         return {}
     visible_path = sandbox_path_to_visible(target)
@@ -864,7 +885,7 @@ async def read_workspace_file_from_sandbox(*, workspace_root: str, file_path: st
     session = await get_workspace_execution_session(workspace_root, user_id)
     try:
         target = sandbox_visible_path(file_path)
-        data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
+        data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
         if len(data) > max_bytes:
             raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
         result = {
