@@ -575,6 +575,7 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     create_payload = SemanticConfigCreateRequest(
         name="新指标集",
         description="描述",
+        scope_type="public",
         enabled=True,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
@@ -594,7 +595,7 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     assert list_payload["data"]["configs"][0]["can_manage"] is True
     assert missing_list["code"] == 40404
     assert create_response["data"]["name"] == "新指标集"
-    assert manager.created_kwargs["scope_type"] == "private"
+    assert manager.created_kwargs["scope_type"] == "public"
     assert update_response["data"]["name"] == "订单分析V2"
     assert manager.updated_kwargs["update_by"] == "user_a"
     assert toggle_response["data"] == {"config_id": "cfg_a", "enabled": False}

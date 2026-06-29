@@ -990,6 +990,7 @@ const handleCreateMetricConfig = async () => {
   try {
     const res = await createSemanticConfig(selectedDatasourceId.value, {
       name: datasetName,
+      scope_type: 'private',
       enabled: true,
       metrics: [],
       dimensions: [],
@@ -1564,6 +1565,7 @@ onUnmounted(() => {
           :datasource-type="resolveDatasourceType(metricConfigDatasource)"
           :tables="metricConfigDatasource?.ds_tables || []"
           :selected-config-id="selectedSemanticConfigId"
+          create-scope-type="private"
           hide-dataset-selector
           embedded
           @config-change="loadSemanticConfigs"
@@ -1838,6 +1840,7 @@ onUnmounted(() => {
         :datasource-name="semanticConfigDatasource?.group_name || ''"
         :datasource-type="resolveDatasourceType(semanticConfigDatasource)"
         :tables="semanticConfigDatasource?.ds_tables || []"
+        create-scope-type="public"
         @close="handleCloseSemanticConfig"
       />
     </div>

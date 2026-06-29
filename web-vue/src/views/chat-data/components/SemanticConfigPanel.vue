@@ -37,9 +37,12 @@ interface Props {
   embedded?: boolean
   selectedConfigId?: string | null
   hideDatasetSelector?: boolean
+  createScopeType?: 'public' | 'private'
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  createScopeType: 'private',
+})
 const emit = defineEmits<{
   close: []
   configChange: []
@@ -477,6 +480,7 @@ const createConfig = async () => {
   try {
     const res = await createSemanticConfig(props.datasourceId, {
       name: datasetName,
+      scope_type: props.createScopeType,
       enabled: true,
       metrics: [],
       dimensions: [],

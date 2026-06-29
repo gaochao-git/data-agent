@@ -1055,7 +1055,7 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
             metrics=metrics,
             dimensions=dimensions,
             relationships=[r.model_dump() for r in payload.relationships],
-            scope_type="private",
+            scope_type=payload.scope_type,
             create_by=user_id,
             create_by_name=username,
         )
