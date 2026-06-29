@@ -164,14 +164,15 @@ const artifactId = computed(() => {
   }
 })
 const memberResults = computed(() => queryResult.value?.results || [])
-const hasMultipleMemberResults = computed(() => memberResults.value.length > 1)
+const getResultTabLabel = (item: MemberQueryResult | MultiQueryResult | null | undefined, index: number) => {
+  const name = String(item?.member_name || '').trim()
+  return name || `结果${index + 1}`
+}
 const memberResultTabs = computed<ResultTabItem[]>(() =>
   memberResults.value.map((item, index) => ({
     key: item.member_datasource_id || item.member_name || index,
-    label: item.member_name || item.member_datasource_id || `结果${index + 1}`,
-    title: item.member_name && item.member_datasource_id
-      ? `${item.member_name}（${item.member_datasource_id}）`
-      : item.member_name || item.member_datasource_id || `结果${index + 1}`,
+    label: getResultTabLabel(item, index),
+    title: getResultTabLabel(item, index),
     status: item.success === false ? 'error' : 'success',
   }))
 )
@@ -179,6 +180,21 @@ const activeResult = computed<MemberQueryResult | MultiQueryResult | null>(() =>
   if (!memberResults.value.length) return queryResult.value
   return memberResults.value[activeMemberResultIndex.value] || memberResults.value[0] || queryResult.value
 })
+const executionTargetText = computed(() => {
+  if (!activeResult.value?.member_name) return ''
+  return String(activeResult.value.member_name).trim()
+})
+const executionTargetTabs = computed<ResultTabItem[]>(() => {
+  if (memberResultTabs.value.length > 0) return memberResultTabs.value
+  if (!executionTargetText.value) return []
+  return [{
+    key: activeResult.value?.member_datasource_id || executionTargetText.value,
+    label: executionTargetText.value,
+    title: executionTargetText.value,
+    status: activeResult.value?.success === false ? 'error' : 'success',
+  }]
+})
+const showExecutionTargetTabs = computed(() => executionTargetTabs.value.length > 0)
 
 watch(
   () => memberResults.value.map(item => item.member_datasource_id || item.member_name || '').join('|'),
@@ -468,9 +484,9 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
       <template v-else>
       <ResultTabs
-        v-if="hasMultipleMemberResults"
+        v-if="showExecutionTargetTabs"
         v-model:active-index="activeMemberResultIndex"
-        :tabs="memberResultTabs"
+        :tabs="executionTargetTabs"
         show-status
       />
 
