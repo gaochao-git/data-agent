@@ -2478,6 +2478,7 @@ defineExpose({
           :result-data="currentResultData"
           :sql="currentResult?.sql"
           :on-save="handleSaveToDashboard"
+          :show-execution-target-tabs="results.length <= 1"
         />
 
         <div v-else-if="executing" class="flex-1 flex flex-col items-center justify-center py-16 px-6 bg-gradient-to-br from-gray-50 to-slate-50">

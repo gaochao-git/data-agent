@@ -82,6 +82,7 @@ interface Props {
   autoWrap?: boolean
   metricsFirst?: boolean
   allowFullscreen?: boolean
+  showExecutionTargetTabs?: boolean
   initialViewMode?: ViewMode
 }
 
@@ -98,7 +99,8 @@ const props = withDefaults(defineProps<Props>(), {
   showIndex: false,
   autoWrap: false,
   metricsFirst: false,
-  allowFullscreen: true
+  allowFullscreen: true,
+  showExecutionTargetTabs: true
 })
 const attrs = useAttrs()
 const rootClass = computed(() => [
@@ -194,7 +196,7 @@ const executionTargetTabs = computed<ResultTabItem[]>(() => {
     status: activeResult.value?.success === false ? 'error' : 'success',
   }]
 })
-const showExecutionTargetTabs = computed(() => executionTargetTabs.value.length > 0)
+const shouldShowExecutionTargetTabs = computed(() => props.showExecutionTargetTabs && executionTargetTabs.value.length > 0)
 
 watch(
   () => memberResults.value.map(item => item.member_datasource_id || item.member_name || '').join('|'),
@@ -484,7 +486,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
       <template v-else>
       <ResultTabs
-        v-if="showExecutionTargetTabs"
+        v-if="shouldShowExecutionTargetTabs"
         v-model:active-index="activeMemberResultIndex"
         :tabs="executionTargetTabs"
         show-status
@@ -728,6 +730,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :auto-wrap="autoWrap"
         :metrics-first="metricsFirst"
         :allow-fullscreen="false"
+        :show-execution-target-tabs="showExecutionTargetTabs"
         :initial-view-mode="viewMode"
       />
     </div>

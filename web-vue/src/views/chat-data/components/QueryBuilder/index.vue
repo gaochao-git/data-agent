@@ -5095,6 +5095,7 @@ defineExpose({
             :show-index="chartFormat.showIndex"
             :auto-wrap="chartFormat.autoWrap"
             :metrics-first="chartFormat.metricsFirst"
+            :show-execution-target-tabs="resultTabs.length <= 1"
           />
         </div>
 
