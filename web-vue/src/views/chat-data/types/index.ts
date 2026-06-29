@@ -383,6 +383,7 @@ export interface MemberQueryResult {
   member_datasource_id?: string
   member_name?: string
   success: boolean
+  status?: string | null
   sql?: string
   columns: string[]
   data: Record<string, unknown>[]

@@ -285,18 +285,18 @@ const resultTabs = ref<Array<{
   executedSql: string
   memberDatasourceId?: string
   memberName?: string
+  status?: 'success' | 'error' | 'none'
 }>>([])
 const activeResultTabIndex = ref(0)
 const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   resultTabs.value.map((result, index) => ({
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
-    title: result.memberName && result.memberDatasourceId
-      ? `${result.memberName}（${result.memberDatasourceId}）`
-      : result.title || `结果${index + 1}`,
+    title: result.title || result.memberName || `结果${index + 1}`,
     resultData: result.rawResultData,
     sql: result.executedSql || executedSql.value || previewSql.value,
     memberDatasourceId: result.memberDatasourceId,
     memberName: result.memberName,
+    status: result.status,
   }))
 )
 
@@ -3460,6 +3460,10 @@ const executeQuery = async () => {
           : {
               success: false,
               sql: result.sql || sqlText,
+              columns: result.columns || [],
+              data: result.data || [],
+              total_count: result.total_count || 0,
+              execution_time_ms: result.execution_time_ms,
               error: result.error || '查询失败',
               member_datasource_id: result.member_datasource_id,
               member_name: result.member_name,
@@ -3470,6 +3474,7 @@ const executeQuery = async () => {
           executedSql: result.sql || sqlText,
           memberDatasourceId: result.member_datasource_id,
           memberName: result.member_name,
+          status: result.success === false ? 'error' : 'success',
         }
       })
       activateResultTab(0)
@@ -3484,6 +3489,7 @@ const executeQuery = async () => {
         title: '结果1',
         rawResultData: rawResultData.value,
         executedSql: sqlText,
+        status: 'error',
       }]
     }
   } catch (err) {
@@ -3499,6 +3505,7 @@ const executeQuery = async () => {
       title: '结果1',
       rawResultData: rawResultData.value,
       executedSql: '',
+      status: 'error',
     }]
   } finally {
     executing.value = false

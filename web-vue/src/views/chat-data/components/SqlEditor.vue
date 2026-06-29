@@ -524,9 +524,7 @@ const results = ref<QueryResultItem[]>([])
 const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   results.value.map((result, index) => ({
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
-    title: result.memberName && result.memberDatasourceId
-      ? `${result.memberName}（${result.memberDatasourceId}）`
-      : result.title || result.sql || `结果${index + 1}`,
+    title: result.title || result.memberName || result.sql || `结果${index + 1}`,
     resultData: JSON.stringify({
       success: !result.error,
       columns: result.columns,

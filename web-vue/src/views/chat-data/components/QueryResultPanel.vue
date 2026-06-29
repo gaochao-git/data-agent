@@ -122,9 +122,20 @@ const panelResult = computed(() => artifactResult.value || inlineParse.value.res
 const parseError = computed(() => inlineParse.value.error)
 
 const resultToData = (result: QueryResult) => JSON.stringify(result)
+const getMemberFullTitle = (item: Pick<QueryResultPanelItem, 'memberName' | 'memberDatasourceId'> | null | undefined) => {
+  const memberName = String(item?.memberName || '').trim()
+  const memberDatasourceId = String(item?.memberDatasourceId || '').trim()
+  if (memberName && memberDatasourceId) return `${memberName}（${memberDatasourceId}）`
+  return memberName || memberDatasourceId
+}
+
 const getItemLabel = (item: Pick<QueryResultPanelItem, 'title' | 'memberName' | 'memberDatasourceId'> | null | undefined, index: number) => {
-  const title = String(item?.title || item?.memberName || '').trim()
-  return title || `结果${index + 1}`
+  const title = String(item?.title || '').trim()
+  const memberName = String(item?.memberName || '').trim()
+  const memberDatasourceId = String(item?.memberDatasourceId || '').trim()
+  const memberFullTitle = getMemberFullTitle(item)
+  if (title && title !== memberFullTitle) return title
+  return memberName || title || memberDatasourceId || `结果${index + 1}`
 }
 
 const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
@@ -171,9 +182,7 @@ const tabs = computed<ResultTabItem[]>(() =>
   normalizedItems.value.map((item, index) => ({
     key: item.key || item.memberDatasourceId || item.title || index,
     label: getItemLabel(item, index),
-    title: item.memberName && item.memberDatasourceId
-      ? `${item.memberName}（${item.memberDatasourceId}）`
-      : item.title || item.sql || getItemLabel(item, index),
+    title: getMemberFullTitle(item) || item.title || item.sql || getItemLabel(item, index),
     status: item.status,
   }))
 )
