@@ -736,20 +736,18 @@ watch(() => props.initialSkillId, (skillId) => {
         >
           <div class="flex items-start gap-2">
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
+              <div class="flex min-w-0 items-center gap-2">
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
                 <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ getSkillCreatorLabel(skill) }}</span>
                 <span class="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">{{ getSkillScopeLabel(skill.skill_scope) }}</span>
-                <span v-if="skill.source === 'user'" class="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">{{ getSkillStatusLabel(skill) }}</span>
-                <span v-if="getSkillDraftLabel(skill)" class="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600">{{ getSkillDraftLabel(skill) }}</span>
               </div>
               <div class="mt-1 truncate text-xs text-slate-400">{{ skill.description || skill.name }}</div>
             </div>
-            <div class="flex shrink-0 items-center gap-1">
+            <div class="flex h-6 shrink-0 items-center justify-end gap-1">
               <button
                 v-if="canCopySkill(skill)"
                 type="button"
-                class="border-none bg-transparent text-slate-300 hover:text-blue-500"
+                class="h-6 w-6 rounded border-none bg-transparent text-slate-300 hover:bg-blue-50 hover:text-blue-500"
                 title="复制技能"
                 @click="handleCopySkill(skill, $event)"
               >
@@ -758,13 +756,13 @@ watch(() => props.initialSkillId, (skillId) => {
               <button
                 v-if="canDeleteSkill(skill)"
                 type="button"
-                class="border-none bg-transparent text-slate-300 hover:text-red-500"
+                class="h-6 w-6 rounded border-none bg-transparent text-slate-300 hover:bg-red-50 hover:text-red-500"
                 title="删除技能"
                 @click="handleDeleteSkill(skill, $event)"
               >
                 <i class="fa-regular fa-trash-can"></i>
               </button>
-              <button type="button" class="border-none bg-transparent text-slate-300 hover:text-amber-400" title="收藏" @click="toggleFavorite(skill, $event)">
+              <button type="button" class="h-6 w-6 rounded border-none bg-transparent text-slate-300 hover:bg-amber-50 hover:text-amber-400" title="收藏" @click="toggleFavorite(skill, $event)">
                 <i :class="skill.favorite ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star'"></i>
               </button>
             </div>
