@@ -52,7 +52,8 @@ from utils.lang_util.models import (
     ChatDataQueryExecution,
 )
 from utils.logger import get_logger
-from .route_modules.common import _build_table_columns_map, _get_current_user, _optional_current_user, business_response
+from utils.response import business_response
+from .route_modules.common import _build_table_columns_map, _get_current_user, _optional_current_user
 from .services.runtime_config import read_positive_int_env
 from .route_modules.config import router as config_router
 from .route_modules.evaluation import router as evaluation_router

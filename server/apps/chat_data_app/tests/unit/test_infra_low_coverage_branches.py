@@ -17,6 +17,7 @@ from apps.chat_data_app.agent.tools import skill_load
 from apps.chat_data_app.route_modules import common, data_analyze_workspace
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
+from utils import response as response_module
 from utils import logger as logger_module
 from utils.lang_util import checkpoint, common_util, database, llm
 from utils.lang_util.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
@@ -1010,7 +1011,21 @@ async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeyp
 
 def test_route_common_and_schema_edge_branches(monkeypatch):
     with pytest.raises(ValueError, match="success/error"):
-        common.business_response(status="bad")
+        response_module.business_response(status="bad")
+
+    internal_error = (
+        "获取失败: (pymysql.err.OperationalError) "
+        "(2003, \"Can't connect to MySQL server on '62.234.152.217'\") "
+        "(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+    )
+    sanitized = _payload(response_module.business_response(msg=internal_error, code=50005, status="error"))
+    assert sanitized["msg"] == "后端服务异常，请稍后重试"
+    assert "62.234.152.217" not in sanitized["msg"]
+    assert "pymysql" not in sanitized["msg"].lower()
+    business_error = _payload(response_module.business_response(msg="数据源不存在: ds_a", code=40404, status="error"))
+    assert business_error["msg"] == "数据源不存在: ds_a"
+    success = _payload(response_module.business_response(msg=internal_error, status="success"))
+    assert success["msg"] == internal_error
 
     monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
     with pytest.raises(common.HTTPException, match="Missing user_id"):

@@ -7,9 +7,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 
 from utils.logger import get_logger
+from utils.response import business_response
 from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 from ..services.skill_service import skill_service
-from .common import _current_user_names, _get_current_user, _optional_current_user, business_response
+from .common import _current_user_names, _get_current_user, _optional_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()

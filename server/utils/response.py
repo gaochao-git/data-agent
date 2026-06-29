@@ -4,6 +4,31 @@
 """
 from fastapi.responses import JSONResponse
 
+SAFE_INTERNAL_ERROR_MESSAGE = "后端服务异常，请稍后重试"
+
+_INTERNAL_ERROR_MARKERS = (
+    "traceback",
+    "pymysql.",
+    "sqlalchemy.",
+    "httpx.",
+    "openai.",
+    "sandbox",
+    "can't connect",
+    "connection refused",
+    "connection timed out",
+    "access denied for user",
+    "background on this error",
+)
+
+
+def safe_user_error_message(msg) -> str:
+    """隐藏内部异常细节，保留普通业务错误文案。"""
+    text = str(msg or "")
+    lowered = text.lower()
+    if any(marker in lowered for marker in _INTERNAL_ERROR_MARKERS):
+        return SAFE_INTERNAL_ERROR_MESSAGE
+    return text
+
 
 def business_response(data=None, msg: str = "操作成功", code: int = 2000, status: str = "success"):
     """
@@ -32,6 +57,8 @@ def business_response(data=None, msg: str = "操作成功", code: int = 2000, st
     """
     if status not in ("success", "error"):
         raise ValueError(f"status 仅支持 success/error，当前值: {status}")
+    if status == "error":
+        msg = safe_user_error_message(msg)
 
     response = {
         "status": status,

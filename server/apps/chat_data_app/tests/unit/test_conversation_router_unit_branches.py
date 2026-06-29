@@ -495,6 +495,19 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.conversation, "list_all", list_raises)
     assert payload(await conversation_router.list_conversations(request))["code"] == 50002
 
+    async def list_internal_raises(*_args, **_kwargs):
+        raise RuntimeError(
+            "(pymysql.err.OperationalError) "
+            "(2003, \"Can't connect to MySQL server on '62.234.152.217'\") "
+            "(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+        )
+
+    monkeypatch.setattr(conversation_router.conversation, "list_all", list_internal_raises)
+    sanitized = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
+    assert sanitized["code"] == 50002
+    assert sanitized["msg"] == "后端服务异常，请稍后重试"
+    assert "62.234.152.217" not in sanitized["msg"]
+
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
 

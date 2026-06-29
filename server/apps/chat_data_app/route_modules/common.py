@@ -7,19 +7,10 @@ from typing import Any, Dict, Set
 from fastapi import HTTPException, Request
 
 from auth import AuthenticationError, authenticate_request
-from utils.response import business_response as _base_business_response
 
 AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
-
-
-def business_response(data=None, msg: str = "操作成功", code: int = 2000, status: str = "success"):
-    """chatdata 路由统一响应为 success/error。"""
-    if status not in ("success", "error"):
-        raise ValueError(f"status 仅支持 success/error，当前值: {status}")
-    return _base_business_response(data=data, msg=msg, code=code, status=status)
-
 
 def _get_current_user(request: Request):
     """解析当前登录用户。"""

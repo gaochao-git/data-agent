@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from utils.logger import get_logger
+from utils.response import business_response
 from ..services.llm_config import get_chat_data_model_options
 from ..services.runtime_config import get_chat_data_runtime_config
-from .common import business_response
 
 logger = get_logger(__name__)
 router = APIRouter()

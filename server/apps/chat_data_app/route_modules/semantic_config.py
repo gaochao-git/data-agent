@@ -17,6 +17,7 @@ from utils.lang_util.checkpoint import get_checkpointer
 from utils.lang_util.database import get_session
 from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
+from utils.response import business_response
 from ..agent import get_chat_data_graph
 from ..agent.data_analyze_graph import get_data_analyze_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
@@ -42,7 +43,6 @@ from .common import (
     _build_table_columns_map,
     _get_current_user,
     _semantic_config_prompt_payload,
-    business_response,
 )
 
 logger = get_logger(__name__)

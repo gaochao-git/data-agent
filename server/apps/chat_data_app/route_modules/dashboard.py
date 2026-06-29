@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from utils.lang_util.database import get_session
 from utils.lang_util.models import ChatDataQueryExecution
 from utils.logger import get_logger
+from utils.response import business_response
 from ..agent.tools import execute_sql_direct as execute_sql_direct_runner
 from ..chart_types import get_chart_type_label
 from ..schema import (
@@ -34,7 +35,7 @@ from ..services.dashboard_service import get_dashboard_service
 from ..services.query_metadata import generate_query_metadata
 from ..services.runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
 from ..services.sql_executor import resolve_query_timeout
-from .common import _get_current_user, business_response
+from .common import _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()

@@ -21,12 +21,13 @@ from sqlalchemy import and_, func, select
 from utils.lang_util.database import get_session
 from utils.lang_util.models import ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 from utils.logger import get_logger
+from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from ..semantic.utils import parse_llm_json
 from ..services.datasource_manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from .common import _get_current_user, _semantic_config_prompt_payload, business_response
+from .common import _get_current_user, _semantic_config_prompt_payload
 
 logger = get_logger(__name__)
 router = APIRouter()
