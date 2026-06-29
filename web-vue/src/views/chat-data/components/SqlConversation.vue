@@ -21,6 +21,7 @@ import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import AnalysisPanel from './AnalysisPanel.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import SkillManager from './SkillManager.vue'
+import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import type { AnalysisData } from './AnalysisPanel.vue'
 import { hideSemanticConfigSelectionPayloads } from '../utils'
 
@@ -2114,6 +2115,7 @@ const handleViewAnalysis = (msg: Message) => {
                 <i class="fa-solid fa-circle-exclamation"></i>
                 <span>{{ msg.error }}</span>
               </div>
+              <AiGeneratedNotice v-if="!msg.isStreaming" />
             </div>
 
             <div
@@ -2420,7 +2422,6 @@ const handleViewAnalysis = (msg: Message) => {
             </template>
           </div>
         </form>
-        <div class="text-center pt-1.5 text-xs text-gray-400">内容由AI生成，请仔细甄别</div>
       </div>
     </div>
       </div>

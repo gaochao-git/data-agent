@@ -16,6 +16,7 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import ResultTabs from './ResultTabs.vue'
+import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
@@ -2340,6 +2341,7 @@ defineExpose({
                     <i class="fa-solid fa-spinner fa-spin"></i>
                     <span>正在思考...</span>
                   </div>
+                  <AiGeneratedNotice v-if="!msg.isStreaming" />
                 </div>
                 <div v-if="msg.role === 'user'" class="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br bg-[#1677FF]/10 text-[#1F3A56] text-[13px] leading-relaxed">{{ msg.content }}</div>
                 <div v-if="msg.role === 'user' && msg.time" class="text-[11px] text-gray-400 mt-1">{{ msg.time }}</div>

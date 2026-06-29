@@ -18,6 +18,7 @@ import QuickQueries from './QuickQueries.vue'
 import ChartSpecRenderer from './ChartSpecRenderer.vue'
 import { normalizeChartType } from '../chartTypes'
 import SkillManager from './SkillManager.vue'
+import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import { hideSemanticConfigSelectionPayloads } from '../utils'
 
 interface Props {
@@ -2437,6 +2438,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </div>
                 </div>
                 <div v-if="msg.error" class="mt-2 text-sm text-red-500">{{ msg.error }}</div>
+                <AiGeneratedNotice v-if="!msg.isStreaming" />
               </div>
               <div v-if="msg.role === 'assistant' && msg.isStreaming && shouldShowStreamingStatus(msg)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
                 <i class="fa-solid fa-spinner fa-spin text-[11px]"></i>
