@@ -304,6 +304,9 @@ async def _build_remote_history_result_payload(execution: ChatDataQueryExecution
     operator_name = str(execution.create_by_name or execution.update_by_name or "").strip()
     if not operator_name and task:
         operator_name = _get_task_operator_name(_build_query_task_runtime_data(task))
+    local_execution_time_ms = getattr(execution, "execution_time_ms", None)
+    local_started_time = getattr(execution, "started_time", None)
+    local_finished_time = getattr(execution, "finished_time", None)
     try:
         remote_result = await fetch_http_query_task_result(
             remote_task_id,
@@ -318,10 +321,15 @@ async def _build_remote_history_result_payload(execution: ChatDataQueryExecution
             "columns": [],
             "data": [],
             "total_count": 0,
-            "execution_time_ms": execution.execution_time_ms,
+            "execution_time_ms": query_runtime.resolve_execution_time_ms(local_execution_time_ms, local_started_time, local_finished_time),
             "error": "历史结果已不可用或获取失败",
             "remote_result_status": "unavailable",
         }
+    execution_time_ms = query_runtime.resolve_execution_time_ms(
+        (remote_result or {}).get("execution_time_ms"),
+        local_started_time,
+        local_finished_time,
+    )
     status = str((remote_result or {}).get("status") or "").strip().lower()
     if status != "succeeded":
         error_message = str((remote_result or {}).get("error") or "").strip() or "历史结果已不可用或仍在处理中"
@@ -330,7 +338,7 @@ async def _build_remote_history_result_payload(execution: ChatDataQueryExecution
             "columns": [],
             "data": [],
             "total_count": 0,
-            "execution_time_ms": (remote_result or {}).get("execution_time_ms"),
+            "execution_time_ms": execution_time_ms,
             "error": error_message,
             "remote_result_status": status or "unknown",
         }
@@ -339,7 +347,7 @@ async def _build_remote_history_result_payload(execution: ChatDataQueryExecution
         "columns": (remote_result or {}).get("columns") or [],
         "data": (remote_result or {}).get("data") or [],
         "total_count": int((remote_result or {}).get("total_count") or 0),
-        "execution_time_ms": (remote_result or {}).get("execution_time_ms"),
+        "execution_time_ms": execution_time_ms,
         "error": None,
         "remote_result_status": status,
     }
@@ -924,13 +932,18 @@ async def get_query_history_result(execution_id: str, request: Request):
             result_payload = payload.get("result_payload")
             if _is_http_query_execution(execution):
                 result_payload = await _build_remote_history_result_payload(execution, task)
+            execution_time_ms = query_runtime.resolve_execution_time_ms(
+                execution.execution_time_ms,
+                execution.started_time,
+                execution.finished_time,
+            )
             return business_response(
                 data={
                     "execution_id": execution.execution_id,
                     "query": execution.sql_text,
                     "member_datasource_id": execution.member_datasource_id,
                     "member_name": execution.member_name,
-                    "execution_time_ms": execution.execution_time_ms,
+                    "execution_time_ms": execution_time_ms,
                     "error_message": execution.error_message,
                     "result_payload": result_payload,
                 },
@@ -2254,11 +2267,33 @@ def _build_cancelled_execution_map(executions: List[Dict[str, Any]]) -> Dict[str
     return cancelled_map
 
 
+def _build_execution_map_by_member(executions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """按成员数据源整理本地执行记录。"""
+    execution_map: Dict[str, Dict[str, Any]] = {}
+    for execution in executions:
+        member_datasource_id = str((execution or {}).get("member_datasource_id") or "").strip()
+        if member_datasource_id:
+            execution_map[member_datasource_id] = execution
+    return execution_map
+
+
+def _resolve_member_execution_time_ms(remote_result: Dict[str, Any], local_execution: Optional[Dict[str, Any]]) -> Optional[int]:
+    """解析成员远端结果耗时，远端缺失时使用本地执行记录兜底。"""
+    if not local_execution:
+        return query_runtime.resolve_execution_time_ms((remote_result or {}).get("execution_time_ms"))
+    return query_runtime.resolve_execution_time_ms(
+        (remote_result or {}).get("execution_time_ms") if (remote_result or {}).get("execution_time_ms") is not None else local_execution.get("execution_time_ms"),
+        local_execution.get("started_time"),
+        local_execution.get("finished_time"),
+    )
+
+
 async def _build_live_remote_sql_result(response_data: Dict[str, Any], executions: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """基于远端 HTTP 任务实时拉取 SQL 结果。"""
     remote_tasks = list(response_data.get("remote_tasks") or [])
     if not remote_tasks:
         return None
+    local_execution_map = _build_execution_map_by_member(executions or [])
     cancelled_execution_map = _build_cancelled_execution_map(executions or [])
     request_payload = response_data.get("request_payload") or {}
     remote_user_id = str((request_payload or {}).get("user_id") or "").strip()
@@ -2277,6 +2312,7 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
     remote_results: List[Dict[str, Any]] = []
     for remote_task, remote_result in zip(remote_tasks, remote_member_results):
         member_datasource_id = str(remote_task.get("member_datasource_id") or "").strip()
+        local_execution = local_execution_map.get(member_datasource_id)
         local_cancelled_execution = cancelled_execution_map.get(member_datasource_id)
         if local_cancelled_execution:
             local_status = str(local_cancelled_execution.get("sql_status") or "cancelled").strip().lower()
@@ -2289,7 +2325,7 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
                 "columns": [],
                 "data": [],
                 "total_count": 0,
-                "execution_time_ms": local_cancelled_execution.get("execution_time_ms"),
+                "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
                 "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
             })
             continue
@@ -2302,7 +2338,7 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
-            "execution_time_ms": remote_result.get("execution_time_ms"),
+            "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_execution),
             "error": remote_result.get("error"),
         })
 

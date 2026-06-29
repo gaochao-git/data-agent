@@ -295,6 +295,56 @@ def has_running_member_result(results: List[Dict[str, Any]]) -> bool:
     return any(str((item or {}).get("status") or "").strip().lower() in {"pending", "running"} for item in results or [])
 
 
+def normalize_execution_time_ms(value: Any) -> Optional[int]:
+    """将执行耗时规整为非负毫秒值。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_datetime_value(value: Any) -> Optional[datetime]:
+    """解析模型或接口中的时间值。"""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def resolve_execution_time_ms(value: Any = None, started_time: Any = None, finished_time: Any = None) -> Optional[int]:
+    """优先使用显式耗时；缺失时用开始和结束时间计算。"""
+    explicit_value = normalize_execution_time_ms(value)
+    if explicit_value is not None:
+        return explicit_value
+
+    started = _parse_datetime_value(started_time)
+    finished = _parse_datetime_value(finished_time)
+    if not started or not finished:
+        return None
+    try:
+        return max(0, int((finished - started).total_seconds() * 1000))
+    except TypeError:
+        return None
+
+
+def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: Optional[int]) -> Any:
+    """将最终耗时同步写入结果负载。"""
+    if not isinstance(result_payload, dict) or execution_time_ms is None or "execution_time_ms" not in result_payload:
+        return result_payload
+    payload = dict(result_payload)
+    payload["execution_time_ms"] = execution_time_ms
+    return payload
+
+
 async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Dict[str, str]:
     """为任务预创建每个成员数据源的 SQL 执行记录。"""
     ds_manager = get_datasource_manager()
@@ -358,18 +408,28 @@ async def update_query_execution(
             return
         if execution.sql_status in {"cancelled", "kill_failed"} and sql_status in {"running", "succeeded", "failed"}:
             return
+        resolved_execution_time_ms = None
+        if execution_time_ms is not None or finished_time is not None:
+            resolved_execution_time_ms = resolve_execution_time_ms(
+                execution_time_ms,
+                started_time or execution.started_time,
+                finished_time or execution.finished_time,
+            )
         if sql_status is not None:
             execution.sql_status = sql_status
         if remote_task_id is not None:
             execution.remote_task_id = remote_task_id
         if db_connection_id is not None:
             execution.db_connection_id = db_connection_id
-        if execution_time_ms is not None:
-            execution.execution_time_ms = execution_time_ms
+        if resolved_execution_time_ms is not None:
+            execution.execution_time_ms = resolved_execution_time_ms
         if result_row_count is not None:
             execution.result_row_count = result_row_count
         if result_payload is not None:
-            execution.result_payload = json.dumps(result_payload, ensure_ascii=False)
+            execution.result_payload = json.dumps(
+                attach_execution_time_to_payload(result_payload, resolved_execution_time_ms),
+                ensure_ascii=False,
+            )
         if error_message is not None:
             execution.error_message = error_message or None
         if started_time is not None:
@@ -384,6 +444,7 @@ async def update_query_execution_from_result(execution_id: str, result: Dict[str
     """按 SQL 执行结果更新执行明细。"""
     success = bool((result or {}).get("success"))
     status = "succeeded" if success else "failed"
+    finished_time = datetime.now()
     result_payload = None
     if store_result_payload:
         result_payload = {
@@ -404,7 +465,7 @@ async def update_query_execution_from_result(execution_id: str, result: Dict[str
         result_row_count=int((result or {}).get("total_count") or 0),
         result_payload=result_payload,
         error_message=None if success else str((result or {}).get("error") or "SQL 执行失败"),
-        finished_time=datetime.now(),
+        finished_time=finished_time,
     )
 
 
@@ -467,6 +528,7 @@ async def execute_sql_for_member(
     effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
     cache_identity = build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
     http_target = is_http_execution_target(execution_target)
+    local_started_at = time.perf_counter()
 
     async def on_remote_task_created(payload: Dict[str, Any]) -> None:
         remote_task_id = str((payload or {}).get("remote_task_id") or "").strip()
@@ -599,6 +661,8 @@ async def execute_sql_for_member(
     finally:
         if executor is not None:
             await executor.close()
+    if result.get("execution_time_ms") is None and str(result.get("status") or "").strip().lower() not in {"pending", "running"}:
+        result["execution_time_ms"] = int((time.perf_counter() - local_started_at) * 1000)
     if execution_id:
         await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
     return {

@@ -148,6 +148,18 @@ def test_has_running_member_result_detects_unfinished_members():
     ]) is False
 
 
+def test_resolve_execution_time_ms_prefers_explicit_and_falls_back_to_times():
+    started = datetime(2026, 6, 29, 16, 57, 45)
+    finished = datetime(2026, 6, 29, 16, 57, 50)
+
+    assert query_runtime.resolve_execution_time_ms("123.8", started, finished) == 123
+    assert query_runtime.resolve_execution_time_ms(None, started, finished) == 5000
+    assert query_runtime.resolve_execution_time_ms(None, started.isoformat(), finished.isoformat()) == 5000
+    assert query_runtime.resolve_execution_time_ms(None, finished, started) == 0
+    assert query_runtime.resolve_execution_time_ms(True, started, finished) == 5000
+    assert query_runtime.resolve_execution_time_ms(None, None, finished) is None
+
+
 def test_runtime_task_operator_and_execution_id_helpers():
     assert query_runtime.get_task_operator_name({"request_payload": "{bad"}) == ""
     assert query_runtime.get_task_operator_name({"request_payload": json.dumps({"operator_name": "测试用户"})}) == "测试用户"
@@ -968,6 +980,34 @@ def test_update_query_execution_and_task_db_branches(monkeypatch):
     _patch_query_runtime_session(monkeypatch, missing_task_session)
     assert asyncio.run(query_runtime.update_query_task("missing")) is None
     assert missing_task_session.commits == 0
+
+
+def test_update_query_execution_from_result_falls_back_to_started_finished(monkeypatch):
+    started = datetime.now() - timedelta(seconds=5)
+    execution = SimpleNamespace(
+        started_time=started,
+        finished_time=None,
+        sql_status="running",
+        execution_time_ms=None,
+        result_row_count=None,
+        result_payload=None,
+        error_message=None,
+        update_time=None,
+    )
+
+    session = _SessionQueue(_ScalarResult(execution), _ScalarResult(execution))
+    _patch_query_runtime_session(monkeypatch, session)
+
+    asyncio.run(query_runtime.update_query_execution_from_result(
+        "exec_1",
+        {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": None},
+    ))
+
+    assert execution.sql_status == "succeeded"
+    assert 4500 <= execution.execution_time_ms <= 5500
+    assert execution.finished_time is not None
+    assert json.loads(execution.result_payload)["execution_time_ms"] == execution.execution_time_ms
+    assert session.commits == 1
 
 
 def test_get_query_executions_applies_operator_fallbacks(monkeypatch):

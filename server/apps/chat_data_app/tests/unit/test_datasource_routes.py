@@ -4541,6 +4541,8 @@ def test_routes_load_tables_from_source_branches(monkeypatch):
 def test_routes_remote_history_helpers_cover_success_failure_and_default_source(monkeypatch):
     from apps.chat_data_app import routes
 
+    started = datetime(2026, 6, 29, 16, 57, 45)
+    finished = datetime(2026, 6, 29, 16, 57, 50)
     task = SimpleNamespace(
         remote_task_payload=json.dumps([
             {"member_datasource_id": "m_other", "remote_task_id": "rt_other", "source_type": "mysql"},
@@ -4576,7 +4578,7 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
             return {"status": "failed", "error": "", "execution_time_ms": 11}
         if remote_task_id == "rt_error":
             raise RuntimeError("remote down")
-        return {"status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": "1", "execution_time_ms": 7}
+        return {"status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": "1", "execution_time_ms": None}
 
     monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
 
@@ -4587,7 +4589,9 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
         user_id="u1",
         create_by_name="",
         update_by_name="",
-        execution_time_ms=5,
+        execution_time_ms=None,
+        started_time=started,
+        finished_time=finished,
     ), task))
     failed = asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(
         execution_id="ex_2",
@@ -4597,6 +4601,8 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
         create_by_name="执行人",
         update_by_name="",
         execution_time_ms=5,
+        started_time=started,
+        finished_time=finished,
     ), task))
     unavailable = asyncio.run(routes._build_remote_history_result_payload(SimpleNamespace(
         execution_id="ex_3",
@@ -4606,13 +4612,18 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
         create_by_name="",
         update_by_name="",
         execution_time_ms=5,
+        started_time=started,
+        finished_time=finished,
     ), task))
 
     assert success["success"] is True
     assert success["total_count"] == 1
+    assert success["execution_time_ms"] == 5000
     assert failed["success"] is False
+    assert failed["execution_time_ms"] == 11
     assert failed["remote_result_status"] == "failed"
     assert "历史结果已不可用" in failed["error"]
+    assert unavailable["execution_time_ms"] == 5
     assert unavailable["remote_result_status"] == "unavailable"
     assert calls[0] == ("rt_ok", "hive", {"user_id": "u1", "username": "任务用户"})
     assert calls[1][2]["username"] == "执行人"
@@ -4625,7 +4636,7 @@ def test_routes_live_remote_sql_result_status_branches(monkeypatch):
         return {
             "rt_running": {"success": False, "status": "running", "error": "", "execution_time_ms": None},
             "rt_failed": {"success": False, "status": "failed", "error": "远端失败", "execution_time_ms": 20},
-            "rt_success": {"success": True, "status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": 10},
+            "rt_success": {"success": True, "status": "succeeded", "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": None},
         }[remote_task_id]
 
     monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
@@ -4648,7 +4659,13 @@ def test_routes_live_remote_sql_result_status_branches(monkeypatch):
                 {"member_datasource_id": "m_direct", "member_name": "直连", "success": False, "status": "failed", "error": "直连失败"}
             ]
         },
-    }))
+    }, [{
+        "member_datasource_id": "m_http",
+        "sql_status": "running",
+        "execution_time_ms": None,
+        "started_time": datetime(2026, 6, 29, 16, 57, 45).isoformat(),
+        "finished_time": datetime(2026, 6, 29, 16, 57, 50).isoformat(),
+    }]))
 
     assert no_remote is None
     assert running["status"] == "running"
@@ -4658,6 +4675,8 @@ def test_routes_live_remote_sql_result_status_branches(monkeypatch):
     assert succeeded_with_direct["status"] == "succeeded"
     assert succeeded_with_direct["error_message"] is None
     assert [item["member_datasource_id"] for item in succeeded_with_direct["result_payload"]["results"]] == ["m_direct", "m_http"]
+    assert succeeded_with_direct["result_payload"]["execution_time_ms"] == 5000
+    assert succeeded_with_direct["result_payload"]["results"][1]["execution_time_ms"] == 5000
 
 
 def test_routes_task_owner_and_cancel_status_helpers():
