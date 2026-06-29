@@ -575,13 +575,13 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     create_payload = SemanticConfigCreateRequest(
         name="新指标集",
         description="描述",
-        scope_type="public",
         enabled=True,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
         relationships=[],
     )
     create_response = _response_payload(asyncio.run(semantic_config.create_semantic_config("ds_a", create_payload, object())))
+    admin_create_response = _response_payload(asyncio.run(semantic_config.create_admin_semantic_config("ds_a", create_payload, object())))
     update_payload = SemanticConfigUpdateRequest(
         name="订单分析V2",
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
@@ -595,6 +595,8 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     assert list_payload["data"]["configs"][0]["can_manage"] is True
     assert missing_list["code"] == 40404
     assert create_response["data"]["name"] == "新指标集"
+    assert create_response["data"]["scope_type"] == "private"
+    assert admin_create_response["data"]["scope_type"] == "public"
     assert manager.created_kwargs["scope_type"] == "public"
     assert update_response["data"]["name"] == "订单分析V2"
     assert manager.updated_kwargs["update_by"] == "user_a"

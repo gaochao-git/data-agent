@@ -44,6 +44,10 @@ const ADMIN_DATASOURCE_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/datasources`
 
 type DatasourceListParams = { include_tables?: boolean }
 type DatasourceMetaUpdatePayload = { name?: string; description?: string }
+type SemanticConfigCreatePayload = Omit<
+  Partial<SemanticConfigItem>,
+  'id' | 'scope_type' | 'can_manage' | 'create_time' | 'update_time' | 'create_by' | 'update_by'
+>
 type DbTablesRequestPayload = {
   source_type: string
   query_executor_type?: 'direct' | 'http'
@@ -809,9 +813,18 @@ export function getSemanticConfigs(datasourceId: string): Promise<ApiResponse<{ 
 }
 
 /** 创建语义配置 */
-export function createSemanticConfig(datasourceId: string, data: Partial<SemanticConfigItem>): Promise<ApiResponse<SemanticConfigItem>> {
+export function createSemanticConfig(datasourceId: string, data: SemanticConfigCreatePayload): Promise<ApiResponse<SemanticConfigItem>> {
   return request({
     url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs`,
+    method: 'post',
+    data
+  })
+}
+
+/** 后台创建公共语义配置 */
+export function createAdminSemanticConfig(datasourceId: string, data: SemanticConfigCreatePayload): Promise<ApiResponse<SemanticConfigItem>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs`,
     method: 'post',
     data
   })

@@ -52,6 +52,7 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
     body = {
         "name": "个人订单分析",
         "description": "个人指标集",
+        "scope_type": "public",
         "enabled": True,
         "metrics": [
             {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
@@ -72,6 +73,34 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
     assert payload["data"]["create_by"] == "user_a"
     assert payload["data"]["can_manage"] is True
     assert fake_datasource_manager.created_semantic_kwargs["scope_type"] == "private"
+    assert fake_datasource_manager.created_semantic_kwargs["create_by"] == "user_a"
+
+
+def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fake_datasource_manager, monkeypatch):
+    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    body = {
+        "name": "公共订单分析",
+        "description": "公共指标集",
+        "enabled": True,
+        "metrics": [
+            {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
+        ],
+        "dimensions": [
+            {"name": "城市", "column": "city", "table": "orders", "type": "categorical"}
+        ],
+        "relationships": [],
+    }
+
+    response = client.post("/api/chatdata/admin/datasources/ds_a/semantic-configs", json=body, headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["id"] == "cfg_new"
+    assert payload["data"]["scope_type"] == "public"
+    assert payload["data"]["create_by"] == "user_a"
+    assert payload["data"]["can_manage"] is True
+    assert fake_datasource_manager.created_semantic_kwargs["scope_type"] == "public"
     assert fake_datasource_manager.created_semantic_kwargs["create_by"] == "user_a"
 
 

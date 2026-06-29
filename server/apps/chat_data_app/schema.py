@@ -384,7 +384,6 @@ class SemanticConfigCreateRequest(BaseModel):
     name: str = Field(..., description="配置名称")
     description: Optional[str] = Field(default=None, description="指标集短描述")
     ontology_rules: Optional[str] = Field(default=None, description="业务描述/本体规则")
-    scope_type: Literal["public", "private"] = Field(default="private", description="指标集范围：public公共，private个人")
     enabled: bool = Field(default=True, description="是否启用")
     metrics: List[SemanticMetric] = Field(default_factory=list, description="指标列表")
     dimensions: List[SemanticDimension] = Field(default_factory=list, description="维度列表")

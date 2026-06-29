@@ -1028,9 +1028,14 @@ async def list_semantic_configs(datasource_id: str, request: Request):
         return business_response(msg=f"获取失败: {str(e)}", code=50010, status="error")
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs")
-async def create_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
-    """创建新的语义配置。"""
+async def _create_semantic_config_with_scope(
+    datasource_id: str,
+    payload: SemanticConfigCreateRequest,
+    request: Request,
+    *,
+    scope_type: str,
+):
+    """按指定范围创建指标集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -1055,7 +1060,7 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
             metrics=metrics,
             dimensions=dimensions,
             relationships=[r.model_dump() for r in payload.relationships],
-            scope_type=payload.scope_type,
+            scope_type=scope_type,
             create_by=user_id,
             create_by_name=username,
         )
@@ -1067,6 +1072,18 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
     except Exception as e:
         logger.error(f"创建语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"创建失败: {str(e)}", code=50010, status="error")
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs")
+async def create_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
+    """创建个人指标集。"""
+    return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="private")
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs")
+async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
+    """创建公共指标集。"""
+    return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public")
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")

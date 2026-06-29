@@ -7,6 +7,7 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getSemanticConfigs,
+  createAdminSemanticConfig,
   createSemanticConfig,
   updateSemanticConfig,
   deleteSemanticConfig,
@@ -37,11 +38,11 @@ interface Props {
   embedded?: boolean
   selectedConfigId?: string | null
   hideDatasetSelector?: boolean
-  createScopeType?: 'public' | 'private'
+  adminCreate?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  createScopeType: 'private',
+  adminCreate: false,
 })
 const emit = defineEmits<{
   close: []
@@ -478,9 +479,9 @@ const createConfig = async () => {
   if (!datasetName) return
   creatingConfig.value = true
   try {
-    const res = await createSemanticConfig(props.datasourceId, {
+    const createApi = props.adminCreate ? createAdminSemanticConfig : createSemanticConfig
+    const res = await createApi(props.datasourceId, {
       name: datasetName,
-      scope_type: props.createScopeType,
       enabled: true,
       metrics: [],
       dimensions: [],
