@@ -14,7 +14,7 @@ import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs } from '../utils/semanticTool'
 import StructuredMessage from './StructuredMessage.vue'
-import AsyncQueryResult from './AsyncQueryResult.vue'
+import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
@@ -2000,7 +2000,7 @@ const handleViewAnalysis = (msg: Message) => {
                     >
                       <span v-html="renderSummaryMarkdown(segment.content)"></span>
                     </div>
-                    <AsyncQueryResult
+                    <QueryResultPanel
                       v-else-if="segment.type === 'queryResult'"
                       class="max-h-[46vh]"
                       :result-data="segment.toolCall.renderId!"

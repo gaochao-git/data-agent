@@ -8,12 +8,11 @@ import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
-import AsyncQueryResult from '../AsyncQueryResult.vue'
+import QueryResultPanel from '../QueryResultPanel.vue'
 import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import QueryFavoriteModal from '../QueryFavoriteModal.vue'
 import ExecutionTargetPicker from '../ExecutionTargetPicker.vue'
-import ResultTabs from '../ResultTabs.vue'
 import AdvancedFilterTree from './AdvancedFilterTree.vue'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 import IconSetting from '../icons/IconSetting.vue'
@@ -29,6 +28,16 @@ interface ColumnInfo {
   mysql_type?: string
   description?: string
   primary_key?: boolean
+}
+
+type QueryResultPanelItem = {
+  key?: string | number
+  title?: string
+  resultData: string
+  sql?: string
+  memberDatasourceId?: string
+  memberName?: string
+  status?: 'success' | 'error' | 'none'
 }
 
 interface TableInfo {
@@ -92,13 +101,6 @@ interface FilterCondition {
   logic: 'AND' | 'OR'
   aggFunc?: string  // 如果设置，则为 HAVING 条件
   aggId?: string
-}
-
-type ResultTabItem = {
-  key: string | number
-  label: string
-  title?: string
-  status?: 'success' | 'error' | 'none'
 }
 
 type FilterLogic = 'AND' | 'OR'
@@ -285,13 +287,16 @@ const resultTabs = ref<Array<{
   memberName?: string
 }>>([])
 const activeResultTabIndex = ref(0)
-const displayResultTabs = computed<ResultTabItem[]>(() =>
+const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   resultTabs.value.map((result, index) => ({
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
-    label: result.title || `结果${index + 1}`,
     title: result.memberName && result.memberDatasourceId
       ? `${result.memberName}（${result.memberDatasourceId}）`
       : result.title || `结果${index + 1}`,
+    resultData: result.rawResultData,
+    sql: result.executedSql || executedSql.value || previewSql.value,
+    memberDatasourceId: result.memberDatasourceId,
+    memberName: result.memberName,
   }))
 )
 
@@ -371,6 +376,11 @@ const activateResultTab = (index: number) => {
   analyzedResultData.value = null
   rawResultData.value = target?.rawResultData || null
   executedSql.value = target?.executedSql || ''
+}
+
+const handleResultPanelActiveIndex = (index: number) => {
+  if (hasAnalyzedResult.value) return
+  activateResultTab(index)
 }
 
 const buildBuilderConfigSnapshot = () => JSON.stringify(buildBuilderConfigPayload())
@@ -5077,15 +5087,10 @@ defineExpose({
       <div class="flex-1 min-h-[100px] flex flex-col overflow-hidden bg-white">
         <!-- 结果区域 -->
         <div v-if="resultData" class="bg-white flex-1 flex flex-col overflow-hidden">
-          <ResultTabs
-            v-if="resultTabs.length > 1"
-            :active-index="activeResultTabIndex"
-            :tabs="displayResultTabs"
-            @update:active-index="activateResultTab"
-          />
-          <AsyncQueryResult
-            :key="`${activeResultTabIndex}-${resultTabs[activeResultTabIndex]?.memberDatasourceId || 'single'}`"
-            :result-data="resultData"
+          <QueryResultPanel
+            :items="hasAnalyzedResult ? [] : queryResultPanelItems"
+            :result-data="hasAnalyzedResult ? resultData : null"
+            :active-index="hasAnalyzedResult ? 0 : activeResultTabIndex"
             :sql="executedSql || previewSql"
             :semantic-params="resultSemanticParams"
             :visualization="currentVisualization"
@@ -5095,7 +5100,7 @@ defineExpose({
             :show-index="chartFormat.showIndex"
             :auto-wrap="chartFormat.autoWrap"
             :metrics-first="chartFormat.metricsFirst"
-            :show-execution-target-tabs="resultTabs.length <= 1"
+            @update:active-index="handleResultPanelActiveIndex"
           />
         </div>
 

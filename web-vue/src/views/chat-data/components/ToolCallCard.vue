@@ -7,7 +7,7 @@ import { ref, computed } from 'vue'
 import { format as formatSQL } from 'sql-formatter'
 import { ElMessage } from 'element-plus'
 import type { ToolCallInfo } from '../types'
-import AsyncQueryResult from './AsyncQueryResult.vue'
+import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractSemanticDslFromArgs } from '../utils/semanticTool'
 
@@ -662,7 +662,7 @@ function getSqlTokenClass(type: string): string {
           </div>
           <!-- 渲染结果（表格/图表） -->
           <div v-if="toolCall.renderId && toolCall.renderType === 'queryResult'" class="min-w-0 max-w-full overflow-hidden">
-            <AsyncQueryResult
+            <QueryResultPanel
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"
               :sql="generatedSql"

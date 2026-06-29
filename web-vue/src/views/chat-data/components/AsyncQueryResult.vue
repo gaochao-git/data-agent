@@ -7,9 +7,7 @@ import { ref, computed, watch, useAttrs } from 'vue'
 import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
-import ResultTabs from './ResultTabs.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
-import { getConversationArtifact } from '../api'
 
 interface QueryResult {
   success: boolean
@@ -24,20 +22,8 @@ interface QueryResult {
   cache_hit?: boolean
   cache_age_seconds?: number | null
   cache_expires_in_seconds?: number | null
-}
-
-interface MemberQueryResult extends QueryResult {
   member_datasource_id?: string
   member_name?: string
-}
-
-interface MultiQueryResult extends QueryResult {
-  member_datasource_id?: string
-  member_name?: string
-  results?: MemberQueryResult[]
-  artifact_id?: string
-  llm_analysis_skipped?: boolean
-  message?: string
 }
 
 interface SemanticParams {
@@ -60,12 +46,6 @@ interface VisualizationConfig {
 
 type ResultChartType = Extract<ChartType, 'bar' | 'horizontal_bar' | 'line' | 'area' | 'pie' | 'funnel' | 'graph'>
 type ViewMode = 'vertical' | 'card' | ChartType
-type ResultTabItem = {
-  key: string | number
-  label: string
-  title?: string
-  status?: 'success' | 'error' | 'none'
-}
 
 interface Props {
   resultData: string
@@ -82,7 +62,6 @@ interface Props {
   autoWrap?: boolean
   metricsFirst?: boolean
   allowFullscreen?: boolean
-  showExecutionTargetTabs?: boolean
   initialViewMode?: ViewMode
 }
 
@@ -99,8 +78,7 @@ const props = withDefaults(defineProps<Props>(), {
   showIndex: false,
   autoWrap: false,
   metricsFirst: false,
-  allowFullscreen: true,
-  showExecutionTargetTabs: true
+  allowFullscreen: true
 })
 const attrs = useAttrs()
 const rootClass = computed(() => [
@@ -109,15 +87,11 @@ const rootClass = computed(() => [
 ])
 
 const viewMode = ref<ViewMode>('table')
-const artifactResult = ref<MultiQueryResult | null>(null)
-const artifactLoading = ref(false)
-const artifactError = ref('')
 
 // 图表类型下拉菜单状态
 const showChartMenu = ref(false)
 const viewBtnRef = ref<HTMLElement | null>(null)
 const menuStyle = ref<{ top: string; left: string }>({ top: '0px', left: '0px' })
-const activeMemberResultIndex = ref(0)
 const isFullscreen = ref(false)
 
 // 更新菜单位置
@@ -146,100 +120,16 @@ watch(showChartMenu, (val) => {
 })
 
 // 解析查询结果
-const parseResult = computed<{ result: MultiQueryResult | null; error: string | null }>(() => {
+const parseResult = computed<{ result: QueryResult | null; error: string | null }>(() => {
   try {
-    const parsed = JSON.parse(props.resultData)
-    return { result: artifactResult.value || parsed, error: null }
+    return { result: JSON.parse(props.resultData) as QueryResult, error: null }
   } catch {
     return { result: null, error: '无法解析查询结果' }
   }
 })
 
-const queryResult = computed(() => parseResult.value.result)
+const activeResult = computed(() => parseResult.value.result)
 const parseError = computed(() => parseResult.value.error)
-const artifactId = computed(() => {
-  try {
-    const parsed = JSON.parse(props.resultData) as MultiQueryResult
-    return String(parsed.artifact_id || '').trim()
-  } catch {
-    return ''
-  }
-})
-const memberResults = computed(() => queryResult.value?.results || [])
-const getResultTabLabel = (item: MemberQueryResult | MultiQueryResult | null | undefined, index: number) => {
-  const name = String(item?.member_name || '').trim()
-  return name || `结果${index + 1}`
-}
-const memberResultTabs = computed<ResultTabItem[]>(() =>
-  memberResults.value.map((item, index) => ({
-    key: item.member_datasource_id || item.member_name || index,
-    label: getResultTabLabel(item, index),
-    title: getResultTabLabel(item, index),
-    status: item.success === false ? 'error' : 'success',
-  }))
-)
-const activeResult = computed<MemberQueryResult | MultiQueryResult | null>(() => {
-  if (!memberResults.value.length) return queryResult.value
-  return memberResults.value[activeMemberResultIndex.value] || memberResults.value[0] || queryResult.value
-})
-const executionTargetText = computed(() => {
-  if (!activeResult.value?.member_name) return ''
-  return String(activeResult.value.member_name).trim()
-})
-const executionTargetTabs = computed<ResultTabItem[]>(() => {
-  if (memberResultTabs.value.length > 0) return memberResultTabs.value
-  if (!executionTargetText.value) return []
-  return [{
-    key: activeResult.value?.member_datasource_id || executionTargetText.value,
-    label: executionTargetText.value,
-    title: executionTargetText.value,
-    status: activeResult.value?.success === false ? 'error' : 'success',
-  }]
-})
-const shouldShowExecutionTargetTabs = computed(() => props.showExecutionTargetTabs && executionTargetTabs.value.length > 0)
-
-watch(
-  () => memberResults.value.map(item => item.member_datasource_id || item.member_name || '').join('|'),
-  () => {
-    if (!memberResults.value.length) {
-      activeMemberResultIndex.value = 0
-      return
-    }
-    if (activeMemberResultIndex.value >= memberResults.value.length) {
-      activeMemberResultIndex.value = 0
-    }
-  },
-  { immediate: true }
-)
-
-watch(
-  artifactId,
-  async (id) => {
-    artifactResult.value = null
-    artifactError.value = ''
-    if (!id) {
-      artifactLoading.value = false
-      return
-    }
-    artifactLoading.value = true
-    try {
-      const response = await getConversationArtifact<MultiQueryResult>(id)
-      if (id !== artifactId.value) return
-      artifactResult.value = response.data || null
-      if (!artifactResult.value) {
-        artifactError.value = '查询结果详情为空'
-      }
-    } catch (error) {
-      if (id !== artifactId.value) return
-      artifactError.value = error instanceof Error ? error.message : '加载查询结果详情失败'
-    } finally {
-      if (id === artifactId.value) {
-        artifactLoading.value = false
-      }
-    }
-  },
-  { immediate: true }
-)
 
 const normalizeColumnName = (value: string) => (value || '').replace(/`/g, '').trim().toLowerCase()
 
@@ -326,14 +216,14 @@ const formatExecutionSeconds = (value?: number | null): string => {
 }
 
 const queryModeText = computed(() => {
-  const mode = String(queryResult.value?.query_mode || activeResult.value?.query_mode || '').trim().toLowerCase()
+  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
   if (mode === 'dsl2sql') return '语义查询'
   if (mode === 'nl2sql') return '直接SQL'
   return ''
 })
 
 const confidenceText = computed(() => {
-  const value = queryResult.value?.confidence ?? activeResult.value?.confidence
+  const value = activeResult.value?.confidence
   if (value === null || value === undefined || value === '') return ''
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return String(value)
@@ -474,24 +364,6 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
     <!-- 正常展示（包括无数据的情况） -->
     <template v-else>
-      <div v-if="artifactLoading" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-gray-500 bg-gradient-to-br from-slate-50 to-slate-100">
-        <i class="fa-solid fa-spinner fa-spin text-2xl text-[#1f82d9]"></i>
-        <span>正在加载查询结果详情...</span>
-      </div>
-
-      <div v-else-if="artifactError" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
-        <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
-        <span>{{ artifactError }}</span>
-      </div>
-
-      <template v-else>
-      <ResultTabs
-        v-if="shouldShowExecutionTargetTabs"
-        v-model:active-index="activeMemberResultIndex"
-        :tabs="executionTargetTabs"
-        show-status
-      />
-
       <!-- 查询失败 -->
       <div v-if="activeResult && !activeResult.success" class="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
         <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
@@ -681,7 +553,6 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           </button>
         </div>
       </div>
-      </template>
     </template>
   </div>
 
@@ -730,7 +601,6 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :auto-wrap="autoWrap"
         :metrics-first="metricsFirst"
         :allow-fullscreen="false"
-        :show-execution-target-tabs="showExecutionTargetTabs"
         :initial-view-mode="viewMode"
       />
     </div>

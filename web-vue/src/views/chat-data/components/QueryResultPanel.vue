@@ -1,0 +1,288 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import AsyncQueryResult from './AsyncQueryResult.vue'
+import ResultTabs from './ResultTabs.vue'
+import { getConversationArtifact } from '../api'
+import type { ChartType } from '../chartTypes'
+
+interface SemanticParams {
+  metrics?: string[]
+  dimensions?: Array<string | { name: string; time_grain?: string; [key: string]: unknown }>
+  filters?: Array<{
+    dimension?: string
+    operator?: string
+    value?: unknown
+    [key: string]: unknown
+  }>
+}
+
+interface VisualizationConfig {
+  type?: string
+  x_field?: string
+  y_field?: string
+}
+
+interface QueryResult {
+  success: boolean
+  sql?: string
+  query_mode?: string
+  confidence?: number | string
+  columns?: string[]
+  data?: Record<string, unknown>[]
+  total_count?: number
+  execution_time_ms?: number
+  error?: string
+  cache_hit?: boolean
+  cache_age_seconds?: number | null
+  cache_expires_in_seconds?: number | null
+  member_datasource_id?: string
+  member_name?: string
+  results?: QueryResult[]
+  artifact_id?: string
+}
+
+type ResultTabItem = {
+  key: string | number
+  label: string
+  title?: string
+  status?: 'success' | 'error' | 'none'
+}
+
+interface QueryResultPanelItem {
+  key?: string | number
+  title?: string
+  resultData: string
+  sql?: string
+  memberDatasourceId?: string
+  memberName?: string
+  status?: 'success' | 'error' | 'none'
+}
+
+type ViewMode = 'vertical' | 'card' | ChartType
+
+interface Props {
+  resultData?: string | null
+  items?: QueryResultPanelItem[]
+  semanticParams?: SemanticParams
+  visualization?: VisualizationConfig
+  sql?: string
+  onSave?: (sql: string, chartType: string, memberDatasourceId?: string) => void
+  onViewAnalysis?: () => void
+  isAnalysisActive?: boolean
+  paginationEnabled?: boolean
+  pageSize?: number
+  maxRows?: number
+  showIndex?: boolean
+  autoWrap?: boolean
+  metricsFirst?: boolean
+  allowFullscreen?: boolean
+  initialViewMode?: ViewMode
+  activeIndex?: number
+}
+
+defineOptions({
+  name: 'QueryResultPanel',
+  inheritAttrs: false
+})
+
+const props = withDefaults(defineProps<Props>(), {
+  items: () => [],
+  isAnalysisActive: false,
+  paginationEnabled: false,
+  pageSize: 20,
+  maxRows: 1000,
+  showIndex: false,
+  autoWrap: false,
+  metricsFirst: false,
+  allowFullscreen: true,
+  activeIndex: 0,
+})
+
+const emit = defineEmits<{
+  'update:activeIndex': [value: number]
+}>()
+
+const activeIndex = ref(0)
+const artifactResult = ref<QueryResult | null>(null)
+const artifactLoading = ref(false)
+const artifactError = ref('')
+
+const parseInlineResult = (raw: string | null | undefined): { result: QueryResult | null; error: string | null } => {
+  if (!raw) return { result: null, error: null }
+  try {
+    return { result: JSON.parse(raw) as QueryResult, error: null }
+  } catch {
+    return { result: null, error: '无法解析查询结果' }
+  }
+}
+
+const inlineParse = computed(() => parseInlineResult(props.resultData))
+const artifactId = computed(() => String(inlineParse.value.result?.artifact_id || '').trim())
+const panelResult = computed(() => artifactResult.value || inlineParse.value.result)
+const parseError = computed(() => inlineParse.value.error)
+
+const resultToData = (result: QueryResult) => JSON.stringify(result)
+const getItemLabel = (item: Pick<QueryResultPanelItem, 'title' | 'memberName' | 'memberDatasourceId'> | null | undefined, index: number) => {
+  const title = String(item?.title || item?.memberName || '').trim()
+  return title || `结果${index + 1}`
+}
+
+const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
+  const result = panelResult.value
+  if (!result) return []
+  const memberResults = result.results || []
+  if (memberResults.length > 0) {
+    return memberResults.map((item, index) => ({
+      key: item.member_datasource_id || item.member_name || index,
+      title: getItemLabel({
+        title: item.member_name,
+        memberName: item.member_name,
+        memberDatasourceId: item.member_datasource_id,
+      }, index),
+      resultData: resultToData({
+        ...item,
+        sql: item.sql || result.sql,
+        query_mode: item.query_mode || result.query_mode,
+        confidence: item.confidence ?? result.confidence,
+      }),
+      sql: item.sql || result.sql || props.sql,
+      memberDatasourceId: item.member_datasource_id,
+      memberName: item.member_name,
+      status: item.success === false ? 'error' : 'success',
+    }))
+  }
+  return [{
+    key: result.member_datasource_id || result.member_name || 'single',
+    title: result.member_name || '',
+    resultData: resultToData(result),
+    sql: result.sql || props.sql,
+    memberDatasourceId: result.member_datasource_id,
+    memberName: result.member_name,
+    status: result.success === false ? 'error' : 'success',
+  }]
+})
+
+const normalizedItems = computed<QueryResultPanelItem[]>(() => {
+  if (props.items.length > 0) return props.items
+  return itemsFromResult.value
+})
+
+const tabs = computed<ResultTabItem[]>(() =>
+  normalizedItems.value.map((item, index) => ({
+    key: item.key || item.memberDatasourceId || item.title || index,
+    label: getItemLabel(item, index),
+    title: item.memberName && item.memberDatasourceId
+      ? `${item.memberName}（${item.memberDatasourceId}）`
+      : item.title || item.sql || getItemLabel(item, index),
+    status: item.status,
+  }))
+)
+
+const activeItem = computed(() => normalizedItems.value[activeIndex.value] || normalizedItems.value[0] || null)
+const activeResultData = computed(() => activeItem.value?.resultData || '')
+const activeSql = computed(() => activeItem.value?.sql || props.sql)
+const showTabs = computed(() => {
+  if (tabs.value.length > 1) return true
+  const item = activeItem.value
+  const title = String(item?.title || '').trim()
+  return Boolean(item?.memberName || item?.memberDatasourceId || (title && title !== '结果1'))
+})
+
+watch(
+  () => props.activeIndex,
+  (value) => {
+    const next = Number(value)
+    if (Number.isFinite(next) && next >= 0 && next !== activeIndex.value) {
+      activeIndex.value = next
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  activeIndex,
+  (value) => emit('update:activeIndex', value)
+)
+
+watch(
+  () => normalizedItems.value.map(item => `${item.key || ''}:${item.memberDatasourceId || ''}:${item.title || ''}`).join('|'),
+  () => {
+    if (activeIndex.value >= normalizedItems.value.length) activeIndex.value = 0
+    if (activeIndex.value < 0) activeIndex.value = 0
+  },
+  { immediate: true }
+)
+
+watch(
+  artifactId,
+  async (id) => {
+    artifactResult.value = null
+    artifactError.value = ''
+    if (!id || props.items.length > 0) {
+      artifactLoading.value = false
+      return
+    }
+    artifactLoading.value = true
+    try {
+      const response = await getConversationArtifact<QueryResult>(id)
+      if (id !== artifactId.value) return
+      artifactResult.value = response.data || null
+      if (!artifactResult.value) artifactError.value = '查询结果详情为空'
+    } catch (error) {
+      if (id !== artifactId.value) return
+      artifactError.value = error instanceof Error ? error.message : '加载查询结果详情失败'
+    } finally {
+      if (id === artifactId.value) artifactLoading.value = false
+    }
+  },
+  { immediate: true }
+)
+</script>
+
+<template>
+  <div v-bind="$attrs" class="flex h-full min-h-0 flex-col overflow-hidden">
+    <div v-if="parseError" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
+      <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
+      <span>{{ parseError }}</span>
+    </div>
+
+    <div v-else-if="artifactLoading" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-gray-500 bg-gradient-to-br from-slate-50 to-slate-100">
+      <i class="fa-solid fa-spinner fa-spin text-2xl text-[#1f82d9]"></i>
+      <span>正在加载查询结果详情...</span>
+    </div>
+
+    <div v-else-if="artifactError" class="flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
+      <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
+      <span>{{ artifactError }}</span>
+    </div>
+
+    <template v-else>
+      <ResultTabs
+        v-if="showTabs"
+        v-model:active-index="activeIndex"
+        :tabs="tabs"
+        show-status
+      />
+      <AsyncQueryResult
+        v-if="activeResultData"
+        :key="`${activeIndex}-${activeItem?.memberDatasourceId || activeItem?.key || 'single'}`"
+        class="min-h-0 flex-1"
+        :result-data="activeResultData"
+        :semantic-params="semanticParams"
+        :visualization="visualization"
+        :sql="activeSql"
+        :on-save="onSave"
+        :on-view-analysis="onViewAnalysis"
+        :is-analysis-active="isAnalysisActive"
+        :pagination-enabled="paginationEnabled"
+        :page-size="pageSize"
+        :max-rows="maxRows"
+        :show-index="showIndex"
+        :auto-wrap="autoWrap"
+        :metrics-first="metricsFirst"
+        :allow-fullscreen="allowFullscreen"
+        :initial-view-mode="initialViewMode"
+      />
+    </template>
+  </div>
+</template>

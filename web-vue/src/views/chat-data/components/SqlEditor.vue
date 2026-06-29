@@ -10,12 +10,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import { cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
-import AsyncQueryResult from './AsyncQueryResult.vue'
+import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
-import ResultTabs from './ResultTabs.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 
@@ -49,18 +48,21 @@ type SqlEditorSSEEventType = 'message' | 'error'
 type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean }
 type AiMessageSegment = { type: 'markdown' | 'sql'; content: string }
 type SqlContextFunctionGroup = 'string' | 'date' | 'condition'
-type ResultTabItem = {
-  key: string | number
-  label: string
-  title?: string
-  status?: 'success' | 'error' | 'none'
-}
 type SqlContextFunction = {
   key: string
   label: string
   desc: string
   group: SqlContextFunctionGroup
   build: (expression: string) => string
+}
+type QueryResultPanelItem = {
+  key?: string | number
+  title?: string
+  resultData: string
+  sql?: string
+  memberDatasourceId?: string
+  memberName?: string
+  status?: 'success' | 'error' | 'none'
 }
 type AiConversationRecord = {
   id: string
@@ -519,19 +521,32 @@ interface QueryResultItem {
   cache_expires_in_seconds?: number | null
 }
 const results = ref<QueryResultItem[]>([])
-const activeResultIndex = ref(0)
-const resultTabs = computed<ResultTabItem[]>(() =>
+const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
   results.value.map((result, index) => ({
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
-    label: result.title || `结果${index + 1}`,
     title: result.memberName && result.memberDatasourceId
       ? `${result.memberName}（${result.memberDatasourceId}）`
       : result.title || result.sql || `结果${index + 1}`,
+    resultData: JSON.stringify({
+      success: !result.error,
+      columns: result.columns,
+      data: result.data,
+      total_count: result.total_count,
+      execution_time_ms: result.execution_time_ms,
+      error: result.error,
+      cache_hit: result.cache_hit,
+      cache_age_seconds: result.cache_age_seconds,
+      cache_expires_in_seconds: result.cache_expires_in_seconds,
+      member_datasource_id: result.memberDatasourceId,
+      member_name: result.memberName,
+    }),
+    sql: result.sql,
+    memberDatasourceId: result.memberDatasourceId,
+    memberName: result.memberName,
     status: result.error ? 'error' : 'success',
   }))
 )
 const queryHistoryRefreshKey = ref(0)
-const errorDetailsExpanded = ref(false)
 
 const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
   const members = props.datasource?.member_sources || []
@@ -866,7 +881,6 @@ const handleViewHistoryResult = async (item: SqlHistoryItem) => {
     memberDatasourceId: response.data?.member_datasource_id || item.member_datasource_id,
     memberName: response.data?.member_name || item.member_name,
   }]
-  activeResultIndex.value = 0
   executionTime.value = payload.execution_time_ms ?? response.data?.execution_time_ms ?? item.execution_time_ms ?? null
   showHistoryDialog.value = false
   await nextTick()
@@ -944,7 +958,7 @@ const saveMemberDatasourceId = ref('')
 const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
   saveSql.value = sql
   saveChartType.value = chartType
-  saveMemberDatasourceId.value = String(memberDatasourceId || currentResult.value?.memberDatasourceId || '').trim()
+  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
   showSaveModal.value = true
 }
 
@@ -1494,7 +1508,6 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
   executingTaskText.value = '任务创建中...'
   executingTaskId.value = ''
   results.value = []
-  activeResultIndex.value = 0
   executionTime.value = null
 
   const newResults: QueryResultItem[] = []
@@ -1921,53 +1934,6 @@ const handleLoadAiConversation = async (item: AiConversationRecord) => {
   scrollAiOutputToBottom(true)
 }
 
-// 当前结果
-const currentResult = computed(() => results.value[activeResultIndex.value])
-const currentErrorMeta = computed(() => {
-  const rawMessage = String(currentResult.value?.error || '').trim()
-  if (!rawMessage) {
-    return {
-      summary: '',
-      details: '',
-      hasDetails: false,
-    }
-  }
-
-  const normalizedMessage = rawMessage.replace(/\s+/g, ' ').trim()
-  if (normalizedMessage.length <= 100) {
-    return {
-      summary: normalizedMessage,
-      details: '',
-      hasDetails: false,
-    }
-  }
-
-  return {
-    summary: `${normalizedMessage.slice(0, 100)}...`,
-    details: normalizedMessage,
-    hasDetails: true,
-  }
-})
-
-// 当前结果的 JSON 字符串（用于 AsyncQueryResult）
-const currentResultData = computed(() => {
-  const result = currentResult.value
-  if (!result) return null
-  return JSON.stringify({
-    success: !result.error,
-    columns: result.columns,
-    data: result.data,
-    total_count: result.total_count,
-    execution_time_ms: result.execution_time_ms,
-    error: result.error,
-    cache_hit: result.cache_hit,
-    cache_age_seconds: result.cache_age_seconds,
-    cache_expires_in_seconds: result.cache_expires_in_seconds,
-    member_datasource_id: result.memberDatasourceId,
-    member_name: result.memberName,
-  })
-})
-
 // 数据源切换时保存并重置 AI 会话（表结构变了，历史上下文无意义）
 watch(() => props.datasourceId, (_newId, oldId) => {
   saveCurrentAiConversation(oldId || '', '')
@@ -1988,10 +1954,6 @@ watch(() => props.initialSql, () => {
   }
   sqlCode.value = next
   savedSqlCode.value = next
-})
-
-watch(() => currentResult.value?.error, () => {
-  errorDetailsExpanded.value = false
 })
 
 // 显示 AI 面板时自动聚焦
@@ -2440,45 +2402,12 @@ defineExpose({
 
     <!-- 结果区域 -->
     <div class="flex-1 flex flex-col min-h-[100px] overflow-hidden bg-white">
-      <!-- 结果 Tabs（多结果时显示） -->
-      <ResultTabs
-        v-if="results.length > 1"
-        v-model:active-index="activeResultIndex"
-        :tabs="resultTabs"
-        show-status
-      />
-
       <!-- 结果内容 -->
       <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div v-if="currentResult?.error" class="m-4 p-4 rounded-xl bg-red-500/[0.05] border border-red-500/15 text-red-600">
-          <div class="flex items-start gap-2.5">
-            <i class="fa-solid fa-triangle-exclamation mt-0.5 shrink-0"></i>
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-3 min-w-0 text-[13px] leading-relaxed">
-                <span class="min-w-0 flex-1 break-words">{{ currentErrorMeta.summary }}</span>
-                <button
-                  v-if="currentErrorMeta.hasDetails"
-                  class="inline-flex shrink-0 items-center gap-1.5 px-2.5 py-1 rounded-md border border-red-500/20 bg-white/70 text-[12px] font-medium text-red-600 transition-colors duration-150 hover:bg-white"
-                  @click="errorDetailsExpanded = !errorDetailsExpanded"
-                >
-                  <i :class="['fa-solid text-[10px]', errorDetailsExpanded ? 'fa-chevron-up' : 'fa-chevron-down']"></i>
-                  <span>{{ errorDetailsExpanded ? '收起详情' : '查看详情' }}</span>
-                </button>
-              </div>
-              <pre
-                v-if="currentErrorMeta.hasDetails && errorDetailsExpanded"
-                class="mt-3 mb-0 p-3 rounded-lg bg-white/80 border border-red-500/10 text-[12px] leading-6 text-red-700 whitespace-pre-wrap break-words overflow-auto max-h-40 font-sans"
-              >{{ currentErrorMeta.details }}</pre>
-            </div>
-          </div>
-        </div>
-
-        <AsyncQueryResult
-          v-else-if="currentResultData"
-          :result-data="currentResultData"
-          :sql="currentResult?.sql"
+        <QueryResultPanel
+          v-if="queryResultPanelItems.length > 0"
+          :items="queryResultPanelItems"
           :on-save="handleSaveToDashboard"
-          :show-execution-target-tabs="results.length <= 1"
         />
 
         <div v-else-if="executing" class="flex-1 flex flex-col items-center justify-center py-16 px-6 bg-gradient-to-br from-gray-50 to-slate-50">
