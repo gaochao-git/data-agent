@@ -206,7 +206,7 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
             assert kwargs["user_query"] == "查销售额"
             return {"success": True, "sql": "select sum(amount) from orders", "error": ""}
 
-    async def fake_get_config(datasource_id, semantic_config_id):
+    async def fake_get_config(datasource_id, semantic_config_id, user_id=None):
         return {"id": semantic_config_id, "datasource_id": datasource_id}
 
     def fake_remove_mixed(dsl, semantic_config):
@@ -260,7 +260,7 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
 
 @pytest.mark.asyncio
 async def test_dsl2sql_tool_returns_error_text_when_dependency_raises(monkeypatch):
-    async def fake_get_config(_datasource_id, _semantic_config_id):
+    async def fake_get_config(_datasource_id, _semantic_config_id, user_id=None):
         raise RuntimeError("配置不存在")
 
     monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_config)

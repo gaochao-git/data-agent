@@ -221,10 +221,11 @@ async def list_runtime_semantic_config_directory(datasource_id: str | None, user
     return directory
 
 
-async def load_runtime_semantic_config(datasource_id: str | None, semantic_config_id: str | None) -> Dict[str, Any] | None:
+async def load_runtime_semantic_config(datasource_id: str | None, semantic_config_id: str | None, user_id: str | None = None) -> Dict[str, Any] | None:
     """读取运行时语义配置，并补齐方言和 joins。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_config_id = str(semantic_config_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
     if not normalized_datasource_id or not normalized_config_id:
         return None
     ds_manager = get_datasource_manager()
@@ -232,9 +233,17 @@ async def load_runtime_semantic_config(datasource_id: str | None, semantic_confi
     if not datasource:
         return None
     if hasattr(ds_manager, "get_runtime_semantic_config_async"):
-        config = await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        config = (
+            await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
+            if normalized_user_id
+            else await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        )
     else:
-        config = await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        config = (
+            await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
+            if normalized_user_id
+            else await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        )
     if not config or not config.get("enabled", True):
         return None
     result = dict(config)
@@ -245,6 +254,22 @@ async def load_runtime_semantic_config(datasource_id: str | None, semantic_confi
     if not result.get("id"):
         result["id"] = normalized_config_id
     return result
+
+
+async def _load_runtime_semantic_config_for_user(
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+    user_id: str | None,
+) -> Dict[str, Any] | None:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return await load_runtime_semantic_config(datasource_id, semantic_config_id)
+    try:
+        return await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=normalized_user_id)
+    except TypeError as exc:
+        if "user_id" not in str(exc):
+            raise
+        return await load_runtime_semantic_config(datasource_id, semantic_config_id)
 
 
 def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], selected_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -362,7 +387,7 @@ def create_semantic_config_selection_tools(
         if bound_semantic_config and (not effective_semantic_config_id or effective_semantic_config_id == bound_semantic_config_id):
             return bound_semantic_config_id or effective_semantic_config_id, dict(bound_semantic_config)
         datasource_id = bound_datasource_id or extract_datasource_id(state)
-        return effective_semantic_config_id, await load_runtime_semantic_config(datasource_id, effective_semantic_config_id)
+        return effective_semantic_config_id, await _load_runtime_semantic_config_for_user(datasource_id, effective_semantic_config_id, bound_user_id)
 
     @tool(args_schema=SelectSemanticConfigInput)
     async def select_semantic_config_tool(
@@ -395,7 +420,7 @@ def create_semantic_config_selection_tools(
                 datasource_group_context=extract_datasource_group_context(state),
             )
             selected_config_id = str((selection or {}).get("selected_config_id") or "").strip()
-            selected_config = await load_runtime_semantic_config(datasource_id, selected_config_id) if selected_config_id else None
+            selected_config = await _load_runtime_semantic_config_for_user(datasource_id, selected_config_id, bound_user_id) if selected_config_id else None
             payload = _selection_to_tool_payload(selection, selected_config)
             query_plan = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else None
             if query_plan and query_plan.get("tasks"):
@@ -404,7 +429,7 @@ def create_semantic_config_selection_tools(
                     config_id = str(task.get("semantic_config_id") or "").strip()
                     if not config_id or config_id in task_summaries:
                         continue
-                    task_config = await load_runtime_semantic_config(datasource_id, config_id)
+                    task_config = await _load_runtime_semantic_config_for_user(datasource_id, config_id, bound_user_id)
                     if task_config:
                         task_summaries[config_id] = _summarize_semantic_config(task_config)
                 if task_summaries:

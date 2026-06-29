@@ -1010,11 +1010,20 @@ async def prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTa
         return request
     if not semantic_config_id:
         raise ValueError("语义可视化查询缺少 semantic_config_id")
-    compiled = await compile_semantic_builder_sql(
-        datasource_id=request.datasource_id,
-        semantic_config_id=semantic_config_id,
-        semantic_builder_config=semantic_builder_config,
-    )
+    request_user_id = str(getattr(request, "user_id", "") or "").strip()
+    if request_user_id:
+        compiled = await compile_semantic_builder_sql(
+            datasource_id=request.datasource_id,
+            semantic_config_id=semantic_config_id,
+            semantic_builder_config=semantic_builder_config,
+            user_id=request_user_id,
+        )
+    else:
+        compiled = await compile_semantic_builder_sql(
+            datasource_id=request.datasource_id,
+            semantic_config_id=semantic_config_id,
+            semantic_builder_config=semantic_builder_config,
+        )
     return request.model_copy(update={"sql": compiled["sql"], "builder_config": None})
 
 

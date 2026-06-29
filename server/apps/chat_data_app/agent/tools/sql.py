@@ -239,7 +239,8 @@ async def _resolve_semantic_query_config(
         if semantic_config_id and not config.get("id"):
             config["id"] = semantic_config_id
         return config
-    return await load_runtime_semantic_config(datasource_id, semantic_config_id)
+    user_id = str(state.get("user_id") or "").strip() or None
+    return await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id)
 
 
 def _get_execution_context(state: dict | None) -> dict[str, Any]:

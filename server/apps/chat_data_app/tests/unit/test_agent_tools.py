@@ -524,9 +524,10 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
             assert kwargs["user_query"] == "查订单"
             return {"success": True, "sql": "select 1"}
 
-    async def fake_load_config(datasource_id, semantic_config_id):
+    async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
         assert datasource_id == "ds_a"
         assert semantic_config_id == "cfg_a"
+        assert user_id == "user_a"
         return {"id": "cfg_a", "metrics": [], "dimensions": []}
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=None):
@@ -934,9 +935,10 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
 def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
     from langchain_core.messages import HumanMessage
 
-    async def fake_load_config(datasource_id, semantic_config_id):
+    async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
         assert datasource_id == "ds_a"
         assert semantic_config_id == "cfg_a"
+        assert user_id == "user_a"
         return {"id": "cfg_a", "metrics": [], "dimensions": []}
 
     class FailGenerator:

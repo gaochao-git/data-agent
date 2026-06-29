@@ -142,13 +142,27 @@ class FakeDatasourceManager:
         return list(tables)
 
     async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
-        return list((self.datasources.get(datasource_id) or {}).get("semantic_configs") or [])
+        configs = list((self.datasources.get(datasource_id) or {}).get("semantic_configs") or [])
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return configs
+        return [
+            config for config in configs
+            if config.get("scope_type", "public") == "public"
+            or (
+                config.get("scope_type") == "private"
+                and str(config.get("create_by") or "").strip() == normalized_user_id
+            )
+        ]
 
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str):
-        for config in await self.get_semantic_configs_async(datasource_id):
+    async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        for config in await self.get_semantic_configs_async(datasource_id, user_id):
             if config.get("id") == config_id:
                 return dict(config)
         return None
+
+    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        return await self.get_semantic_config_async(datasource_id, config_id, user_id)
 
     async def create_semantic_config_async(self, **kwargs):
         self.created_semantic_kwargs = dict(kwargs)

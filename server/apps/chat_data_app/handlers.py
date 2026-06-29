@@ -488,6 +488,7 @@ async def _get_semantic_config_async(
     datasource_id: str | None,
     semantic_config_id: str | None,
     user_query: str | None = None,
+    user_id: str | None = None,
 ) -> dict | None:
     """异步获取语义配置，避免在 FastAPI 事件循环中同步访问存储。"""
     if not semantic_config_id or not datasource_id:
@@ -500,10 +501,11 @@ async def _get_semantic_config_async(
             return None
 
         source_type = datasource.get("source_type", "mysql")
+        normalized_user_id = str(user_id or "").strip()
         if hasattr(ds_manager, "get_runtime_semantic_config_async"):
-            cfg = await ds_manager.get_runtime_semantic_config_async(datasource_id, semantic_config_id)
+            cfg = await ds_manager.get_runtime_semantic_config_async(datasource_id, semantic_config_id, normalized_user_id) if normalized_user_id else await ds_manager.get_runtime_semantic_config_async(datasource_id, semantic_config_id)
         else:
-            cfg = await ds_manager.get_semantic_config_async(datasource_id, semantic_config_id)
+            cfg = await ds_manager.get_semantic_config_async(datasource_id, semantic_config_id, normalized_user_id) if normalized_user_id else await ds_manager.get_semantic_config_async(datasource_id, semantic_config_id)
         if not cfg:
             logger.warning(f"未找到指定的语义配置: {semantic_config_id}")
             return None
@@ -749,7 +751,7 @@ async def _stream_sql_generation(
         semantic_config = temp_semantic_config
         logger.info(f"使用临时语义配置（测试模式）")
     elif semantic_config_id is not None:
-        semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id, user_query)
+        semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id, user_query, user_id)
         if semantic_config:
             logger.info(f"使用语义模式: {semantic_config.get('name', semantic_config.get('id'))}")
         else:
@@ -1122,7 +1124,7 @@ async def data_analyze_completion_handler(
             log_phase("get_or_create_conversation")
             log_phase("skip_preload_skill")
             semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-            data_context = await build_data_analyze_context(datasource_id, semantic_config_id)
+            data_context = await build_data_analyze_context(datasource_id, semantic_config_id, user_id=user_id)
             log_phase("build_data_context")
             workspace_paths, data_context_file = await prepare_data_analyze_workspace(conversation_id, data_context)
             log_phase("ensure_workspace")

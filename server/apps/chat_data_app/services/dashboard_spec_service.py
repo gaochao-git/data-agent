@@ -191,18 +191,22 @@ def remove_mixed_raw_metrics_for_aggregate_dsl(dsl: Dict[str, Any], semantic_con
     return payload, [f"已移除聚合卡片中不能混用的原始值指标：{', '.join(removed)}"]
 
 
-async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config_id: Optional[str]) -> Dict[str, Any]:
+async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config_id: Optional[str], user_id: Optional[str] = None) -> Dict[str, Any]:
     """读取看板 DSL 校验和 SQL 生成所需语义配置。"""
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
     if not normalized_semantic_config_id:
         raise ValueError("缺少指标集ID，无法生成看板 SQL")
     ds_manager = get_datasource_manager()
     datasource = await ds_manager.get_datasource_async(datasource_id)
     if not datasource:
         raise ValueError("数据源不存在")
-    configs = datasource.get("semantic_configs")
-    if configs is None:
-        configs = await ds_manager.get_semantic_configs_async(datasource_id)
+    if normalized_user_id:
+        configs = await ds_manager.get_semantic_configs_async(datasource_id, normalized_user_id)
+    else:
+        configs = datasource.get("semantic_configs")
+        if configs is None:
+            configs = await ds_manager.get_semantic_configs_async(datasource_id)
     selected = None
     for config in configs or []:
         config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
@@ -435,7 +439,7 @@ async def validate_dashboard_spec_payload(
             "warnings": structure_errors,
             "panels": [],
         }
-    semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id)
+    semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id, user_id=user_id)
     sql_generator = SemanticSQLGenerator(semantic_config)
     panel_plans, warnings = build_dashboard_panel_plans(cards, sql_generator, user_query=user_query)
     if execute_sql and panel_plans:

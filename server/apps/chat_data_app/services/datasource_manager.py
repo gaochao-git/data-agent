@@ -936,17 +936,17 @@ class DataSourceManager:
             return configs
         return [self._merge_column_dict_into_semantic_config(config, column_dicts) for config in configs]
 
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[dict]:
+    async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[dict]:
         """异步获取指定的语义配置。"""
-        configs = await self.get_semantic_configs_async(datasource_id)
+        configs = await self.get_semantic_configs_async(datasource_id, user_id)
         for config in configs:
             if config.get("id") == config_id or config.get("semantic_config_id") == config_id:
                 return config
         return None
 
-    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[dict]:
+    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[dict]:
         """异步获取智能问数运行时语义配置，并临时合并物理字段字典。"""
-        config = await self.get_semantic_config_async(datasource_id, config_id)
+        config = await self.get_semantic_config_async(datasource_id, config_id, user_id)
         if not config:
             return None
         return await self._enrich_semantic_config_column_dict_async(datasource_id, config)

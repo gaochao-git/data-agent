@@ -79,9 +79,10 @@ def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_i
     return result
 
 
-async def build_data_analyze_context(datasource_id: Optional[str], semantic_config_id: Optional[str] = None) -> Dict[str, Any]:
+async def build_data_analyze_context(datasource_id: Optional[str], semantic_config_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
     """构建 DataAnalyze 可用工具和数据上下文。"""
     normalized_datasource_id = str(datasource_id or "").strip()
+    normalized_user_id = str(user_id or "").strip()
     if not normalized_datasource_id:
         return {
             "datasource": None,
@@ -102,9 +103,12 @@ async def build_data_analyze_context(datasource_id: Optional[str], semantic_conf
                 "tool_chain": get_data_analyze_tool_chain(),
                 "notes": ["未找到当前数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。"],
             }
-        semantic_configs = datasource.get("semantic_configs")
-        if semantic_configs is None:
-            semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
+        if normalized_user_id:
+            semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id, normalized_user_id)
+        else:
+            semantic_configs = datasource.get("semantic_configs")
+            if semantic_configs is None:
+                semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
         return {
             "datasource": {
                 "id": normalized_datasource_id,

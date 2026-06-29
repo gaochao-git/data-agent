@@ -59,7 +59,7 @@ def create_exec_sql_tool(
                     return "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
                 if not save_path.lower().endswith(".json"):
                     return "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
-            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id)
+            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id, user_id=bound_user_id)
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl_payload or {}, semantic_config)
             if payload.get("compare"):
                 return "semantic_query_tool 执行失败: DSL2SQL 不支持 compare，请拆成基础 DSL 查询"

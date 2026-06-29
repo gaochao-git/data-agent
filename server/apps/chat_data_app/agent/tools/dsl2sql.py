@@ -77,7 +77,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, semantic_config_id: st
                 })
             if not isinstance(dsl, dict):
                 return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
-            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id)
+            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id, user_id=bound_user_id)
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
             if payload.get("compare"):
                 return "[dsl2sql_tool]\n" + json_dumps({

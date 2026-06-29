@@ -1534,8 +1534,8 @@ def test_data_analyze_completion_handler_auto_selects_semantic_config(monkeypatc
             yield ("messages", (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
 
-    async def fake_build_context(datasource_id, semantic_config_id):
-        captured["context_args"] = (datasource_id, semantic_config_id)
+    async def fake_build_context(datasource_id, semantic_config_id, user_id=None):
+        captured["context_args"] = (datasource_id, semantic_config_id, user_id)
         return {"datasource": {"source_type": "mysql"}}
 
     def fake_create_graph(**kwargs):
@@ -1561,7 +1561,7 @@ def test_data_analyze_completion_handler_auto_selects_semantic_config(monkeypatc
     assert "event: semantic_config_selected" in joined
     assert '"semantic_config_id": "cfg_sales"' in joined
     assert "分析完成" in joined
-    assert captured["context_args"] == ("ds_a", None)
+    assert captured["context_args"] == ("ds_a", None, "u1")
     assert captured["graph_kwargs"]["semantic_config_id"] is None
     assert captured["graph_kwargs"]["datasource_id"] == "ds_a"
     assert captured["initial_state"]["datasource_id"] == "ds_a"

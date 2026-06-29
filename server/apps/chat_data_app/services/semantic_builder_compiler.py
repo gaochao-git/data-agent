@@ -546,9 +546,10 @@ class SemanticBuilderCompiler:
         return _normalize_text(node.get("table")), _normalize_alias(node)
 
 
-async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: str) -> Dict[str, Any]:
+async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: str, user_id: str | None = None) -> Dict[str, Any]:
     normalized_datasource_id = _normalize_text(datasource_id)
     normalized_config_id = _normalize_text(semantic_config_id)
+    normalized_user_id = _normalize_text(user_id)
     if not normalized_datasource_id or not normalized_config_id:
         raise ValueError("缺少 datasource_id 或 semantic_config_id")
 
@@ -557,9 +558,17 @@ async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: s
     if not datasource:
         raise LookupError(f"数据源不存在: {normalized_datasource_id}")
     if hasattr(ds_manager, "get_runtime_semantic_config_async"):
-        config = await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        config = (
+            await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
+            if normalized_user_id
+            else await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        )
     else:
-        config = await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        config = (
+            await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
+            if normalized_user_id
+            else await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id)
+        )
     if not config:
         raise LookupError(f"语义配置不存在: {normalized_config_id}")
     if not config.get("enabled", True):
@@ -579,6 +588,7 @@ async def compile_semantic_builder_sql(
     datasource_id: str,
     semantic_config_id: str,
     semantic_builder_config: Dict[str, Any],
+    user_id: str | None = None,
 ) -> Dict[str, Any]:
-    semantic_config = await load_runtime_semantic_config(datasource_id, semantic_config_id)
+    semantic_config = await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id) if user_id else await load_runtime_semantic_config(datasource_id, semantic_config_id)
     return SemanticBuilderCompiler(semantic_config).compile(semantic_builder_config)

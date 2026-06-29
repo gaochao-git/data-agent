@@ -853,7 +853,7 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     writes = []
     input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
 
-    async def fake_get_config(datasource_id, semantic_config_id):
+    async def fake_get_config(datasource_id, semantic_config_id, user_id=None):
         assert datasource_id == "ds_1"
         assert semantic_config_id == "sc_1"
         return {"id": "sc_1", "metrics": [], "dimensions": []}
