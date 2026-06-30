@@ -21,7 +21,7 @@ const buildAssistantHistorySegments = (message: Message, stageOffset = 0): Messa
     void stage
     segments.push({ type: 'taskStage', stageIndex: stageOffset + _index })
   }
-  const visibleContent = stripThinkingContent(message.content)
+  const visibleContent = String(message.content || '').trim()
   if (visibleContent) {
     segments.push({ type: 'text', content: visibleContent })
   }
@@ -29,30 +29,6 @@ const buildAssistantHistorySegments = (message: Message, stageOffset = 0): Messa
     segments.push({ type: 'toolCall', toolCallId: toolCall.tool_call_id })
   }
   return segments
-}
-
-const appendThinkingSegmentsToContent = (segments: ThinkingSegment[], visibleContent: string): string => {
-  const thinkingContent = segments.map(segment => `<thinking>${segment.content}</thinking>`).join('')
-  return visibleContent ? `${thinkingContent}${visibleContent}` : thinkingContent
-}
-
-const extractThinkingText = (content: string): string[] => {
-  const result: string[] = []
-  const regex = /<thinking>([\s\S]*?)<\/thinking>/g
-  let match: RegExpExecArray | null
-  while ((match = regex.exec(content || '')) !== null) {
-    result.push(match[1] || '')
-  }
-  return result
-}
-
-const stripThinkingContent = (content: string): string => {
-  return String(content || '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-    .replace(/<\/think>/gi, '')
-    .trim()
 }
 
 const appendAssistantHistoryMessage = (target: Message, source: Message) => {
@@ -69,7 +45,7 @@ const appendAssistantHistoryMessage = (target: Message, source: Message) => {
       toolCallCount: currentToolCallCount + segment.toolCallCount,
     }))
     target.thinkingSegments = [...(target.thinkingSegments || []), ...normalizedThinkingSegments]
-    target.content = appendThinkingSegmentsToContent(target.thinkingSegments, stripThinkingContent(target.content || ''))
+    target.content = String(target.content || '').trim()
   }
   if (source.toolCalls?.length) {
     target.toolCalls = [...(target.toolCalls || []), ...source.toolCalls]
@@ -137,7 +113,7 @@ const normalizeTaskStages = (value: unknown): TaskStageInfo[] => {
 }
 
 const normalizeReasoningContent = (value: unknown): string => {
-  return typeof value === 'string' ? value : ''
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 const normalizeReasoningSegments = (value: unknown): ThinkingSegment[] => {
@@ -146,7 +122,7 @@ const normalizeReasoningSegments = (value: unknown): ThinkingSegment[] => {
   value.forEach((item, index) => {
     if (!item || typeof item !== 'object') return
     const data = item as Record<string, unknown>
-    const content = typeof data.content === 'string' ? data.content : ''
+    const content = typeof data.content === 'string' ? data.content.trim() : ''
     if (!content) return
     const rawToolCallCount = data.tool_call_count ?? data.toolCallCount ?? 0
     const toolCallCount = Number.isFinite(Number(rawToolCallCount))
@@ -175,7 +151,7 @@ const applyThinkingSegmentsToHistoryMessage = (message: Message, thinkingSegment
       source: 'reasoning',
     })),
   ]
-  message.content = appendThinkingSegmentsToContent(thinkingSegments, stripThinkingContent(message.content || ''))
+  message.content = String(message.content || '').trim()
   message.segments = buildAssistantHistorySegments(message)
 }
 
@@ -191,7 +167,7 @@ const setThinkingSegmentsOnHistoryMessage = (message: Message, thinkingSegments:
     source: 'reasoning',
   }))
   message.taskStages = [...reasoningStages, ...nonReasoningStages]
-  message.content = appendThinkingSegmentsToContent(thinkingSegments, stripThinkingContent(message.content || ''))
+  message.content = String(message.content || '').trim()
   message.segments = buildAssistantHistorySegments(message)
 }
 
@@ -358,14 +334,12 @@ export function useConversationHistory({
             const message: Message = {
               id: msg.id,
               role: msg.role,
-              content: stripThinkingContent(msg.content || ''),
+              content: String(msg.content || '').trim(),
               timestamp: parsedTimestamp || undefined,
             }
 
-            const existingThinkingTexts = extractThinkingText(msg.content || '')
             const reasoningContent = normalizeReasoningContent(msg.reasoning_content)
-            const thinkingTexts = [...existingThinkingTexts]
-            if (reasoningContent) thinkingTexts.push(reasoningContent)
+            const thinkingTexts = reasoningContent ? [reasoningContent] : []
             if (thinkingTexts.length > 0 && msg.role === 'assistant') {
               message.thinkingSegments = thinkingTexts.map((content, index) => ({
                 id: `thinking-history-${msg.id || 'message'}-${index}`,
@@ -379,7 +353,6 @@ export function useConversationHistory({
                 content,
                 source: 'reasoning',
               }))
-              message.content = appendThinkingSegmentsToContent(message.thinkingSegments, message.content)
             }
 
             const semanticConfigSelection = normalizeSemanticConfigSelection(msg.semantic_config_selection)

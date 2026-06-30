@@ -3,11 +3,10 @@
  * 结构化消息渲染组件
  * 按顺序渲染 segments
  */
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { parseStructuredContent } from '../utils/parseContent'
 import { hideSemanticConfigSelectionPayloads } from '../utils'
-import type { ContentSegment } from '../utils/parseContent'
 
 interface Props {
   content: string
@@ -23,26 +22,8 @@ const emit = defineEmits<{
 }>()
 const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
 
-// 思考区域展开状态
-const thinkingExpanded = ref<Record<number, boolean>>({})
-
 // 解析内容
 const parsed = computed(() => parseStructuredContent(props.content, props.isStreaming))
-
-// 切换思考区域展开
-const toggleThinking = (index: number) => {
-  thinkingExpanded.value = {
-    ...thinkingExpanded.value,
-    [index]: !thinkingExpanded.value[index]
-  }
-}
-
-// 判断思考区域是否展开
-const isThinkingExpanded = (index: number, inProgress?: boolean): boolean => {
-  const expanded = thinkingExpanded.value[index]
-  if (expanded !== undefined) return expanded
-  return true // 默认展开
-}
 
 // 解析语义参数
 interface SemanticParam {
@@ -89,46 +70,8 @@ const renderMarkdown = (content: string) => {
   <!-- 按 segments 顺序渲染 -->
   <div v-else class="flex flex-col gap-3">
     <template v-for="(segment, index) in parsed.segments" :key="index">
-      <!-- 思考区域 -->
-      <div v-if="segment.type === 'thinking'" class="rounded-xl overflow-hidden bg-black/[0.02] border border-black/[0.06]">
-        <button
-          class="flex items-center gap-2.5 w-full px-4 py-3 border-none bg-transparent cursor-pointer text-left transition-colors duration-200 hover:bg-black/[0.02]"
-          @click="toggleThinking(index)"
-        >
-          <i
-            :class="[
-              'fa-solid fa-chevron-right text-[10px] text-gray-400 transition-transform duration-200',
-              isThinkingExpanded(index, segment.inProgress) && 'rotate-90'
-            ]"
-          ></i>
-          <template v-if="segment.inProgress">
-            <div class="w-5 h-5 flex items-center justify-center rounded-md bg-amber-500/10">
-              <i class="fa-solid fa-spinner fa-spin text-[10px] text-amber-500"></i>
-            </div>
-            <span class="text-xs font-medium text-gray-500">正在思考...</span>
-          </template>
-          <template v-else>
-            <div class="w-5 h-5 flex items-center justify-center rounded-md bg-gradient-to-br from-amber-500 to-amber-600">
-              <i class="fa-solid fa-lightbulb text-[10px] text-white"></i>
-            </div>
-            <span class="text-xs font-medium text-gray-500">已思考</span>
-          </template>
-        </button>
-        <div
-          :class="[
-            'transition-all duration-200',
-            isThinkingExpanded(index, segment.inProgress) ? 'max-h-none opacity-100' : 'max-h-0 overflow-hidden opacity-0'
-          ]"
-        >
-          <div
-            class="px-4 pb-3 pt-3 text-sm text-gray-600 border-t border-black/[0.04] leading-relaxed markdown-body"
-            v-html="renderMarkdown(segment.content)"
-          ></div>
-        </div>
-      </div>
-
       <!-- 语义参数 -->
-      <div v-else-if="segment.type === 'semanticParams'" class="rounded-xl overflow-hidden bg-emerald-500/[0.04] border border-emerald-500/20">
+      <div v-if="segment.type === 'semanticParams'" class="rounded-xl overflow-hidden bg-emerald-500/[0.04] border border-emerald-500/20">
         <div class="flex items-center gap-2.5 px-4 py-3">
           <div class="w-5 h-5 flex items-center justify-center rounded-md bg-gradient-to-br from-emerald-500 to-emerald-600">
             <i class="fa-solid fa-layer-group text-[10px] text-white"></i>

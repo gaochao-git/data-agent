@@ -1,11 +1,10 @@
 /**
  * 解析结构化内容
- * 支持 <thinking>、多个sql代码块、多个<explanation> 标签
+ * 支持语义参数、SQL 代码块、查询结果、图表配置和解释标签
  */
 
 // 内容片段类型
 export type ContentSegment =
-  | { type: 'thinking'; content: string; inProgress?: boolean }
   | { type: 'semanticParams'; content: string; inProgress?: boolean }
   | { type: 'sql'; sql: string; explanation?: string; sqlInProgress?: boolean; explanationInProgress?: boolean }
   | { type: 'text'; content: string }
@@ -18,7 +17,7 @@ export interface ParsedContent {
 }
 
 interface StructuredElement {
-  type: 'thinking' | 'semanticParams' | 'sql' | 'queryResult' | 'chart' | 'explanation'
+  type: 'semanticParams' | 'sql' | 'queryResult' | 'chart' | 'explanation'
   content: string
   startIndex: number
   endIndex: number
@@ -34,36 +33,9 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
   const result: ParsedContent = { raw: content, segments: [] }
   const elements: StructuredElement[] = []
 
-  // 1. 提取 thinking
-  const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g
   let match: RegExpExecArray | null
-  while ((match = thinkingRegex.exec(content)) !== null) {
-    const matchedContent = match[1]
-    if (matchedContent !== undefined) {
-      elements.push({
-        type: 'thinking',
-        content: matchedContent.trim(),
-        startIndex: match.index,
-        endIndex: match.index + match[0].length
-      })
-    }
-  }
-  // 流式：检查未闭合的 thinking
-  if (isStreaming) {
-    const unclosedThinking = content.match(/<thinking>([\s\S]*?)$/)
-    const unclosedContent = unclosedThinking?.[1]
-    if (unclosedThinking && unclosedThinking.index !== undefined && unclosedContent !== undefined && !content.includes('</thinking>')) {
-      elements.push({
-        type: 'thinking',
-        content: unclosedContent.trim(),
-        startIndex: unclosedThinking.index,
-        endIndex: content.length,
-        inProgress: true
-      })
-    }
-  }
 
-  // 2. 提取 semantic_params
+  // 1. 提取 semantic_params
   const semanticParamsRegex = /<semantic_params>([\s\S]*?)<\/semantic_params>/g
   while ((match = semanticParamsRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -91,7 +63,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 3. 提取 sql 代码块
+  // 2. 提取 sql 代码块
   const sqlRegex = /```sql\s*([\s\S]*?)```/g
   while ((match = sqlRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -121,7 +93,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 4. 提取 query_result
+  // 3. 提取 query_result
   const queryResultRegex = /<query_result>([\s\S]*?)<\/query_result>/g
   while ((match = queryResultRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -135,7 +107,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 5. 提取 chart_config
+  // 4. 提取 chart_config
   const chartConfigRegex = /<chart_config>([\s\S]*?)<\/chart_config>/g
   while ((match = chartConfigRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -149,7 +121,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 6. 提取 explanation
+  // 5. 提取 explanation
   const explanationRegex = /<explanation>([\s\S]*?)<\/explanation>/g
   while ((match = explanationRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -206,13 +178,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
 
     // 添加结构化元素
-    if (elem.type === 'thinking') {
-      result.segments.push({
-        type: 'thinking',
-        content: elem.content,
-        inProgress: elem.inProgress
-      })
-    } else if (elem.type === 'semanticParams') {
+    if (elem.type === 'semanticParams') {
       result.segments.push({
         type: 'semanticParams',
         content: elem.content,

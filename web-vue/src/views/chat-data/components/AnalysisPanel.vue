@@ -4,14 +4,13 @@
  * 展示思考过程和工具调用链路
  */
 import { computed, ref, watch, nextTick } from 'vue'
+import MarkdownIt from 'markdown-it'
 import type { SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ThinkingSegment, ToolCallInfo } from '../types'
-import StructuredMessage from './StructuredMessage.vue'
 import ToolCallList from './ToolCallList.vue'
 
 // 分析过程数据
 export interface AnalysisData {
   roundId: string              // 轮次唯一标识
-  thinkingContent: string      // 思考内容
   thinkingSegments?: ThinkingSegment[] // 按时序分段的思考内容
   toolCalls: ToolCallInfo[]    // 工具调用列表
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
@@ -36,6 +35,7 @@ const emit = defineEmits<{
 }>()
 
 const HIDDEN_TOOLS = ['load_skill_tool']
+const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
 
 // 可见的工具调用
 const visibleToolCalls = computed(() => {
@@ -49,32 +49,16 @@ const hasToolCalls = computed(() => visibleToolCalls.value.length > 0)
 // 是否有需要用户处理的指标集选择过程；自动选择结果在工具调用结果中展示。
 const hasSemanticConfigStep = computed(() => Boolean(props.data?.semanticConfigSelectRequired))
 
-const stripThinkingWrapper = (content: string): string => {
-  const match = content.match(/^<thinking>([\s\S]*?)<\/thinking>$/)
-  return stripModelThinkTags(match?.[1] ?? content)
-}
-
-const stripModelThinkTags = (content: string): string => {
-  return String(content || '')
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-    .replace(/<\/think>/gi, '')
-    .trim()
-}
-
 const thinkingSegments = computed<ThinkingSegment[]>(() => {
   const maxToolCount = visibleToolCalls.value.length
-  const segments = props.data?.thinkingSegments
+  return props.data?.thinkingSegments
     ?.filter(item => item.content)
     .map(item => ({
       ...item,
-      content: stripThinkingWrapper(item.content),
+      content: String(item.content || '').trim(),
       toolCallCount: Math.min(Math.max(0, item.toolCallCount), maxToolCount),
-    })) || []
-  if (segments.length) return segments
-  return props.data?.thinkingContent
-    ? [{ id: 'thinking-legacy', content: stripThinkingWrapper(props.data.thinkingContent), toolCallCount: 0 }]
-    : []
+    }))
+    .filter(item => item.content) || []
 })
 const hasUnderstandingStep = computed(() => thinkingSegments.value.length > 0)
 const isEnabledFlag = (value: unknown) => value === true || value === 'true' || value === 1 || value === '1'
@@ -124,6 +108,16 @@ const isTimelineEntryInProgress = (entry: TimelineEntry, index: number): boolean
 // 自动滚动
 const contentRef = ref<HTMLDivElement | null>(null)
 const isNearBottom = ref(true)
+const collapsedThinking = ref<Record<string, boolean>>({})
+
+const isThinkingCollapsed = (key: string): boolean => collapsedThinking.value[key] === true
+
+const toggleThinking = (key: string) => {
+  collapsedThinking.value = {
+    ...collapsedThinking.value,
+    [key]: !isThinkingCollapsed(key),
+  }
+}
 
 const handleContentScroll = () => {
   const container = contentRef.value
@@ -133,7 +127,7 @@ const handleContentScroll = () => {
 }
 
 watch(
-  () => [props.data?.thinkingContent, props.data?.thinkingSegments, props.data?.toolCalls, props.data?.semanticConfigSelection, props.data?.semanticConfigSelectRequired],
+  () => [props.data?.thinkingSegments, props.data?.toolCalls, props.data?.semanticConfigSelection, props.data?.semanticConfigSelectRequired],
   () => {
     if (props.isStreaming && contentRef.value && isNearBottom.value) {
       nextTick(() => {
@@ -155,6 +149,8 @@ watch(
     })
   }
 )
+
+const renderMarkdown = (content: string) => md.render(content)
 </script>
 
 <template>
@@ -247,14 +243,27 @@ watch(
           </div>
           <div class="min-w-0 flex-1 pb-6">
             <template v-if="entry.type === 'thinking'">
-              <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">思考</h4>
-              <div class="w-full min-w-0 text-sm text-gray-600">
-                <StructuredMessage
-                  :content="`<thinking>${entry.segment.content}</thinking>`"
-                  :is-streaming="isTimelineEntryInProgress(entry, index)"
-                  @copy-sql="emit('copySql', $event)"
-                />
-              </div>
+              <button
+                type="button"
+                class="mb-2 flex w-full items-center gap-2 border-none bg-transparent p-0 text-left text-sm font-medium text-gray-900 cursor-pointer"
+                @click="toggleThinking(entry.key)"
+              >
+                <i
+                  :class="[
+                    'fa-solid fa-chevron-right text-[10px] text-gray-400 transition-transform',
+                    !isThinkingCollapsed(entry.key) && 'rotate-90'
+                  ]"
+                ></i>
+                <span>思考</span>
+                <span class="ml-auto text-[11px] font-normal text-gray-400">
+                  {{ isThinkingCollapsed(entry.key) ? '展开' : '收起' }}
+                </span>
+              </button>
+              <div
+                v-if="!isThinkingCollapsed(entry.key)"
+                class="w-full min-w-0 text-sm leading-relaxed text-gray-400 markdown-body"
+                v-html="renderMarkdown(entry.segment.content)"
+              ></div>
             </template>
             <template v-else>
               <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">工具调用</h4>

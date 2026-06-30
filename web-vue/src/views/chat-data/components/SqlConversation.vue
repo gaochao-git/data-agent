@@ -142,7 +142,7 @@ const loadingParticles = Array.from({ length: 30 }, (_, index) => ({
 }))
 
 const hasAnalysisDataContent = (data: AnalysisData | null): boolean => {
-  return Boolean(data?.thinkingContent || data?.toolCalls.length || data?.semanticConfigSelection || data?.semanticConfigSelectRequired)
+  return Boolean(data?.thinkingSegments?.length || data?.toolCalls.length || data?.semanticConfigSelection || data?.semanticConfigSelectRequired)
 }
 
 // 打开分析面板
@@ -714,11 +714,11 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
       if (msgIndex >= 0) {
         const m = messages.value[msgIndex]
         if (m) {
-          const visibleContent = getConversationDisplayContent(m.content)
           const toolCallCount = getVisibleToolCalls(m.toolCalls).length
           const thinkingSegments = [...(m.thinkingSegments || [])]
           const lastSegment = thinkingSegments[thinkingSegments.length - 1]
-          const normalizedReasoningContent = stripModelThinkTags(reasoningContent)
+          const normalizedReasoningContent = String(reasoningContent || '')
+          if (!normalizedReasoningContent.trim()) return
           if (lastSegment && lastSegment.toolCallCount === toolCallCount) {
             lastSegment.content += normalizedReasoningContent
           } else {
@@ -729,10 +729,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
             })
           }
           m.thinkingSegments = thinkingSegments
-          const nextThinking = thinkingSegments
-            .map(segment => `<thinking>${segment.content}</thinking>`)
-            .join('')
-          m.content = visibleContent ? `${nextThinking}${visibleContent}` : nextThinking
           syncAnalysisPanelFromMessage(m, true)
         }
       }
@@ -1348,19 +1344,10 @@ const getConversationDisplayContent = (content: string): string => {
   return stripTechnicalContent(content)
 }
 
-const stripModelThinkTags = (content: string): string => {
-  return String(content || '')
-    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-    .replace(/<\/think>/gi, '')
-    .trim()
-}
-
 const buildAnalysisDataFromMessage = (msg: Message): AnalysisData => {
   return {
     roundId: msg.id,
-    thinkingContent: extractThinkingContent(msg.content),
-    thinkingSegments: msg.thinkingSegments || extractThinkingSegments(msg.content),
+    thinkingSegments: msg.thinkingSegments || [],
     toolCalls: getVisibleToolCalls(msg.toolCalls),
     semanticConfigSelection: msg.semanticConfigSelection || null,
     semanticConfigSelectRequired: msg.semanticConfigSelectRequired || null,
@@ -1381,47 +1368,8 @@ const syncAnalysisPanelFromMessage = (msg: Message, autoOpen: boolean) => {
   }
 }
 
-// 提取第一个 thinking 内容（兼容历史数据）
-const extractThinkingContent = (content: string): string => {
-  // 优先匹配完整闭合的 thinking 块
-  const completeMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/)
-  if (completeMatch) return `<thinking>${completeMatch[1]}</thinking>`
-  // 流式中：匹配已打开但未闭合的 thinking 标签
-  const incompleteMatch = content.match(/<thinking>([\s\S]*)$/)
-  if (incompleteMatch) return `<thinking>${incompleteMatch[1]}</thinking>`
-  return ''
-}
-
-const extractThinkingSegments = (content: string) => {
-  const segments: Array<{ id: string; content: string; toolCallCount: number }> = []
-  const completeRegex = /<thinking>([\s\S]*?)<\/thinking>/g
-  let match: RegExpExecArray | null
-  while ((match = completeRegex.exec(content)) !== null) {
-    segments.push({
-      id: `thinking-history-${segments.length}`,
-      content: match[1] || '',
-      toolCallCount: segments.length,
-    })
-  }
-  if (segments.length) return segments
-  const incompleteMatch = content.match(/<thinking>([\s\S]*)$/)
-  if (incompleteMatch) {
-    return [{
-      id: 'thinking-history-0',
-      content: incompleteMatch[1] || '',
-      toolCallCount: 0,
-    }]
-  }
-  return []
-}
-
-// 去除 thinking 内容（主对话区不显示思考过程）
-const stripThinkingContent = (content: string): string => {
-  return content.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
-}
-
 const stripTechnicalContent = (content: string): string => {
-  return stripModelThinkTags(hideSemanticConfigSelectionPayloads(stripThinkingContent(content)))
+  return hideSemanticConfigSelectionPayloads(String(content || '').trim())
     .replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
     .replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
     .trim()
@@ -1524,7 +1472,6 @@ const getSummaryText = (content: string): string => {
   if (!content) return ''
   let text = getConversationDisplayContent(content)
   // 移除所有技术标签和内容
-  text = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
   text = text.replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
   text = text.replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
   // text = text.replace(/查询结果已生成[。.]?/g, '') // 已改为输出简要说明
@@ -1539,7 +1486,7 @@ const renderSummaryMarkdown = (content: string) => {
 const createAnalysisData = (msg: Message): AnalysisData | null => {
   const data = buildAnalysisDataFromMessage(msg)
   if (!hasAnalysisDataContent(data)) return null
-  if (!hasCompletedQueryResult(msg.toolCalls) && !data.semanticConfigSelection && !data.semanticConfigSelectRequired && !data.thinkingContent && data.toolCalls.length === 0) return null
+  if (!hasCompletedQueryResult(msg.toolCalls) && !data.semanticConfigSelection && !data.semanticConfigSelectRequired && !data.thinkingSegments?.length && data.toolCalls.length === 0) return null
   return data
 }
 
@@ -1566,7 +1513,7 @@ const getStreamingStageText = (msg: Message): string => {
 
 const shouldShowStreamingProgress = (msg: Message): boolean => {
   return Boolean(
-    extractThinkingContent(msg.content)
+    msg.thinkingSegments?.length
     || getVisibleToolCalls(msg.toolCalls).length > 0
     || msg.semanticConfigSelection
     || msg.semanticConfigSelectRequired
