@@ -80,6 +80,45 @@ def normalize_temporal_exclusive_upper(value: Any, *, inclusive: bool) -> str | 
     return format_temporal_value(moment)
 
 
+def normalize_default_filter(filter_item: dict[str, Any], dimension: Any, value: Any) -> list[Any]:
+    return [{
+        "dimension": dimension,
+        "operator": filter_item.get("operator"),
+        "value": value,
+    }]
+
+
+def normalize_temporal_between_filter(dimension: Any, value: Any) -> list[Any] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    lower = normalize_temporal_lower(value[0])
+    upper = normalize_temporal_exclusive_upper(value[1], inclusive=True)
+    if not lower or not upper:
+        return None
+    return [
+        {"dimension": dimension, "operator": ">=", "value": lower},
+        {"dimension": dimension, "operator": "<", "value": upper},
+    ]
+
+
+def normalize_temporal_comparison_filter(dimension: Any, operator: str, value: Any) -> list[Any] | None:
+    if operator in (">=", ">"):
+        normalized_value = normalize_temporal_lower(value)
+        if normalized_value:
+            return [{"dimension": dimension, "operator": operator, "value": normalized_value}]
+        return None
+    if operator == "<":
+        upper = normalize_temporal_exclusive_upper(value, inclusive=False)
+        if upper:
+            return [{"dimension": dimension, "operator": "<", "value": upper}]
+        return None
+    if operator == "<=":
+        upper = normalize_temporal_exclusive_upper(value, inclusive=True)
+        if upper:
+            return [{"dimension": dimension, "operator": "<", "value": upper}]
+    return None
+
+
 def normalize_filter(filter_item: Any) -> list[Any]:
     if not isinstance(filter_item, dict):
         return [filter_item]
@@ -87,33 +126,16 @@ def normalize_filter(filter_item: Any) -> list[Any]:
     operator = str(filter_item.get("operator") or "").strip().lower()
     value = filter_item.get("value")
 
-    if is_temporal_dimension(dimension) and operator == "between" and isinstance(value, (list, tuple)) and len(value) == 2:
-        lower = normalize_temporal_lower(value[0])
-        upper = normalize_temporal_exclusive_upper(value[1], inclusive=True)
-        if lower and upper:
-            return [
-                {"dimension": dimension, "operator": ">=", "value": lower},
-                {"dimension": dimension, "operator": "<", "value": upper},
-            ]
-
     if is_temporal_dimension(dimension):
-        normalized_value = normalize_temporal_lower(value)
-        if operator in (">=", ">") and normalized_value:
-            return [{"dimension": dimension, "operator": operator, "value": normalized_value}]
-        if operator == "<":
-            upper = normalize_temporal_exclusive_upper(value, inclusive=False)
-            if upper:
-                return [{"dimension": dimension, "operator": "<", "value": upper}]
-        if operator == "<=":
-            upper = normalize_temporal_exclusive_upper(value, inclusive=True)
-            if upper:
-                return [{"dimension": dimension, "operator": "<", "value": upper}]
+        if operator == "between":
+            normalized_between = normalize_temporal_between_filter(dimension, value)
+            if normalized_between:
+                return normalized_between
+        normalized_comparison = normalize_temporal_comparison_filter(dimension, operator, value)
+        if normalized_comparison:
+            return normalized_comparison
 
-    return [{
-        "dimension": dimension,
-        "operator": filter_item.get("operator"),
-        "value": value,
-    }]
+    return normalize_default_filter(filter_item, dimension, value)
 
 
 def normalize_filters(value: Any) -> list[Any]:

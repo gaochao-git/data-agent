@@ -110,30 +110,46 @@ def is_seven_tuple_case(case: dict[str, Any]) -> bool:
     return any(key in case for key in ("nl", "gold_dsl", "gold_sql"))
 
 
+def validate_basic_case(case: Any, path: Path, index: int) -> None:
+    if not isinstance(case, dict):
+        raise ValueError(f"case 必须是对象: {path}#{index}")
+    if not case_question(case):
+        raise ValueError(f"case 缺少 nl/question: {path}#{index}")
+    if not case_expected_dsl(case):
+        raise ValueError(f"case 缺少 gold_dsl/expected_dsl: {path}#{index}")
+
+
+def validate_seven_tuple_fields(case: dict[str, Any], path: Path, index: int) -> None:
+    missing = [key for key in SEVEN_TUPLE_KEYS if key not in case]
+    if missing:
+        raise ValueError(f"7 元组 case 字段不完整: {path}#{index} missing={missing}")
+    if case.get("query_type") not in QUERY_TYPES:
+        raise ValueError(f"query_type 非法: {path}#{index} value={case.get('query_type')}")
+    if case.get("difficulty") not in DIFFICULTIES:
+        raise ValueError(f"difficulty 非法: {path}#{index} value={case.get('difficulty')}")
+    if not str(case.get("business_domain") or "").strip():
+        raise ValueError(f"business_domain 不能为空: {path}#{index}")
+
+
+def normalize_case_source(case: dict[str, Any], path: Path, index: int) -> None:
+    source = _LEGACY_SOURCE_MAP.get(case.get("source"), case.get("source"))
+    if source not in SOURCES:
+        raise ValueError(f"source 非法: {path}#{index} value={case.get('source')}")
+    case["source"] = source
+
+
+def validate_case(case: Any, path: Path, index: int) -> None:
+    validate_basic_case(case, path, index)
+    if not is_seven_tuple_case(case):
+        return
+    validate_seven_tuple_fields(case, path, index)
+    normalize_case_source(case, path, index)
+
+
 def validate_cases(cases: list[dict[str, Any]], path: Path) -> None:
     """校验 7 元组字段并保留旧格式兼容。"""
     for index, case in enumerate(cases, start=1):
-        if not isinstance(case, dict):
-            raise ValueError(f"case 必须是对象: {path}#{index}")
-        if not case_question(case):
-            raise ValueError(f"case 缺少 nl/question: {path}#{index}")
-        if not case_expected_dsl(case):
-            raise ValueError(f"case 缺少 gold_dsl/expected_dsl: {path}#{index}")
-        if not is_seven_tuple_case(case):
-            continue
-        missing = [key for key in SEVEN_TUPLE_KEYS if key not in case]
-        if missing:
-            raise ValueError(f"7 元组 case 字段不完整: {path}#{index} missing={missing}")
-        if case.get("query_type") not in QUERY_TYPES:
-            raise ValueError(f"query_type 非法: {path}#{index} value={case.get('query_type')}")
-        if case.get("difficulty") not in DIFFICULTIES:
-            raise ValueError(f"difficulty 非法: {path}#{index} value={case.get('difficulty')}")
-        source = _LEGACY_SOURCE_MAP.get(case.get("source"), case.get("source"))
-        if source not in SOURCES:
-            raise ValueError(f"source 非法: {path}#{index} value={case.get('source')}")
-        case["source"] = source
-        if not str(case.get("business_domain") or "").strip():
-            raise ValueError(f"business_domain 不能为空: {path}#{index}")
+        validate_case(case, path, index)
 
 
 def normalize_sql(sql: str) -> str:
@@ -391,6 +407,153 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
     return await _execute_sql_real(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
 
 
+def build_completion_options(args: AccuracyRunConfig, datasource_id: str, semantic_config_id: str) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "datasource_id": datasource_id,
+        "semantic_config_id": semantic_config_id,
+        "mode": args.query_mode,
+    }
+    if args.model_id:
+        options["model_id"] = args.model_id
+    return options
+
+
+async def collect_live_case_traces(
+    *,
+    args: AccuracyRunConfig,
+    question: str,
+    conversation_id: str,
+    datasource_id: str,
+    semantic_config_id: str,
+) -> tuple[list[ToolTrace], str]:
+    return await asyncio.wait_for(
+        consume_internal_completion(
+            conversation_id=conversation_id,
+            agent_id=args.agent_id,
+            query=question,
+            options=build_completion_options(args, datasource_id, semantic_config_id),
+            user_id=args.user_id,
+        ),
+        timeout=args.request_timeout,
+    )
+
+
+async def compile_or_reuse_agent_sql(
+    *,
+    args: AccuracyRunConfig,
+    datasource_id: str,
+    semantic_config_id: str,
+    predicted_dsl: dict[str, Any] | None,
+    user_query: str,
+    dsl_payload: dict[str, Any],
+    agent_tool_sql: str,
+) -> dict[str, Any]:
+    if not args.local_compile:
+        return {
+            "compile_success": bool(dsl_payload.get("success")) if dsl_payload else False,
+            "generated_sql": agent_tool_sql,
+            "compile_result": dsl_payload,
+        }
+    compile_result = await compile_dsl_locally(
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        dsl=predicted_dsl,
+        user_query=user_query,
+    )
+    return {
+        "compile_success": bool(compile_result.get("success")),
+        "generated_sql": str(compile_result.get("sql") or ""),
+        "compile_result": compile_result,
+    }
+
+
+async def maybe_execute_generated_sql(
+    *,
+    args: AccuracyRunConfig,
+    compile_success: bool,
+    generated_sql: str,
+    datasource_id: str,
+) -> tuple[bool | None, str]:
+    if args.skip_execution or not compile_success:
+        return None, ""
+    execution_result = await execute_sql_locally(sql=generated_sql, datasource_id=datasource_id, user_id=args.user_id)
+    execution_success = bool(execution_result.get("success"))
+    if execution_success:
+        return execution_success, ""
+    return execution_success, str(execution_result.get("error") or "SQL 执行失败")
+
+
+def resolve_live_case_error(
+    *,
+    stream_error: str,
+    dsl_trace: ToolTrace | None,
+    compile_success: bool,
+    compile_result: dict[str, Any],
+) -> str:
+    if not dsl_trace:
+        return stream_error or "未捕获到 dsl2sql_tool 调用"
+    if not compile_success:
+        return stream_error or str(compile_result.get("error") or "DSL2SQL 编译失败")
+    return stream_error
+
+
+def build_failed_live_case_result(
+    *,
+    case: dict[str, Any],
+    question: str,
+    started_at: float,
+    conversation_id: str,
+    error: Exception,
+) -> LiveCaseResult:
+    return LiveCaseResult(
+        case_id=case_id(case),
+        question=question,
+        status="failed",
+        dsl_score=score_dsl(None, case_expected_dsl(case)),
+        sql_score=score_sql("", case_gold_sql(case)),
+        compile_success=False,
+        execution_success=None,
+        metadata=case_metadata(case),
+        error=repr(error),
+        elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+        conversation_id=conversation_id,
+    )
+
+
+def build_scored_live_case_result(
+    *,
+    case: dict[str, Any],
+    question: str,
+    started_at: float,
+    conversation_id: str,
+    dsl_trace: ToolTrace | None,
+    dsl_score: dict[str, Any],
+    sql_score: dict[str, Any],
+    compile_success: bool,
+    execution_success: bool | None,
+    generated_sql: str,
+    agent_tool_sql: str,
+    error: str,
+    tool_traces: list[ToolTrace],
+) -> LiveCaseResult:
+    return LiveCaseResult(
+        case_id=case_id(case),
+        question=question,
+        status="scored" if dsl_trace else "failed",
+        dsl_score=dsl_score,
+        sql_score=sql_score,
+        compile_success=compile_success,
+        execution_success=execution_success,
+        metadata=case_metadata(case),
+        generated_sql=generated_sql,
+        agent_tool_sql=agent_tool_sql,
+        error=error,
+        elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+        conversation_id=conversation_id,
+        tool_traces=tool_traces,
+    )
+
+
 async def run_live_case(
     *,
     args: AccuracyRunConfig,
@@ -403,82 +566,69 @@ async def run_live_case(
     conversation_id = ""
     try:
         conversation_id = str(uuid.uuid4())
-        options = {
-            "datasource_id": datasource_id,
-            "semantic_config_id": semantic_config_id,
-            "mode": args.query_mode,
-        }
-        if args.model_id:
-            options["model_id"] = args.model_id
-        tool_traces, stream_error = await asyncio.wait_for(
-            consume_internal_completion(
-                conversation_id=conversation_id,
-                agent_id=args.agent_id,
-                query=question,
-                options=options,
-                user_id=args.user_id,
-            ),
-            timeout=args.request_timeout,
+        tool_traces, stream_error = await collect_live_case_traces(
+            args=args,
+            question=question,
+            conversation_id=conversation_id,
+            datasource_id=datasource_id,
+            semantic_config_id=semantic_config_id,
         )
         dsl_trace, dsl_payload = choose_final_dsl2sql_trace(tool_traces)
         predicted_dsl = dsl_payload.get("dsl") if isinstance(dsl_payload, dict) else None
         dsl_score = score_dsl(predicted_dsl, case_expected_dsl(case))
         agent_tool_sql = str(dsl_payload.get("sql") or "") if dsl_payload else ""
+        compile_state = await compile_or_reuse_agent_sql(
+            args=args,
+            datasource_id=datasource_id,
+            semantic_config_id=semantic_config_id,
+            predicted_dsl=predicted_dsl,
+            user_query=question,
+            dsl_payload=dsl_payload,
+            agent_tool_sql=agent_tool_sql,
+        )
+        compile_success = bool(compile_state["compile_success"])
+        generated_sql = str(compile_state["generated_sql"])
+        compile_result = compile_state["compile_result"]
+        execution_success, execution_error = (None, "")
         if args.local_compile:
-            compile_result = await compile_dsl_locally(
+            execution_success, execution_error = await maybe_execute_generated_sql(
+                args=args,
+                compile_success=compile_success,
+                generated_sql=generated_sql,
                 datasource_id=datasource_id,
-                semantic_config_id=semantic_config_id,
-                dsl=predicted_dsl,
-                user_query=question,
             )
-            compile_success = bool(compile_result.get("success"))
-            generated_sql = str(compile_result.get("sql") or "")
-            execution_success = None
-            if compile_success and not args.skip_execution:
-                execution_result = await execute_sql_locally(sql=generated_sql, datasource_id=datasource_id, user_id=args.user_id)
-                execution_success = bool(execution_result.get("success"))
-                if not execution_success:
-                    stream_error = stream_error or str(execution_result.get("error") or "SQL 执行失败")
         else:
-            compile_success = bool(dsl_payload.get("success")) if dsl_payload else False
-            generated_sql = agent_tool_sql
             execution_success = summarize_execution_success(tool_traces)
-        error = stream_error
-        if not dsl_trace:
-            error = error or "未捕获到 dsl2sql_tool 调用"
-        elif not compile_success:
-            error = error or str((compile_result if args.local_compile else dsl_payload).get("error") or "DSL2SQL 编译失败")
-        status = "scored" if dsl_trace else "failed"
+        stream_error = stream_error or execution_error
+        error = resolve_live_case_error(
+            stream_error=stream_error,
+            dsl_trace=dsl_trace,
+            compile_success=compile_success,
+            compile_result=compile_result,
+        )
         sql_score = score_sql(generated_sql, case_gold_sql(case))
-        return LiveCaseResult(
-            case_id=case_id(case),
+        return build_scored_live_case_result(
+            case=case,
             question=question,
-            status=status,
+            started_at=started_at,
+            conversation_id=conversation_id,
+            dsl_trace=dsl_trace,
             dsl_score=dsl_score,
             sql_score=sql_score,
             compile_success=compile_success,
             execution_success=execution_success,
-            metadata=case_metadata(case),
             generated_sql=generated_sql,
             agent_tool_sql=agent_tool_sql,
             error=error,
-            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-            conversation_id=conversation_id,
             tool_traces=tool_traces,
         )
     except Exception as exc:
-        return LiveCaseResult(
-            case_id=case_id(case),
+        return build_failed_live_case_result(
+            case=case,
             question=question,
-            status="failed",
-            dsl_score=score_dsl(None, case_expected_dsl(case)),
-            sql_score=score_sql("", case_gold_sql(case)),
-            compile_success=False,
-            execution_success=None,
-            metadata=case_metadata(case),
-            error=repr(exc),
-            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+            started_at=started_at,
             conversation_id=conversation_id,
+            error=exc,
         )
 
 
@@ -503,38 +653,57 @@ def live_result_to_dict(result: LiveCaseResult, include_traces: bool) -> dict[st
     return payload
 
 
-def build_live_report(results: list[LiveCaseResult], include_traces: bool) -> dict[str, Any]:
-    total = len(results)
+def collect_live_report_counts(results: list[LiveCaseResult]) -> dict[str, Any]:
     scored = [item for item in results if item.status == "scored"]
-    exact = sum(1 for item in scored if item.dsl_score.get("dsl_exact_match"))
     sql_scored = [item for item in scored if item.sql_score.get("sql_exact_match") is not None]
-    sql_exact = sum(1 for item in sql_scored if item.sql_score.get("sql_exact_match"))
-    compile_success = sum(1 for item in scored if item.compile_success)
     executable = [item for item in results if item.execution_success is not None]
-    execution_success = sum(1 for item in executable if item.execution_success)
-    semantic_accuracy = (
-        sum(float(item.dsl_score.get("semantic_accuracy") or 0) for item in scored) / len(scored)
-        if scored else 0.0
-    )
     return {
-        "summary": {
-            "total": total,
-            "scored": len(scored),
-            "failed": total - len(scored),
-            "semantic_accuracy": semantic_accuracy,
-            "compile_success_count": compile_success,
-            "dsl2sql_compile_success_rate": compile_success / len(scored) if scored else 0.0,
-            "execution_checked": len(executable),
-            "execution_success_count": execution_success,
-            "sql_execution_success_rate": execution_success / len(executable) if executable else None,
-            "debug_metrics": {
-                "dsl_exact_match_count": exact,
-                "dsl_exact_match_rate": exact / len(scored) if scored else 0.0,
-                "sql_exact_match_count": sql_exact,
-                "sql_exact_match_rate": sql_exact / len(sql_scored) if sql_scored else None,
-                "avg_dsl_slot_accuracy": semantic_accuracy,
-            },
+        "total": len(results),
+        "scored": scored,
+        "sql_scored": sql_scored,
+        "executable": executable,
+        "dsl_exact": sum(1 for item in scored if item.dsl_score.get("dsl_exact_match")),
+        "sql_exact": sum(1 for item in sql_scored if item.sql_score.get("sql_exact_match")),
+        "compile_success": sum(1 for item in scored if item.compile_success),
+        "execution_success": sum(1 for item in executable if item.execution_success),
+    }
+
+
+def calculate_semantic_accuracy(scored: list[LiveCaseResult]) -> float:
+    if not scored:
+        return 0.0
+    return sum(float(item.dsl_score.get("semantic_accuracy") or 0) for item in scored) / len(scored)
+
+
+def build_live_summary(counts: dict[str, Any]) -> dict[str, Any]:
+    scored = counts["scored"]
+    sql_scored = counts["sql_scored"]
+    executable = counts["executable"]
+    semantic_accuracy = calculate_semantic_accuracy(scored)
+    return {
+        "total": counts["total"],
+        "scored": len(scored),
+        "failed": counts["total"] - len(scored),
+        "semantic_accuracy": semantic_accuracy,
+        "compile_success_count": counts["compile_success"],
+        "dsl2sql_compile_success_rate": counts["compile_success"] / len(scored) if scored else 0.0,
+        "execution_checked": len(executable),
+        "execution_success_count": counts["execution_success"],
+        "sql_execution_success_rate": counts["execution_success"] / len(executable) if executable else None,
+        "debug_metrics": {
+            "dsl_exact_match_count": counts["dsl_exact"],
+            "dsl_exact_match_rate": counts["dsl_exact"] / len(scored) if scored else 0.0,
+            "sql_exact_match_count": counts["sql_exact"],
+            "sql_exact_match_rate": counts["sql_exact"] / len(sql_scored) if sql_scored else None,
+            "avg_dsl_slot_accuracy": semantic_accuracy,
         },
+    }
+
+
+def build_live_report(results: list[LiveCaseResult], include_traces: bool) -> dict[str, Any]:
+    counts = collect_live_report_counts(results)
+    return {
+        "summary": build_live_summary(counts),
         "results": [live_result_to_dict(item, include_traces) for item in results],
     }
 

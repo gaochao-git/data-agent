@@ -81,6 +81,9 @@ def test_scorer_filter_and_slot_mismatch_branches():
     assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}) == [
         {"dimension": "下单时间", "operator": "between", "value": ["bad", "2026-06-02"]}
     ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": "2026-06-02"}) == [
+        {"dimension": "下单时间", "operator": "between", "value": "2026-06-02"}
+    ]
     assert scorers.normalize_filter({"dimension": "下单时间", "operator": "between", "value": ["2026-06-01", "2026-06-02"]}) == [
         {"dimension": "下单时间", "operator": ">=", "value": "2026-06-01 00:00:00"},
         {"dimension": "下单时间", "operator": "<", "value": "2026-06-03 00:00:00"},
@@ -93,6 +96,9 @@ def test_scorer_filter_and_slot_mismatch_branches():
     ]
     assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<", "value": "2026-06-01"}) == [
         {"dimension": "下单时间", "operator": "<", "value": "2026-06-01 00:00:00"}
+    ]
+    assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<", "value": "bad"}) == [
+        {"dimension": "下单时间", "operator": "<", "value": "bad"}
     ]
     assert scorers.normalize_filter({"dimension": "下单时间", "operator": "<=", "value": "bad"}) == [
         {"dimension": "下单时间", "operator": "<=", "value": "bad"}
@@ -495,6 +501,9 @@ async def test_run_live_case_failure_paths_and_case_selection(monkeypatch):
 
 
 def test_live_report_handles_failed_and_unchecked_execution():
+    empty_report = runner.build_live_report([], include_traces=False)
+    assert empty_report["summary"]["semantic_accuracy"] == 0.0
+
     failed = LiveCaseResult(
         case_id="failed",
         question="失败用例",
