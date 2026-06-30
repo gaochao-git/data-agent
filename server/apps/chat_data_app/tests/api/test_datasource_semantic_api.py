@@ -1,5 +1,5 @@
 from apps.chat_data_app import routes
-from apps.chat_data_app.route_modules import semantic_config as semantic_routes
+from apps.chat_data_app.routers import semantic_config as semantic_routes
 
 
 def test_list_datasources_api_contract(client, fake_datasource_manager, monkeypatch):

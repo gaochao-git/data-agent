@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat_data_app.route_modules import dashboard as dashboard_routes
+from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.schema import (
     DashboardCreateRequest,
     DashboardFromSpecRequest,

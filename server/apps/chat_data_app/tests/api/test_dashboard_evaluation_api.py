@@ -1,5 +1,5 @@
-from apps.chat_data_app.route_modules import dashboard as dashboard_routes
-from apps.chat_data_app.route_modules import evaluation as evaluation_routes
+from apps.chat_data_app.routers import dashboard as dashboard_routes
+from apps.chat_data_app.routers import evaluation as evaluation_routes
 
 
 def test_list_dashboards_api_contract(client, auth_headers, fake_dashboard_service, monkeypatch):

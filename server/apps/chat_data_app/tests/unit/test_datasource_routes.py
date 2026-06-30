@@ -17,9 +17,9 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app import routes
-from apps.chat_data_app.route_modules import dashboard as dashboard_routes
-from apps.chat_data_app.route_modules import common as common_routes
-from apps.chat_data_app.route_modules import semantic_config as semantic_config_routes
+from apps.chat_data_app.routers import dashboard as dashboard_routes
+from apps.chat_data_app.routers import common as common_routes
+from apps.chat_data_app.routers import semantic_config as semantic_config_routes
 from apps.chat_data_app.services import dashboard_spec_service
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.routes import (

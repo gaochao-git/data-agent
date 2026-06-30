@@ -17,7 +17,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.route_modules import evaluation
+from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from utils.lang_util.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 

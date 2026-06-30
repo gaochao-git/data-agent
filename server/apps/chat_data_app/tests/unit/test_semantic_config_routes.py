@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.route_modules import semantic_config
+from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_auto_prefill_prompt,

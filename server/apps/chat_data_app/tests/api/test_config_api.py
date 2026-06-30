@@ -1,4 +1,4 @@
-from apps.chat_data_app.route_modules import config as config_routes
+from apps.chat_data_app.routers import config as config_routes
 
 
 def test_models_api_contract(client, monkeypatch):

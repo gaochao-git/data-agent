@@ -1,4 +1,4 @@
-"""Shared helpers for ChatData route modules."""
+"""Shared helpers for ChatData routers."""
 
 from __future__ import annotations
 

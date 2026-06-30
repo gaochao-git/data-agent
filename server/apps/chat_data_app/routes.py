@@ -53,15 +53,15 @@ from utils.lang_util.models import (
 )
 from utils.logger import get_logger
 from utils.response import business_response
-from .route_modules.common import _build_table_columns_map, _get_current_user, _optional_current_user
+from .routers.common import _build_table_columns_map, _get_current_user, _optional_current_user
 from .services.runtime_config import read_positive_int_env
-from .route_modules.config import router as config_router
-from .route_modules.evaluation import router as evaluation_router
-from .route_modules.data_analyze_workspace import router as data_analyze_workspace_router
-from .route_modules.skills import router as skills_router
-from .route_modules.dashboard import DashboardRuntime, configure_dashboard_runtime, router as dashboard_router
-from .route_modules.semantic_config import router as semantic_config_router
-from .route_modules.dashboard import (
+from .routers.config import router as config_router
+from .routers.evaluation import router as evaluation_router
+from .routers.data_analyze_workspace import router as data_analyze_workspace_router
+from .routers.skills import router as skills_router
+from .routers.dashboard import DashboardRuntime, configure_dashboard_runtime, router as dashboard_router
+from .routers.semantic_config import router as semantic_config_router
+from .routers.dashboard import (
     _run_dashboard_batch_task,
     _run_dashboard_panel_task,
 )

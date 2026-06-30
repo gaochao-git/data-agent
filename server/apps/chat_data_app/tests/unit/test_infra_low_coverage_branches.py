@@ -14,7 +14,7 @@ import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.route_modules import common, data_analyze_workspace
+from apps.chat_data_app.routers import common, data_analyze_workspace
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils import response as response_module

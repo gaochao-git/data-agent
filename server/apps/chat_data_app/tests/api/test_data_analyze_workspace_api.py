@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from apps.chat_data_app.route_modules import data_analyze_workspace as workspace_routes
+from apps.chat_data_app.routers import data_analyze_workspace as workspace_routes
 
 
 def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, tmp_path):

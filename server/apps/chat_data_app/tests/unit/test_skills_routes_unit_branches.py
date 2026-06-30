@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from apps.chat_data_app.route_modules import skills as skills_routes
+from apps.chat_data_app.routers import skills as skills_routes
 from apps.chat_data_app.schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 
 

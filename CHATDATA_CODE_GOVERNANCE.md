@@ -36,7 +36,7 @@
 
 - 认证 helper 存在多处包装：
   - `server/auth.py`
-  - `server/apps/chat_data_app/route_modules/common.py`
+  - `server/apps/chat_data_app/routers/common.py`
   - `server/utils/lang_util/conversation_router.py`
 - 统一响应主入口是 `server/utils/response.py`，但不少接口仍在 `except Exception` 后拼接 `str(e)` 返回，错误输出口径需要继续收敛。
 - `server/utils/lang_util/conversation_router.py` 名义上是公共会话路由，但路径和业务行为已经偏 ChatData，需要明确边界。
@@ -178,4 +178,3 @@
 3. 小范围修改，不混入无关重构。
 4. 跑对应单测、导入检查或前端构建。
 5. 更新本文档中对应条目的状态或补充发现。
-
