@@ -553,7 +553,7 @@ onUnmounted(() => {
         <span>暂无指标集</span>
       </div>
 
-      <div v-else class="flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">
+      <div v-else class="semantic-config-list flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">
         <div class="mb-2 px-3">
           <div class="flex h-8 items-center rounded-md border border-[#E5E6EB] bg-white px-2.5 text-[#86909C] transition-colors focus-within:border-[#165DFF]">
             <i class="fa-solid fa-magnifying-glass mr-2 text-[11px]"></i>
@@ -579,6 +579,7 @@ onUnmounted(() => {
             'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
             selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
           ]"
+          :title="`智能选择指标集：可用指标集 ${semanticConfigs.length} 个，表 ${physicalTableCount} 张`"
           @click="handleSelectConfig(null)"
         >
           <span
@@ -592,7 +593,7 @@ onUnmounted(() => {
           </span>
           <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
           <span
-            class="ml-2 shrink-0 text-[10px] text-[#939495]"
+            class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
             :title="`可用指标集：${semanticConfigs.length}；表：${physicalTableCount}`"
           >
             {{ getSmartSelectionSummary() }}
@@ -622,6 +623,7 @@ onUnmounted(() => {
               selectedConfigId === config.id ? 'bg-[#E8F3FF]' : '',
               expandedConfigIds.has(config.id) ? 'text-[#1D2129]' : ''
             ]"
+            :title="`${getConfigDisplayName(config)}：${getConfigSummary(config)}`"
             @click="toggleConfig(config.id)"
           >
             <button
@@ -641,7 +643,7 @@ onUnmounted(() => {
               {{ getConfigDisplayName(config) }}
             </span>
             <span
-              class="ml-2 shrink-0 text-[10px] text-[#939495]"
+              class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
               :title="`${getConfigDisplayName(config)}：${getConfigSummary(config)}`"
             >
               {{ getConfigSummary(config) }}
@@ -781,3 +783,19 @@ onUnmounted(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.semantic-config-list {
+  container-type: inline-size;
+}
+
+.semantic-config-summary {
+  display: none;
+}
+
+@container (min-width: 320px) {
+  .semantic-config-summary {
+    display: inline;
+  }
+}
+</style>
