@@ -1,22 +1,32 @@
 import type { SemanticConfigItem } from '../types'
 
+const addSemanticConfigTableKey = (tableKeys: Set<string>, table?: string, alias?: string) => {
+  const tableName = String(table || '').trim()
+  const tableAlias = String(alias || tableName).trim()
+  const tableKey = tableName || tableAlias
+  if (tableKey) {
+    tableKeys.add(tableKey)
+  }
+}
+
+const collectSemanticConfigTableKeys = (config: SemanticConfigItem, tableKeys: Set<string>) => {
+  ;(config.metrics || []).forEach(item => addSemanticConfigTableKey(tableKeys, item.table, item.table_alias))
+  ;(config.dimensions || []).forEach(item => addSemanticConfigTableKey(tableKeys, item.table, item.table_alias))
+  ;(config.relationships || []).forEach(item => {
+    addSemanticConfigTableKey(tableKeys, item.left_table, item.left_alias)
+    addSemanticConfigTableKey(tableKeys, item.right_table, item.right_alias)
+  })
+}
+
 export const getSemanticConfigTableCount = (config: SemanticConfigItem): number => {
   const tableKeys = new Set<string>()
-  const addTable = (table?: string, alias?: string) => {
-    const tableName = String(table || '').trim()
-    const tableAlias = String(alias || tableName).trim()
-    if (tableAlias) {
-      tableKeys.add(tableAlias)
-    }
-  }
+  collectSemanticConfigTableKeys(config, tableKeys)
+  return tableKeys.size
+}
 
-  ;(config.metrics || []).forEach(item => addTable(item.table, item.table_alias))
-  ;(config.dimensions || []).forEach(item => addTable(item.table, item.table_alias))
-  ;(config.relationships || []).forEach(item => {
-    addTable(item.left_table, item.left_alias)
-    addTable(item.right_table, item.right_alias)
-  })
-
+export const getSemanticConfigsTableCount = (configs: SemanticConfigItem[]): number => {
+  const tableKeys = new Set<string>()
+  configs.forEach(config => collectSemanticConfigTableKeys(config, tableKeys))
   return tableKeys.size
 }
 

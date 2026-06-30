@@ -5,7 +5,7 @@
 export { formatSql, parseSqlStatements } from './sqlFormatter'
 export { hideSemanticConfigSelectionPayloads, normalizeMarkdownFences } from './markdown'
 export { parseStructuredContent } from './parseContent'
-export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount } from './semanticConfig'
+export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export {
   buildSemanticParamsFromDsl,
   extractGeneratedSqlFromToolCall,

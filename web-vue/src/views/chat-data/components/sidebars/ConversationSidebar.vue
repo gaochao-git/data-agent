@@ -7,7 +7,7 @@
 import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { getSemanticConfigs } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
-import { getSemanticConfigTableCount } from '../../utils'
+import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
 import {
   buildFieldDictSection,
   createTooltipSection,
@@ -91,11 +91,7 @@ const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
 const internalIsLoadingConfigs = ref(false)
 const semanticConfigs = computed(() => props.semanticConfigs ?? internalSemanticConfigs.value)
 const isLoadingConfigs = computed(() => props.loadingConfigs ?? internalIsLoadingConfigs.value)
-const physicalTableCount = computed(() => {
-  return new Set((props.tables || [])
-    .map(table => String(table.table_name || '').trim())
-    .filter(Boolean)).size
-})
+const semanticConfigTableCount = computed(() => getSemanticConfigsTableCount(semanticConfigs.value))
 const configSearchKeyword = ref('')
 const dimensionSearchKeywords = reactive<Record<string, string>>({})
 const metricSearchKeywords = reactive<Record<string, string>>({})
@@ -167,7 +163,7 @@ const filteredSemanticConfigs = computed(() => {
 })
 
 const getSmartSelectionSummary = () => {
-  return `${semanticConfigs.value.length}指标集/${physicalTableCount.value}表`
+  return `${semanticConfigs.value.length}指标集/${semanticConfigTableCount.value}表`
 }
 
 const getConfigSummary = (config: SemanticConfigItem) => {
@@ -579,7 +575,7 @@ onUnmounted(() => {
             'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
             selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
           ]"
-          :title="`智能选择指标集：可用指标集 ${semanticConfigs.length} 个，表 ${physicalTableCount} 张`"
+          :title="`智能选择指标集：可用指标集 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
           @click="handleSelectConfig(null)"
         >
           <span
@@ -594,7 +590,7 @@ onUnmounted(() => {
           <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
           <span
             class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
-            :title="`可用指标集：${semanticConfigs.length}；表：${physicalTableCount}`"
+            :title="`可用指标集：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
           >
             {{ getSmartSelectionSummary() }}
           </span>
