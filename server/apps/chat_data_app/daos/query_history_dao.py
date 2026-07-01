@@ -1,4 +1,4 @@
-c"""查询历史数据访问层。"""
+"""查询历史数据访问层。"""
 
 from __future__ import annotations
 
