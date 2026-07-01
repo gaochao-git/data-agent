@@ -1,4 +1,4 @@
-"""ChatData 用户技能数据库存储。"""
+"""ChatData 用户技能数据访问层。"""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ def get_session():
     return session_context()
 
 
-class SkillDBStore:
-    """封装用户技能元数据和收藏关系读写。"""
+class SkillDao:
+    """封装用户技能元数据和收藏关系数据库读写。"""
 
     def _skill_visible_filter(self, user_id: str):
         return or_(

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from utils.logger import get_logger
 from utils.storage_paths import DATA_ROOT
 from ..agent.skills import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
-from .skill_store import SkillDBStore
+from ..daos.skill_dao import SkillDao
 
 logger = get_logger(__name__)
 USER_SKILL_ROOT = Path(DATA_ROOT) / "chat_data_skills" / "user"
@@ -273,19 +273,19 @@ class SkillService:
     """提供技能发现、详情和缓存刷新能力。"""
 
     def __init__(self):
-        self._store: SkillDBStore | None = None
+        self._dao: SkillDao | None = None
 
     @property
-    def store(self) -> SkillDBStore:
-        """懒加载数据库存储，避免无数据库环境导入即失败。"""
-        if self._store is None:
-            self._store = SkillDBStore()
-        return self._store
+    def dao(self) -> SkillDao:
+        """懒加载数据库访问层，避免无数据库环境导入即失败。"""
+        if self._dao is None:
+            self._dao = SkillDao()
+        return self._dao
 
     async def _safe_db_skills_async(self, user_id: str = "", include_disabled: bool = False) -> Optional[List[Dict[str, Any]]]:
         """异步读取数据库技能；表未初始化时返回 None 并保留内置技能能力。"""
         try:
-            return await self.store.list_skills_async(user_id=user_id, include_disabled=include_disabled)
+            return await self.dao.list_skills_async(user_id=user_id, include_disabled=include_disabled)
         except Exception as err:
             logger.warning("读取技能表失败，回退内置技能: %s", err)
             return None
@@ -299,7 +299,7 @@ class SkillService:
             if not skill_name:
                 continue
             try:
-                existing = await self.store.get_skill_async(skill_name, user_id=operator)
+                existing = await self.dao.get_skill_async(skill_name, user_id=operator)
                 values = {
                     "skill_title": item.get("title") or skill_name,
                     "skill_desc": item.get("description") or "",
@@ -312,10 +312,10 @@ class SkillService:
                     "skill_root_dir": str(Path(str(item.get("path") or "")).parent),
                 }
                 if existing:
-                    await self.store.update_skill_async(str(existing.get("skill_id") or skill_name), values, update_by=operator, update_by_name=operator_name)
+                    await self.dao.update_skill_async(str(existing.get("skill_id") or skill_name), values, update_by=operator, update_by_name=operator_name)
                 else:
                     skill_id = f"sys_{skill_name}"
-                    await self.store.create_skill_with_version_async({
+                    await self.dao.create_skill_with_version_async({
                         "skill_id": skill_id,
                         "skill_name": skill_name,
                         "skill_title": values["skill_title"],
@@ -446,7 +446,7 @@ class SkillService:
         normalized_payload = dict(payload or {})
         _validate_skill_payload(normalized_payload)
         skill_name = str(normalized_payload.get("skill_name") or normalized_payload.get("name") or "").strip()
-        existing = await self.store.get_skill_async(skill_name, user_id=user_id)
+        existing = await self.dao.get_skill_async(skill_name, user_id=user_id)
         if existing and existing.get("skill_source") == "user" and existing.get("owner_user_id") == user_id and existing.get("skill_publish_status") == "disabled":
             await self._archive_user_skill_async(existing, user_id, operator_name=operator_name)
         elif existing:
@@ -460,7 +460,7 @@ class SkillService:
         visibility_type = str(normalized_payload.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
             visibility_type = "private"
-        await self.store.create_skill_with_version_async({
+        await self.dao.create_skill_with_version_async({
             "skill_id": skill_id,
             "skill_name": skill_name,
             "skill_title": normalized_payload.get("skill_title") or normalized_payload.get("title") or parsed.get("title") or skill_name,
@@ -520,7 +520,7 @@ class SkillService:
 
     async def copy_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步复制可见用户技能为当前用户私有草稿。"""
-        source_skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        source_skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not source_skill:
             raise ValueError("技能不存在")
         if source_skill.get("skill_source") == "system":
@@ -554,7 +554,7 @@ class SkillService:
 
     async def update_user_skill_draft_async(self, skill_id: str, payload: Dict[str, Any], user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步更新用户技能；只有正文变更才写入草稿版本。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
@@ -575,7 +575,7 @@ class SkillService:
         if visibility_type not in {"private", "global"}:
             visibility_type = "private"
         current_version_no = int(skill.get("current_skill_version_no") or 0)
-        await self.store.update_skill_async(str(skill.get("skill_id")), {
+        await self.dao.update_skill_async(str(skill.get("skill_id")), {
             "skill_title": normalized_payload.get("skill_title") or parsed.get("title") or skill.get("skill_name"),
             "skill_desc": payload.get("skill_desc") if payload.get("skill_desc") is not None else skill.get("skill_desc"),
             "skill_category": payload.get("skill_category") if payload.get("skill_category") is not None else skill.get("skill_category"),
@@ -588,37 +588,37 @@ class SkillService:
 
     async def publish_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步发布用户技能最新草稿版本。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权发布该技能")
-        draft = await self.store.get_latest_draft_version_async(str(skill.get("skill_id")))
+        draft = await self.dao.get_latest_draft_version_async(str(skill.get("skill_id")))
         if not draft:
             raise ValueError("没有可发布的草稿版本")
-        await self.store.publish_version_async(str(skill.get("skill_id")), int(draft.get("skill_version_no") or 0), update_by=user_id, update_by_name=operator_name)
+        await self.dao.publish_version_async(str(skill.get("skill_id")), int(draft.get("skill_version_no") or 0), update_by=user_id, update_by_name=operator_name)
         clear_metadata_cache()
         return await self.get_skill_async(str(skill.get("skill_id")), include_draft=True, user_id=user_id) or {}
 
     async def list_skill_versions_async(self, skill_id: str, user_id: str) -> List[Dict[str, Any]]:
         """异步列出用户技能所有版本。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权查看该技能版本")
         current_version_no = int(skill.get("current_skill_version_no") or 0)
-        versions = await self.store.list_versions_async(str(skill.get("skill_id")))
+        versions = await self.dao.list_versions_async(str(skill.get("skill_id")))
         return [_skill_version_to_info(version, current_version_no=current_version_no) for version in versions]
 
     async def get_skill_version_detail_async(self, skill_id: str, skill_version_no: int, user_id: str) -> Dict[str, Any]:
         """异步读取用户技能指定版本详情。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权查看该技能版本")
-        version = await self.store.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
+        version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         if not version:
             raise ValueError("技能版本不存在")
         version_dir = Path(str(version.get("skill_version_dir") or ""))
@@ -653,7 +653,7 @@ class SkillService:
     async def save_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, content: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步保存用户技能版本目录文件。"""
         try:
-            skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+            skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
             if await self._get_builtin_skill_metadata_async(skill_id):
                 raise PermissionError("无权管理该技能文件")
@@ -677,7 +677,7 @@ class SkillService:
     async def delete_skill_version_file_async(self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步删除用户技能草稿版本目录文件。"""
         try:
-            skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+            skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
             if await self._get_builtin_skill_metadata_async(skill_id):
                 raise PermissionError("无权管理该技能文件")
@@ -700,32 +700,32 @@ class SkillService:
 
     async def rollback_user_skill_async(self, skill_id: str, skill_version_no: int, user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步将用户技能切回指定历史版本。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权切换该技能版本")
-        version = await self.store.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
+        version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         if not version:
             raise ValueError("技能版本不存在")
         if version.get("version_publish_status") != "published":
             raise ValueError("只有已发布版本可以选择为当前版本")
-        await self.store.activate_version_async(str(skill.get("skill_id")), int(skill_version_no or 0), update_by=user_id, update_by_name=operator_name)
+        await self.dao.activate_version_async(str(skill.get("skill_id")), int(skill_version_no or 0), update_by=user_id, update_by_name=operator_name)
         clear_metadata_cache()
         return await self.get_skill_async(str(skill.get("skill_id")), user_id=user_id) or {}
 
     async def favorite_skill_async(self, skill_id_or_name: str, user_id: str, favorite: bool, operator_name: str = "") -> Dict[str, Any]:
         """异步收藏或取消收藏技能。"""
-        skill = await self.store.get_skill_async(skill_id_or_name, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id_or_name, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
-        await self.store.set_favorite_async(user_id, str(skill.get("skill_id")), favorite, operator=user_id, operator_name=operator_name)
+        await self.dao.set_favorite_async(user_id, str(skill.get("skill_id")), favorite, operator=user_id, operator_name=operator_name)
         return {"skill_id": skill.get("skill_id"), "favorite": favorite}
 
     async def _get_db_skill_metadata_async(self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         """异步从数据库读取可加载技能元数据。"""
         try:
-            row = await self.store.get_skill_async(resolve_skill_name(name), user_id=user_id)
+            row = await self.dao.get_skill_async(resolve_skill_name(name), user_id=user_id)
             if not row:
                 return None
             if row.get("skill_source") == "user" and row.get("skill_publish_status") != "published" and not include_draft:
@@ -808,14 +808,14 @@ class SkillService:
             return skill_md if skill_md.exists() else None
         version = None
         if include_draft:
-            version = await self.store.get_latest_draft_version_async(str(row.get("skill_id") or ""))
+            version = await self.dao.get_latest_draft_version_async(str(row.get("skill_id") or ""))
         if not version:
-            version = await self.store.get_published_version_async(
+            version = await self.dao.get_published_version_async(
                 str(row.get("skill_id") or ""),
                 int(row.get("current_skill_version_no") or 0),
             )
         if include_draft and not version:
-            version = await self.store.get_latest_published_version_async(str(row.get("skill_id") or ""))
+            version = await self.dao.get_latest_published_version_async(str(row.get("skill_id") or ""))
         version_dir = Path(str((version or {}).get("skill_version_dir") or ""))
         skill_md = version_dir / "SKILL.md"
         return skill_md if skill_md.exists() else None
@@ -823,7 +823,7 @@ class SkillService:
     async def _get_editable_version_dir_async(self, skill_id: str, skill_version_no: int, user_id: str) -> Path:
         """异步校验用户技能版本权限并返回版本目录。"""
         try:
-            skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+            skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception:
             if await self._get_builtin_skill_metadata_async(skill_id):
                 raise PermissionError("无权管理该技能文件")
@@ -832,7 +832,7 @@ class SkillService:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权管理该技能文件")
-        version = await self.store.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
+        version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         if not version:
             raise ValueError("技能版本不存在")
         version_dir = Path(str(version.get("skill_version_dir") or ""))
@@ -843,24 +843,24 @@ class SkillService:
     async def _ensure_user_skill_draft_version_async(self, skill: Dict[str, Any], user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步复用已有草稿；没有草稿时基于当前发布版本复制出新草稿。"""
         skill_id = str(skill.get("skill_id") or "")
-        draft = await self.store.get_latest_draft_version_async(skill_id)
+        draft = await self.dao.get_latest_draft_version_async(skill_id)
         if draft:
             return draft
-        version_no = await self.store.next_version_no_async(skill_id)
+        version_no = await self.dao.next_version_no_async(skill_id)
         skill_root_dir = Path(str(skill.get("skill_root_dir") or USER_SKILL_ROOT / str(skill.get("skill_name") or skill_id)))
         version_dir = skill_root_dir / "versions" / f"v{version_no}"
         source_version = None
         current_version_no = int(skill.get("current_skill_version_no") or 0)
         if current_version_no:
-            source_version = await self.store.get_version_async(skill_id, current_version_no)
+            source_version = await self.dao.get_version_async(skill_id, current_version_no)
         if not source_version:
-            source_version = await self.store.get_latest_published_version_async(skill_id)
+            source_version = await self.dao.get_latest_published_version_async(skill_id)
         source_dir_value = str((source_version or {}).get("skill_version_dir") or "").strip()
         if source_dir_value:
             await asyncio.to_thread(_copy_version_dir, Path(source_dir_value), version_dir)
         else:
             await asyncio.to_thread(_ensure_skill_dirs, version_dir)
-        await self.store.insert_version_async({
+        await self.dao.insert_version_async({
             "skill_id": skill_id,
             "skill_version_no": version_no,
             "skill_version_dir": str(version_dir),
@@ -885,13 +885,13 @@ class SkillService:
         """异步确定复制技能时使用的源版本。"""
         skill_id = str(skill.get("skill_id") or "")
         if str(skill.get("owner_user_id") or "") == user_id:
-            draft = await self.store.get_latest_draft_version_async(skill_id)
+            draft = await self.dao.get_latest_draft_version_async(skill_id)
             if draft:
                 return draft
         current_version_no = int(skill.get("current_skill_version_no") or 0)
-        version = await self.store.get_published_version_async(skill_id, current_version_no) if current_version_no else None
+        version = await self.dao.get_published_version_async(skill_id, current_version_no) if current_version_no else None
         if not version:
-            version = await self.store.get_latest_published_version_async(skill_id)
+            version = await self.dao.get_latest_published_version_async(skill_id)
         if not version:
             raise ValueError("没有可复制的技能版本")
         return version
@@ -906,14 +906,14 @@ class SkillService:
             candidate = f"{prefix}-copy{suffix}"
             if not SKILL_NAME_PATTERN.match(candidate):
                 continue
-            if not await self.store.get_skill_async(candidate, user_id=user_id):
+            if not await self.dao.get_skill_async(candidate, user_id=user_id):
                 return candidate
         raise ValueError("无法生成可用的复制技能名称")
 
     async def _get_readable_version_dir_async(self, skill_id: str, skill_version_no: int, user_id: str) -> Path:
         """异步校验技能版本读取权限并返回版本目录。"""
         try:
-            skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+            skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         except Exception as err:
             logger.warning("读取技能表失败，回退内置技能文件: skill_id=%s error=%s", skill_id, err)
             skill = None
@@ -925,7 +925,7 @@ class SkillService:
 
     async def _get_system_version_dir_async(self, skill: Dict[str, Any], skill_version_no: int) -> Path:
         """异步返回系统技能只读版本目录。"""
-        version = await self.store.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
+        version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         version_dir = Path(str((version or {}).get("skill_version_dir") or skill.get("skill_root_dir") or ""))
         if not version_dir:
             raise ValueError("技能版本目录无效")
@@ -968,7 +968,7 @@ class SkillService:
 
     async def delete_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> None:
         """异步逻辑删除用户技能，释放技能名并保留归档目录。"""
-        skill = await self.store.get_skill_async(skill_id, user_id=user_id)
+        skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
@@ -983,7 +983,7 @@ class SkillService:
         archive_root_dir = root_dir.parent / archive_name
         if root_dir.exists() and root_dir != archive_root_dir:
             await asyncio.to_thread(root_dir.rename, archive_root_dir)
-        versions = await self.store.list_versions_async(str(skill.get("skill_id")))
+        versions = await self.dao.list_versions_async(str(skill.get("skill_id")))
         for version in versions:
             version_no = int(version.get("skill_version_no") or 0)
             version_dir = Path(str(version.get("skill_version_dir") or ""))
@@ -991,8 +991,8 @@ class SkillService:
                 archived_version_dir = archive_root_dir / version_dir.relative_to(root_dir)
             except ValueError:
                 archived_version_dir = archive_root_dir / "versions" / f"v{version_no}"
-            await self.store.update_version_dir_async(str(skill.get("skill_id")), version_no, str(archived_version_dir), update_by=user_id, update_by_name=operator_name)
-        await self.store.delete_skill_async(str(skill.get("skill_id")), archive_name, str(archive_root_dir), update_by=user_id, update_by_name=operator_name)
+            await self.dao.update_version_dir_async(str(skill.get("skill_id")), version_no, str(archived_version_dir), update_by=user_id, update_by_name=operator_name)
+        await self.dao.delete_skill_async(str(skill.get("skill_id")), archive_name, str(archive_root_dir), update_by=user_id, update_by_name=operator_name)
 
     def cleanup_user_skill_dir(self, skill_id: str) -> None:
         """测试辅助：清理用户技能目录。"""
