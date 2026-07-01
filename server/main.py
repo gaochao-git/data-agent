@@ -54,20 +54,9 @@ def _env_flag(key: str, default: bool = True) -> bool:
     return trimmed.lower() in {"1", "true", "yes", "y", "on"}
 
 
-app = FastAPI(title="FXCJG FastAPI (experimental)", lifespan=lifespan)
-
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,http://192.168.*:3000,http://10.*:3000,http://172.*:3000",
-    ).split(",")
-    if origin.strip()
-]
-
+app = FastAPI(title="data-agent", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Content-Type", "Authorization"],
