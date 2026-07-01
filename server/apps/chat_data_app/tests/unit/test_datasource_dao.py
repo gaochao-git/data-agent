@@ -14,9 +14,12 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_store as store_module
-from apps.chat_data_app.services.datasource_store import (
+from apps.chat_data_app.daos.datasource_dao import (
     _ORM_SESSION,
+    DataSourceDao,
+)
+from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
+from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_member_identity,
     _build_member_source_text_line,
     _build_source_line,
@@ -29,7 +32,6 @@ from apps.chat_data_app.services.datasource_store import (
     _parse_member_sources_text,
     _parse_source_line,
     _unique_non_empty_texts,
-    DataSourceDBStore,
 )
 
 
@@ -244,7 +246,7 @@ def _patch_store_session(monkeypatch, rows_by_table=None, executed=None):
     async def fake_get_session():
         yield session
 
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_store.get_session", fake_get_session)
+    monkeypatch.setattr("apps.chat_data_app.daos.datasource_dao.get_session", fake_get_session)
     return session
 
 
@@ -286,7 +288,7 @@ def test_parse_member_source_entries_keep_valid_members():
 
 def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     warnings = []
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_store.logger.warning", lambda *args, **_kwargs: warnings.append(args))
+    monkeypatch.setattr("apps.chat_data_app.daos.datasource_dao_helpers.logger.warning", lambda *args, **_kwargs: warnings.append(args))
 
     assert _format_time("2026-06-02") == "2026-06-02"
     assert _load_json(None, {"default": True}) == {"default": True}
@@ -316,13 +318,13 @@ def test_parse_and_mapping_helpers_cover_invalid_branches(monkeypatch):
     assert _parse_member_source_entry("机构A||direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|direct|bad", "mysql", "direct") is None
     assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "bad")["query_executor_type"] == "direct"
-    monkeypatch.setattr(store_module, "_build_member_identity", lambda *_args: None)
+    monkeypatch.setattr(datasource_dao_helper_module, "_build_member_identity", lambda *_args: None)
     assert _parse_member_source_entry("机构A|ORG_A|direct|127.0.0.1:3306:demo", "mysql", "direct") is None
     assert _unique_non_empty_texts([" a ", "", "a", "b"]) == ["a", "b"]
 
 
 def test_map_group_row_and_member_sources_preserve_metadata():
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     row = store._group_model_to_row(_group_model(is_default=1))
 
     datasource = store._map_group_row(row)
@@ -354,8 +356,8 @@ def test_map_group_row_and_member_sources_preserve_metadata():
     assert legacy["source_config"] == {"host": "127.0.0.1", "port": 3306, "database": "demo"}
 
 
-def test_datasource_store_group_and_table_queries_use_orm(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model(is_default=1)],
         "datasource_table": [_table_model()],
@@ -425,7 +427,7 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
     assert len(normalized["unit"]) == 100
     assert _normalize_column_dict({"enum_values": "bad", "synonyms": "bad"}) == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
 
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     _patch_store_session(monkeypatch, {
         "datasource_column_dict": [
             _column_dict_model("group_a", "orders", "status", json.dumps({"enum_values": [{"value": "1", "label": "有效"}]}, ensure_ascii=False)),
@@ -461,8 +463,8 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
     }
 
 
-def test_datasource_store_empty_defaults_and_write_short_circuits(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+def test_datasource_dao_empty_defaults_and_write_short_circuits(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
     executed = []
     _patch_store_session(monkeypatch, {"datasource_group": [], "datasource_column_dict": []}, executed=executed)
 
@@ -487,8 +489,8 @@ def test_datasource_store_empty_defaults_and_write_short_circuits(monkeypatch):
     assert any("UPDATE datasource_column_dict" in str(stmt) for stmt in executed)
 
 
-def test_datasource_store_table_group_queries_deduplicate(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+def test_datasource_dao_table_group_queries_deduplicate(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
     _patch_store_session(monkeypatch, {
         "datasource_table_group_rel": [
             _table_group_model("group_a", "订单域", "orders"),
@@ -516,7 +518,7 @@ def test_datasource_store_table_group_queries_deduplicate(monkeypatch):
 
 
 def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [],
@@ -548,7 +550,7 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
 
 
 def test_store_write_methods_emit_orm_statements(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     executed = []
     _patch_store_session(monkeypatch, {"datasource_group": [_group_model()], "datasource_table": []}, executed=executed)
 
@@ -605,7 +607,7 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
 
 
 def test_transaction_reuses_active_orm_session(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     session = _patch_store_session(monkeypatch, {"datasource_group": [_group_model()]})
 
     async def run_checks():
@@ -621,14 +623,14 @@ def test_transaction_reuses_active_orm_session(monkeypatch):
 
 
 def test_attach_table_groups_short_circuits():
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
 
     assert asyncio.run(store._attach_table_groups_async("", [{"table_name": "orders"}])) == [{"table_name": "orders"}]
     assert asyncio.run(store._attach_table_groups_async("group_a", [{"table_name": ""}])) == [{"table_name": ""}]
 
 
-def test_datasource_store_remaining_read_branch_edges(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [
@@ -658,7 +660,7 @@ def test_datasource_store_remaining_read_branch_edges(monkeypatch):
 
 
 def test_update_datasource_group_all_optional_fields_and_duplicate_relations(monkeypatch):
-    store = DataSourceDBStore.__new__(DataSourceDBStore)
+    store = DataSourceDao.__new__(DataSourceDao)
     executed = []
     _patch_store_session(monkeypatch, {"datasource_group": [_group_model()]}, executed=executed)
 

@@ -204,7 +204,7 @@ class _FakeStore:
 def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager = DataSourceManager.__new__(DataSourceManager)
     manager.base_dir = None
-    manager.db_store = fake_store
+    manager.datasource_dao = fake_store
     return manager
 
 
@@ -559,7 +559,7 @@ def test_datasource_manager_runtime_column_dict_fallbacks():
         async def get_datasource_async(self, datasource_id: str):
             return {}
 
-    manager.db_store = NoGroupStore()
+    manager.datasource_dao = NoGroupStore()
     config = {"id": "sc_a", "metrics": [], "dimensions": []}
     assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) is config
 
@@ -567,7 +567,7 @@ def test_datasource_manager_runtime_column_dict_fallbacks():
         async def get_datasource_async(self, datasource_id: str):
             return {"group_id": "group_a"}
 
-    manager.db_store = NoColumnDictMethodStore()
+    manager.datasource_dao = NoColumnDictMethodStore()
     assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) is config
 
     manager = _build_manager(_FakeStore())
@@ -684,7 +684,7 @@ def test_get_execution_datasources_keeps_mysql_http_executor_type(monkeypatch):
 def test_save_datasource_rejects_duplicate_member_connections():
     manager = DataSourceManager.__new__(DataSourceManager)
     manager.base_dir = None
-    manager.db_store = None
+    manager.datasource_dao = None
 
     with pytest.raises(ValueError, match="第 2 个机构编码重复"):
         asyncio.run(manager._save_datasource_async(
@@ -721,7 +721,7 @@ def test_save_datasource_rejects_duplicate_member_connections():
 def test_save_datasource_rejects_missing_member_name():
     manager = DataSourceManager.__new__(DataSourceManager)
     manager.base_dir = None
-    manager.db_store = None
+    manager.datasource_dao = None
 
     with pytest.raises(ValueError, match="机构名称不能为空"):
         asyncio.run(manager._save_datasource_async(
@@ -820,7 +820,7 @@ def test_save_datasource_keeps_mysql_http_members_with_shared_connection():
 def test_save_datasource_rejects_duplicate_hive_http_names():
     manager = DataSourceManager.__new__(DataSourceManager)
     manager.base_dir = None
-    manager.db_store = None
+    manager.datasource_dao = None
 
     with pytest.raises(ValueError, match="第 2 个机构编码重复"):
         asyncio.run(manager._save_datasource_async(
@@ -978,7 +978,7 @@ def test_replace_table_groups_filters_missing_tables_and_dedupes():
         async def replace_table_group_relations_async(self, group_id, groups, create_by="", update_by="", create_by_name="", update_by_name=""):
             captured.update({"group_id": group_id, "groups": groups, "create_by": create_by, "update_by": update_by})
 
-    manager.db_store = FakeStore()
+    manager.datasource_dao = FakeStore()
 
     assert asyncio.run(manager.replace_table_groups_async("ds_a", [
         {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
@@ -1002,7 +1002,7 @@ def test_create_and_update_semantic_config_enforce_name_scope_and_relationships(
             configs[:] = [item for item in configs if item["id"] != config["id"]]
             configs.append(dict(config))
 
-    manager.db_store = FakeStore()
+    manager.datasource_dao = FakeStore()
     manager.get_datasource_async = lambda _datasource_id: asyncio.sleep(0, result=datasource)
     manager.get_semantic_configs_async = lambda _datasource_id, user_id="": asyncio.sleep(0, result=list(configs))
     manager.get_semantic_config_async = lambda _datasource_id, config_id: asyncio.sleep(0, result=next((item for item in configs if item["id"] == config_id), None))
@@ -1039,7 +1039,7 @@ def test_save_datasource_persists_group_and_tables_in_transaction():
         async def replace_datasource_tables_async(self, **kwargs):
             calls.append(("replace_tables", kwargs))
 
-    manager.db_store = FakeStore()
+    manager.datasource_dao = FakeStore()
     manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id})
 
     result = asyncio.run(manager._save_datasource_async(
@@ -1399,7 +1399,7 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
         async def replace_datasource_tables_async(self, **kwargs):
             calls.append(("replace_tables", kwargs))
 
-    manager.db_store = AsyncSaveStore()
+    manager.datasource_dao = AsyncSaveStore()
     manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id, "loaded": True})
 
     async def run_checks():
@@ -1610,7 +1610,7 @@ def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypa
             self.calls.append((args, kwargs))
 
     store = DescStore()
-    manager.db_store = store
+    manager.datasource_dao = store
 
     async def run_desc_checks():
         return (
@@ -1678,7 +1678,7 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
         async def replace_table_group_relations_async(self, group_id, groups, **kwargs):
             captured.update({"group_id": group_id, "groups": groups, "kwargs": kwargs})
 
-    manager.db_store = GroupStore()
+    manager.datasource_dao = GroupStore()
     assert asyncio.run(manager.replace_table_groups_async("ds_a", [
         {"table_group_name": "空分组", "table_names": ["missing"]},
         {"table_group_name": "  ", "table_names": ["orders"]},
@@ -1721,14 +1721,14 @@ def test_datasource_manager_name_scope_and_column_finder_edges():
     assert asyncio.run(manager.get_default_datasource_async()) is None
 
 
-def test_datasource_manager_init_and_singleton_use_db_store(monkeypatch, tmp_path):
+def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch, tmp_path):
     created = {}
 
-    class FakeDBStore:
+    class FakeDatasourceDao:
         def __init__(self):
             created["called"] = True
 
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DataSourceDBStore", FakeDBStore)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DataSourceDao", FakeDatasourceDao)
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager._datasource_manager_instance", None)
 
     manager = DataSourceManager(base_dir=str(tmp_path))
@@ -1739,7 +1739,7 @@ def test_datasource_manager_init_and_singleton_use_db_store(monkeypatch, tmp_pat
     first = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
     second = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
     assert first is second
-    assert isinstance(first.db_store, FakeDBStore)
+    assert isinstance(first.datasource_dao, FakeDatasourceDao)
 
 
 def test_datasource_manager_relationship_and_helper_fallback_branches(monkeypatch):
@@ -1835,7 +1835,7 @@ def test_datasource_manager_async_save_datasource_supports_minimal_payloads():
         async def get_semantic_configs_by_group_id_async(self, group_id):
             return []
 
-    manager.db_store = MinimalAsyncStore()
+    manager.datasource_dao = MinimalAsyncStore()
 
     result = asyncio.run(manager._save_datasource_async(
         datasource_id="ds_async_min",

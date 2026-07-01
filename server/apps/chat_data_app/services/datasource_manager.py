@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 from utils.storage_paths import NL2SQL_BASE_DIR
-from .datasource_store import DataSourceDBStore
+from ..daos.datasource_dao import DataSourceDao
 from .datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials, sanitize_source_config
 from .hive_meta_http import get_hive_meta_schema_async
 
@@ -275,8 +275,8 @@ class DataSourceManager:
     def __init__(self, base_dir: Optional[str] = None):
         self.base_dir = Path(base_dir or NL2SQL_BASE_DIR)
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.db_store = DataSourceDBStore()
-        logger.info("数据源 DB 存储已启用")
+        self.datasource_dao = DataSourceDao()
+        logger.info("数据源 DAO 已启用")
 
     def _normalize_semantic_relationships(self, datasource: dict):
         """规范化语义关系：统一使用 join_conditions，并同步首条到 left/right 字段。"""
@@ -319,10 +319,10 @@ class DataSourceManager:
 
     async def _load_datasource_async(self, datasource_id: str) -> dict:
         """异步读取最新数据源并补充语义配置。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             raise ValueError(f"数据源写入后读取失败: {datasource_id}")
-        datasource["semantic_configs"] = await self.db_store.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
+        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
         self._enrich_semantic_runtime_fields(datasource)
         return datasource
 
@@ -413,12 +413,12 @@ class DataSourceManager:
         """按物理字段字典增强单个语义配置运行时对象。"""
         group_id = str((config or {}).get("group_id") or "").strip()
         if not group_id:
-            datasource = await self.db_store.get_datasource_async(datasource_id)
+            datasource = await self.datasource_dao.get_datasource_async(datasource_id)
             group_id = str((datasource or {}).get("group_id") or "").strip()
         if not group_id:
             return config
         try:
-            column_dicts = await self.db_store.get_column_dicts_by_group_id_async(group_id)
+            column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
         except AttributeError:
             column_dicts = {}
         if not column_dicts:
@@ -462,8 +462,8 @@ class DataSourceManager:
         if not template_source_line:
             template_source_line = template_source
 
-        async with self.db_store.transaction_async():
-            await self.db_store.upsert_datasource_group_async(
+        async with self.datasource_dao.transaction_async():
+            await self.datasource_dao.upsert_datasource_group_async(
                 group_id=datasource_id,
                 group_name=group_name,
                 group_desc=group_desc or "",
@@ -484,9 +484,9 @@ class DataSourceManager:
             }
             if is_default is not _UNSET:
                 update_kwargs["is_default"] = is_default
-            await self.db_store.update_datasource_group_async(**update_kwargs)
+            await self.datasource_dao.update_datasource_group_async(**update_kwargs)
             if tables is not _UNSET:
-                await self.db_store.replace_datasource_tables_async(
+                await self.datasource_dao.replace_datasource_tables_async(
                     group_id=datasource_id,
                     tables=tables or [],
                     create_by=create_by,
@@ -498,18 +498,18 @@ class DataSourceManager:
 
     async def get_all_datasources_async(self, include_tables: bool = True) -> List[Dict[str, Any]]:
         """异步获取所有数据源。"""
-        return await self.db_store.get_all_datasources_async(include_tables=include_tables)
+        return await self.datasource_dao.get_all_datasources_async(include_tables=include_tables)
 
     async def has_datasource_async(self, datasource_id: str) -> bool:
         """异步判断数据源是否存在。"""
-        return await self.db_store.has_datasource_async(datasource_id)
+        return await self.datasource_dao.has_datasource_async(datasource_id)
 
     async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
         """异步获取指定数据源。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return None
-        datasource["semantic_configs"] = await self.db_store.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
+        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
         self._enrich_semantic_runtime_fields(datasource)
         return datasource
 
@@ -588,19 +588,19 @@ class DataSourceManager:
 
     async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
         """异步根据数据源组名称获取数据源。"""
-        datasource = await self.db_store.get_datasource_by_group_name_async(group_name)
+        datasource = await self.datasource_dao.get_datasource_by_group_name_async(group_name)
         if not datasource:
             return None
-        datasource["semantic_configs"] = await self.db_store.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
+        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
         self._enrich_semantic_runtime_fields(datasource)
         return datasource
 
     async def get_table_groups_async(self, datasource_id: str) -> List[Dict[str, Any]]:
         """异步获取数据源内的表分组关系。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return []
-        relations = await self.db_store.get_table_group_relations_async(datasource.get("group_id"))
+        relations = await self.datasource_dao.get_table_group_relations_async(datasource.get("group_id"))
         groups: Dict[str, List[str]] = {}
         for relation in relations:
             group_name = str(relation.get("table_group_name") or "").strip()
@@ -614,7 +614,7 @@ class DataSourceManager:
 
     async def replace_table_groups_async(self, datasource_id: str, groups: List[Dict[str, Any]], operator: str = "", operator_name: str = "") -> bool:
         """异步覆盖保存数据源内的表分组关系。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return False
         existing_tables = {str(table.get("table_name") or "").strip() for table in datasource.get("ds_tables") or []}
@@ -630,7 +630,7 @@ class DataSourceManager:
                     table_names.append(normalized_table_name)
             if table_names:
                 normalized_groups.append({"table_group_name": group_name, "table_names": table_names})
-        await self.db_store.replace_table_group_relations_async(
+        await self.datasource_dao.replace_table_group_relations_async(
             datasource.get("group_id"),
             normalized_groups,
             create_by=operator or "",
@@ -645,7 +645,7 @@ class DataSourceManager:
         normalized_table_name = str(table_name or "").strip()
         if not normalized_table_name:
             return None
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return None
         current_table = None
@@ -656,7 +656,7 @@ class DataSourceManager:
         if current_table is None:
             return None
         normalized_desc = str(business_desc or "").strip()[:255]
-        await self.db_store.update_datasource_table_business_desc_async(
+        await self.datasource_dao.update_datasource_table_business_desc_async(
             datasource.get("group_id") or "",
             normalized_table_name,
             normalized_desc,
@@ -668,18 +668,18 @@ class DataSourceManager:
 
     async def get_column_dict_async(self, datasource_id: str, table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
         """异步获取单个字段的数据字典。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         table = self._find_table_column(datasource, table_name, column_name)
         if not datasource or table is None:
             return None
-        return await self.db_store.get_column_dict_async(datasource.get("group_id") or "", table_name, column_name)
+        return await self.datasource_dao.get_column_dict_async(datasource.get("group_id") or "", table_name, column_name)
 
     async def get_table_column_dicts_async(self, datasource_id: str, table_name: str) -> Optional[Dict[str, Dict[str, Any]]]:
         """异步获取单张表所有已维护字段的数据字典。"""
         normalized_table_name = str(table_name or "").strip()
         if not normalized_table_name:
             return None
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return None
         current_table = None
@@ -691,7 +691,7 @@ class DataSourceManager:
             return None
         column_names = {str(column.get("name") or "").strip() for column in current_table.get("columns") or []}
         column_names.discard("")
-        column_dicts = await self.db_store.get_column_dicts_by_table_async(datasource.get("group_id") or "", normalized_table_name)
+        column_dicts = await self.datasource_dao.get_column_dicts_by_table_async(datasource.get("group_id") or "", normalized_table_name)
         return {column_name: column_dict for column_name, column_dict in column_dicts.items() if column_name in column_names}
 
     async def replace_column_dict_async(
@@ -704,11 +704,11 @@ class DataSourceManager:
         operator_name: str = "",
     ) -> Optional[Dict[str, Any]]:
         """异步覆盖保存单个字段的数据字典。"""
-        datasource = await self.db_store.get_datasource_async(datasource_id)
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         table = self._find_table_column(datasource, table_name, column_name)
         if not datasource or table is None:
             return None
-        return await self.db_store.replace_column_dict_async(
+        return await self.datasource_dao.replace_column_dict_async(
             datasource.get("group_id") or "",
             table_name,
             column_name,
@@ -894,7 +894,7 @@ class DataSourceManager:
         if not datasource:
             return False
 
-        await self.db_store.soft_delete_group_async(datasource.get("group_id") or datasource_id, update_by=update_by or "", update_by_name=update_by_name or "")
+        await self.datasource_dao.soft_delete_group_async(datasource.get("group_id") or datasource_id, update_by=update_by or "", update_by_name=update_by_name or "")
         logger.info("删除数据源: %s, force=%s", datasource_id, force)
         return True
 
@@ -922,11 +922,11 @@ class DataSourceManager:
         if not configs:
             return []
         try:
-            datasource = await self.db_store.get_datasource_async(datasource_id)
+            datasource = await self.datasource_dao.get_datasource_async(datasource_id)
             group_id = str((datasource or {}).get("group_id") or "").strip()
             if not group_id:
                 return configs
-            column_dicts = await self.db_store.get_column_dicts_by_group_id_async(group_id)
+            column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
         except AttributeError:
             column_dicts = {}
         except Exception as e:
@@ -1026,7 +1026,7 @@ class DataSourceManager:
             "update_by_name": create_by_name or "",
         }
         self._normalize_semantic_relationships({"semantic_configs": [config]})
-        await self.db_store.upsert_semantic_config_async(datasource_id, config)
+        await self.datasource_dao.upsert_semantic_config_async(datasource_id, config)
 
         logger.info("创建语义配置: %s - %s", config_id, name)
         return await self.get_semantic_config_async(datasource_id, config_id)
@@ -1070,7 +1070,7 @@ class DataSourceManager:
             "update_by_name": str(update_by_name or current.get("update_by_name") or "").strip(),
         }
         self._normalize_semantic_relationships({"semantic_configs": [config]})
-        await self.db_store.upsert_semantic_config_async(datasource_id, config)
+        await self.datasource_dao.upsert_semantic_config_async(datasource_id, config)
 
         logger.info("更新语义配置: %s", config_id)
         return await self.get_semantic_config_async(datasource_id, config_id)
@@ -1080,7 +1080,7 @@ class DataSourceManager:
         config = await self.get_semantic_config_async(datasource_id, config_id)
         if not config:
             return False
-        await self.db_store.soft_delete_semantic_config_async(config_id, update_by=update_by or config.get("update_by") or "", update_by_name=update_by_name or config.get("update_by_name") or "")
+        await self.datasource_dao.soft_delete_semantic_config_async(config_id, update_by=update_by or config.get("update_by") or "", update_by_name=update_by_name or config.get("update_by_name") or "")
         logger.info("删除语义配置: %s", config_id)
         return True
 
@@ -1092,8 +1092,8 @@ class DataSourceManager:
 
         operator = update_by or datasource.get("update_by") or ""
         operator_name = update_by_name or datasource.get("update_by_name") or ""
-        await self.db_store.clear_all_default_datasources_async(update_by=operator, update_by_name=operator_name)
-        await self.db_store.update_datasource_group_async(
+        await self.datasource_dao.clear_all_default_datasources_async(update_by=operator, update_by_name=operator_name)
+        await self.datasource_dao.update_datasource_group_async(
             datasource.get("group_id"),
             is_default=True,
             update_by=operator,
@@ -1104,10 +1104,10 @@ class DataSourceManager:
 
     async def get_default_datasource_async(self) -> Optional[Dict[str, Any]]:
         """异步获取默认数据源。"""
-        datasource = await self.db_store.get_default_datasource_async()
+        datasource = await self.datasource_dao.get_default_datasource_async()
         if not datasource:
             return None
-        datasource["semantic_configs"] = await self.db_store.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
+        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
         return datasource
 
     async def clear_default_datasource_async(self, datasource_id: str, update_by: str = "", update_by_name: str = "") -> bool:
@@ -1116,7 +1116,7 @@ class DataSourceManager:
         if not datasource or not datasource.get("is_default"):
             return False
 
-        await self.db_store.update_datasource_group_async(
+        await self.datasource_dao.update_datasource_group_async(
             datasource.get("group_id"),
             is_default=False,
             update_by=update_by or datasource.get("update_by") or "",
