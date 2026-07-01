@@ -1,0 +1,790 @@
+"""Dashboard execution runtime and task helpers."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
+
+from utils.lang_util.database import get_session
+from utils.lang_util.models import ChatDataQueryExecution
+from utils.logger import get_logger
+
+from ..agent.tools import execute_sql_direct as execute_sql_direct_runner
+from .dashboard_service import get_dashboard_service
+from .runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
+from .sql_executor import resolve_query_timeout
+
+logger = get_logger(__name__)
+DASHBOARD_PANEL_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY", 8)
+
+
+@dataclass
+class DashboardRuntime:
+    get_datasource_manager: Callable[[], Any]
+    execute_sql_for_member: Callable[..., Awaitable[Dict[str, Any]]]
+    create_task_record: Callable[..., Awaitable[Dict[str, Any]]]
+    update_query_task: Callable[..., Awaitable[Optional[Dict[str, Any]]]]
+    is_query_task_cancelled: Callable[[str], Awaitable[bool]]
+    schedule_query_task: Callable[[str], None]
+    query_task_poll_interval_ms: int
+
+
+_dashboard_runtime_value: Optional[DashboardRuntime] = None
+
+
+def configure_dashboard_runtime(runtime: DashboardRuntime) -> None:
+    """注入看板执行依赖，避免看板模块反向导入主路由。"""
+    global _dashboard_runtime_value
+    _dashboard_runtime_value = runtime
+
+
+def dashboard_runtime() -> DashboardRuntime:
+    if _dashboard_runtime_value is None:
+        raise RuntimeError("Dashboard runtime is not configured")
+    return _dashboard_runtime_value
+
+
+async def execute_dashboard_panel_sql(
+    panel: Dict[str, Any],
+    member_datasource_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+    query_task_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """执行看板面板 SQL，仅针对一个成员数据源。"""
+    datasource_id = panel.get("datasource_id")
+    sql = panel.get("sql") or ""
+
+    if not datasource_id:
+        result = await execute_sql_direct_runner(sql, None)
+        return {
+            "member_datasource_id": None,
+            "member_name": None,
+            "sql": sql,
+            "success": bool(result.get("success")),
+            "columns": result.get("columns") or [],
+            "data": result.get("data") or [],
+            "total_count": int(result.get("total_count") or 0),
+            "execution_time_ms": result.get("execution_time_ms"),
+            "error": result.get("error"),
+        }
+
+    ds_manager = dashboard_runtime().get_datasource_manager()
+    effective_member_datasource_id = resolve_panel_member_datasource_id(panel, member_datasource_id)
+    selected_member_ids = [effective_member_datasource_id] if effective_member_datasource_id else None
+    execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, selected_member_ids)
+    execution_target = execution_targets[0]
+    return await dashboard_runtime().execute_sql_for_member(
+        execution_target=execution_target,
+        sql=sql,
+        limit=DEFAULT_ROW_LIMIT,
+        timeout=resolve_query_timeout(execution_target.get("source_type")),
+        user_id=user_id,
+        username=operator_name,
+        query_task_id=query_task_id,
+        execution_id=execution_id,
+        datasource_id=datasource_id,
+    )
+
+
+async def execute_dashboard_panel_sql_with_target(
+    panel: Dict[str, Any],
+    member_datasource_id: Optional[str] = None,
+    execution_target: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+    query_task_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """执行看板面板 SQL，支持复用预解析执行对象。"""
+    if execution_target is None:
+        return await execute_dashboard_panel_sql(
+            panel,
+            member_datasource_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            query_task_id=query_task_id,
+            execution_id=execution_id,
+        )
+    sql = panel.get("sql") or ""
+    return await dashboard_runtime().execute_sql_for_member(
+        execution_target=execution_target,
+        sql=sql,
+        limit=DEFAULT_ROW_LIMIT,
+        timeout=resolve_query_timeout(execution_target.get("source_type")),
+        user_id=user_id,
+        username=operator_name,
+        query_task_id=query_task_id,
+        execution_id=execution_id,
+        datasource_id=panel.get("datasource_id"),
+    )
+
+
+async def build_dashboard_panel_execution_result(
+    panel: Dict[str, Any],
+    member_datasource_id: Optional[str] = None,
+    execution_target: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+    query_task_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """构造看板面板执行返回。"""
+    result = await execute_dashboard_panel_sql_with_target(
+        panel,
+        member_datasource_id,
+        execution_target,
+        user_id=user_id,
+        operator_name=operator_name,
+        query_task_id=query_task_id,
+        execution_id=execution_id,
+    )
+    return {
+        "panel_id": panel["id"],
+        "name": panel["name"],
+        "chart_type": panel["chart_type"],
+        "chart_config": panel["chart_config"],
+        "member_datasource_id": result.get("member_datasource_id"),
+        "member_name": result.get("member_name"),
+        "result": result,
+    }
+
+
+def raise_if_dashboard_panel_execution_failed(payload: Dict[str, Any]) -> None:
+    """校验面板执行结果，失败时抛错，统一单面板/批量/同步接口口径。"""
+    result = (payload or {}).get("result") or {}
+    if result.get("success"):
+        return
+    error_message = (
+        result.get("error")
+        or payload.get("error")
+        or f"面板执行失败: {(payload or {}).get('panel_id') or 'unknown'}"
+    )
+    raise RuntimeError(str(error_message))
+
+
+async def create_dashboard_panel_execution(
+    *,
+    task_id: str,
+    panel: Dict[str, Any],
+    execution_target: Optional[Dict[str, Any]],
+    user_id: Optional[str],
+    operator_name: Optional[str],
+) -> Optional[str]:
+    """为看板面板执行创建 SQL 执行记录。"""
+    datasource_id = str((panel or {}).get("datasource_id") or "").strip()
+    sql_text = str((panel or {}).get("sql") or "").strip()
+    if not task_id or not datasource_id or not sql_text:
+        return None
+    target = execution_target or {}
+    member_datasource_id = str(target.get("member_datasource_id") or "").strip()
+    member_name = str(target.get("member_name") or target.get("group_name") or "").strip()
+    executor_type = str(target.get("query_executor_type") or "direct").strip().lower() or "direct"
+    operator_user_id = str(user_id or "").strip()
+    now = datetime.now()
+    execution_id = uuid.uuid4().hex
+    async with get_session() as db:
+        db.add(ChatDataQueryExecution(
+            execution_id=execution_id,
+            task_id=task_id,
+            user_id=str(user_id or "").strip(),
+            datasource_id=datasource_id,
+            member_datasource_id=member_datasource_id,
+            member_name=member_name,
+            executor_type=executor_type,
+            sql_text=sql_text,
+            sql_status="pending",
+            delete_flag=0,
+            create_time=now,
+            update_time=now,
+            create_by=operator_user_id,
+            create_by_name=str(operator_name or "").strip(),
+            update_by=operator_user_id,
+            update_by_name=str(operator_name or "").strip(),
+        ))
+        await db.commit()
+    return execution_id
+
+
+async def load_dashboard_panel_or_raise(
+    panel_id: str,
+    dashboard_id: str = "",
+    user_id: Optional[str] = None,
+    include_public: bool = True,
+) -> Dict[str, Any]:
+    """读取面板，不存在则抛错。"""
+    service = get_dashboard_service()
+    panel = await service.get_panel(panel_id, dashboard_id=dashboard_id or None, user_id=user_id, include_public=include_public)
+    if not panel:
+        raise ValueError(f"面板不存在: {panel_id}")
+    return panel
+
+
+def build_dashboard_execution_target_cache_key(datasource_id: str, member_datasource_id: Optional[str]) -> tuple[str, str]:
+    """构造看板执行对象缓存键。"""
+    return str(datasource_id or "").strip(), str(member_datasource_id or "").strip()
+
+
+def resolve_panel_member_datasource_id(panel: Optional[Dict[str, Any]], override_member_datasource_id: Optional[str] = None) -> str:
+    """解析面板本次执行成员：本次显式指定优先，其次使用面板保存的成员。"""
+    return str(override_member_datasource_id or (panel or {}).get("member_datasource_id") or "").strip()
+
+
+def build_effective_panel_member_datasource_ids(
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    requested_member_datasource_ids: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """构造本次看板执行的面板成员映射：请求覆盖优先，其次面板保存成员。"""
+    result: Dict[str, str] = {}
+    requested_member_datasource_ids = requested_member_datasource_ids or {}
+    for panel_id in panel_ids:
+        member_datasource_id = resolve_panel_member_datasource_id(
+            panel_map.get(panel_id),
+            requested_member_datasource_ids.get(panel_id),
+        )
+        if member_datasource_id:
+            result[panel_id] = member_datasource_id
+    return result
+
+
+def build_dashboard_panel_sql_preview(sql: Any, max_length: int = 160) -> str:
+    """构造面板 SQL 日志预览。"""
+    preview = " ".join(str(sql or "").split())
+    if len(preview) <= max_length:
+        return preview
+    return f"{preview[:max_length]}..."
+
+
+def log_dashboard_panel_timing(
+    panel: Optional[Dict[str, Any]],
+    elapsed_ms: int,
+    status: str,
+    member_datasource_id: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """记录看板面板执行耗时。"""
+    panel_data = panel or {}
+    log_func = logger.debug if status == "succeeded" else logger.warning
+    log_func(
+        "看板面板执行耗时: panel_id=%s name=%s datasource_id=%s member_datasource_id=%s status=%s elapsed_ms=%s sql=%s error=%s",
+        str(panel_data.get("id") or "").strip() or "unknown",
+        str(panel_data.get("name") or "").strip() or "unknown",
+        str(panel_data.get("datasource_id") or "").strip() or "",
+        str(member_datasource_id or "").strip(),
+        status,
+        elapsed_ms,
+        build_dashboard_panel_sql_preview(panel_data.get("sql")),
+        str(error or "").strip(),
+    )
+
+
+async def prepare_dashboard_batch_context(
+    dashboard_id: str,
+    panel_ids: List[str],
+    panel_member_datasource_ids: Dict[str, str],
+    preloaded_dashboard: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    include_public: bool = True,
+) -> tuple[Dict[str, Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
+    """预加载批量执行需要的面板与执行对象，减少每个卡片的重复查库。"""
+    service = get_dashboard_service()
+    dashboard = preloaded_dashboard
+    if dashboard is None:
+        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=include_public)
+    if not dashboard:
+        raise ValueError(f"大屏不存在: {dashboard_id}")
+
+    panel_map = {
+        str(panel.get("id") or "").strip(): panel
+        for panel in (dashboard.get("panels") or [])
+        if str(panel.get("id") or "").strip()
+    }
+    missing_panel_ids = [panel_id for panel_id in panel_ids if panel_id not in panel_map]
+    if missing_panel_ids:
+        raise ValueError(f"面板不存在: {missing_panel_ids[0]}")
+
+    ds_manager = dashboard_runtime().get_datasource_manager()
+    execution_target_map: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for panel_id in panel_ids:
+        panel = panel_map[panel_id]
+        datasource_id = str(panel.get("datasource_id") or "").strip()
+        if not datasource_id:
+            continue
+        member_datasource_id = resolve_panel_member_datasource_id(panel, panel_member_datasource_ids.get(panel_id))
+        cache_key = build_dashboard_execution_target_cache_key(datasource_id, member_datasource_id)
+        if cache_key in execution_target_map:
+            continue
+        selected_member_ids = [member_datasource_id] if member_datasource_id else None
+        execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, selected_member_ids)
+        execution_target_map[cache_key] = execution_targets[0]
+
+    return panel_map, execution_target_map
+
+
+async def run_dashboard_panel_task(task_id: str, task: Dict[str, Any]) -> None:
+    """后台执行单面板任务。"""
+    await dashboard_runtime().update_query_task(
+        task_id,
+        status="running",
+        progress_text="面板执行中",
+        started_time=datetime.now(),
+        error_message=None,
+    )
+    request_payload = json_loads_dict(task.get("request_payload"))
+    dashboard_id = str(request_payload.get("dashboard_id") or "").strip()
+    user_id = str(request_payload.get("user_id") or "").strip()
+    panel = await load_dashboard_panel_or_raise(
+        str(request_payload.get("panel_id") or ""),
+        dashboard_id=dashboard_id,
+        user_id=user_id,
+        include_public=True,
+    )
+    effective_member_datasource_id = resolve_panel_member_datasource_id(
+        panel,
+        request_payload.get("member_datasource_id"),
+    )
+    result_data = await build_dashboard_panel_execution_result(
+        panel=panel,
+        member_datasource_id=effective_member_datasource_id,
+    )
+    if not (result_data.get("result") or {}).get("success"):
+        await dashboard_runtime().update_query_task(
+            task_id,
+            status="failed",
+            progress_text="执行失败",
+            result_payload=result_data,
+            error_message=(result_data.get("result") or {}).get("error") or "面板执行失败",
+            finished_time=datetime.now(),
+        )
+        return
+    await dashboard_runtime().update_query_task(
+        task_id,
+        status="succeeded",
+        progress_text="执行完成",
+        result_payload=result_data,
+        error_message=None,
+        finished_time=datetime.now(),
+    )
+
+
+def build_dashboard_batch_result(dashboard_id: str, panel_ids: List[str]) -> Dict[str, Any]:
+    """构造看板批量任务初始结果。"""
+    return {
+        "dashboard_id": dashboard_id,
+        "total": len(panel_ids),
+        "completed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "results": {
+            panel_id: {"status": "pending"}
+            for panel_id in panel_ids
+        },
+    }
+
+
+async def execute_dashboard_panel_task_item(
+    panel_id: str,
+    member_datasource_id: Optional[str] = None,
+    semaphore: Optional[asyncio.Semaphore] = None,
+    panel: Optional[Dict[str, Any]] = None,
+    execution_target: Optional[Dict[str, Any]] = None,
+    query_task_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
+) -> tuple[str, Dict[str, Any]]:
+    """执行批量任务中的单个面板。"""
+    if semaphore is not None:
+        async with semaphore:
+            return await execute_dashboard_panel_task_item(
+                panel_id,
+                member_datasource_id,
+                panel=panel,
+                execution_target=execution_target,
+                query_task_id=query_task_id,
+                user_id=user_id,
+                operator_name=operator_name,
+            )
+    started_at = time.perf_counter()
+    try:
+        panel = panel or await load_dashboard_panel_or_raise(panel_id, user_id=user_id, include_public=True)
+        execution_id = await create_dashboard_panel_execution(
+            task_id=query_task_id or "",
+            panel=panel,
+            execution_target=execution_target,
+            user_id=user_id,
+            operator_name=operator_name,
+        )
+        payload = await build_dashboard_panel_execution_result(
+            panel=panel,
+            member_datasource_id=member_datasource_id,
+            execution_target=execution_target,
+            user_id=user_id,
+            operator_name=operator_name,
+            query_task_id=query_task_id,
+            execution_id=execution_id,
+        )
+        raise_if_dashboard_panel_execution_failed(payload)
+        log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "succeeded", member_datasource_id)
+        return panel_id, {"status": "succeeded", "payload": payload}
+    except Exception as e:
+        log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "failed", member_datasource_id, str(e))
+        logger.error("执行看板面板任务失败: panel_id=%s err=%s", panel_id, e)
+        return panel_id, {"status": "failed", "error": str(e)}
+
+
+async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
+    """后台执行看板批量任务。"""
+    if await dashboard_runtime().is_query_task_cancelled(task_id):
+        return
+    await dashboard_runtime().update_query_task(
+        task_id,
+        status="running",
+        progress_text="看板执行中",
+        started_time=datetime.now(),
+        error_message=None,
+    )
+    if await dashboard_runtime().is_query_task_cancelled(task_id):
+        return
+    request_payload = json_loads_dict(task.get("request_payload"))
+    dashboard_id = str(request_payload.get("dashboard_id") or "")
+    user_id = str(request_payload.get("user_id") or "").strip()
+    operator_name = str(request_payload.get("operator_name") or "").strip()
+    panel_ids = [str(panel_id).strip() for panel_id in (request_payload.get("panel_ids") or []) if str(panel_id).strip()]
+    panel_member_datasource_ids = {
+        str(panel_id): str(member_id).strip()
+        for panel_id, member_id in (request_payload.get("panel_member_datasource_ids") or {}).items()
+        if str(panel_id).strip() and str(member_id).strip()
+    }
+
+    service = get_dashboard_service()
+    dashboard: Optional[Dict[str, Any]] = None
+    if not panel_ids:
+        dashboard = await service.get_dashboard(dashboard_id, user_id=user_id, include_public=True)
+        if not dashboard:
+            raise ValueError(f"大屏不存在: {dashboard_id}")
+        panel_ids = [str(panel.get("id") or "").strip() for panel in (dashboard.get("panels") or []) if str(panel.get("id") or "").strip()]
+
+    batch_result = build_dashboard_batch_result(dashboard_id, panel_ids)
+    await dashboard_runtime().update_query_task(task_id, result_payload=batch_result, progress_text="看板执行中")
+    if not panel_ids:
+        await dashboard_runtime().update_query_task(
+            task_id,
+            status="succeeded",
+            progress_text="无面板需要执行",
+            result_payload=batch_result,
+            error_message=None,
+            finished_time=datetime.now(),
+        )
+        return
+
+    panel_map, execution_target_map = await prepare_dashboard_batch_context(
+        dashboard_id,
+        panel_ids,
+        panel_member_datasource_ids,
+        preloaded_dashboard=dashboard,
+        user_id=user_id,
+        include_public=True,
+    )
+    effective_panel_member_datasource_ids = build_effective_panel_member_datasource_ids(
+        panel_ids,
+        panel_map,
+        panel_member_datasource_ids,
+    )
+    semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
+    tasks = [
+        asyncio.create_task(
+            execute_dashboard_panel_task_item(
+                panel_id,
+                effective_panel_member_datasource_ids.get(panel_id),
+                semaphore,
+                panel=panel_map.get(panel_id),
+                execution_target=execution_target_map.get(
+                    build_dashboard_execution_target_cache_key(
+                        str((panel_map.get(panel_id) or {}).get("datasource_id") or ""),
+                        effective_panel_member_datasource_ids.get(panel_id),
+                    )
+                ),
+                query_task_id=task_id,
+                user_id=user_id,
+                operator_name=operator_name,
+            )
+        )
+        for panel_id in panel_ids
+    ]
+    for completed_task in asyncio.as_completed(tasks):
+        if await cancel_dashboard_batch_if_needed(task_id, tasks):
+            return
+        panel_id, entry = await completed_task
+        update_dashboard_batch_result(batch_result, panel_id, entry)
+        await dashboard_runtime().update_query_task(
+            task_id,
+            progress_text=f"已完成 {batch_result['completed']}/{batch_result['total']}",
+            result_payload=batch_result,
+        )
+        if await cancel_dashboard_batch_if_needed(task_id, tasks):
+            return
+
+    if await dashboard_runtime().is_query_task_cancelled(task_id):
+        return
+    await dashboard_runtime().update_query_task(
+        task_id,
+        **build_dashboard_batch_final_update(batch_result),
+        result_payload=batch_result,
+        finished_time=datetime.now(),
+    )
+
+
+async def execute_dashboard_stream_panel(
+    panel_id: str,
+    panel_map: Dict[str, Dict[str, Any]],
+    execution_target_map: Dict[tuple[str, str], Dict[str, Any]],
+    effective_panel_member_datasource_ids: Dict[str, str],
+    task_id: str,
+    user_id: Optional[str],
+    operator_name: Optional[str],
+    semaphore: asyncio.Semaphore,
+) -> Dict[str, Any]:
+    """执行流式批量接口中的单个面板，返回前端 SSE payload。"""
+    async with semaphore:
+        panel = panel_map.get(panel_id)
+        started_at = time.perf_counter()
+        try:
+            if not panel:
+                return {"panel_id": panel_id, "error": f"面板不存在: {panel_id}"}
+            member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
+            execution_target = execution_target_map.get(
+                build_dashboard_execution_target_cache_key(
+                    str(panel.get("datasource_id") or ""),
+                    member_datasource_id,
+                )
+            )
+            execution_id = await create_dashboard_panel_execution(
+                task_id=task_id,
+                panel=panel,
+                execution_target=execution_target,
+                user_id=user_id,
+                operator_name=operator_name,
+            )
+            payload = await build_dashboard_panel_execution_result(
+                panel=panel,
+                member_datasource_id=member_datasource_id,
+                execution_target=execution_target,
+                user_id=user_id,
+                operator_name=operator_name,
+                query_task_id=task_id,
+                execution_id=execution_id,
+            )
+            raise_if_dashboard_panel_execution_failed(payload)
+            log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "succeeded", member_datasource_id)
+            return payload
+        except Exception as exc:
+            member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
+            log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "failed", member_datasource_id, str(exc))
+            logger.error("执行面板 %s 失败: %s", panel_id, exc)
+            return {"panel_id": panel_id, "error": str(exc)}
+
+
+def create_dashboard_stream_tasks(
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    execution_target_map: Dict[tuple[str, str], Dict[str, Any]],
+    effective_panel_member_datasource_ids: Dict[str, str],
+    task_id: str,
+    user_id: Optional[str],
+    operator_name: Optional[str],
+) -> Dict[asyncio.Task, str]:
+    """创建流式批量面板执行任务。"""
+    semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
+    return {
+        asyncio.create_task(
+            execute_dashboard_stream_panel(
+                panel_id,
+                panel_map,
+                execution_target_map,
+                effective_panel_member_datasource_ids,
+                task_id,
+                user_id,
+                operator_name,
+                semaphore,
+            )
+        ): panel_id
+        for panel_id in panel_ids
+    }
+
+
+def build_sse_data(payload: Any) -> str:
+    """构造 SSE data 行。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def build_sse_done() -> str:
+    """构造 SSE 结束标记。"""
+    return "data: [DONE]\n\n"
+
+
+async def cancel_dashboard_stream_if_needed(
+    task_id: str,
+    task_map: Dict[asyncio.Task, str],
+    pending_tasks: set[asyncio.Task],
+) -> bool:
+    """任务被取消时终止流式批量面板任务。"""
+    if not await dashboard_runtime().is_query_task_cancelled(task_id):
+        return False
+    for task_item in pending_tasks:
+        task_item.cancel()
+    await asyncio.gather(*task_map.keys(), return_exceptions=True)
+    return True
+
+
+def update_dashboard_batch_result_from_stream_result(
+    batch_result: Dict[str, Any],
+    panel_id: str,
+    result: Dict[str, Any],
+) -> None:
+    """按流式面板执行 payload 更新批量结果。"""
+    success = bool((result.get("result") or {}).get("success"))
+    entry = {"status": "succeeded", "payload": result} if success else {
+        "status": "failed",
+        "error": result.get("error") or (result.get("result") or {}).get("error"),
+    }
+    update_dashboard_batch_result(batch_result, panel_id, entry)
+
+
+async def handle_dashboard_stream_completed_task(
+    completed_task: asyncio.Task,
+    task_map: Dict[asyncio.Task, str],
+    batch_result: Dict[str, Any],
+) -> str:
+    """处理已完成面板任务并返回 SSE 字符串。"""
+    panel_id = task_map[completed_task]
+    try:
+        result = completed_task.result()
+        update_dashboard_batch_result_from_stream_result(batch_result, panel_id, result)
+        return build_sse_data(result)
+    except Exception as exc:
+        logger.error("面板 %s 执行异常: %s", panel_id, exc, exc_info=True)
+        update_dashboard_batch_result(batch_result, panel_id, {"status": "failed", "error": str(exc)})
+        return build_sse_data({"panel_id": panel_id, "error": str(exc)})
+
+
+async def update_dashboard_stream_cancelled_task(task_id: str, batch_result: Dict[str, Any]) -> None:
+    """客户端断开时更新流式批量任务状态。"""
+    completed = int(batch_result.get("completed") or 0)
+    total = int(batch_result.get("total") or 0)
+    await dashboard_runtime().update_query_task(
+        task_id,
+        status="cancelled" if completed == 0 else "partial_success",
+        progress_text="已取消" if completed == 0 else f"已取消，完成 {completed}/{total}",
+        result_payload=batch_result,
+        error_message="客户端取消看板执行",
+        finished_time=datetime.now(),
+    )
+
+
+async def stream_dashboard_batch_execution(
+    *,
+    dashboard_id: str,
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    execution_target_map: Dict[tuple[str, str], Dict[str, Any]],
+    effective_panel_member_datasource_ids: Dict[str, str],
+    task_id: str,
+    user_id: Optional[str],
+    operator_name: Optional[str],
+) -> AsyncIterator[str]:
+    """流式执行看板批量面板，并按 SSE 输出每个面板结果。"""
+    batch_result = build_dashboard_batch_result(dashboard_id, panel_ids)
+    task_map = create_dashboard_stream_tasks(
+        panel_ids,
+        panel_map,
+        execution_target_map,
+        effective_panel_member_datasource_ids,
+        task_id,
+        user_id,
+        operator_name,
+    )
+    pending_tasks = set(task_map.keys())
+    try:
+        while pending_tasks:
+            done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
+            if await cancel_dashboard_stream_if_needed(task_id, task_map, pending_tasks):
+                yield build_sse_data({"cancelled": True, "message": "已人工取消"})
+                yield build_sse_done()
+                return
+            for completed_task in done_tasks:
+                yield await handle_dashboard_stream_completed_task(completed_task, task_map, batch_result)
+            if await cancel_dashboard_stream_if_needed(task_id, task_map, pending_tasks):
+                yield build_sse_data({"cancelled": True, "message": "已人工取消"})
+                yield build_sse_done()
+                return
+    except asyncio.CancelledError:
+        for task_item in pending_tasks:
+            task_item.cancel()
+        await update_dashboard_stream_cancelled_task(task_id, batch_result)
+        raise
+
+    if await dashboard_runtime().is_query_task_cancelled(task_id):
+        yield build_sse_done()
+        return
+    await dashboard_runtime().update_query_task(
+        task_id,
+        **build_dashboard_batch_final_update(batch_result),
+        result_payload=batch_result,
+        finished_time=datetime.now(),
+    )
+    yield build_sse_done()
+
+
+def json_loads_dict(value: Any) -> Dict[str, Any]:
+    """解析 JSON 对象字符串，空值返回空字典。"""
+    parsed = json.loads(value or "{}")
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def cancel_dashboard_batch_if_needed(task_id: str, tasks: List[asyncio.Task]) -> bool:
+    """任务被取消时终止未完成的批量面板任务。"""
+    if not await dashboard_runtime().is_query_task_cancelled(task_id):
+        return False
+    for task_item in tasks:
+        if not task_item.done():
+            task_item.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    return True
+
+
+def update_dashboard_batch_result(batch_result: Dict[str, Any], panel_id: str, entry: Dict[str, Any]) -> None:
+    """写入单个面板执行结果并更新批量计数。"""
+    batch_result["results"][panel_id] = entry
+    batch_result["completed"] += 1
+    if entry["status"] == "succeeded":
+        batch_result["succeeded"] += 1
+    else:
+        batch_result["failed"] += 1
+
+
+def build_dashboard_batch_final_update(batch_result: Dict[str, Any]) -> Dict[str, Any]:
+    """构造批量任务最终状态字段。"""
+    if batch_result["failed"] >= batch_result["total"] and batch_result["total"] > 0:
+        return {
+            "status": "failed",
+            "progress_text": "执行失败",
+            "error_message": "所有面板执行失败",
+        }
+    if batch_result["failed"] > 0:
+        return {
+            "status": "partial_success",
+            "progress_text": f"部分完成，失败 {batch_result['failed']} 个面板",
+            "error_message": f"{batch_result['failed']} 个面板执行失败",
+        }
+    return {
+        "status": "succeeded",
+        "progress_text": "执行完成",
+        "error_message": None,
+    }

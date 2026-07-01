@@ -16,13 +16,22 @@ from apps.chat_data_app.schema import (
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
+from apps.chat_data_app.services import dashboard_runtime
 
 
 @pytest.fixture(autouse=True)
 def restore_dashboard_runtime():
-    previous = dashboard_routes._dashboard_runtime_value
+    previous = dashboard_runtime._dashboard_runtime_value
     yield
-    dashboard_routes._dashboard_runtime_value = previous
+    dashboard_runtime._dashboard_runtime_value = previous
+
+
+@pytest.fixture(autouse=True)
+def mirror_dashboard_service():
+    previous = dashboard_runtime.get_dashboard_service
+    dashboard_runtime.get_dashboard_service = lambda: dashboard_routes.get_dashboard_service()
+    yield
+    dashboard_runtime.get_dashboard_service = previous
 
 
 def test_get_dashboard_detail_api_contract(client, auth_headers, fake_dashboard_service, monkeypatch):
@@ -321,9 +330,9 @@ def test_execute_panel_success_and_failure(fake_dashboard_service, monkeypatch):
     _patch_dashboard_user(monkeypatch)
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -365,9 +374,9 @@ def test_execute_panel_without_datasource_uses_tool_direct(monkeypatch):
 
     runtime = FakeDashboardRuntime()
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: NoDatasourceDashboardService())
-    monkeypatch.setattr(dashboard_routes, "execute_sql_direct_runner", fake_execute_sql_direct_runner)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    monkeypatch.setattr(dashboard_runtime, "execute_sql_direct_runner", fake_execute_sql_direct_runner)
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -387,7 +396,7 @@ def test_create_dashboard_query_task_and_panel_alias(fake_dashboard_service, mon
     _patch_dashboard_user(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -418,9 +427,9 @@ def test_execute_panels_batch_streams_success_and_failure(fake_dashboard_service
     _patch_dashboard_user(monkeypatch)
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
     runtime = FakeDashboardRuntime(fail_members={"member_fail"})
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -462,9 +471,9 @@ def test_dashboard_background_tasks_update_status(fake_dashboard_service, monkey
     _patch_dashboard_user(monkeypatch)
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_1"))
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -474,10 +483,10 @@ def test_dashboard_background_tasks_update_status(fake_dashboard_service, monkey
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
 
-    asyncio.run(dashboard_routes._run_dashboard_panel_task("task_panel", {
+    asyncio.run(dashboard_runtime.run_dashboard_panel_task("task_panel", {
         "request_payload": json.dumps({"dashboard_id": "dash_a", "panel_id": "panel_a", "member_datasource_id": "member_a", "user_id": "user_a"}),
     }))
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_batch", {
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_batch", {
         "request_payload": json.dumps({"dashboard_id": "dash_a", "panel_ids": ["panel_a"], "panel_member_datasource_ids": {"panel_a": "member_a"}, "user_id": "user_a", "operator_name": "测试用户"}),
     }))
 
@@ -486,23 +495,23 @@ def test_dashboard_background_tasks_update_status(fake_dashboard_service, monkey
 
 
 def test_dashboard_runtime_and_helper_error_branches(monkeypatch):
-    previous = dashboard_routes._dashboard_runtime_value
-    dashboard_routes._dashboard_runtime_value = None
+    previous = dashboard_runtime._dashboard_runtime_value
+    dashboard_runtime._dashboard_runtime_value = None
     try:
         try:
-            dashboard_routes._dashboard_runtime()
+            dashboard_runtime.dashboard_runtime()
         except RuntimeError as exc:
             assert "runtime" in str(exc)
         else:
             raise AssertionError("runtime must be configured")
     finally:
-        dashboard_routes._dashboard_runtime_value = previous
+        dashboard_runtime._dashboard_runtime_value = previous
 
-    assert dashboard_routes._build_dashboard_panel_sql_preview("select " + "x" * 200, 20).endswith("...")
-    assert dashboard_routes._build_dashboard_execution_target_cache_key(" ds ", " member ") == ("ds", "member")
+    assert dashboard_runtime.build_dashboard_panel_sql_preview("select " + "x" * 200, 20).endswith("...")
+    assert dashboard_runtime.build_dashboard_execution_target_cache_key(" ds ", " member ") == ("ds", "member")
 
     try:
-        dashboard_routes._raise_if_dashboard_panel_execution_failed({"panel_id": "p1", "result": {"success": False, "error": "失败"}})
+        dashboard_runtime.raise_if_dashboard_panel_execution_failed({"panel_id": "p1", "result": {"success": False, "error": "失败"}})
     except RuntimeError as exc:
         assert str(exc) == "失败"
     else:
@@ -526,9 +535,9 @@ def test_create_dashboard_panel_execution_persists_record(monkeypatch):
         async def commit(self):
             committed["value"] = True
 
-    monkeypatch.setattr(dashboard_routes, "get_session", lambda: FakeSession())
+    monkeypatch.setattr(dashboard_runtime, "get_session", lambda: FakeSession())
 
-    assert asyncio.run(dashboard_routes._create_dashboard_panel_execution(
+    assert asyncio.run(dashboard_runtime.create_dashboard_panel_execution(
         task_id="",
         panel={"datasource_id": "ds_a", "sql": "select 1"},
         execution_target={},
@@ -536,7 +545,7 @@ def test_create_dashboard_panel_execution_persists_record(monkeypatch):
         operator_name="测试用户",
     )) is None
 
-    execution_id = asyncio.run(dashboard_routes._create_dashboard_panel_execution(
+    execution_id = asyncio.run(dashboard_runtime.create_dashboard_panel_execution(
         task_id="task_a",
         panel={"datasource_id": "ds_a", "sql": "select 1"},
         execution_target={"member_datasource_id": "member_a", "member_name": "成员A", "query_executor_type": "http"},
@@ -555,7 +564,7 @@ def test_prepare_dashboard_batch_context_errors_and_cache(fake_dashboard_service
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -565,7 +574,7 @@ def test_prepare_dashboard_batch_context_errors_and_cache(fake_dashboard_service
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
 
-    panel_map, target_map = asyncio.run(dashboard_routes._prepare_dashboard_batch_context(
+    panel_map, target_map = asyncio.run(dashboard_runtime.prepare_dashboard_batch_context(
         "dash_a",
         ["panel_a"],
         {"panel_a": "member_a"},
@@ -575,15 +584,15 @@ def test_prepare_dashboard_batch_context_errors_and_cache(fake_dashboard_service
     assert panel_map["panel_a"]["datasource_id"] == "ds_a"
     assert target_map[("ds_a", "member_a")]["member_datasource_id"] == "member_a"
     with pytest.raises(ValueError, match="大屏不存在"):
-        asyncio.run(dashboard_routes._prepare_dashboard_batch_context("missing", ["panel_a"], {}, user_id="user_a"))
+        asyncio.run(dashboard_runtime.prepare_dashboard_batch_context("missing", ["panel_a"], {}, user_id="user_a"))
     with pytest.raises(ValueError, match="面板不存在"):
-        asyncio.run(dashboard_routes._prepare_dashboard_batch_context("dash_a", ["missing"], {}, user_id="user_a"))
+        asyncio.run(dashboard_runtime.prepare_dashboard_batch_context("dash_a", ["missing"], {}, user_id="user_a"))
 
 
 def test_execute_dashboard_panel_task_item_success_and_failure(monkeypatch):
     panel = {"id": "panel_a", "name": "面板A", "chart_type": "bar", "chart_config": {}, "datasource_id": "ds_a", "sql": "select 1"}
     runtime = FakeDashboardRuntime(fail_members={"member_fail"})
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -592,9 +601,9 @@ def test_execute_dashboard_panel_task_item_success_and_failure(monkeypatch):
         schedule_query_task=runtime.schedule_query_task,
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
 
-    success_panel_id, success_entry = asyncio.run(dashboard_routes._execute_dashboard_panel_task_item(
+    success_panel_id, success_entry = asyncio.run(dashboard_runtime.execute_dashboard_panel_task_item(
         "panel_a",
         "member_a",
         asyncio.Semaphore(1),
@@ -604,7 +613,7 @@ def test_execute_dashboard_panel_task_item_success_and_failure(monkeypatch):
         user_id="user_a",
         operator_name="测试用户",
     ))
-    fail_panel_id, fail_entry = asyncio.run(dashboard_routes._execute_dashboard_panel_task_item(
+    fail_panel_id, fail_entry = asyncio.run(dashboard_runtime.execute_dashboard_panel_task_item(
         "panel_a",
         "member_fail",
         panel=panel,
@@ -631,7 +640,7 @@ def test_run_dashboard_batch_task_cancel_empty_and_partial(monkeypatch):
             return self.dashboard if dashboard_id == "dash_a" else None
 
     def configure(runtime):
-        dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+        dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
             get_datasource_manager=runtime.get_datasource_manager,
             execute_sql_for_member=runtime.execute_sql_for_member,
             create_task_record=runtime.create_task_record,
@@ -643,18 +652,18 @@ def test_run_dashboard_batch_task_cancel_empty_and_partial(monkeypatch):
 
     cancelled_runtime = FakeDashboardRuntime(cancelled_after=1)
     configure(cancelled_runtime)
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_cancel", {"request_payload": "{}"}))
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_cancel", {"request_payload": "{}"}))
     assert cancelled_runtime.updated_tasks == []
 
     early_cancel_runtime = FakeDashboardRuntime(cancelled_after=2)
     configure(early_cancel_runtime)
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_cancel_after_start", {"request_payload": "{}"}))
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_cancel_after_start", {"request_payload": "{}"}))
     assert any(update[1].get("status") == "running" for update in early_cancel_runtime.updated_tasks)
 
     empty_runtime = FakeDashboardRuntime()
     configure(empty_runtime)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: BatchDashboardService([]))
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_empty", {
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_empty", {
         "request_payload": json.dumps({"dashboard_id": "dash_a", "user_id": "user_a"}),
     }))
     assert any(update[1].get("progress_text") == "无面板需要执行" for update in empty_runtime.updated_tasks)
@@ -666,8 +675,8 @@ def test_run_dashboard_batch_task_cancel_empty_and_partial(monkeypatch):
     partial_runtime = FakeDashboardRuntime(fail_members={"member_fail"})
     configure(partial_runtime)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: BatchDashboardService(panels))
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_partial", {
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_partial", {
         "request_payload": json.dumps({
             "dashboard_id": "dash_a",
             "panel_ids": ["panel_a", "panel_b"],
@@ -776,7 +785,7 @@ def test_execute_panel_value_and_generic_error_branches(fake_dashboard_service, 
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -785,19 +794,19 @@ def test_execute_panel_value_and_generic_error_branches(fake_dashboard_service, 
         schedule_query_task=runtime.schedule_query_task,
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
 
     async def raise_value_error(**_kwargs):
         raise ValueError("参数错误")
 
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", raise_value_error)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_value_error)
     value_error = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
     assert value_error["code"] == 40001
 
     async def raise_generic_error(**_kwargs):
         raise Exception("未知错误")
 
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", raise_generic_error)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_generic_error)
     generic_error = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
     assert generic_error["code"] == 50029
     assert any(update[1].get("status") == "failed" for update in runtime.updated_tasks)
@@ -807,7 +816,7 @@ def test_dashboard_helpers_cover_missing_panel_and_no_datasource_batch(fake_dash
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -818,7 +827,7 @@ def test_dashboard_helpers_cover_missing_panel_and_no_datasource_batch(fake_dash
     ))
 
     with pytest.raises(ValueError, match="面板不存在"):
-        asyncio.run(dashboard_routes._load_dashboard_panel_or_raise("missing", dashboard_id="dash_a", user_id="user_a"))
+        asyncio.run(dashboard_runtime.load_dashboard_panel_or_raise("missing", dashboard_id="dash_a", user_id="user_a"))
 
     no_ds_dashboard = {
         "id": "dash_no_ds",
@@ -826,7 +835,7 @@ def test_dashboard_helpers_cover_missing_panel_and_no_datasource_batch(fake_dash
         "datasource_id": "",
         "panels": [{"id": "panel_no_ds", "name": "无数据源", "chart_type": "table", "chart_config": {}, "datasource_id": "", "sql": "select 1"}],
     }
-    panel_map, target_map = asyncio.run(dashboard_routes._prepare_dashboard_batch_context(
+    panel_map, target_map = asyncio.run(dashboard_runtime.prepare_dashboard_batch_context(
         "dash_no_ds",
         ["panel_no_ds"],
         {},
@@ -842,7 +851,7 @@ def test_run_dashboard_panel_task_failed_result(fake_dashboard_service, monkeypa
     _patch_dashboard_execution_service_shape(fake_dashboard_service)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime(fail_members={"member_fail"})
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -852,7 +861,7 @@ def test_run_dashboard_panel_task_failed_result(fake_dashboard_service, monkeypa
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
 
-    asyncio.run(dashboard_routes._run_dashboard_panel_task("task_panel_fail", {
+    asyncio.run(dashboard_runtime.run_dashboard_panel_task("task_panel_fail", {
         "request_payload": json.dumps({
             "dashboard_id": "dash_a",
             "panel_id": "panel_a",
@@ -878,7 +887,7 @@ def test_run_dashboard_batch_task_not_found_and_all_failed(monkeypatch):
     ]
 
     def configure(runtime):
-        dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+        dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
             get_datasource_manager=runtime.get_datasource_manager,
             execute_sql_for_member=runtime.execute_sql_for_member,
             create_task_record=runtime.create_task_record,
@@ -892,15 +901,15 @@ def test_run_dashboard_batch_task_not_found_and_all_failed(monkeypatch):
     configure(missing_runtime)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: BatchDashboardService([]))
     with pytest.raises(ValueError, match="大屏不存在"):
-        asyncio.run(dashboard_routes._run_dashboard_batch_task("task_missing", {
+        asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_missing", {
             "request_payload": json.dumps({"dashboard_id": "missing", "user_id": "user_a"}),
         }))
 
     fail_runtime = FakeDashboardRuntime(fail_members={"member_fail"})
     configure(fail_runtime)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: BatchDashboardService(panels))
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    asyncio.run(dashboard_routes._run_dashboard_batch_task("task_all_failed", {
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    asyncio.run(dashboard_runtime.run_dashboard_batch_task("task_all_failed", {
         "request_payload": json.dumps({
             "dashboard_id": "dash_a",
             "panel_ids": ["panel_a", "panel_b"],
@@ -936,7 +945,7 @@ def test_execute_panels_batch_accepts_list_missing_and_cancel(monkeypatch):
         return {"panel_id": kwargs["panel"]["id"], "name": "面板A", "chart_type": "table", "chart_config": {}, "result": {"success": True, "data": [{"x": 1}]}}
 
     runtime = FakeDashboardRuntime(cancelled_after=1)
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -946,9 +955,9 @@ def test_execute_panels_batch_accepts_list_missing_and_cancel(monkeypatch):
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: BatchDashboardService())
-    monkeypatch.setattr(dashboard_routes, "_prepare_dashboard_batch_context", fake_prepare_context)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", fake_build_result)
+    monkeypatch.setattr(dashboard_runtime, "prepare_dashboard_batch_context", fake_prepare_context)
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", fake_build_result)
 
     missing = _payload(asyncio.run(dashboard_routes.execute_panels_batch("missing", SimpleNamespace(), None)))
     response = asyncio.run(dashboard_routes.execute_panels_batch("dash_a", SimpleNamespace(), ["panel_a"]))
@@ -971,7 +980,7 @@ def test_execute_panels_batch_generator_exception_and_client_cancel(monkeypatch)
         }, {}
 
     runtime = FakeDashboardRuntime(cancelled_after=999)
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -981,13 +990,13 @@ def test_execute_panels_batch_generator_exception_and_client_cancel(monkeypatch)
         query_task_poll_interval_ms=runtime.query_task_poll_interval_ms,
     ))
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: SinglePanelService())
-    monkeypatch.setattr(dashboard_routes, "_prepare_dashboard_batch_context", fake_prepare_context)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+    monkeypatch.setattr(dashboard_runtime, "prepare_dashboard_batch_context", fake_prepare_context)
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
 
     async def raise_panel_error(**_kwargs):
         raise RuntimeError("panel failed")
 
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", raise_panel_error)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_panel_error)
     response = asyncio.run(dashboard_routes.execute_panels_batch(
         "dash_a",
         SimpleNamespace(),
@@ -1009,7 +1018,7 @@ def test_execute_panels_batch_generator_exception_and_client_cancel(monkeypatch)
         await asyncio.sleep(0.1)
         return {"panel_id": kwargs["panel"]["id"], "name": "面板A", "chart_type": "table", "chart_config": {}, "result": {"success": True}}
 
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", slow_success)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", slow_success)
     cancel_response = asyncio.run(dashboard_routes.execute_panels_batch(
         "dash_a",
         SimpleNamespace(),
@@ -1024,7 +1033,7 @@ def test_create_dashboard_query_task_error_and_list_request(fake_dashboard_servi
     _patch_dashboard_user(monkeypatch)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: fake_dashboard_service)
     runtime = FakeDashboardRuntime()
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,
@@ -1041,7 +1050,7 @@ def test_create_dashboard_query_task_error_and_list_request(fake_dashboard_servi
         raise RuntimeError("create task failed")
 
     runtime.create_task_record = raise_create_task
-    dashboard_routes.configure_dashboard_runtime(dashboard_routes.DashboardRuntime(
+    dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
         execute_sql_for_member=runtime.execute_sql_for_member,
         create_task_record=runtime.create_task_record,

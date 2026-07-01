@@ -25,7 +25,7 @@ from .schema import (
 )
 from .services.datasource_manager import get_datasource_manager
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
-from .services import query_runtime
+from .services import dashboard_runtime, query_runtime
 from .services.query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 from .daos.query_history_dao import QueryHistoryDao
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
@@ -47,12 +47,8 @@ from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
 from .routers.data_analyze_workspace import router as data_analyze_workspace_router
 from .routers.skills import router as skills_router
-from .routers.dashboard import DashboardRuntime, configure_dashboard_runtime, router as dashboard_router
+from .routers.dashboard import router as dashboard_router
 from .routers.semantic_config import router as semantic_config_router
-from .routers.dashboard import (
-    _run_dashboard_batch_task,
-    _run_dashboard_panel_task,
-)
 import time
 
 logger = get_logger(__name__)
@@ -1093,10 +1089,10 @@ async def _run_query_task(task_id: str) -> None:
             await _run_sql_query_task(task_id, task)
             return
         if task.get("task_type") == "dashboard_panel":
-            await _run_dashboard_panel_task(task_id, task)
+            await dashboard_runtime.run_dashboard_panel_task(task_id, task)
             return
         if task.get("task_type") == "dashboard_batch":
-            await _run_dashboard_batch_task(task_id, task)
+            await dashboard_runtime.run_dashboard_batch_task(task_id, task)
             return
         raise ValueError(f"不支持的任务类型: {task.get('task_type')}")
     except ValueError as e:
@@ -1126,7 +1122,7 @@ def _schedule_query_task(task_id: str) -> None:
     background_task.add_done_callback(_query_task_background_tasks.discard)
 
 
-configure_dashboard_runtime(DashboardRuntime(
+dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
     get_datasource_manager=lambda: get_datasource_manager(),
     execute_sql_for_member=lambda **kwargs: _execute_sql_for_member(**kwargs),
     create_task_record=lambda **kwargs: _create_task_record(**kwargs),

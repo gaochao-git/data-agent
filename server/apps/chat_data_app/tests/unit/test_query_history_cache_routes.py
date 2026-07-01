@@ -20,7 +20,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app import routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services import dashboard_runtime, query_runtime
 from utils.lang_util.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
 
 
@@ -1274,8 +1274,8 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
 
     monkeypatch.setattr(routes, "_get_query_task", fake_get_task)
     monkeypatch.setattr(routes, "_run_sql_query_task", fake_run_sql)
-    monkeypatch.setattr(routes, "_run_dashboard_panel_task", fake_run_panel)
-    monkeypatch.setattr(routes, "_run_dashboard_batch_task", fake_run_batch)
+    monkeypatch.setattr(dashboard_runtime, "run_dashboard_panel_task", fake_run_panel)
+    monkeypatch.setattr(dashboard_runtime, "run_dashboard_batch_task", fake_run_batch)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_task)
 
     asyncio.run(routes._run_query_task("missing"))

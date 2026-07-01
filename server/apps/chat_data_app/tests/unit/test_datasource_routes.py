@@ -18,6 +18,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app import routes
 from apps.chat_data_app.routers import dashboard as dashboard_routes
+from apps.chat_data_app.services import dashboard_runtime
 from apps.chat_data_app.routers import common as common_routes
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
 from apps.chat_data_app.routers import datasource_helpers as datasource_helper_routes
@@ -69,6 +70,14 @@ from apps.chat_data_app.schema import (
     QuickSqlRequest,
     QueryTaskCreateRequest,
 )
+
+
+@pytest.fixture(autouse=True)
+def mirror_dashboard_service():
+    previous = dashboard_runtime.get_dashboard_service
+    dashboard_runtime.get_dashboard_service = lambda: dashboard_routes.get_dashboard_service()
+    yield
+    dashboard_runtime.get_dashboard_service = previous
 
 
 def test_query_history_filter_normalizers():
@@ -786,6 +795,10 @@ def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
     monkeypatch.setattr(query_runtime, "create_task_record", fake_create_task_record)
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_executions)
     monkeypatch.setattr(query_runtime, "update_query_task", fake_update_task)
+    runtime = dashboard_runtime.dashboard_runtime()
+    monkeypatch.setattr(runtime, "create_task_record", fake_create_task_record)
+    monkeypatch.setattr(runtime, "update_query_task", fake_update_task)
+    monkeypatch.setattr(runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     return updates
 
 
@@ -2293,10 +2306,11 @@ def test_execute_panel_uses_selected_member_datasource(monkeypatch):
     ]
     _mock_datasource_manager(monkeypatch, manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
+    monkeypatch.setattr(dashboard_runtime, "get_dashboard_service", lambda: _FakeDashboardService())
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
 
     resp = asyncio.run(dashboard_routes.execute_panel(
         "dash_a",
@@ -2347,7 +2361,7 @@ def test_execute_panel_uses_saved_member_datasource_when_not_overridden(monkeypa
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
 
     resp = asyncio.run(dashboard_routes.execute_panel(
         "dash_a",
@@ -2370,10 +2384,11 @@ def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
     ]
     _mock_datasource_manager(monkeypatch, manager)
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
+    monkeypatch.setattr(dashboard_runtime, "get_dashboard_service", lambda: _FakeDashboardService())
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
 
     resp = asyncio.run(dashboard_routes.execute_panel(
         "dash_a",
@@ -2460,12 +2475,12 @@ def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monke
         updates.append((task_id, kwargs))
         return None
 
-    monkeypatch.setattr(dashboard_routes, "_load_dashboard_panel_or_raise", fake_load_panel)
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", fake_build_panel_result)
+    monkeypatch.setattr(dashboard_runtime, "load_dashboard_panel_or_raise", fake_load_panel)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", fake_build_panel_result)
     monkeypatch.setattr(routes, "_update_query_task", fake_update_query_task)
     monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
 
-    asyncio.run(dashboard_routes._run_dashboard_panel_task("panel_task_001", {
+    asyncio.run(dashboard_runtime.run_dashboard_panel_task("panel_task_001", {
         "request_payload": json.dumps({
             "panel_id": "panel_a",
             "member_datasource_id": "phy_error",
@@ -2490,7 +2505,7 @@ def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
@@ -2522,7 +2537,7 @@ def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypat
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
@@ -2548,9 +2563,10 @@ def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch)
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
+    monkeypatch.setattr(dashboard_runtime, "get_dashboard_service", lambda: _FakeDashboardService())
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
-    monkeypatch.setattr(dashboard_routes, "_create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     monkeypatch.setattr(routes, "_is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
     monkeypatch.setattr(query_runtime, "is_query_task_cancelled", lambda _task_id: asyncio.sleep(0, result=False))
 
@@ -2558,7 +2574,7 @@ def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch)
         await asyncio.sleep(30)
         return {}
 
-    monkeypatch.setattr(dashboard_routes, "_build_dashboard_panel_execution_result", fake_build_panel_result)
+    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", fake_build_panel_result)
 
     response = asyncio.run(dashboard_routes.execute_panels_batch(
         "dash_a",
