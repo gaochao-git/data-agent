@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, File, Request, UploadFile
 from langchain_core.messages import HumanMessage
-from sqlalchemy import select
 
 from auth import AuthenticationError
 from utils.lang_util import conversation
 from utils.lang_util.checkpoint import get_checkpointer
 from utils.lang_util.database import get_session
-from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent import get_chat_data_graph
@@ -24,7 +20,7 @@ from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,
 )
-from ..agent.prompts.history_learning import build_history_learning_prompt
+from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from ..schema import (
     SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
@@ -36,13 +32,36 @@ from ..semantic.utils import parse_llm_json
 from ..services.datasource_manager import get_datasource_manager
 from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm
+from ..services.semantic_history_learning_service import (
+    SemanticHistoryLearningService,
+    _build_existing_semantic_indexes,
+    _build_history_learning_table_context,
+    _compact_history_conversation_messages,
+    _compact_history_sample_for_llm,
+    _extract_expression_columns,
+    _extract_history_task_conversation_id,
+    _extract_history_task_query_text,
+    _extract_history_task_semantic_id,
+    _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
+    _history_belongs_to_config as _service_history_belongs_to_config,
+    _history_message_text,
+    _is_existing_history_suggestion,
+    _is_history_tool_error_message,
+    _is_negative_feedback_text,
+    _normalize_history_learning_result,
+    _normalize_history_suggestion_item,
+    _normalize_semantic_expression,
+    _normalize_semantic_text,
+    _parse_json_object,
+    _sample_map_by_execution_id,
+    _semantic_scope_tables,
+)
 from ..services.sql_parser import extract_physical_tables
 from .common import (
     AGENT_ID,
     DATA_ANALYZE_AGENT_ID,
     _build_table_columns_map,
     _get_current_user,
-    _semantic_config_prompt_payload,
 )
 
 logger = get_logger(__name__)
@@ -128,131 +147,28 @@ def _quote_identifier(name: str) -> str:
     return f"`{safe}`"
 
 
-def _parse_json_object(raw: Any) -> Dict[str, Any]:
-    """解析 JSON 对象字符串。"""
-    if isinstance(raw, dict):
-        return raw
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(str(raw))
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+def _history_table_parser(sql: str, source_type: str):
+    return extract_physical_tables(sql, source_type=source_type)
 
 
-def _extract_history_task_semantic_id(payload: Dict[str, Any]) -> str:
-    """从任务请求中提取语义配置ID。"""
-    return str((payload or {}).get("semantic_config_id") or "").strip()
-
-
-def _extract_history_task_query_text(payload: Dict[str, Any]) -> str:
-    """从任务请求中提取原始问题或查询说明。"""
-    return str((payload or {}).get("query_text") or "").strip()
-
-
-def _extract_history_task_conversation_id(payload: Dict[str, Any]) -> str:
-    """从任务请求中提取来源会话ID。"""
-    return str((payload or {}).get("conversation_id") or "").strip()
-
-
-def _history_message_text(content: Any) -> str:
-    """提取对话消息可读文本。"""
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: List[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts).strip()
-    return str(content or "").strip()
-
-
-def _is_negative_feedback_text(text: str) -> bool:
-    """识别明显负反馈，只作为学习信号，不沉淀为业务事实。"""
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    patterns = [
-        "不对",
-        "不是",
-        "错了",
-        "错误",
-        "不准确",
-        "不应该",
-        "没有",
-        "漏了",
-        "少了",
-        "查不到",
-        "不符合",
-        "不合理",
-        "wrong",
-        "incorrect",
-    ]
-    return any(pattern in normalized for pattern in patterns)
-
-
-def _is_history_tool_error_message(text: str) -> bool:
-    """识别工具消息是否真的是失败结果。"""
-    raw = str(text or "").strip()
-    if not raw:
-        return False
-    payload_text = raw
-    if "\n" in raw and raw.startswith("["):
-        payload_text = raw.split("\n", 1)[1].strip()
-    try:
-        payload = json.loads(payload_text)
-        if isinstance(payload, dict):
-            if payload.get("success") is False:
-                return True
-            error_value = payload.get("error")
-            if error_value not in (None, "", False):
-                return True
-            return False
-    except Exception:
-        pass
-    lowered = raw.lower()
-    return "失败" in raw or "错误" in raw or "exception" in lowered or "traceback" in lowered
-
-
-def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """裁剪智能问数对话上下文，保留用户意图、反馈和工具错误。"""
-    user_turns: List[Dict[str, str]] = []
-    assistant_turns: List[Dict[str, str]] = []
-    tool_errors: List[Dict[str, str]] = []
-    negative_feedback: List[str] = []
-    for msg in messages or []:
-        role = str((msg or {}).get("role") or "").strip()
-        text = _history_message_text((msg or {}).get("content"))
-        if not text:
-            continue
-        timestamp = str((msg or {}).get("timestamp") or "").strip()
-        if role == "user":
-            clipped = text[:500]
-            user_turns.append({"content": clipped, "timestamp": timestamp})
-            if _is_negative_feedback_text(text):
-                negative_feedback.append(clipped)
-        elif role == "assistant":
-            if text and not (msg or {}).get("tool_calls"):
-                assistant_turns.append({"content": text[:500], "timestamp": timestamp})
-        elif role == "tool":
-            if _is_history_tool_error_message(text):
-                tool_errors.append({
-                    "tool_name": str((msg or {}).get("tool_name") or "").strip(),
-                    "content": text[:600],
-                    "timestamp": timestamp,
-                })
-    return {
-        "user_turns": user_turns[-6:],
-        "assistant_turns": assistant_turns[-3:],
-        "negative_feedback": negative_feedback[-5:],
-        "tool_errors": tool_errors[-5:],
-    }
+def _history_belongs_to_config(
+    query_type: str,
+    task_payload: Dict[str, Any],
+    sql: str,
+    config_id: str,
+    config: Dict[str, Any],
+    source_type: str,
+) -> tuple[bool, str, List[str], str]:
+    """判断历史记录是否属于当前指标集。"""
+    return _service_history_belongs_to_config(
+        query_type,
+        task_payload,
+        sql,
+        config_id,
+        config,
+        source_type,
+        table_parser=_history_table_parser,
+    )
 
 
 async def _load_history_conversation_context(conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -280,117 +196,28 @@ async def _load_history_conversation_context(conversation_id: str) -> Optional[D
         return None
 
 
-def _semantic_scope_tables(config: Dict[str, Any]) -> Set[str]:
-    """提取指标集涉及的表。"""
-    tables: Set[str] = set()
-    for item in config.get("metrics") or []:
-        table = str((item or {}).get("table") or "").strip()
-        if table:
-            tables.add(table)
-    for item in config.get("dimensions") or []:
-        table = str((item or {}).get("table") or "").strip()
-        if table:
-            tables.add(table)
-    for item in config.get("relationships") or []:
-        left = str((item or {}).get("left_table") or "").strip()
-        right = str((item or {}).get("right_table") or "").strip()
-        if left:
-            tables.add(left)
-        if right:
-            tables.add(right)
-    return tables
-
-
-def _history_belongs_to_config(
-    query_type: str,
-    task_payload: Dict[str, Any],
-    sql: str,
-    config_id: str,
+async def _generate_history_learning_suggestions_by_llm(
+    datasource: Dict[str, Any],
     config: Dict[str, Any],
-    source_type: str,
-) -> tuple[bool, str, List[str], str]:
-    """判断历史记录是否属于当前指标集。"""
-    task_config_id = _extract_history_task_semantic_id(task_payload)
-    if query_type in {"agent", "builder"}:
-        if not task_config_id or task_config_id != config_id:
-            return False, "config_id_mismatch", [], ""
-        return True, "matched_config_id", [], ""
-
-    scope_tables = _semantic_scope_tables(config)
-    if not scope_tables:
-        return False, "empty_scope", [], ""
-    parsed = extract_physical_tables(sql, source_type=source_type)
-    if not parsed.success:
-        return False, "sql_parse_failed", [], parsed.error
-    history_tables = parsed.tables
-    if not history_tables:
-        return False, "empty_history_tables", [], ""
-    if not history_tables.issubset(scope_tables):
-        return False, "table_scope_mismatch", sorted(history_tables), ""
-    return True, "matched_table_scope", sorted(history_tables), ""
+    samples: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """调用大模型基于历史生成指标集维护建议。"""
+    return await _service_generate_history_learning_suggestions_by_llm(
+        datasource,
+        config,
+        samples,
+        llm_factory=get_chat_data_llm,
+    )
 
 
-def _build_history_learning_table_context(datasource: Dict[str, Any], config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """裁剪指标集相关表结构给历史学习模型。"""
-    scope_tables = _semantic_scope_tables(config)
-    items: List[Dict[str, Any]] = []
-    for table in datasource.get("ds_tables", []) or []:
-        table_name = str((table or {}).get("table_name") or "").strip()
-        if scope_tables and table_name not in scope_tables:
-            continue
-        columns = []
-        for col in (table or {}).get("columns", []) or []:
-            col_name = str((col or {}).get("name") or "").strip()
-            if not col_name:
-                continue
-            columns.append({
-                "name": col_name,
-                "type": (col or {}).get("mysql_type") or (col or {}).get("hive_type") or (col or {}).get("type") or "",
-                "description": (col or {}).get("description") or "",
-            })
-        items.append({
-            "table_name": table_name,
-            "description": (table or {}).get("description") or "",
-            "columns": columns[:80],
-        })
-    return items[:20]
-
-
-def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
-    """压缩单条历史，控制 LLM 输入长度。"""
-    builder_config = sample.get("builder_config") if isinstance(sample.get("builder_config"), dict) else None
-    compact: Dict[str, Any] = {
-        "execution_id": sample.get("execution_id"),
-        "source": sample.get("source"),
-        "status": sample.get("status"),
-        "query_text": str(sample.get("query_text") or "")[:300],
-        "sql": str(sample.get("sql") or "")[:1200],
-        "error_message": str(sample.get("error_message") or "")[:500],
-        "executed_at": sample.get("executed_at"),
-    }
-    conversation_context = sample.get("conversation_context")
-    if isinstance(conversation_context, dict) and sample.get("source") == "agent":
-        compact["conversation_context"] = conversation_context
-    if builder_config:
-        compact["builder_config"] = {
-            "mainTable": builder_config.get("mainTable"),
-            "joins": (builder_config.get("joins") or [])[:10],
-            "dimensions": (builder_config.get("dimensions") or [])[:20],
-            "aggregations": (builder_config.get("aggregations") or [])[:20],
-            "filters": (builder_config.get("filters") or [])[:20],
-            "orderBy": (builder_config.get("orderBy") or [])[:10],
-        }
-    return compact
-
-
-def _sample_map_by_execution_id(samples: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """按执行ID索引历史样例。"""
-    return {str(item.get("execution_id") or ""): item for item in samples if str(item.get("execution_id") or "")}
-
-
-def _normalize_semantic_text(value: Any) -> str:
-    """统一语义字段比较口径。"""
-    return str(value or "").strip().strip("`").lower()
+def _build_history_learning_service() -> SemanticHistoryLearningService:
+    """构建历史学习服务，保留路由模块测试替换点。"""
+    return SemanticHistoryLearningService(
+        dao=SemanticHistoryLearningDao(session_context=lambda: get_session()),
+        context_loader=_load_history_conversation_context,
+        suggestion_loader=_generate_history_learning_suggestions_by_llm,
+        history_matcher=_history_belongs_to_config,
+    )
 
 
 def _normalize_prefill_display_name(value: Any, fallback: str) -> str:
@@ -422,6 +249,7 @@ def _build_prefill_alias_map(tables: List[Dict]) -> Dict[str, List[str]]:
 
 def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """自动预填字段重名时追加表角色前缀。"""
+
     def build_prefixed_name(table_alias: str, name: str) -> str:
         alias = re.sub(r"[`\"'“”‘’、/\\|()（）\[\]【】{}<>《》.!！?？~@#$%^&*+=-]", "", str(table_alias or "").strip())
         alias = re.sub(r"\s+", "", alias)
@@ -434,11 +262,8 @@ def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str,
         if budget <= 0:
             return name[:PREFILL_DISPLAY_NAME_MAX_LENGTH]
         alias_parts = [part for part in alias.split("_") if part]
-        alias_part = alias
-        if alias_parts and len(alias_parts[-1]) >= 2:
-            alias_part = alias_parts[-1]
-        alias_part = alias_part[:budget]
-        return _normalize_prefill_display_name(f"{alias_part}_{name}", name)
+        alias_part = alias_parts[-1] if alias_parts and len(alias_parts[-1]) >= 2 else alias
+        return _normalize_prefill_display_name(f"{alias_part[:budget]}_{name}", name)
 
     name_counts: Dict[str, int] = {}
     for item in items:
@@ -460,226 +285,6 @@ def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str,
         item["name"] = candidate
         used_names.add(candidate)
     return items
-
-
-def _normalize_semantic_expression(value: Any) -> str:
-    """统一表达式比较口径。"""
-    return re.sub(r"\s+", "", str(value or "").strip().strip("`").lower())
-
-
-def _extract_expression_columns(expression: Any) -> Set[str]:
-    """从指标表达式中提取可能引用的物理字段。"""
-    text = str(expression or "").strip()
-    if not text:
-        return set()
-    keywords = {
-        "case", "when", "then", "else", "end", "filter", "where", "distinct", "count", "sum", "avg", "max", "min",
-        "and", "or", "not", "null", "is", "in", "as", "on", "if", "cast", "char", "date", "date_format", "str_to_date",
-        "unix_timestamp", "from_unixtime", "year", "month", "day",
-    }
-    columns: Set[str] = set()
-    for match in re.finditer(r"`([^`]+)`|(?<!['\"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['\"])", text):
-        token = str(match.group(1) or match.group(2) or "").strip()
-        if not token:
-            continue
-        if text[match.end():].lstrip().startswith("."):
-            continue
-        token = token.split(".")[-1].strip("`")
-        if not token or token.lower() in keywords:
-            continue
-        columns.add(token)
-    return columns
-
-
-def _build_existing_semantic_indexes(config: Dict[str, Any]) -> Dict[str, Set[str]]:
-    """构建当前指标集已维护字段索引，用于过滤历史学习重复建议。"""
-    indexes: Dict[str, Set[str]] = {
-        "metric_names": set(),
-        "metric_expressions": set(),
-        "dimension_names": set(),
-        "dimension_columns": set(),
-        "dimension_fields": set(),
-    }
-    for item in config.get("metrics") or []:
-        if not isinstance(item, dict):
-            continue
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        expression = _normalize_semantic_expression(item.get("expression"))
-        if name:
-            indexes["metric_names"].add(name)
-        if table and expression:
-            indexes["metric_expressions"].add(f"{table}.{expression}")
-    for item in config.get("dimensions") or []:
-        if not isinstance(item, dict):
-            continue
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        field_name = _normalize_semantic_text(item.get("field_name"))
-        column = _normalize_semantic_text(item.get("column") or item.get("field_name"))
-        if name:
-            indexes["dimension_names"].add(name)
-        if table and column:
-            indexes["dimension_columns"].add(f"{table}.{column}")
-        if table and field_name:
-            indexes["dimension_fields"].add(f"{table}.{field_name}")
-    return indexes
-
-
-def _is_existing_history_suggestion(item: Dict[str, Any], category: str, indexes: Dict[str, Set[str]]) -> bool:
-    """判断历史学习建议是否已在当前指标集维护。"""
-    if category == "metrics":
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        expression = _normalize_semantic_expression(item.get("expression"))
-        if name and name in indexes["metric_names"]:
-            return True
-        if table and expression and f"{table}.{expression}" in indexes["metric_expressions"]:
-            return True
-        return False
-    if category == "dimensions":
-        table = _normalize_semantic_text(item.get("table"))
-        name = _normalize_semantic_text(item.get("name"))
-        field_name = _normalize_semantic_text(item.get("field_name"))
-        column = _normalize_semantic_text(item.get("column") or item.get("field_name"))
-        if name and name in indexes["dimension_names"]:
-            return True
-        if table and column and f"{table}.{column}" in indexes["dimension_columns"]:
-            return True
-        if table and field_name and f"{table}.{field_name}" in indexes["dimension_fields"]:
-            return True
-        return False
-    return False
-
-
-def _normalize_history_suggestion_item(
-    item: Any,
-    category: str,
-    sample_map: Dict[str, Dict[str, Any]],
-    datasource: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    """校验并标准化 LLM 输出的历史学习建议。"""
-    if not isinstance(item, dict):
-        return None
-    source = str(item.get("source") or "").strip().lower()
-    if source not in {"agent", "builder", "sql"}:
-        return None
-    confidence = str(item.get("confidence") or "").strip().lower()
-    if confidence not in {"high", "medium", "low"}:
-        return None
-    sample_ids = item.get("sample_execution_ids")
-    if not isinstance(sample_ids, list):
-        return None
-    samples = [sample_map[sid] for sid in [str(s or "") for s in sample_ids] if sid in sample_map][:3]
-    if not samples:
-        return None
-    support_count = item.get("support_count")
-    try:
-        support_count_int = max(1, int(support_count))
-    except Exception:
-        return None
-
-    normalized = {
-        "reason": str(item.get("reason") or "").strip(),
-        "source": source,
-        "confidence": confidence,
-        "support_count": support_count_int,
-        "samples": samples,
-    }
-    if category in {"metrics", "dimensions"}:
-        normalized.update({
-            "name": str(item.get("name") or "").strip(),
-            "table": str(item.get("table") or "").strip(),
-            "field_name": str(item.get("field_name") or "").strip(),
-            "expression": str(item.get("expression") or "").strip(),
-        })
-        if category == "dimensions":
-            dim_type = str(item.get("type") or "").strip().lower()
-            if dim_type not in {"categorical", "time", "number"}:
-                return None
-            normalized["type"] = dim_type
-            normalized["column"] = str(item.get("column") or item.get("field_name") or "").strip()
-        if not normalized["name"] or not normalized["reason"]:
-            return None
-    else:
-        normalized.update({
-            "title": str(item.get("title") or "").strip(),
-            "content": str(item.get("content") or "").strip(),
-        })
-        if not normalized["title"] or not normalized["content"] or not normalized["reason"]:
-            return None
-
-    table_columns = _build_table_columns_map(datasource)
-    table_name = str(normalized.get("table") or "").strip()
-    review_reasons: List[str] = []
-    if table_name and table_name not in table_columns:
-        review_reasons.append(f"表不在当前数据源缓存中：{table_name}")
-    if category == "dimensions":
-        column_name = str(normalized.get("column") or normalized.get("field_name") or "").strip()
-        if table_name and column_name and table_name in table_columns and column_name not in table_columns[table_name]:
-            review_reasons.append(f"字段不在当前表结构中：{table_name}.{column_name}")
-    if category == "metrics":
-        expression_columns = _extract_expression_columns(normalized.get("expression"))
-        missing_columns = sorted(col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name])
-        if table_name and missing_columns:
-            review_reasons.append(f"表达式引用字段不在当前表结构中：{table_name}.{', '.join(missing_columns)}")
-    normalized["needs_review"] = bool(review_reasons)
-    normalized["review_reason"] = "；".join(review_reasons)
-    return normalized
-
-
-def _normalize_history_learning_result(
-    raw_result: Any,
-    samples: List[Dict[str, Any]],
-    datasource: Dict[str, Any],
-    config: Dict[str, Any],
-) -> Dict[str, List[Dict[str, Any]]]:
-    """校验 LLM 历史学习 JSON 输出。"""
-    parsed = raw_result if isinstance(raw_result, dict) else {}
-    suggestions = parsed.get("suggestions") if isinstance(parsed.get("suggestions"), dict) else parsed
-    sample_map = _sample_map_by_execution_id(samples)
-    existing_indexes = _build_existing_semantic_indexes(config)
-    result: Dict[str, List[Dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
-    for category in result.keys():
-        raw_items = suggestions.get(category) if isinstance(suggestions, dict) else []
-        if not isinstance(raw_items, list):
-            raw_items = []
-        seen: Set[str] = set()
-        for raw_item in raw_items[:30]:
-            item = _normalize_history_suggestion_item(raw_item, category, sample_map, datasource)
-            if not item:
-                continue
-            if category in {"metrics", "dimensions"} and _is_existing_history_suggestion(item, category, existing_indexes):
-                continue
-            key = str(item.get("name") or item.get("title") or "") + "::" + str(item.get("table") or item.get("content") or "")
-            if key in seen:
-                continue
-            seen.add(key)
-            result[category].append(item)
-    return result
-
-
-async def _generate_history_learning_suggestions_by_llm(
-    datasource: Dict[str, Any],
-    config: Dict[str, Any],
-    samples: List[Dict[str, Any]],
-) -> Dict[str, List[Dict[str, Any]]]:
-    """调用大模型基于历史生成指标集维护建议。"""
-    if not samples:
-        return {"metrics": [], "dimensions": [], "issues": []}
-    compact_samples = [_compact_history_sample_for_llm(item) for item in samples]
-    prompt = build_history_learning_prompt(
-        semantic_config_payload=_semantic_config_prompt_payload(config),
-        table_context=_build_history_learning_table_context(datasource, config),
-        compact_samples=compact_samples,
-    )
-    llm = get_chat_data_llm(streaming=False, max_tokens=4000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
-    content = getattr(response, "content", response)
-    parsed = parse_llm_json(str(content), strict=False)
-    if not isinstance(parsed, dict):
-        raise ValueError("大模型未返回合法 JSON")
-    return _normalize_history_learning_result(parsed, samples, datasource, config)
 
 
 def _normalize_prefill_item(item: Dict) -> Optional[Dict]:
@@ -1187,152 +792,22 @@ async def learn_semantic_config_from_history(
         if not config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
 
-        source_set = {str(item or "").strip().lower() for item in (payload.sources or []) if str(item or "").strip()}
-        if not source_set:
-            return business_response(msg="请至少选择一个学习来源", code=40010, status="error")
-        unsupported_sources = sorted(source_set - {"agent", "builder", "sql"})
-        if unsupported_sources:
-            return business_response(msg=f"不支持的学习来源: {', '.join(unsupported_sources)}", code=40010, status="error")
-        cutoff_time = datetime.now() - timedelta(days=payload.days)
-        status_values = ["succeeded", "partial_success"]
-        if payload.include_failed:
-            status_values.append("failed")
-        scan_limit = min(max(payload.limit * 5, payload.limit), 1000)
-
-        async with get_session() as db:
-            stmt = (
-                select(ChatDataQueryExecution, ChatDataQueryTask)
-                .outerjoin(ChatDataQueryTask, ChatDataQueryTask.task_id == ChatDataQueryExecution.task_id)
-                .where(
-                    ChatDataQueryExecution.datasource_id == datasource_id,
-                    ChatDataQueryExecution.user_id == user_id,
-                    ChatDataQueryExecution.delete_flag == 0,
-                    ChatDataQueryExecution.create_time >= cutoff_time,
-                    ChatDataQueryExecution.sql_status.in_(status_values),
-                    ChatDataQueryTask.query_type.in_(["agent", "builder", "sql"]),
-                )
-                .order_by(ChatDataQueryExecution.create_time.desc(), ChatDataQueryExecution.id.desc())
-                .limit(scan_limit)
-            )
-            rows = (await db.execute(stmt)).all()
-
-        samples: List[Dict[str, Any]] = []
-        conversation_context_cache: Dict[str, Optional[Dict[str, Any]]] = {}
-        skipped = {
-            "source": 0,
-            "semantic_config": 0,
-            "missing_conversation_context": 0,
-            "empty_scope": 0,
-            "sql_parse_failed": 0,
-            "empty_history_tables": 0,
-            "table_scope_mismatch": 0,
-            "config_id_mismatch": 0,
-        }
-        source_stats: Dict[str, Dict[str, int]] = {
-            "agent": {"scanned": 0, "matched": 0, "skipped": 0},
-            "builder": {"scanned": 0, "matched": 0, "skipped": 0},
-            "sql": {"scanned": 0, "matched": 0, "skipped": 0},
-        }
-
-        for execution, task in rows:
-            task_payload = _parse_json_object(task.request_payload if task else None)
-            raw_query_type = str((task.query_type if task else "") or "").strip().lower()
-            query_type = raw_query_type
-            if query_type not in source_stats:
-                skipped["source"] += 1
-                continue
-            source_stats[query_type]["scanned"] += 1
-            if query_type not in source_set:
-                skipped["source"] += 1
-                source_stats[query_type]["skipped"] += 1
-                continue
-            matched, skip_reason, history_tables, skip_detail = _history_belongs_to_config(
-                query_type,
-                task_payload,
-                execution.sql_text,
-                config_id,
-                config,
-                str(datasource.get("source_type") or ""),
-            )
-            if not matched:
-                skipped["semantic_config"] += 1
-                if skip_reason in skipped:
-                    skipped[skip_reason] += 1
-                source_stats[query_type]["skipped"] += 1
-                if skip_reason == "sql_parse_failed" and skipped[skip_reason] <= 5:
-                    logger.warning(
-                        "history_learning sql parse failed: datasource_id=%s config_id=%s query_type=%s error=%s sql=%s",
-                        datasource_id,
-                        config_id,
-                        query_type,
-                        skip_detail,
-                        str(execution.sql_text or "")[:300],
-                    )
-                continue
-            conversation_id = _extract_history_task_conversation_id(task_payload)
-            sample = {
-                "execution_id": execution.execution_id,
-                "task_id": execution.task_id,
-                "source": query_type,
-                "status": execution.sql_status,
-                "conversation_id": conversation_id,
-                "query_text": _extract_history_task_query_text(task_payload),
-                "sql": execution.sql_text,
-                "tables": history_tables,
-                "error_message": execution.error_message or (task.error_message if task else "") or "",
-                "executed_at": (execution.finished_time or execution.started_time or execution.create_time).isoformat() if (execution.finished_time or execution.started_time or execution.create_time) else None,
-            }
-            if query_type == "builder" and isinstance(task_payload.get("builder_config"), dict):
-                sample["builder_config"] = task_payload.get("builder_config")
-            if query_type == "agent" and conversation_id:
-                if conversation_id not in conversation_context_cache:
-                    conversation_context_cache[conversation_id] = await _load_history_conversation_context(conversation_id)
-                conversation_context = conversation_context_cache.get(conversation_id)
-                if not conversation_context:
-                    skipped["missing_conversation_context"] += 1
-                    source_stats[query_type]["skipped"] += 1
-                    continue
-                sample["conversation_context"] = conversation_context
-            elif query_type == "agent":
-                skipped["missing_conversation_context"] += 1
-                source_stats[query_type]["skipped"] += 1
-                continue
-            samples.append(sample)
-            source_stats[query_type]["matched"] += 1
-            if len(samples) >= payload.limit:
-                break
-
-        suggestions = await _generate_history_learning_suggestions_by_llm(datasource, config, samples)
-        logger.info(
-            "history_learning stats: datasource_id=%s config_id=%s user_id=%s scanned=%s matched=%s source_stats=%s skipped=%s scope_tables=%s",
-            datasource_id,
-            config_id,
-            user_id,
-            len(rows),
-            len(samples),
-            source_stats,
-            skipped,
-            sorted(_semantic_scope_tables(config)),
+        data = await _build_history_learning_service().learn(
+            datasource_id=datasource_id,
+            config_id=config_id,
+            user_id=user_id,
+            datasource=datasource,
+            config=config,
+            days=payload.days,
+            limit=payload.limit,
+            sources=payload.sources,
+            include_failed=payload.include_failed,
         )
-
-        return business_response(
-            data={
-                "datasource_id": datasource_id,
-                "semantic_config_id": config_id,
-                "days": payload.days,
-                "limit": payload.limit,
-                "scan_limit": scan_limit,
-                "scanned_count": len(rows),
-                "matched_count": len(samples),
-                "skipped": skipped,
-                "source_stats": source_stats,
-                "suggestions": suggestions,
-                "samples": samples[:payload.limit],
-            },
-            msg="学习完成",
-        )
+        return business_response(data=data, msg="学习完成")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=40101, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=40010, status="error")
     except Exception as e:
         logger.error("历史学习失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
         return business_response(msg=f"历史学习失败: {str(e)}", code=50010, status="error")
