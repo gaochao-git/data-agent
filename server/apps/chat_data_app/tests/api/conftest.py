@@ -20,6 +20,9 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 import auth  # noqa: E402
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
+from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
+from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
+from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
 from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
 
 auth.SERVICE_AUTH_TOKEN = os.environ["SERVICE_AUTH_TOKEN"]
@@ -43,6 +46,16 @@ def auth_headers():
 def client():
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture()
+def patch_datasource_manager(monkeypatch):
+    def _patch(manager):
+        monkeypatch.setattr(chat_data_routes, "get_datasource_manager", lambda: manager)
+        monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
+        monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+
+    return _patch
 
 
 class FakeDatasourceManager:

@@ -1,9 +1,8 @@
-from apps.chat_data_app import routes
 from apps.chat_data_app.routers import semantic_config as semantic_routes
 
 
-def test_list_datasources_api_contract(client, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_list_datasources_api_contract(client, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/datasources")
 
@@ -16,8 +15,8 @@ def test_list_datasources_api_contract(client, fake_datasource_manager, monkeypa
     assert payload["data"]["datasources"][0]["ds_tables"]
 
 
-def test_get_datasource_schema_api_contract(client, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_get_datasource_schema_api_contract(client, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/datasources/ds_a/schema", params={"tables": "orders"})
 
