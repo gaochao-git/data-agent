@@ -68,11 +68,6 @@ uvicorn main:app --host 0.0.0.0 --port 5001
 
 ## 主要接口
 
-健康检查：
-
-- `GET /healthz`
-- `GET /api/healthz`
-
 智能问数：
 
 - `/agents/api/chatdata/*`

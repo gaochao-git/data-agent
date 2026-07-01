@@ -67,48 +67,16 @@ app.include_router(conversation_router)
 app.include_router(file_router)
 
 
-@app.get("/healthz")
-@app.get("/api/healthz")
-def healthz():
-    """健康检查。"""
-    return {"status": "ok"}
-
-
-def _build_uvicorn_log_config():
-    try:
-        from uvicorn.config import LOGGING_CONFIG as DEFAULT
-    except Exception:
-        return None
-    fmt = os.getenv("UVICORN_ACCESS_FORMAT", "%(asctime)s %(levelname)s %(name)s - %(message)s")
-    datefmt = os.getenv("UVICORN_ACCESS_DATEFMT", "%Y-%m-%d %H:%M:%S")
-    config = {
-        "version": DEFAULT.get("version", 1),
-        "disable_existing_loggers": DEFAULT.get("disable_existing_loggers", False),
-        "formatters": dict(DEFAULT.get("formatters", {})),
-        "handlers": DEFAULT.get("handlers", {}),
-        "loggers": DEFAULT.get("loggers", {}),
-        "root": DEFAULT.get("root", {}),
-    }
-    access_fmt = dict(config["formatters"].get("access", {}))
-    access_fmt["fmt"] = fmt
-    access_fmt["datefmt"] = datefmt
-    config["formatters"]["access"] = access_fmt
-    return config
-
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
     reload_enabled = _env_flag("FASTAPI_RELOAD", False)
-    access_log_enabled = _env_flag("UVICORN_ACCESS_LOG", False)
-    log_level = os.getenv("UVICORN_LOG_LEVEL", "info")
     target_app = "main:app" if reload_enabled else app
-    logger.info("[startup] host=0.0.0.0 port=%s reload=%s access_log=%s log_level=%s", port, reload_enabled, access_log_enabled, log_level)
+    logger.info("[startup] host=0.0.0.0 port=%s reload=%s", port, reload_enabled)
     uvicorn.run(
         target_app,
         host="0.0.0.0",
         port=port,
         reload=reload_enabled,
-        access_log=access_log_enabled,
-        log_level=log_level,
-        log_config=_build_uvicorn_log_config(),
+        access_log=False,
+        log_level="warning",
     )
