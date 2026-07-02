@@ -1,6 +1,5 @@
 """DataAnalyze 通用分析智能体。"""
 
-from datetime import datetime
 import json
 from typing import Annotated, Any
 
@@ -38,7 +37,7 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_THINKING_PROMPT,
 )
 from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware, invoke_with_token_usage
-from .nodes import normalize_response_tool_call_names, timestamp_message
+from .nodes import format_current_time_for_prompt, normalize_response_tool_call_names, timestamp_message
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -275,7 +274,7 @@ def build_data_analyze_system_prompt(
     _ = data_context_file
 
     return DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.format(
-        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        current_time=format_current_time_for_prompt(),
         workspace_root=workspace_root or "未初始化",
         data_context_text=data_context_text,
         available_skills_xml=available_skills_xml,

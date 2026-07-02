@@ -1,11 +1,10 @@
 """SQL 编辑器 AI 辅助专用图。"""
-
-from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import SystemMessage
 from langgraph.graph import StateGraph, START
 
+from .nodes import format_current_time_for_prompt
 from .sql_assist_state import SqlAssistState
 from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from ..services.llm_config import get_chat_data_llm
@@ -15,7 +14,7 @@ def create_sql_assist_node(sql_dialect: str):
     """创建只生成 SQL 的轻量节点。"""
     async def sql_assist_node(state: SqlAssistState) -> dict[str, Any]:
         system_prompt = SQL_GENERATOR_PROMPT_GENERATE.format(
-            current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            current_time=format_current_time_for_prompt(),
             tables_ddl_info=state.get("tables_ddl_info") or "",
             sql_dialect=sql_dialect,
         )

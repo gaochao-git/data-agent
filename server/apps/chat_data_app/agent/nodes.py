@@ -15,6 +15,14 @@ from .tools import TOOLS
 logger = get_logger(__name__)
 
 
+def format_current_time_for_prompt(current_time: datetime | None = None) -> str:
+    """格式化提示词中的当前时间，附带周几信息。"""
+    current = current_time or datetime.now()
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday = weekdays[current.weekday()]
+    return f"{current.strftime('%Y-%m-%d %H:%M:%S')}（{weekday}）"
+
+
 def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:
     """格式化当前可见指标集轻量目录，供 system prompt 注入。"""
     text = str(directory_info or "").strip()
@@ -163,7 +171,7 @@ def create_agent_node(
         active_tools = tools
 
         # 当前时间
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time = format_current_time_for_prompt()
 
         # 构建提示词参数
         prompt_params = {

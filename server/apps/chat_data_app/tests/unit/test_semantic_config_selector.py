@@ -454,16 +454,14 @@ def test_selector_prompt_matches_user_focus_across_metrics_dimensions_and_fields
         candidates=[{"id": "sc_category", "name": "分类订单", "coverage": "full", "confidence": "high"}],
     )
 
-    for text in (prompt, reducer_prompt):
-        assert "默认按明细/字段查询理解用户问题" in text
-        assert "不要先找指标" in text
-        assert "先识别用户原词关注的业务对象" in text
-        assert "最贴近用户原词" in text
-        assert "指标" in text
-        assert "维度" in text
-        assert "相关表字段" in text
-        assert "完整指标名称/口径" in text
-    assert "不能只匹配指标，也不能只匹配维度或原始字段" in prompt
+    assert "默认按明细/字段查询理解用户问题" in prompt
+    assert "不要先找指标" in prompt
+    assert "先识别用户原词关注的业务对象" in prompt
+    assert "最贴近用户原词" in prompt
+    assert "完整指标名称/口径" in prompt
+    assert "默认按明细/字段查询理解用户问题" in reducer_prompt
+    assert "候选项也都代表完整指标集" in reducer_prompt
+    assert "多个指标集都能完整覆盖同一个完整问题" in reducer_prompt
 
 
 def test_chunk_semantic_config_summaries_never_splits_single_config(monkeypatch):

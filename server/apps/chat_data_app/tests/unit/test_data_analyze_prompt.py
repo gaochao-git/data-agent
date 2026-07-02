@@ -63,14 +63,9 @@ def test_chat_data_query_prompt_aligns_date_filter_value_with_dimension_expressi
 def test_chat_data_query_prompt_prefers_user_named_dimension_field_over_similar_metric():
     prompt = SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 
-    assert "按用户关注的业务对象" in prompt
     assert "默认按明细/字段查询理解用户问题" in prompt
-    assert "指标、维度和相关表原始字段中同时匹配" in prompt
     assert "不要默认指标优先，也不要默认维度优先" in prompt
-    assert "用户原词能精确命中某个指标、维度或原始字段时，优先使用精确命中的项" in prompt
-    assert "不要自动增加、删除或替换“平均、汇总、总额、明细、数量”等限定词" in prompt
     assert "如果同一业务名称同时存在指标、维度或原始字段" in prompt
-    assert "不要用相近的平均、汇总、总额、明细字段替代" in prompt
 
 
 def test_chat_data_query_prompt_has_minimal_dsl_few_shots():
@@ -122,9 +117,7 @@ def test_chat_data_query_prompt_defines_new_user_onboarding_role():
     assert "数据向导" in prompt
     assert "不知道能问什么" in prompt
     assert "新用户上手引导" in prompt
-    assert "一次只推进一步" in prompt
     assert "不能编造指标、维度、表、字段或查询结果" in prompt
-    assert "新用户引导时，可基于「当前可见指标集目录」" in prompt
 
 
 def test_chat_data_query_prompt_stops_when_question_exceeds_current_capability():
@@ -144,23 +137,12 @@ def test_semantic_query_prompt_requires_selection_when_missing_current_config():
     assert "业务数据查询、具体指标/维度询问" in prompt
     assert "必须先搜索真实指标集，再决定查询、澄清或说明缺口" in prompt
     assert "不要在搜索前凭常识澄清" in prompt
-    assert "当前可见指标集、业务域或可查询范围概览" in prompt
-    assert "直接基于目录回答名称、描述、指标数和维度数" in prompt
-    assert "选择工具返回唯一指标集后，仍必须按澄清门禁核对具体指标、维度、筛选对象和业务口径" in prompt
     assert "名称一样但口径不明" in prompt
-    assert "可见输出约束" in prompt
-    assert "不要输出思考标签、伪造思考块或内部推理内容" in prompt
-    assert "不要输出内部执行步骤说明，包括技能加载、系统规则依据、工具选择理由、工具调用顺序和配置选择过程" in prompt
-    assert "最终回答和澄清问题只说业务结论或业务口径" in prompt
-    assert "不要说“我先加载/查看/调用/使用技能、工具、配置、指标集”等内部动作" in prompt
-    assert "不要描述“修正、重新查询、让我检查”等过程" in prompt
-    assert "思考过程由模型原生推理流展示" in prompt
-    assert "禁止出现工具名、配置 ID、工具调用计划" in prompt
-    assert "除用户明确询问当前可见指标集目录或业务范围外，不要输出配置名或指标集名称" in prompt
-    assert "禁止把这些内部选择过程写给用户" in prompt
+    assert "选择工具返回唯一指标集后，仍必须按澄清门禁核对具体指标、维度、筛选对象和业务口径" in prompt
     assert "对复购率、转化率、留存率、占比、客单价、有效率等比例/率类问题" in prompt
-    assert "返回唯一指标集后，不要输出" not in prompt
+    assert "当前可执行事实源" in prompt
     assert "当前指标集是唯一可执行事实源" in prompt
+    assert "真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准" in prompt
     assert "需要精确计算时必须调用 `calculator_tool`" in prompt
     assert "用户未指定机构，本次默认查询第 1 个机构" in prompt
     assert "不要默认查询全部" in prompt
@@ -171,13 +153,8 @@ def test_chat_data_query_prompt_enforces_clarification_gate_before_query_tools()
 
     assert "查询执行澄清门禁" in prompt
     assert "调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，必须同时满足" in prompt
-    assert "只要任一条件不满足，禁止调用 `dsl2sql_tool`、`semantic_query_tool`、`calculator_tool`" in prompt
     assert "“看起来像”“可能是”“通常指”“可以理解为”“与某字段相近”“名称一样但口径不明”都不算高置信匹配" in prompt
-    assert "指标和维度必须有明确业务口径" in prompt
-    assert "即使名称看起来一样，只要口径、单位、时间范围、枚举含义、统计粒度或业务限定不明确或不一致，也必须先澄清" in prompt
-    assert "若只是工具或模型推断出的比例、差值、转化率等公式，必须先向用户澄清" in prompt
     assert "澄清问题必须面向业务用户，只问一个最关键问题" in prompt
-    assert "信息不完整、口径不唯一、只是相近匹配或多个合理解释" in prompt
     assert "类型A" not in prompt
     assert "类型B" not in prompt
     assert "类型C" not in prompt

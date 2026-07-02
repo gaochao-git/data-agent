@@ -1,6 +1,5 @@
 """DataAnalyze few-shot 与系统提示词。"""
 
-from .safety import SAFETY_GUARDRAILS_PROMPT
 from .security_prompt import SECURITY_PROMPT
 
 DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
@@ -28,8 +27,6 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 | `dsl2sql_tool` | 校验语义 DSL 并转换 SQL；禁止手写语义层 SQL |
 | `semantic_query_tool` | 接收语义 DSL，内部生成只读 SQL 并查询真实数据；需要后续脚本处理时可用 `save_as` 保存 JSON |
 </available_tools>
-
-{safety_guardrails}
 
 {available_skills_xml}
 
@@ -119,11 +116,13 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 <examples condition="no_skill AND task=multi_step_analysis">
 {multi_step_fewshot}
 </examples>
+
+{security_guardrails}
 """
 
 DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.replace(
-    "{safety_guardrails}",
-    f"{SAFETY_GUARDRAILS_PROMPT}\n\n{SECURITY_PROMPT}",
+    "{security_guardrails}",
+    SECURITY_PROMPT,
 )
 
 DATA_ANALYZE_THINKING_PROMPT = (

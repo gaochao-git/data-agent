@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,7 @@ def test_prompt_formatters():
     assert nodes.format_semantic_config_directory_info_for_llm("") == ""
     assert nodes.format_datasource_group_context_for_llm("  规则说明  ") == "\n## 数据源组智能问数说明\n规则说明\n"
     assert nodes.format_datasource_group_context_for_llm("") == ""
+    assert nodes.format_current_time_for_prompt(datetime(2026, 6, 24, 10, 0, 0)) == "2026-06-24 10:00:00（周三）"
     assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context(None)
     assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None)
     assert "指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答" in nodes.build_semantic_layer_context(None)
@@ -96,15 +98,11 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "当前可见指标集目录" in system_prompt
     assert "1. 名称：订单分析" in system_prompt
     assert "custom-query-skill" in system_prompt
-    assert "基本边界" in system_prompt
+    assert "技能使用" in system_prompt
     assert "当前指标集是唯一可执行事实源" in system_prompt
-    assert "数据源组智能问数说明是当前数据源组的主要业务上下文" in system_prompt
-    assert "业务知识技能默认不加载" in system_prompt
+    assert "真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准" in system_prompt
     assert "只有用户本轮显式引用技能" in system_prompt
     assert "禁止再向用户确认是否加载" in system_prompt
-    assert "必须先读取 `custom-query-skill` 主说明" not in system_prompt
-    assert "必须先读取对应技能补充领域上下文" not in system_prompt
-    assert "必须先读取对应技能补充业务判断" not in system_prompt
     assert "最终回答不要提及技能加载过程" in system_prompt
 
 

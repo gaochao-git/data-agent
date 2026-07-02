@@ -1,6 +1,5 @@
 """AI 生成 SQL 提示词。"""
 
-from .safety import SAFETY_GUARDRAILS_PROMPT
 from .security_prompt import SECURITY_PROMPT
 
 TABLE_SELECTOR_PROMPT = """你是数据库专家，根据用户问题选择需要的表。
@@ -28,8 +27,6 @@ SQL_GENERATOR_PROMPT_GENERATE = """# 角色
 
 ## 可用数据表
 {tables_ddl_info}
-
-{safety_guardrails}
 
 # 任务
 根据用户需求生成 SQL 查询语句。
@@ -109,9 +106,11 @@ SELECT department, COUNT(*) AS user_count
 FROM users
 GROUP BY department
 ```
+
+{security_guardrails}
 """
 
 SQL_GENERATOR_PROMPT_GENERATE = SQL_GENERATOR_PROMPT_GENERATE.replace(
-    "{safety_guardrails}",
-    f"{SAFETY_GUARDRAILS_PROMPT}\n\n{SECURITY_PROMPT}",
+    "{security_guardrails}",
+    SECURITY_PROMPT,
 )
