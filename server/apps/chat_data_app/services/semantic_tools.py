@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
-from ..semantic.compiler import SemanticSQLGenerator
+from ..semantic import SemanticSQLGenerator
 from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput
 from .datasource_manager import get_datasource_manager
 from .semantic_config_selector import _summarize_semantic_config, select_semantic_config_for_query
@@ -442,13 +442,7 @@ def create_semantic_config_selection_tools(
     @tool(args_schema=ExecuteSemanticInput)
     async def dsl2sql_tool(
         semantic_config_id: str = None,
-        metrics: List[str] = [],
-        dimensions: List[str] = [],
-        filters: List[Dict] = [],
-        having: List[Dict] = [],
-        order_by: List[Dict] = [],
-        limit: int = None,
-        offset: int = None,
+        dsl: Dict[str, Any] = None,
         state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """
@@ -459,9 +453,18 @@ def create_semantic_config_selection_tools(
         effective_semantic_config_id, config = await resolve_semantic_config(state, semantic_config_id)
         if not config:
             return f"dsl2sql_tool 执行失败: 未找到可用指标集 {effective_semantic_config_id or '-'}"
+        if not isinstance(dsl, dict):
+            return "dsl2sql_tool 执行失败: dsl 必须是对象"
         user_query = extract_user_query(state)
         return SemanticToolHandler(config).generate_sql(
-            metrics, dimensions, filters, having, order_by, limit, offset, user_query
+            dsl.get("metrics") or [],
+            dsl.get("dimensions") or [],
+            dsl.get("filters") or [],
+            dsl.get("having") or [],
+            dsl.get("order_by") or [],
+            dsl.get("limit"),
+            dsl.get("offset"),
+            user_query,
         )
 
     if not include_query_tools:

@@ -28,7 +28,7 @@ from ..schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from ..semantic.utils import parse_llm_json
+from ..semantic import parse_llm_json
 from ..services.datasource_manager import get_datasource_manager
 from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm

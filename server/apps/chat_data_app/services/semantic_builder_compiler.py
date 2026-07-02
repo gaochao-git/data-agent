@@ -9,9 +9,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from utils.logger import get_logger
 
-from ..semantic.compiler import SemanticSQLGenerator, compile_builder_sql
-from ..semantic.compiler.filter_normalization import normalize_time_filter_leaf
-from ..semantic.validators import InputValidator
+from ..semantic import InputValidator, SemanticSQLGenerator, compile_builder_sql
+from ..semantic.filter_normalization import normalize_time_filter_leaf
 from .datasource_manager import get_datasource_manager
 
 logger = get_logger(__name__)

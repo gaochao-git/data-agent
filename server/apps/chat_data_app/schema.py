@@ -551,44 +551,15 @@ class ExecuteSemanticInput(BaseModel):
         default=None,
         description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果",
     )
-    metrics: List[str] = Field(
-        description="默认按明细/字段查询处理，metrics 必须为空；仅在用户明确要求统计、汇总、平均、总计、趋势、分组、排行，或用户原词精确命中完整指标名称/口径时填写"
+    dsl: Dict[str, Any] = Field(
+        ...,
+        description='''完整语义 DSL 对象，必须包含在 dsl 参数内，不要把 metrics、dimensions、filters 等字段放在工具顶层。
+DSL 字段包括 metrics、dimensions、filters、having、order_by、limit、offset。
+dimensions 支持简单字符串和 {"name":"时间维度名","time_grain":"month"}。
+filters 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL；支持 and/or 树和 left/right 结构化表达式。
+having 只用于聚合结果过滤。'''
     )
-    dimensions: List[Union[str, Dict[str, str]]] = Field(
-        default=[],
-        description='''维度列表，支持两种格式：
-1. 简单格式: ["维度名1", "维度名2"]
-2. 带时间粒度: [{"name": "时间维度名", "time_grain": "month"}]
-   time_grain 可选值: year, quarter, month, week, day, hour'''
-    )
-    filters: List[Dict] = Field(
-        default=[],
-        description='''WHERE 过滤条件，支持三种格式：
-1. 平铺格式（简单场景）: [{"dimension": "维度名", "operator": "=", "value": "值"}]
-2. 结构化表达式（字段间比较，不传 SQL 字符串）: [{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"dimension","name":"字段B"},"right":{"type":"literal","value":10}}}]
-3. 树形格式（支持OR逻辑）: [{"or": [条件1, 条件2, ...]}] 或 [{"and": [条件1, 条件2, ...]}]
-operator 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL，不使用 equals/notEquals；结构化表达式外层 operator 只支持 =、!=、<>、>、<、>=、<='''
-    )
-    having: List[Dict] = Field(
-        default=[],
-        description='''HAVING 过滤条件列表（过滤聚合结果）：
-1. 固定值过滤: [{"metric": "指标名", "operator": ">", "value": 10}]
-2. 指标间比较或指标与表达式比较: [{"left":{"type":"metric","name":"指标A"},"operator":">","right":{"type":"binary","operator":"*","left":{"type":"metric","name":"指标B"},"right":{"type":"literal","value":10}}}]
-3. operator 使用 SQL 风格操作符，如 =、!=、>、>=、IN、LIKE、BETWEEN、IS NULL，不使用 equals/notEquals；结构化表达式外层 operator 只支持 =、!=、<>、>、<、>=、<='''
-    )
-    order_by: List[Dict] = Field(
-        default=[],
-        description='排序列表，格式: [{"field": "指标名或维度名", "direction": "ASC或DESC"}]'
-    )
-    limit: Optional[int] = Field(
-        default=None,
-        description='限制返回条数。当用户说"只显示N个"、"前N个"、"TOP N"时使用'
-    )
-    offset: Optional[int] = Field(
-        default=None,
-        ge=0,
-        description='跳过返回条数。用于分页场景，如"从第11条开始"、"第3页每页5条"'
-    )
+
     @model_validator(mode="before")
     @classmethod
     def reject_legacy_mode(cls, data: Any):

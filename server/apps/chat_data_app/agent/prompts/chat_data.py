@@ -88,10 +88,10 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - `order_by.field` 只能使用当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
 
 # DSL 示例
-- 明细查询：用户问题“查看字段A、字段B”
+- 明细查询：用户问题“查询字段A在值1和值2之间的字段A、字段B记录”
   DSL：
   ```json
-  {{"metrics":[],"dimensions":["字段A","字段B"]}}
+  {{"metrics":[],"dimensions":["字段A","字段B"],"filters":[{{"dimension":"字段A","operator":"BETWEEN","value":["值1","值2"]}}]}}
   ```
 - 分组查询：用户问题“按维度A看指标A”
   DSL：

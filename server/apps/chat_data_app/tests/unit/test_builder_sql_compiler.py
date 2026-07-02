@@ -10,8 +10,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.semantic.compiler import SemanticSQLGenerator, compile_builder_sql, get_dialect
-from apps.chat_data_app.semantic.compiler import builder_sql_compiler as compiler
+from apps.chat_data_app.semantic import SemanticSQLGenerator, compile_builder_sql, get_dialect
+import apps.chat_data_app.semantic.builder_sql_compiler as compiler
 from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
 
 

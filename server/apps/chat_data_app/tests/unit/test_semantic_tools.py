@@ -503,9 +503,7 @@ def test_semantic_tool_resolve_uses_bound_config_for_matching_id():
     dsl_tool = tools[1]
     sql_text = asyncio.run(dsl_tool.ainvoke({
         "semantic_config_id": "sc_bound",
-        "metrics": ["订单数"],
-        "dimensions": [],
-        "filters": [],
+        "dsl": {"metrics": ["订单数"], "dimensions": [], "filters": []},
         "state": {"datasource_id": "ignored"},
     }))
 
@@ -573,12 +571,14 @@ def test_unified_semantic_tools_use_bound_config_without_selector():
     _, dsl_tool = tools
 
     sql_text = asyncio.run(dsl_tool.ainvoke({
-        "metrics": ["订单数"],
-        "dimensions": ["订单状态"],
-        "filters": [],
-        "having": [],
-        "order_by": [{"field": "订单数", "direction": "DESC"}],
-        "limit": 10,
+        "dsl": {
+            "metrics": ["订单数"],
+            "dimensions": ["订单状态"],
+            "filters": [],
+            "having": [],
+            "order_by": [{"field": "订单数", "direction": "DESC"}],
+            "limit": 10,
+        },
         "state": {"messages": [HumanMessage(content="按状态统计订单数")], "datasource_id": "ds_a", "semantic_config_id": "sc_a"},
     }))
 
@@ -606,14 +606,12 @@ def test_dsl2sql_tool_loads_runtime_config_and_handles_missing(monkeypatch):
 
     missing = asyncio.run(dsl_tool.ainvoke({
         "semantic_config_id": "cfg_missing",
-        "metrics": ["订单数"],
-        "dimensions": [],
+        "dsl": {"metrics": ["订单数"], "dimensions": []},
         "state": {"messages": [HumanMessage(content="查询订单数")]},
     }))
     sql_text = asyncio.run(dsl_tool.ainvoke({
         "semantic_config_id": "cfg_ok",
-        "metrics": ["订单数"],
-        "dimensions": ["城市"],
+        "dsl": {"metrics": ["订单数"], "dimensions": ["城市"]},
         "state": {"messages": [HumanMessage(content="按城市查询订单数")]},
     }))
 
@@ -639,8 +637,7 @@ def test_dsl2sql_tool_uses_state_semantic_config_id_when_argument_missing(monkey
     _, dsl_tool = create_semantic_config_selection_tools()
 
     result = asyncio.run(dsl_tool.ainvoke({
-        "metrics": ["订单数"],
-        "dimensions": [],
+        "dsl": {"metrics": ["订单数"], "dimensions": []},
         "state": {
             "datasource_id": "ds_state",
             "semantic_config_id": "cfg_state",
@@ -650,3 +647,63 @@ def test_dsl2sql_tool_uses_state_semantic_config_id_when_argument_missing(monkey
 
     assert "COUNT(" in result
     assert loaded == [("ds_state", "cfg_state")]
+
+
+def test_dsl2sql_tool_accepts_full_dsl_argument(monkeypatch):
+    captured = {}
+
+    class FakeHandler:
+        def __init__(self, config):
+            captured["config"] = config
+
+        def generate_sql(self, metrics, dimensions, filters, having, order_by, limit, offset, user_query=None):
+            captured.update({
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "filters": filters,
+                "having": having,
+                "order_by": order_by,
+                "limit": limit,
+                "offset": offset,
+                "user_query": user_query,
+            })
+            return "```sql\nSELECT 1\n```"
+
+    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
+        return {"id": semantic_config_id, "source_type": "mysql", "metrics": [], "dimensions": [], "relationships": []}
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.SemanticToolHandler", FakeHandler)
+    _, dsl_tool = create_semantic_config_selection_tools(datasource_id="ds_bound")
+
+    result = asyncio.run(dsl_tool.ainvoke({
+        "semantic_config_id": "sc_order_operating_baseline_v1",
+        "dsl": {
+            "metrics": [],
+            "dimensions": [
+                "明细编号",
+                "items_订单编号",
+                "商品ID",
+                "购买数量",
+                "单价",
+                "折扣率",
+                "小计金额",
+                "商品名称",
+                "商品分类",
+                "用户名称",
+                "下单时间",
+                "订单状态",
+            ],
+            "filters": [
+                {"dimension": "下单时间", "operator": ">=", "value": "2026-07-01 00:00:00"},
+                {"dimension": "下单时间", "operator": "<", "value": "2026-07-02 00:00:00"},
+            ],
+        },
+        "state": {"messages": [HumanMessage(content="查询昨天订单明细")]},
+    }))
+
+    assert "SELECT 1" in result
+    assert captured["metrics"] == []
+    assert captured["dimensions"][0] == "明细编号"
+    assert captured["filters"][1]["operator"] == "<"
+    assert captured["user_query"] == "查询昨天订单明细"

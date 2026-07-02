@@ -182,10 +182,10 @@ chat_data_app/
 
 | 组件 | 文件 | 职责 |
 |---|-----|------|
-| `SemanticSQLGenerator` | semantic/compiler/semantic_sql_generator.py | 校验 DSL，映射指标/维度，组装 builder_config |
-| `compile_builder_sql` | semantic/compiler/builder_sql_compiler.py | 将 builder_config 编译为 SQL |
-| `get_dialect` | semantic/engine/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
-| `InputValidator` | semantic/validators/input_validator.py | 校验指标、维度、过滤、排序和 limit |
+| `SemanticSQLGenerator` | semantic/semantic_sql_generator.py | 校验 DSL，映射指标/维度，组装 builder_config |
+| `compile_builder_sql` | semantic/builder_sql_compiler.py | 将 builder_config 编译为 SQL |
+| `get_dialect` | semantic/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
+| `InputValidator` | semantic/input_validator.py | 校验指标、维度、过滤、排序和 limit |
 
 ### LangGraph 工作流
 

@@ -317,7 +317,7 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         return dsl, ["warning"]
 
     import apps.chat_data_app.services.dashboard_spec_service as dashboard_spec_service
-    import apps.chat_data_app.semantic.compiler as compiler
+    import apps.chat_data_app.semantic as compiler
     import apps.chat_data_app.agent.tools.sql as sql_tool
 
     monkeypatch.setattr(dashboard_spec_service, "get_dashboard_spec_semantic_config", fake_get_config)

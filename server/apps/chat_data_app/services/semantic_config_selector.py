@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 
 from utils.logger import get_logger
 from ..agent.middleware.token_usage_middleware import estimate_text_tokens
-from ..semantic.utils import parse_llm_json
+from ..semantic import parse_llm_json
 from .datasource_manager import get_datasource_manager
 from .llm_config import get_chat_data_llm
 
