@@ -494,6 +494,7 @@ def _build_filter_tree_clause(
     dimension_expr_map: Dict[Tuple[str, str], str],
     aggregations: List[Dict[str, Any]],
     agg_by_id: Dict[str, Dict[str, Any]],
+    is_root: bool = False,
 ) -> str:
     if "and" in node:
         children = node.get("and") or []
@@ -506,6 +507,7 @@ def _build_filter_tree_clause(
                 dimension_expr_map=dimension_expr_map,
                 aggregations=aggregations,
                 agg_by_id=agg_by_id,
+                is_root=False,
             )
             for child in children
             if isinstance(child, dict)
@@ -515,7 +517,8 @@ def _build_filter_tree_clause(
             return ""
         if len(child_clauses) == 1:
             return child_clauses[0]
-        return f"({' AND '.join(child_clauses)})"
+        clause = " AND ".join(child_clauses)
+        return clause if is_root else f"({clause})"
 
     if "or" in node:
         children = node.get("or") or []
@@ -528,6 +531,7 @@ def _build_filter_tree_clause(
                 dimension_expr_map=dimension_expr_map,
                 aggregations=aggregations,
                 agg_by_id=agg_by_id,
+                is_root=False,
             )
             for child in children
             if isinstance(child, dict)
@@ -537,7 +541,8 @@ def _build_filter_tree_clause(
             return ""
         if len(child_clauses) == 1:
             return child_clauses[0]
-        return f"({' OR '.join(child_clauses)})"
+        clause = " OR ".join(child_clauses)
+        return clause if is_root else f"({clause})"
 
     if for_having:
         return _build_having_leaf_clause(node, is_multi_table, main_table, aggregations, agg_by_id)
@@ -798,6 +803,7 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                 dimension_expr_map=dimension_expr_map,
                 aggregations=aggregations,
                 agg_by_id=agg_by_id,
+                is_root=True,
             )
             if where_clause:
                 parts.append(f"WHERE {where_clause}")
@@ -857,6 +863,7 @@ def compile_builder_sql(builder_config: Dict[str, Any], dialect: str = "mysql") 
                 dimension_expr_map=dimension_expr_map,
                 aggregations=aggregations,
                 agg_by_id=agg_by_id,
+                is_root=True,
             )
             if having_clause:
                 parts.append(f"HAVING {having_clause}")

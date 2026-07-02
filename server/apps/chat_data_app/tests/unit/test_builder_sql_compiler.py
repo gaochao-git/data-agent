@@ -1296,7 +1296,7 @@ def test_compile_builder_sql_filter_tree_and_mixed_tree_rejection():
 
     sql = compile_builder_sql(where_tree_config)
 
-    assert "WHERE (`status` = 'paid' OR (`amount` > 100 AND `status` LIKE 'refund%'))" in sql
+    assert "WHERE `status` = 'paid' OR (`amount` > 100 AND `status` LIKE 'refund%')" in sql
     with pytest.raises(ValueError, match="不能混用明细过滤和结果过滤"):
         compile_builder_sql(mixed_tree_config)
 
@@ -1353,7 +1353,7 @@ def test_compile_builder_sql_having_tree_and_special_operators():
     tree_sql = compile_builder_sql(tree_config)
     leaf_sql = compile_builder_sql(leaf_config)
 
-    assert "HAVING (SUM(orders.amount) BETWEEN 10 AND 20 OR SUM(orders.amount) IN (select amount from whitelist))" in tree_sql
+    assert "HAVING SUM(orders.amount) BETWEEN 10 AND 20 OR SUM(orders.amount) IN (select amount from whitelist)" in tree_sql
     assert "HAVING MAX(`amount`) > `discount`" in leaf_sql
     assert "OR MAX(`amount`) NOT IN (select amount from blacklist)" in leaf_sql
 
@@ -1478,7 +1478,7 @@ def test_compile_builder_sql_where_or_tree_and_empty_tree_are_handled():
     or_sql = compile_builder_sql(or_builder_config)
     single_child_sql = compile_builder_sql(single_child_tree_config)
 
-    assert "WHERE (`status` = 'paid' OR `status` = 'refunded')" in or_sql
+    assert "WHERE `status` = 'paid' OR `status` = 'refunded'" in or_sql
     assert "WHERE `status` = 'paid'" in single_child_sql
 
 
@@ -1594,7 +1594,7 @@ def test_compile_builder_sql_having_tree_or_and_empty_tree_variants():
     or_sql = compile_builder_sql(or_tree_config)
     empty_sql = compile_builder_sql(empty_tree_config)
 
-    assert "HAVING (SUM(`amount`) > 100 OR SUM(`amount`) < 10)" in or_sql
+    assert "HAVING SUM(`amount`) > 100 OR SUM(`amount`) < 10" in or_sql
     assert "HAVING" not in empty_sql
 
 

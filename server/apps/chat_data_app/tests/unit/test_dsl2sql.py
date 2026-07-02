@@ -309,7 +309,7 @@ def test_prompt_dsl_examples_compile_to_sql():
                     }
                 ],
             },
-            ["WHERE ((`channel` = '值1' OR `channel` = '值2') AND `out_amount` > 10)"],
+            ["WHERE (`channel` = '值1' OR `channel` = '值2') AND `out_amount` > 10"],
         ),
     ]
 
@@ -505,7 +505,7 @@ def test_structured_expression_filter_inside_tree():
         },
     )
 
-    assert "WHERE ((`order_time` >= '2026-06-01 00:00:00' AND `order_time` < '2026-06-02 00:00:00') AND `out_amount` >= (orders.`in_amount` + 100))" in sql
+    assert "WHERE (`order_time` >= '2026-06-01 00:00:00' AND `order_time` < '2026-06-02 00:00:00') AND `out_amount` >= (orders.`in_amount` + 100)" in sql
 
 
 def test_structured_expression_filter_collects_cross_table_join():
