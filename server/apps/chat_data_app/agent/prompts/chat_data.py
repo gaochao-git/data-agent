@@ -63,36 +63,57 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - 如果机构名称或编码无法唯一匹配可用执行对象，必须先澄清机构范围。
 
 # 查询规划规则
-- 当前指标集是唯一可执行事实源；查询、澄清和结果解释都只能基于它和它注入的相关表、字段、关系、口径，不能编造不存在的查询结果。
-- 真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准，不能编造指标、维度、表、字段或查询结果。
+- 当前指标集是唯一可执行事实源；查询、澄清和结果解释都只能基于它和它注入的相关表、字段、关系、口径，真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准，不能编造指标、维度、表、字段或查询结果。
 - 默认按明细/字段查询理解用户问题，优先在指标、维度和相关表原始字段中同时匹配用户关注的业务对象；用户原词能精确命中某个指标、维度或原始字段时优先使用精确命中的项，不要自动增加、删除或替换“平均、汇总、总额、明细、数量”等限定词；只有用户明确表达统计、汇总、平均、总计、趋势、分组、排行等聚合意图，或用户原词精确命中完整指标名称和口径时，才选择对应指标；不要默认指标优先，也不要默认维度优先。
-- 如果同一业务名称同时存在指标、维度或原始字段，必须按用户问题的完整语义选择最贴近项；无法从上下文判断时先澄清，不要用相近的平均、汇总、总额、明细字段替代。
 - 确定用户目标对象后再组织 DSL：查看明细、详情、列表、具体记录时，`metrics` 必须为空，展示字段全部放 `dimensions`。
 - 确定用户目标对象后再组织 DSL：只有统计、汇总、平均、总计、趋势、分组、排行等聚合意图明确时，`metrics` 才放名称和口径明确一致的聚合指标；否则 `metrics` 必须为空。
 - `metrics` 只能使用当前指标集可用指标，名称必须一致；`dimensions` 用于分组、筛选和明细展示，只能使用当前指标集可用维度。
 - `filters` 可以使用当前指标集中的维度；如果筛选依赖枚举含义、状态码、单位、时间格式或业务规则，而元数据没有维护，必须先澄清或说明不支持。
 - 未指定时间范围时，总量查询和明细查询可以继续；趋势、排行、对比、Top N、分布分析等场景必须先请用户补充时间范围。
-- “最好/最高/最多/表现最好/业务最好”等口语化排行，如果当前配置中存在多个可排序指标，必须先确认按哪个指标排序。
 - 字段截取、拼接、正则、复杂函数分组等派生维度需求，如果当前指标集没有对应维度，按无法处理处理；不要退化为原字段分组。
 - 同比、环比、增长率必须拆成基础查询，并用 `calculator_tool` 计算差值、比例和增长率；禁止心算或口头估算。
 
 # DSL 参数
-- `dsl2sql_tool` 使用顶层语义参数：`metrics`、`dimensions`、`filters`、`having`、`order_by`、`limit`、`offset`。
-- DSL 路径下，`semantic_query_tool` 必须使用 `dsl={{...}}` 包裹完整语义 DSL。
+- 语义 DSL 对象使用字段：`metrics`、`dimensions`、`filters`、`having`、`order_by`、`limit`、`offset`；调用 `dsl2sql_tool` 时把完整 DSL 放入 `dsl` 参数。
+- DSL 路径下，`semantic_query_tool` 必须使用顶层 `dsl={{...}}` 参数传入同一份完整语义 DSL。
 - SQL 路径下，`semantic_query_tool` 使用顶层 `sql` 参数，不能同时传入 `dsl`。
 - `dimensions` 支持简单格式和时间粒度格式；时间粒度使用 `time_grain`，可选 year/quarter/month/week/day/hour。
 - `operator` 使用 SQL 风格操作符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`、`IN`、`NOT IN`、`LIKE`、`NOT LIKE`、`STARTS WITH`、`ENDS WITH`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`EMPTY STRING`；不要使用 `equals`、`notEquals` 这类枚举名。
 - 结构化 `left/right` 表达式的外层 `operator` 只支持比较符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`；`IN`、`LIKE`、`BETWEEN` 等只用于固定值过滤。
 - `filters` 支持固定值过滤：`dimension`、`operator`、`value`、`value_type`；`value_type` 仅允许 `literal` / `sql_function`。
 - `filters` 也支持字段间比较或字段与表达式比较：使用结构化 `left/right`；`left` 只支持 `{{"type":"dimension","name":"维度名"}}`；`right` 操作数只支持 `dimension`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。不要把“维度B * 10”这类表达式字符串放进固定值过滤的 `value`。
+- 多条件组合使用 `filters=[{{"and":[...]}}]` 或 `filters=[{{"or":[...]}}]` 树形结构，叶子节点仍按固定值过滤或结构化 `left/right` 过滤表达。
 - 日期/时间维度过滤时，筛选值必须和该维度当前查询使用的表达式口径一致：如果维度表达式或 `time_grain` 已把原始值格式化为展示格式，`value` 必须使用转换后的展示格式；如果没有日期格式化转换，`value` 必须使用数据库原始存储格式。范围过滤优先使用半开区间，避免漏掉结束日当天非零时分秒数据。
-- `having` 用于聚合结果过滤。固定值过滤使用 `metric/operator/value`；指标间比较或指标与表达式比较使用结构化 `left/right`，`left` 只支持 `{{"type":"metric","name":"指标名"}}`；`right` 操作数只支持 `metric`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。涉及指标结果的比较必须放在 `having`，不要放在 `filters`；不要把“指标B * 10”这类表达式字符串放进固定值过滤的 `value`。
+- `having` 只用于聚合指标结果过滤。固定值过滤使用 `metric/operator/value`；指标间比较或指标与表达式比较使用结构化 `left/right`，`left` 只支持 `{{"type":"metric","name":"指标名"}}`；`right` 操作数只支持 `metric`、`literal`、`binary`，`binary.operator` 只支持 `+`、`-`、`*`、`/`。涉及指标结果的比较必须放在 `having`，不要放在 `filters`；维度或分组字段过滤使用 `filters`，不要放在 `having`；不要把“指标B * 10”这类表达式字符串放进固定值过滤的 `value`。
 - `order_by.field` 只能使用当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
 
 # DSL 示例
-- 指标固定阈值：用户说“按维度A找指标A大于10的对象”时，使用 `metrics=["指标A"]`、`dimensions=["维度A"]`、`having=[{{"metric":"指标A","operator":">","value":10}}]`。
-- 指标间表达式比较：用户说“按维度A找指标A大于指标B 10倍的对象”时，使用 `metrics=["指标A","指标B"]`、`dimensions=["维度A"]`、`having=[{{"left":{{"type":"metric","name":"指标A"}},"operator":">","right":{{"type":"binary","operator":"*","left":{{"type":"metric","name":"指标B"}},"right":{{"type":"literal","value":10}}}}}}]`。
-- 行级字段表达式过滤：用户说“明细里维度A大于维度B 10倍”时，使用结构化 `filters`，操作数类型是 `dimension`；不要把指标结果比较放进 `filters`，也不要把表达式字符串放进 `value`。
+- 明细查询：用户问题“查看字段A、字段B”
+  DSL：
+  ```json
+  {{"metrics":[],"dimensions":["字段A","字段B"]}}
+  ```
+- 分组查询：用户问题“按维度A看指标A”
+  DSL：
+  ```json
+  {{"metrics":["指标A"],"dimensions":["维度A"]}}
+  ```
+- HAVING 分组后过滤：用户问题“按维度A看指标A大于10的对象”
+  DSL：
+  ```json
+  {{"metrics":["指标A"],"dimensions":["维度A"],"having":[{{"metric":"指标A","operator":">","value":10}}]}}
+  ```
+- WHERE 行级字段过滤：用户问题“字段A大于字段B”
+  DSL：
+  ```json
+  {{"metrics":[],"dimensions":["字段A","字段B"],"filters":[{{"left":{{"type":"dimension","name":"字段A"}},"operator":">","right":{{"type":"dimension","name":"字段B"}}}}]}}
+  ```
+  这类条件对应 SQL `WHERE`；如果还涉及倍数、加减乘除，再用 `binary` 组合。
+- AND/OR 条件组合：用户问题“字段A等于值1或值2，并且字段B大于10”
+  DSL：
+  ```json
+  {{"metrics":[],"dimensions":["字段A","字段B"],"filters":[{{"and":[{{"or":[{{"dimension":"字段A","operator":"=","value":"值1"}},{{"dimension":"字段A","operator":"=","value":"值2"}}]}},{{"dimension":"字段B","operator":">","value":10}}]}}]}}
+  ```
 
 # NL2SQL 回退规则
 - 如果用户目标能通过当前指标集中名称和口径明确一致的指标、维度、过滤、having、排序、分页表达，必须优先使用 DSL 路径：先调用 `dsl2sql_tool`，再调用 `semantic_query_tool(dsl={{...}})`；只能通过相近指标或相近维度表达时，不算 DSL 已明确可表达。

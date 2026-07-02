@@ -257,6 +257,68 @@ def test_generate_join_path_for_cross_table_metric_and_dimension():
     assert "SUM(order_items.amount) AS `销售额`" in sql
 
 
+def test_prompt_dsl_examples_compile_to_sql():
+    config = build_config()
+    config["dimensions"].append({"name": "渠道", "column": "channel", "table": "orders", "type": "categorical"})
+    examples = [
+        (
+            {"metrics": [], "dimensions": ["订单状态", "用户等级"]},
+            ["orders.`status` AS `订单状态`", "users.`level` AS `用户等级`", "LEFT JOIN users"],
+        ),
+        (
+            {"metrics": ["订单数"], "dimensions": ["订单状态"]},
+            ["COUNT(DISTINCT order_id) AS `订单数`", "GROUP BY `status`"],
+        ),
+        (
+            {"metrics": ["订单数"], "dimensions": ["订单状态"], "having": [{"metric": "订单数", "operator": ">", "value": 10}]},
+            ["HAVING COUNT(DISTINCT order_id) > 10"],
+        ),
+        (
+            {"metrics": [], "dimensions": ["订单状态"], "filters": [{"dimension": "订单状态", "operator": "IN", "value": ["paid", "cancelled"]}]},
+            ["WHERE `status` IN ('paid', 'cancelled')"],
+        ),
+        (
+            {
+                "metrics": [],
+                "dimensions": ["出金金额", "入金金额"],
+                "filters": [
+                    {
+                        "left": {"type": "dimension", "name": "出金金额"},
+                        "operator": ">",
+                        "right": {"type": "dimension", "name": "入金金额"},
+                    }
+                ],
+            },
+            ["WHERE `out_amount` > orders.`in_amount`"],
+        ),
+        (
+            {
+                "metrics": [],
+                "dimensions": ["渠道", "出金金额"],
+                "filters": [
+                    {
+                        "and": [
+                            {
+                                "or": [
+                                    {"dimension": "渠道", "operator": "=", "value": "值1"},
+                                    {"dimension": "渠道", "operator": "=", "value": "值2"},
+                                ]
+                            },
+                            {"dimension": "出金金额", "operator": ">", "value": 10},
+                        ]
+                    }
+                ],
+            },
+            ["WHERE ((`channel` = '值1' OR `channel` = '值2') AND `out_amount` > 10)"],
+        ),
+    ]
+
+    for payload, expected_parts in examples:
+        sql = generate(config, payload)
+        for expected in expected_parts:
+            assert expected in sql
+
+
 def test_compare_is_rejected_by_dsl2sql_policy():
     with pytest.raises(ValueError, match="不再支持 compare"):
         generate(
