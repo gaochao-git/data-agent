@@ -35,9 +35,10 @@ def test_semantic_permission_helpers():
     public = {"id": "cfg_b", "create_by": "admin"}
 
     assert semantic_config._can_manage_semantic_config(own, "user_a") is True
-    assert semantic_config._can_manage_semantic_config(own, "user_b") is True
+    assert semantic_config._can_manage_semantic_config(own, "user_b") is False
     assert semantic_config._with_semantic_config_permissions(public, "user_a")["scope_type"] == "public"
-    assert semantic_config._with_semantic_config_permissions(public, "user_a")["can_manage"] is True
+    assert semantic_config._with_semantic_config_permissions(public, "user_a")["can_manage"] is False
+    assert semantic_config._with_semantic_config_permissions(public, "user_a", admin_manage=True)["can_manage"] is True
 
 
 def test_validate_semantic_fields_checks_dimensions_and_metrics():
@@ -360,15 +361,17 @@ def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
             return {"id": datasource_id, "ds_tables": [{"table_name": "orders", "columns": [{"name": "id"}]}]}
 
         async def get_semantic_config_async(self, datasource_id, config_id):
-            return {"id": config_id}
+            return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
 
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}], "knowledge": {}}))
 
     response = asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "cfg_a",
         SemanticAutoPrefillRequest(selected_tables=["orders"], table_model_type="detail"),
+        object(),
     ))
     payload = json.loads(response.body.decode("utf-8"))
 
@@ -382,9 +385,10 @@ def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch)
             return {"id": datasource_id}
 
         async def get_semantic_config_async(self, datasource_id, config_id):
-            return {"id": config_id}
+            return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
 
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
 
     response = asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
@@ -392,7 +396,7 @@ def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch)
         config_id="cfg_a",
         tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
         table_model_type="aggregated",
-    )))
+    ), object()))
     payload = json.loads(response.body.decode("utf-8"))
 
     assert payload["status"] == "error"
@@ -527,6 +531,15 @@ class _FakeSemanticManager:
             "dimensions": [{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
             "relationships": [],
         }
+        self.public_config = {
+            "id": "cfg_public",
+            "name": "公共指标",
+            "create_by": "admin",
+            "scope_type": "public",
+            "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
+            "dimensions": [{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+            "relationships": [],
+        }
         self.created_kwargs = None
         self.updated_kwargs = None
         self.deleted = None
@@ -538,10 +551,25 @@ class _FakeSemanticManager:
         return self.datasource if datasource_id == "ds_a" else None
 
     async def get_semantic_configs_async(self, datasource_id, user_id=""):
-        return [dict(self.config)] if datasource_id == "ds_a" else []
+        if datasource_id != "ds_a":
+            return []
+        configs = [dict(self.public_config), dict(self.config)]
+        if not user_id:
+            return configs
+        return [
+            config for config in configs
+            if config.get("scope_type") == "public"
+            or (config.get("scope_type") == "private" and config.get("create_by") == user_id)
+        ]
 
     async def get_semantic_config_async(self, datasource_id, config_id):
-        return dict(self.config) if datasource_id == "ds_a" and config_id == "cfg_a" else None
+        if datasource_id != "ds_a":
+            return None
+        if config_id == "cfg_a":
+            return dict(self.config)
+        if config_id == "cfg_public":
+            return dict(self.public_config)
+        return None
 
     async def create_semantic_config_async(self, **kwargs):
         self.created_kwargs = dict(kwargs)
@@ -549,15 +577,18 @@ class _FakeSemanticManager:
 
     async def update_semantic_config_async(self, **kwargs):
         self.updated_kwargs = dict(kwargs)
-        if kwargs.get("config_id") != "cfg_a":
+        if kwargs.get("config_id") == "cfg_a":
+            result = dict(self.config)
+        elif kwargs.get("config_id") == "cfg_public":
+            result = dict(self.public_config)
+        else:
             return None
-        result = dict(self.config)
         result.update({key: value for key, value in kwargs.items() if key not in {"datasource_id", "config_id"}})
         return result
 
     async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
         self.deleted = (datasource_id, config_id)
-        return datasource_id == "ds_a" and config_id == "cfg_a"
+        return datasource_id == "ds_a" and config_id in {"cfg_a", "cfg_public"}
 
 
 def _patch_semantic_route_user_and_manager(monkeypatch, manager=None, user_id="user_a"):
@@ -571,6 +602,8 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
 
     list_payload = _response_payload(asyncio.run(semantic_config.list_semantic_configs("ds_a", object())))
+    my_list_payload = _response_payload(asyncio.run(semantic_config.list_my_semantic_configs("ds_a", object())))
+    admin_list_payload = _response_payload(asyncio.run(semantic_config.list_admin_semantic_configs("ds_a", object())))
     missing_list = _response_payload(asyncio.run(semantic_config.list_semantic_configs("missing", object())))
     create_payload = SemanticConfigCreateRequest(
         name="新指标集",
@@ -589,20 +622,32 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
         relationships=[],
     )
     update_response = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", update_payload, object())))
+    admin_update_response = _response_payload(asyncio.run(semantic_config.update_admin_semantic_config("ds_a", "cfg_public", update_payload, object())))
     toggle_response = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", False, object())))
+    admin_toggle_response = _response_payload(asyncio.run(semantic_config.toggle_admin_semantic_config("ds_a", "cfg_public", False, object())))
     delete_response = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
+    admin_delete_response = _response_payload(asyncio.run(semantic_config.delete_admin_semantic_config("ds_a", "cfg_public", object())))
 
-    assert list_payload["data"]["configs"][0]["can_manage"] is True
+    assert [item["id"] for item in list_payload["data"]["configs"]] == ["cfg_public", "cfg_a"]
+    assert [item["can_manage"] for item in list_payload["data"]["configs"]] == [False, True]
+    assert [item["id"] for item in my_list_payload["data"]["configs"]] == ["cfg_a"]
+    assert [item["id"] for item in admin_list_payload["data"]["configs"]] == ["cfg_public"]
+    assert admin_list_payload["data"]["configs"][0]["can_manage"] is True
     assert missing_list["code"] == 40404
     assert create_response["data"]["name"] == "新指标集"
     assert create_response["data"]["scope_type"] == "private"
     assert admin_create_response["data"]["scope_type"] == "public"
     assert manager.created_kwargs["scope_type"] == "public"
     assert update_response["data"]["name"] == "订单分析V2"
+    assert admin_update_response["data"]["can_manage"] is True
     assert manager.updated_kwargs["update_by"] == "user_a"
-    assert toggle_response["data"] == {"config_id": "cfg_a", "enabled": False}
+    assert toggle_response["data"]["id"] == "cfg_a"
+    assert toggle_response["data"]["enabled"] is False
+    assert admin_toggle_response["data"]["id"] == "cfg_public"
+    assert admin_toggle_response["data"]["enabled"] is False
     assert delete_response["data"]["config_id"] == "cfg_a"
-    assert manager.deleted == ("ds_a", "cfg_a")
+    assert admin_delete_response["data"]["config_id"] == "cfg_public"
+    assert manager.deleted == ("ds_a", "cfg_public")
 
 
 def test_semantic_config_route_error_mappings(monkeypatch):
@@ -629,10 +674,9 @@ def test_semantic_config_route_error_mappings(monkeypatch):
     )))
     missing_update = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "missing", SemanticConfigUpdateRequest(name="x"), object())))
 
-    assert other_user_update["status"] == "success"
-    assert other_user_update["data"]["name"] == "其他管理员可维护"
-    assert other_user_delete["status"] == "success"
-    assert other_user_toggle["status"] == "success"
+    assert other_user_update["code"] == 40304
+    assert other_user_delete["code"] == 40304
+    assert other_user_toggle["code"] == 40304
     assert invalid_create["code"] == 40010
     assert missing_update["code"] == 40404
 
@@ -779,11 +823,14 @@ def test_semantic_helper_edge_cases():
         async def get_semantic_configs_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_a"
             assert user_id == "user_a"
-            return [{"id": "cfg_a", "create_by": "user_a"}, {"id": "cfg_b", "create_by": "user_b"}]
+            return [
+                {"id": "cfg_a", "scope_type": "public", "create_by": "admin"},
+                {"id": "cfg_b", "scope_type": "private", "create_by": "user_a"},
+            ]
 
     configs = asyncio.run(semantic_config._get_semantic_configs_for_user(FakeManager(), "ds_a", "user_a"))
 
-    assert configs[0]["can_manage"] is True
+    assert configs[0]["can_manage"] is False
     assert configs[1]["can_manage"] is True
     assert semantic_config._expression_uses_physical_column("", {"amount"}) is False
     assert semantic_config._expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
@@ -819,6 +866,7 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
 
     assert captured == {"datasource_id": "ds_a", "user_id": "user_a"}
     assert [item["id"] for item in payload["data"]["configs"]] == ["public", "mine"]
+    assert [item["can_manage"] for item in payload["data"]["configs"]] == [False, True]
 
 
 def test_history_context_loader_branches(monkeypatch):
@@ -1231,30 +1279,44 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
         "missing",
         "cfg_a",
         SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        object(),
     )))
     auto_missing_config = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "missing",
         SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        object(),
     )))
     short_missing_ds = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="missing",
         config_id="cfg_a",
         tables=[],
         table_model_type="detail",
-    ))))
+    ), object())))
     short_missing_config = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="missing",
         tables=[],
         table_model_type="detail",
-    ))))
+    ), object())))
     short_success = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="cfg_a",
         tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
         table_model_type="detail",
-    ))))
+    ), object())))
+    public_denied = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
+        "ds_a",
+        "cfg_public",
+        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        object(),
+    )))
+    admin_public_success = _response_payload(asyncio.run(semantic_config.auto_prefill_admin_semantic_fields(
+        "ds_a",
+        "cfg_public",
+        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        object(),
+    )))
 
     assert manager.config["id"] == "cfg_a"
     assert auto_missing_ds["code"] == 40404
@@ -1262,6 +1324,8 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
     assert short_missing_ds["code"] == 40404
     assert short_missing_config["code"] == 40404
     assert short_success["data"]["total"] == 1
+    assert public_denied["code"] == 40304
+    assert admin_public_success["data"]["total"] == 1
 
 
 def test_semantic_config_route_failure_branches(monkeypatch):
@@ -1326,13 +1390,14 @@ def test_semantic_route_exception_branches(monkeypatch):
         "ds_a",
         "cfg_a",
         SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        object(),
     )))
     short_prefill_error = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="cfg_a",
         tables=[],
         table_model_type="detail",
-    ))))
+    ), object())))
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
     assert list_error["code"] == 50010
     assert create_error["code"] == 50010
@@ -1768,6 +1833,7 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
         "ds_a",
         "cfg_a",
         SemanticAutoPrefillRequest(selected_tables=["orders"], table_model_type="detail"),
+        object(),
     )))
     assert auto_incomplete["code"] == 50010
 

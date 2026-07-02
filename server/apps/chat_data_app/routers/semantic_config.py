@@ -61,7 +61,10 @@ from .common import (
     AGENT_ID,
     DATA_ANALYZE_AGENT_ID,
     _build_table_columns_map,
+    _can_mutate_semantic_config,
     _get_current_user,
+    _is_private_semantic_config_owner,
+    _is_public_semantic_config,
 )
 
 logger = get_logger(__name__)
@@ -75,22 +78,34 @@ PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
 
 
 def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
-    """判断当前用户是否可管理指标集。"""
-    return bool(config and str(user_id or "").strip())
+    """普通用户只能管理自己创建的个人指标集。"""
+    return _is_private_semantic_config_owner(config, user_id)
 
 
-def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, username: str = "") -> Dict[str, Any]:
+def _with_semantic_config_permissions(config: Dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False) -> Dict[str, Any]:
     """补充指标集权限字段。"""
     item = dict(config or {})
     item["scope_type"] = item.get("scope_type") or "public"
-    item["can_manage"] = _can_manage_semantic_config(item, user_id)
+    item["can_manage"] = _can_mutate_semantic_config(item, user_id, admin_manage)
     return item
 
 
 async def _get_semantic_configs_for_user(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
-    """读取当前用户可见的指标集。"""
+    """读取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
     configs = await ds_manager.get_semantic_configs_async(datasource_id, user_id)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
+
+
+async def _get_my_semantic_configs(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+    """读取普通维护页可维护的个人指标集。"""
+    configs = await ds_manager.get_semantic_configs_async(datasource_id, user_id)
+    return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or []) if _is_private_semantic_config_owner(config, user_id)]
+
+
+async def _get_admin_semantic_configs(ds_manager: Any, datasource_id: str, user_id: str, username: str = "") -> List[Dict[str, Any]]:
+    """读取后台维护页可维护的公共指标集。"""
+    configs = await ds_manager.get_semantic_configs_async(datasource_id)
+    return [_with_semantic_config_permissions(config, user_id, username, admin_manage=True) for config in (configs or []) if _is_public_semantic_config(config)]
 
 
 def _expression_uses_physical_column(expression: str, table_columns: Set[str]) -> bool:
@@ -617,7 +632,7 @@ def _resolve_prefill_tables(datasource: Dict, selected_tables: List[str]) -> Lis
 
 @router.get("/datasources/{datasource_id}/semantic-configs")
 async def list_semantic_configs(datasource_id: str, request: Request):
-    """获取数据源的所有语义配置。"""
+    """获取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -633,12 +648,49 @@ async def list_semantic_configs(datasource_id: str, request: Request):
         return business_response(msg=f"获取失败: {str(e)}", code=50010, status="error")
 
 
+@router.get("/datasources/{datasource_id}/my-semantic-configs")
+async def list_my_semantic_configs(datasource_id: str, request: Request):
+    """获取普通维护页可维护的个人指标集。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        ds_manager = get_datasource_manager()
+        if not await ds_manager.has_datasource_async(datasource_id):
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=40404, status="error")
+
+        configs = await _get_my_semantic_configs(ds_manager, datasource_id, user_id, username)
+        return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
+    except Exception as e:
+        logger.error(f"获取个人语义配置列表失败: {str(e)}", exc_info=True)
+        return business_response(msg=f"获取失败: {str(e)}", code=50010, status="error")
+
+
+@router.get("/admin/datasources/{datasource_id}/semantic-configs")
+async def list_admin_semantic_configs(datasource_id: str, request: Request):
+    """后台获取可维护的公共指标集。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        ds_manager = get_datasource_manager()
+        if not await ds_manager.has_datasource_async(datasource_id):
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=40404, status="error")
+
+        configs = await _get_admin_semantic_configs(ds_manager, datasource_id, user_id, username)
+        return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
+    except Exception as e:
+        logger.error(f"获取后台语义配置列表失败: {str(e)}", exc_info=True)
+        return business_response(msg=f"获取失败: {str(e)}", code=50010, status="error")
+
+
 async def _create_semantic_config_with_scope(
     datasource_id: str,
     payload: SemanticConfigCreateRequest,
     request: Request,
     *,
     scope_type: str,
+    admin_manage: bool = False,
 ):
     """按指定范围创建指标集。"""
     try:
@@ -673,7 +725,7 @@ async def _create_semantic_config_with_scope(
             return business_response(msg="创建失败", code=50010, status="error")
 
         logger.info(f"创建语义配置: {config['id']} - {config['name']}")
-        return business_response(data=_with_semantic_config_permissions(config, user_id, username), msg="创建成功")
+        return business_response(data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="创建成功")
     except Exception as e:
         logger.error(f"创建语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"创建失败: {str(e)}", code=50010, status="error")
@@ -688,13 +740,21 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
 @router.post("/admin/datasources/{datasource_id}/semantic-configs")
 async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
     """创建公共指标集。"""
-    return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public")
+    return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
-async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, request: SemanticAutoPrefillRequest):
+async def _auto_prefill_semantic_fields_route(
+    datasource_id: str,
+    config_id: str,
+    payload: SemanticAutoPrefillRequest,
+    request: Request,
+    *,
+    admin_manage: bool = False,
+):
     """按规则自动预填维度/指标/表达式。"""
     try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
@@ -702,13 +762,15 @@ async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, reque
         config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
         if not config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
-        target_tables = _resolve_prefill_tables(datasource, request.selected_tables)
+        if not _can_mutate_semantic_config(config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
+        target_tables = _resolve_prefill_tables(datasource, payload.selected_tables)
 
         prefill_result = await _prefill_by_llm(
             target_tables,
-            request.table_model_type,
-            request.generate_business_flow,
-            request.business_context or "",
+            payload.table_model_type,
+            payload.generate_business_flow,
+            payload.business_context or "",
         )
         if prefill_result is None:
             return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=50010, status="error")
@@ -718,6 +780,18 @@ async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, reque
     except Exception as e:
         logger.error(f"自动预填字段失败: {str(e)}", exc_info=True)
         return business_response(msg=f"自动预填失败: {str(e)}", code=50010, status="error")
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
+async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
+    """按个人指标集自动预填维度/指标/表达式。"""
+    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=False)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
+async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
+    """后台按公共指标集自动预填维度/指标/表达式。"""
+    return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
 @router.post("/semantic/prefill/context-file")
@@ -743,25 +817,28 @@ async def semantic_prefill_context_file(file: UploadFile = File(...)):
         return business_response(msg=f"解析失败: {str(e)}", code=50010, status="error")
 
 
-@router.post("/semantic/prefill")
-async def semantic_prefill(request: SemanticPrefillRequest):
+async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):
     """语义字段预填短路由，前端直接传待预填表结构。"""
     try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(request.datasource_id)
+        datasource = await ds_manager.get_datasource_async(payload.datasource_id)
         if not datasource:
-            return business_response(msg=f"数据源不存在: {request.datasource_id}", code=40404, status="error")
+            return business_response(msg=f"数据源不存在: {payload.datasource_id}", code=40404, status="error")
 
-        config = await ds_manager.get_semantic_config_async(request.datasource_id, request.config_id)
+        config = await ds_manager.get_semantic_config_async(payload.datasource_id, payload.config_id)
         if not config:
-            return business_response(msg=f"语义配置不存在: {request.config_id}", code=40404, status="error")
+            return business_response(msg=f"语义配置不存在: {payload.config_id}", code=40404, status="error")
+        if not _can_mutate_semantic_config(config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
 
-        target_tables = [table.model_dump() for table in request.tables]
+        target_tables = [table.model_dump() for table in payload.tables]
         prefill_result = await _prefill_by_llm(
             target_tables,
-            request.table_model_type,
-            request.generate_business_flow,
-            request.business_context or "",
+            payload.table_model_type,
+            payload.generate_business_flow,
+            payload.business_context or "",
         )
         if prefill_result is None:
             return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=50010, status="error")
@@ -773,12 +850,25 @@ async def semantic_prefill(request: SemanticPrefillRequest):
         return business_response(msg=f"自动预填失败: {str(e)}", code=50010, status="error")
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/history-learning")
-async def learn_semantic_config_from_history(
+@router.post("/semantic/prefill")
+async def semantic_prefill(payload: SemanticPrefillRequest, request: Request):
+    """按个人指标集预填语义字段。"""
+    return await _semantic_prefill_route(payload, request, admin_manage=False)
+
+
+@router.post("/admin/semantic/prefill")
+async def admin_semantic_prefill(payload: SemanticPrefillRequest, request: Request):
+    """后台按公共指标集预填语义字段。"""
+    return await _semantic_prefill_route(payload, request, admin_manage=True)
+
+
+async def _learn_semantic_config_from_history_route(
     datasource_id: str,
     config_id: str,
     payload: SemanticHistoryLearningRequest,
     request: Request,
+    *,
+    admin_manage: bool = False,
 ):
     """基于当前指标集的智能问数/可视化查询历史生成维护建议。"""
     try:
@@ -791,6 +881,8 @@ async def learn_semantic_config_from_history(
         config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
         if not config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        if not _can_mutate_semantic_config(config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
 
         data = await _build_history_learning_service().learn(
             datasource_id=datasource_id,
@@ -813,14 +905,37 @@ async def learn_semantic_config_from_history(
         return business_response(msg=f"历史学习失败: {str(e)}", code=50010, status="error")
 
 
-@router.put("/datasources/{datasource_id}/semantic-configs/{config_id}")
-async def update_semantic_config(
+@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/history-learning")
+async def learn_semantic_config_from_history(
+    datasource_id: str,
+    config_id: str,
+    payload: SemanticHistoryLearningRequest,
+    request: Request,
+):
+    """基于个人指标集的查询历史生成维护建议。"""
+    return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=False)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/history-learning")
+async def learn_admin_semantic_config_from_history(
+    datasource_id: str,
+    config_id: str,
+    payload: SemanticHistoryLearningRequest,
+    request: Request,
+):
+    """后台基于公共指标集的查询历史生成维护建议。"""
+    return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
+
+
+async def _update_semantic_config(
     datasource_id: str,
     config_id: str,
     payload: SemanticConfigUpdateRequest,
     request: Request,
+    *,
+    admin_manage: bool = False,
 ):
-    """更新语义配置。"""
+    """更新指标集。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -832,6 +947,8 @@ async def update_semantic_config(
         current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
 
         update_kwargs = {}
         if payload.name is not None:
@@ -866,15 +983,14 @@ async def update_semantic_config(
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
 
         logger.info(f"更新语义配置: {config_id}")
-        return business_response(data=_with_semantic_config_permissions(config, user_id, username), msg="更新成功")
+        return business_response(data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="更新成功")
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=50010, status="error")
 
 
-@router.delete("/datasources/{datasource_id}/semantic-configs/{config_id}")
-async def delete_semantic_config(datasource_id: str, config_id: str, request: Request):
-    """删除语义配置。"""
+async def _delete_semantic_config(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
+    """删除指标集。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -883,6 +999,8 @@ async def delete_semantic_config(datasource_id: str, config_id: str, request: Re
         current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
 
         success = await ds_manager.delete_semantic_config_async(datasource_id, config_id, update_by=user_id, update_by_name=username)
         if not success:
@@ -895,9 +1013,8 @@ async def delete_semantic_config(datasource_id: str, config_id: str, request: Re
         return business_response(msg=f"删除失败: {str(e)}", code=50010, status="error")
 
 
-@router.patch("/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
-async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
-    """切换单个语义配置的启用状态。"""
+async def _toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request, *, admin_manage: bool = False):
+    """切换指标集启用状态。普通入口仅允许维护本人个人指标集；后台入口允许维护公共指标集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -906,6 +1023,8 @@ async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bo
         current_config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
         if not current_config:
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        if not _can_mutate_semantic_config(current_config, user_id, admin_manage):
+            return business_response(msg="无权限操作该指标集", code=40304, status="error")
 
         config = await ds_manager.update_semantic_config_async(
             datasource_id=datasource_id,
@@ -918,7 +1037,54 @@ async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bo
             return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
 
         logger.info(f"切换语义配置: {config_id}, enabled={enabled}")
-        return business_response(data={"config_id": config_id, "enabled": enabled}, msg=f"语义配置已{'启用' if enabled else '禁用'}")
+        data = _with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage)
+        return business_response(data=data, msg=f"语义配置已{'启用' if enabled else '禁用'}")
     except Exception as e:
         logger.error(f"切换语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"操作失败: {str(e)}", code=50010, status="error")
+
+
+@router.put("/datasources/{datasource_id}/semantic-configs/{config_id}")
+async def update_semantic_config(
+    datasource_id: str,
+    config_id: str,
+    payload: SemanticConfigUpdateRequest,
+    request: Request,
+):
+    """更新个人指标集。"""
+    return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=False)
+
+
+@router.put("/admin/datasources/{datasource_id}/semantic-configs/{config_id}")
+async def update_admin_semantic_config(
+    datasource_id: str,
+    config_id: str,
+    payload: SemanticConfigUpdateRequest,
+    request: Request,
+):
+    """后台更新公共指标集。"""
+    return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=True)
+
+
+@router.delete("/datasources/{datasource_id}/semantic-configs/{config_id}")
+async def delete_semantic_config(datasource_id: str, config_id: str, request: Request):
+    """删除个人指标集。"""
+    return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=False)
+
+
+@router.delete("/admin/datasources/{datasource_id}/semantic-configs/{config_id}")
+async def delete_admin_semantic_config(datasource_id: str, config_id: str, request: Request):
+    """后台删除公共指标集。"""
+    return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
+
+
+@router.patch("/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
+async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
+    """切换个人指标集启用状态。"""
+    return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=False)
+
+
+@router.patch("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
+async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
+    """后台切换公共指标集启用状态。"""
+    return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=True)

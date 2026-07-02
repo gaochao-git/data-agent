@@ -14,7 +14,7 @@ from contextvars import ContextVar
 import json
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from utils.lang_util.database import get_session
@@ -545,7 +545,11 @@ class DataSourceDao:
             query_result = await session.execute(
                 select(SemanticConfig)
                 .where(*conditions)
-                .order_by(SemanticConfig.sort_no.asc(), SemanticConfig.id.asc())
+                .order_by(
+                    case((SemanticConfig.scope_type == "public", 0), else_=1).asc(),
+                    SemanticConfig.semantic_config_name.asc(),
+                    SemanticConfig.id.asc(),
+                )
             )
             rows = [self._semantic_config_model_to_row(row) for row in query_result.scalars().all()]
         return [self._map_semantic_config_row(row) for row in rows]

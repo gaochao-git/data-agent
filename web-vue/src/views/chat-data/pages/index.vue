@@ -9,7 +9,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
 import { getUserOrgList } from '@/api/psoss/records'
-import { getDatasources, getConversations, createConversation, generateConversationTitle, getSemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, getConversations, createConversation, generateConversationTitle, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
 import SqlConversation from '../components/SqlConversation.vue'
@@ -302,9 +302,12 @@ const dashboardMounted = ref(viewMode.value === 'dashboard')
 
 // 选中的指标集 ID
 const selectedSemanticConfigId = ref<string | null>(null)
+const metricSelectedSemanticConfigId = ref<string | null>(null)
 const conversationSelectedSemanticConfigId = ref<string | null>(null)
 const semanticConfigs = ref<SemanticConfigItem[]>([])
 const loadingSemanticConfigs = ref(false)
+const metricSemanticConfigs = ref<SemanticConfigItem[]>([])
+const loadingMetricSemanticConfigs = ref(false)
 const creatingMetricConfig = ref(false)
 const metricConfigPanelKey = ref(0)
 const datasourceSchemaCache = ref<Record<string, TableInfo[]>>({})
@@ -967,6 +970,30 @@ const loadSemanticConfigs = async () => {
   }
 }
 
+const loadMetricSemanticConfigs = async () => {
+  if (!selectedDatasourceId.value) {
+    metricSemanticConfigs.value = []
+    metricSelectedSemanticConfigId.value = null
+    return
+  }
+  loadingMetricSemanticConfigs.value = true
+  try {
+    const res = await getMySemanticConfigs(selectedDatasourceId.value)
+    if (res.status === 'success') {
+      metricSemanticConfigs.value = res.data?.configs || []
+      if (metricSelectedSemanticConfigId.value && !metricSemanticConfigs.value.find(c => c.id === metricSelectedSemanticConfigId.value)) {
+        metricSelectedSemanticConfigId.value = null
+      }
+    }
+  } catch (err) {
+    console.error('加载个人指标集失败:', err)
+    metricSemanticConfigs.value = []
+    metricSelectedSemanticConfigId.value = null
+  } finally {
+    loadingMetricSemanticConfigs.value = false
+  }
+}
+
 const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
   let datasetName = ''
@@ -996,10 +1023,13 @@ const handleCreateMetricConfig = async () => {
       relationships: [],
     })
     if (res.status === 'success' && res.data) {
+      metricSemanticConfigs.value = [...metricSemanticConfigs.value, res.data]
       semanticConfigs.value = [...semanticConfigs.value, res.data]
-      selectedSemanticConfigId.value = res.data.id
+      metricSelectedSemanticConfigId.value = res.data.id
       metricConfigPanelKey.value += 1
       ElMessage.success('创建成功')
+    } else {
+      ElMessage.error(res.msg || '创建失败')
     }
   } catch (err) {
     ElMessage.error('创建失败')
@@ -1047,14 +1077,28 @@ const currentSemanticConfig = computed(() => {
   return semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value) || null
 })
 
+const currentMetricSemanticConfig = computed(() => {
+  if (!metricSelectedSemanticConfigId.value) return null
+  return metricSemanticConfigs.value.find(cfg => cfg.id === metricSelectedSemanticConfigId.value) || null
+})
+
 const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
+const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
 
 const getSemanticConfigIndex = (config: SemanticConfigItem) => {
   return semanticConfigs.value.findIndex(item => item.id === config.id)
 }
 
+const getMetricSemanticConfigIndex = (config: SemanticConfigItem) => {
+  return metricSemanticConfigs.value.findIndex(item => item.id === config.id)
+}
+
 const formatSemanticConfigLabel = (config: SemanticConfigItem) => {
   return formatSemanticConfigOptionLabel(config, getSemanticConfigIndex(config))
+}
+
+const formatMetricSemanticConfigLabel = (config: SemanticConfigItem) => {
+  return formatSemanticConfigOptionLabel(config, getMetricSemanticConfigIndex(config))
 }
 
 const conversationSemanticConfigId = computed(() => {
@@ -1078,7 +1122,12 @@ const conversationSemanticConfigSelection = computed<SemanticConfigSelectionInfo
 })
 
 const ensureStructuredViewSemanticConfig = () => {
-  if (viewMode.value !== 'builder' && viewMode.value !== 'metricConfig') return
+  if (viewMode.value === 'metricConfig') {
+    if (metricSelectedSemanticConfigId.value && metricSemanticConfigs.value.find(cfg => cfg.id === metricSelectedSemanticConfigId.value)) return
+    metricSelectedSemanticConfigId.value = enabledMetricSemanticConfigs.value[0]?.id || metricSemanticConfigs.value[0]?.id || null
+    return
+  }
+  if (viewMode.value !== 'builder') return
   if (selectedSemanticConfigId.value && semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value)) return
   selectedSemanticConfigId.value = enabledSemanticConfigs.value[0]?.id || semanticConfigs.value[0]?.id || null
 }
@@ -1271,8 +1320,19 @@ const showSidebarContextBar = computed(() => {
 
 watch(selectedDatasourceId, () => {
   conversationSelectedSemanticConfigId.value = null
+  metricSelectedSemanticConfigId.value = null
+  metricSemanticConfigs.value = []
   loadSemanticConfigs()
+  if (viewMode.value === 'metricConfig') {
+    loadMetricSemanticConfigs()
+  }
 }, { immediate: true })
+
+watch(viewMode, (mode) => {
+  if (mode === 'metricConfig') {
+    loadMetricSemanticConfigs()
+  }
+})
 
 watch(
   conversationModelStorageUserKey,
@@ -1292,7 +1352,7 @@ watch(selectedConversationModelId, (modelId) => {
 })
 
 watch(
-  [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|')],
+  [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|'), () => metricSemanticConfigs.value.map(cfg => cfg.id).join('|')],
   ensureStructuredViewSemanticConfig,
   { immediate: true }
 )
@@ -1526,12 +1586,12 @@ onUnmounted(() => {
         </select>
         <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
         <el-select
-          v-model="selectedSemanticConfigId"
+          v-model="metricSelectedSemanticConfigId"
           class="min-w-0 flex-1"
           filterable
-          :loading="loadingSemanticConfigs"
-          :disabled="loadingSemanticConfigs || semanticConfigs.length === 0"
-          :title="currentSemanticConfig ? formatSemanticConfigLabel(currentSemanticConfig) : ''"
+          :loading="loadingMetricSemanticConfigs"
+          :disabled="loadingMetricSemanticConfigs || metricSemanticConfigs.length === 0"
+          :title="currentMetricSemanticConfig ? formatMetricSemanticConfigLabel(currentMetricSemanticConfig) : ''"
           placeholder="请选择指标集"
           loading-text="加载中"
           no-data-text="暂无指标集"
@@ -1539,7 +1599,7 @@ onUnmounted(() => {
           popper-class="chatdata-semantic-config-select-popper"
         >
           <el-option
-            v-for="(config, configIndex) in semanticConfigs"
+            v-for="(config, configIndex) in metricSemanticConfigs"
             :key="config.id"
             :value="config.id"
             :label="formatSemanticConfigOptionLabel(config, configIndex)"
@@ -1563,11 +1623,11 @@ onUnmounted(() => {
           :datasource-name="metricConfigDatasource?.group_name || ''"
           :datasource-type="resolveDatasourceType(metricConfigDatasource)"
           :tables="metricConfigDatasource?.ds_tables || []"
-          :selected-config-id="selectedSemanticConfigId"
+          :selected-config-id="metricSelectedSemanticConfigId"
           hide-dataset-selector
           embedded
-          @config-change="loadSemanticConfigs"
-          @update:selected-config-id="selectedSemanticConfigId = $event"
+          @config-change="() => { loadMetricSemanticConfigs(); loadSemanticConfigs() }"
+          @update:selected-config-id="metricSelectedSemanticConfigId = $event"
           @close="handleCloseMetricConfigTab"
         />
         <div v-else class="h-full flex items-center justify-center text-sm text-slate-400">
@@ -1838,7 +1898,7 @@ onUnmounted(() => {
         :datasource-name="semanticConfigDatasource?.group_name || ''"
         :datasource-type="resolveDatasourceType(semanticConfigDatasource)"
         :tables="semanticConfigDatasource?.ds_tables || []"
-        admin-create
+        admin-mode
         @close="handleCloseSemanticConfig"
       />
     </div>

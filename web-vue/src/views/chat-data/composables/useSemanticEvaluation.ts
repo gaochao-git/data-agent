@@ -40,6 +40,7 @@ interface UseSemanticEvaluationOptions {
   datasourceId: Ref<string>
   activeConfig: ComputedRef<SemanticConfigItem | null>
   hasUnsavedSemanticConfig: ComputedRef<boolean>
+  adminMode?: Ref<boolean | undefined>
 }
 
 export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
@@ -92,6 +93,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
 
   const currentConfig = () => options.activeConfig.value
   const currentDatasourceId = () => options.datasourceId.value
+  const evaluationApiOptions = () => ({ adminMode: Boolean(options.adminMode?.value) })
 
   const evaluationMetricTips = {
     semantic: '按指标、维度、筛选、排序、分页等语义槽位逐项比较，反映模型是否理解了问题。',
@@ -295,7 +297,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     if (!config || !datasourceId) return
     evaluationCasesLoading.value = true
     try {
-      const res = await getAccuracyEvaluationCases(datasourceId, config.id)
+      const res = await getAccuracyEvaluationCases(datasourceId, config.id, evaluationApiOptions())
       if (res.status !== 'success') {
         ElMessage.error(res.msg || '加载测试集失败')
         return
@@ -339,7 +341,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
 
     evaluationCasesLoading.value = true
     try {
-      const res = await generateAccuracyEvaluationCases(datasourceId, config.id)
+      const res = await generateAccuracyEvaluationCases(datasourceId, config.id, evaluationApiOptions())
       if (res.status !== 'success') {
         ElMessage.error(res.msg || '生成测试集失败')
         return
@@ -373,7 +375,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
       const res = await saveAccuracyEvaluationCases(datasourceId, config.id, {
         business_domain: evaluationBusinessDomain.value || config.name,
         cases: evaluationCases.value,
-      })
+      }, evaluationApiOptions())
       if (res.status !== 'success') {
         ElMessage.error(res.msg || '保存测试集失败')
         return
@@ -416,7 +418,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
       const res = await draftAccuracyEvaluationCase(datasourceId, config.id, {
         hint: editingCase.value.nl,
         existing_questions: evaluationCases.value.map(item => item.nl).filter(Boolean),
-      })
+      }, evaluationApiOptions())
       if (res.status !== 'success' || !res.data?.case) {
         ElMessage.error(res.msg || '生成用例初稿失败')
         return
@@ -643,6 +645,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
           },
         },
         runController.signal,
+        evaluationApiOptions(),
       )
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -695,7 +698,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
         semantic_config_id: config.id,
         page: evaluationHistoryPage.value,
         page_size: evaluationHistoryPageSize.value,
-      })
+      }, evaluationApiOptions())
       if (res.status !== 'success') {
         ElMessage.error(res.msg || '获取评测历史失败')
         return
@@ -719,7 +722,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     selectedEvaluationHistoryRunId.value = runId
     evaluationHistoryDetailLoading.value = true
     try {
-      const res = await getAccuracyEvaluationRunDetail(runId)
+      const res = await getAccuracyEvaluationRunDetail(runId, evaluationApiOptions())
       if (res.status !== 'success') {
         ElMessage.error(res.msg || '获取评测历史详情失败')
         return

@@ -6,11 +6,15 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getSemanticConfigs,
+  getMySemanticConfigs,
+  getAdminSemanticConfigs,
   createAdminSemanticConfig,
   createSemanticConfig,
+  updateAdminSemanticConfig,
   updateSemanticConfig,
+  deleteAdminSemanticConfig,
   deleteSemanticConfig,
+  toggleAdminSemanticConfig,
   toggleSemanticConfig,
   autoPrefillSemanticFields,
   parseSemanticPrefillContextFile,
@@ -38,11 +42,11 @@ interface Props {
   embedded?: boolean
   selectedConfigId?: string | null
   hideDatasetSelector?: boolean
-  adminCreate?: boolean
+  adminMode?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  adminCreate: false,
+  adminMode: false,
 })
 const emit = defineEmits<{
   close: []
@@ -206,8 +210,14 @@ const deriveScopeFromConfig = (config: SemanticConfigItem) => {
 }
 
 const canManageConfig = (config?: SemanticConfigItem | null) => {
-  return Boolean(config)
+  if (!config) return false
+  return typeof config.can_manage === 'boolean' ? config.can_manage : true
 }
+
+const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticConfigs : getMySemanticConfigs)
+const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
+const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
+const semanticConfigToggleApi = computed(() => props.adminMode ? toggleAdminSemanticConfig : toggleSemanticConfig)
 
 const formatConfigOperator = (value?: string) => {
   const text = String(value || '').trim()
@@ -422,7 +432,7 @@ const fetchConfigs = async () => {
   if (!props.datasourceId) return
   loading.value = true
   try {
-    const res = await getSemanticConfigs(props.datasourceId)
+    const res = await semanticConfigListApi.value(props.datasourceId)
     if (res.status === 'success') {
       configs.value = res.data?.configs || []
       const nextSignatures: Record<string, string> = {}
@@ -448,6 +458,10 @@ const fetchConfigs = async () => {
         expandedId.value = null
       }
       applyDefaultModelConfigCollapse(expandedId.value)
+    } else {
+      configs.value = []
+      expandedId.value = null
+      ElMessage.error(res.msg || '获取配置失败')
     }
   } catch (err) {
     console.error('获取语义配置失败:', err)
@@ -479,7 +493,7 @@ const createConfig = async () => {
   if (!datasetName) return
   creatingConfig.value = true
   try {
-    const createApi = props.adminCreate ? createAdminSemanticConfig : createSemanticConfig
+    const createApi = props.adminMode ? createAdminSemanticConfig : createSemanticConfig
     const res = await createApi(props.datasourceId, {
       name: datasetName,
       enabled: true,
@@ -498,6 +512,8 @@ const createConfig = async () => {
       emit('update:selectedConfigId', res.data.id)
       emit('configChange')
       ElMessage.success('创建成功')
+    } else {
+      ElMessage.error(res.msg || '创建失败')
     }
   } catch (err) {
     ElMessage.error('创建失败')
@@ -510,7 +526,7 @@ const createConfig = async () => {
 const saveConfig = async (config: SemanticConfigItem) => {
   savingId.value = config.id
   try {
-    const res = await updateSemanticConfig(props.datasourceId, config.id, config)
+    const res = await semanticConfigUpdateApi.value(props.datasourceId, config.id, config)
     if (res.status === 'success' && res.data) {
       configs.value = configs.value.map(c => c.id === config.id ? res.data! : c)
       emit('configChange')
@@ -538,7 +554,11 @@ const openEvaluateDrawer = () => {
 const handleDeleteConfig = async (configId: string, configName: string) => {
   if (!confirm(`确定要删除"${configName}"吗？`)) return
   try {
-    await deleteSemanticConfig(props.datasourceId, configId)
+    const res = await semanticConfigDeleteApi.value(props.datasourceId, configId)
+    if (res.status !== 'success') {
+      ElMessage.error(res.msg || '删除失败')
+      return
+    }
     const newConfigs = configs.value.filter(c => c.id !== configId)
     configs.value = newConfigs
     const nextSignatures = { ...savedConfigSignatures.value }
@@ -561,12 +581,16 @@ const handleDeleteConfig = async (configId: string, configName: string) => {
 // 切换启用状态
 const handleToggleEnabled = async (config: SemanticConfigItem) => {
   try {
-    await toggleSemanticConfig(props.datasourceId, config.id, !config.enabled)
-    config.enabled = !config.enabled
+    const res = await semanticConfigToggleApi.value(props.datasourceId, config.id, !config.enabled)
+    if (res.status !== 'success' || !res.data) {
+      ElMessage.error(res.msg || '操作失败')
+      return
+    }
+    configs.value = configs.value.map(c => c.id === config.id ? res.data! : c)
     emit('configChange')
     savedConfigSignatures.value = {
       ...savedConfigSignatures.value,
-      [config.id]: buildConfigSignature(config),
+      [config.id]: buildConfigSignature(res.data),
     }
   } catch (err) {
     ElMessage.error('操作失败')
@@ -1954,7 +1978,7 @@ const handleAutoPrefillFields = async () => {
       table_model_type: 'detail',
       business_context: autoPrefillBusinessContext.value.trim(),
       tables: targetTables,
-    })
+    }, { adminMode: props.adminMode })
     if (res.status !== 'success') {
       ElMessage.error(res.msg || '自动预填失败')
       return
@@ -3291,6 +3315,7 @@ const saveOntologyRules = () => {
       :datasource-id="props.datasourceId"
       :config="activeConfig"
       :has-unsaved-semantic-config="hasUnsavedSemanticConfig"
+      :admin-mode="props.adminMode"
     />
 
     <el-dialog v-model="showRelationshipEditor" width="820px" title="连接方式" @close="closeRelationshipEditor">
@@ -3486,6 +3511,7 @@ const saveOntologyRules = () => {
       v-model:visible="showHistoryLearningDialog"
       :datasource-id="props.datasourceId"
       :config="activeConfig"
+      :admin-mode="props.adminMode"
       @accept-metric="acceptHistoryMetric"
       @accept-dimension="acceptHistoryDimension"
     />

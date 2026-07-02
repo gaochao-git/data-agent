@@ -7,6 +7,7 @@ import type { SemanticConfigItem } from '../../types'
 const props = defineProps<{
   datasourceId: string
   config: SemanticConfigItem | null
+  adminMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -47,7 +48,7 @@ const runHistoryLearning = async () => {
       limit: historyLearningForm.value.limit,
       sources: historyLearningForm.value.sources,
       include_failed: historyLearningForm.value.include_failed,
-    })
+    }, { adminMode: Boolean(props.adminMode) })
     if (res.status !== 'success') {
       ElMessage.error(res.msg || '历史学习失败')
       return

@@ -75,7 +75,7 @@ def test_add_panel_api_contract(client, auth_headers, fake_dashboard_service, mo
     assert fake_dashboard_service.added_panel["datasource_id"] == "ds_a"
 
 
-def test_get_evaluation_cases_preserves_limit_offset_contract(client, monkeypatch):
+def test_get_evaluation_cases_preserves_limit_offset_contract(client, auth_headers, fake_datasource_manager, monkeypatch):
     async def fake_load_scene_case_set(datasource_id, config_id):
         return {
             "business_domain": "订单分析",
@@ -101,9 +101,10 @@ def test_get_evaluation_cases_preserves_limit_offset_contract(client, monkeypatc
             ],
         }
 
+    monkeypatch.setattr(evaluation_routes, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(evaluation_routes, "_load_scene_case_set", fake_load_scene_case_set)
 
-    response = client.get("/api/chatdata/datasources/ds_a/semantic-configs/cfg_a/evaluation-cases")
+    response = client.get("/api/chatdata/datasources/ds_a/semantic-configs/cfg_a/evaluation-cases", headers=auth_headers)
 
     assert response.status_code == 200
     payload = response.json()

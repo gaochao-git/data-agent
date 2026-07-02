@@ -530,7 +530,7 @@ async def test_load_scene_runner_cases_requires_saved_cases(eval_db):
 
 
 @pytest.mark.asyncio
-async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
+async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypatch):
     current_user = SimpleNamespace(user_id="u1", username="测试人员")
     payload = AccuracyEvaluationRunRequest(
         datasource_id="ds_a",
@@ -569,10 +569,14 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
     await evaluation._update_eval_run_record("run_1", error_message="")
     await evaluation._update_eval_run_record("missing", status="failed")
 
-    list_response = await evaluation.list_accuracy_evaluation_runs(datasource_id="ds_a", semantic_config_id="cfg_a", page=-1, page_size=500)
-    list_all_response = await evaluation.list_accuracy_evaluation_runs(page=1, page_size=1)
-    detail_response = await evaluation.get_accuracy_evaluation_run_detail("run_1")
-    missing_response = await evaluation.get_accuracy_evaluation_run_detail("missing")
+    request = SimpleNamespace()
+    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: current_user)
+    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+
+    list_response = await evaluation.list_accuracy_evaluation_runs(request, datasource_id="ds_a", semantic_config_id="cfg_a", page=-1, page_size=500)
+    list_all_response = await evaluation.list_accuracy_evaluation_runs(request, page=1, page_size=1)
+    detail_response = await evaluation.get_accuracy_evaluation_run_detail("run_1", request)
+    missing_response = await evaluation.get_accuracy_evaluation_run_detail("missing", request)
 
     async with eval_db() as session:
         run_row = (await session.execute(select(ChatDataEvalRun).filter_by(run_id="run_1"))).scalar_one()
@@ -591,7 +595,7 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
     assert [row.case_status for row in case_rows] == ["passed", "passed"]
     assert list_payload["data"]["page"] == 1
     assert list_payload["data"]["page_size"] == 100
-    assert list_all_payload["data"]["total"] == 1
+    assert list_all_payload["code"] == 40001
     assert list_payload["data"]["runs"][0]["tester_name"] == "测试人员"
     assert detail_payload["data"]["run"]["run_id"] == "run_1"
     assert len(detail_payload["data"]["cases"]) == 2
@@ -600,6 +604,7 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db):
 
 def test_accuracy_routes_error_mapping(monkeypatch):
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
+    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
 
     async def raise_value_error(_payload, _request, _current_user):
         raise ValueError("测试集为空")
@@ -673,10 +678,73 @@ def _json_body(response):
     return json.loads(response.body.decode("utf-8"))
 
 
+def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
+    class FakeEvaluationService:
+        async def list_eval_runs(self, **_kwargs):
+            return {"runs": [], "total": 0, "page": 1, "page_size": 10}
+
+        async def get_eval_run_detail(self, run_id):
+            if run_id == "missing":
+                return None
+            config_id = "cfg_public" if run_id == "public_run" else "cfg_private"
+            return {
+                "run": {"run_id": run_id, "datasource_id": "ds_a", "semantic_config_id": config_id},
+                "cases": [],
+            }
+
+    class FakeManager:
+        async def get_semantic_config_async(self, datasource_id, config_id):
+            if config_id == "cfg_public":
+                return {"id": config_id, "scope_type": "public", "create_by": "admin"}
+            if config_id == "cfg_private":
+                return {"id": config_id, "scope_type": "private", "create_by": "u1"}
+            return None
+
+    request = SimpleNamespace()
+    monkeypatch.setattr(evaluation, "_build_evaluation_service", lambda: FakeEvaluationService())
+    monkeypatch.setattr(evaluation, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
+
+    normal_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
+        request,
+        datasource_id="ds_a",
+        semantic_config_id="cfg_private",
+    )))
+    normal_public_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
+        request,
+        datasource_id="ds_a",
+        semantic_config_id="cfg_public",
+    )))
+    admin_list = _json_body(asyncio.run(evaluation.list_admin_accuracy_evaluation_runs(
+        request,
+        datasource_id="ds_a",
+        semantic_config_id="cfg_public",
+    )))
+    admin_private_list = _json_body(asyncio.run(evaluation.list_admin_accuracy_evaluation_runs(
+        request,
+        datasource_id="ds_a",
+        semantic_config_id="cfg_private",
+    )))
+    normal_detail = _json_body(asyncio.run(evaluation.get_accuracy_evaluation_run_detail("private_run", request)))
+    admin_detail = _json_body(asyncio.run(evaluation.get_admin_accuracy_evaluation_run_detail("public_run", request)))
+    wrong_detail = _json_body(asyncio.run(evaluation.get_accuracy_evaluation_run_detail("public_run", request)))
+    missing_detail = _json_body(asyncio.run(evaluation.get_admin_accuracy_evaluation_run_detail("missing", request)))
+
+    assert normal_list["status"] == "success"
+    assert admin_list["status"] == "success"
+    assert normal_public_list["code"] == 40301
+    assert admin_private_list["code"] == 40301
+    assert normal_detail["data"]["run"]["run_id"] == "private_run"
+    assert admin_detail["data"]["run"]["run_id"] == "public_run"
+    assert wrong_detail["code"] == 40301
+    assert missing_detail["code"] == 40404
+
+
 def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
     from fastapi import HTTPException
 
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
+    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
 
     async def fake_run(payload, request, current_user):
         return {"summary": {"total": payload.limit}, "user": current_user.username}
@@ -884,7 +952,7 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
                 return None
             if config_id == "boom":
                 raise RuntimeError("配置读取失败")
-            return {"id": config_id, "name": "订单分析"}
+            return {"id": config_id, "name": "订单分析", "scope_type": "private", "create_by": "u1"}
 
     async def fake_compile(datasource_id, config_id, case):
         if case.get("id") == "bad_compile":
@@ -926,18 +994,20 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
     )
     request = SimpleNamespace()
     save_response = asyncio.run(evaluation.save_scene_evaluation_cases("ds_a", "cfg_a", upsert_payload, request))
-    get_response = asyncio.run(evaluation.get_scene_evaluation_cases("ds_a", "cfg_a"))
-    generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "cfg_a"))
+    get_response = asyncio.run(evaluation.get_scene_evaluation_cases("ds_a", "cfg_a", request))
+    generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "cfg_a", request))
     draft_response = asyncio.run(evaluation.draft_scene_evaluation_case(
         "ds_a",
         "cfg_a",
         AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
+        request,
     ))
-    missing_generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "missing"))
+    missing_generate_response = asyncio.run(evaluation.generate_scene_evaluation_cases("ds_a", "missing", request))
     missing_draft_response = asyncio.run(evaluation.draft_scene_evaluation_case(
         "ds_a",
         "missing",
         AccuracyEvaluationDraftCaseRequest(hint="查询销售额", existing_questions=[]),
+        request,
     ))
     bad_save_response = asyncio.run(evaluation.save_scene_evaluation_cases(
         "ds_a",
@@ -952,6 +1022,7 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
         "ds_a",
         "cfg_a",
         AccuracyEvaluationDraftCaseRequest(hint="bad", existing_questions=[]),
+        request,
     ))
     boom_save_response = asyncio.run(evaluation.save_scene_evaluation_cases("ds_a", "boom", upsert_payload, request))
 

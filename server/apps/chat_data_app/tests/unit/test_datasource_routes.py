@@ -1266,8 +1266,9 @@ def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
     from apps.chat_data_app.schema import SemanticPrefillRequest
 
     manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["semantic_configs"] = [{"id": "sc_a", "name": "订单分析"}]
+    manager.datasources["ds_a"]["semantic_configs"] = [{"id": "sc_a", "name": "订单分析", "scope_type": "private", "create_by": "u1"}]
     monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1"))
 
     captured = {}
 
@@ -1288,7 +1289,7 @@ def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
             "table_name": "orders",
             "columns": [{"name": "amount_sum", "type": "decimal", "description": "销售额合计"}],
         }],
-    )))
+    ), object()))
     data = _payload(resp)
 
     assert data["status"] == "success"

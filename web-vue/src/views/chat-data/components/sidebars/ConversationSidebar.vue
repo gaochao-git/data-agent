@@ -180,6 +180,25 @@ const getConfigDisplayName = (config: SemanticConfigItem) => {
   return ordinal > 0 ? `${ordinal}. ${config.name}` : config.name
 }
 
+const getConfigScopeLabel = (config: SemanticConfigItem) => {
+  return config.scope_type === 'private' ? '个人' : '公共'
+}
+
+const getConfigScopeTitle = (config: SemanticConfigItem) => {
+  return `${getConfigScopeLabel(config)}指标集`
+}
+
+const getConfigSelectCircleClass = (config: SemanticConfigItem) => {
+  const isSelected = selectedConfigId.value === config.id
+  if (isSelected) {
+    return 'border-[#165DFF] bg-[#165DFF] text-white'
+  }
+  if (config.scope_type === 'private') {
+    return 'border-2 border-[#00B42A] bg-white text-transparent hover:border-[#00B42A]'
+  }
+  return 'border-[#9CC7FF] bg-white text-transparent hover:border-[#165DFF]'
+}
+
 const getFilteredDimensions = (config: SemanticConfigItem) => {
   const dimensions = config.dimensions || []
   const keyword = (dimensionSearchKeywords[config.id] || '').trim().toLowerCase()
@@ -626,11 +645,9 @@ onUnmounted(() => {
               type="button"
               :class="[
                 'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px] transition-all duration-150',
-                selectedConfigId === config.id
-                  ? 'border-[#165DFF] bg-[#165DFF] text-white'
-                  : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
+                getConfigSelectCircleClass(config)
               ]"
-              :title="selectedConfigId === config.id ? '当前提问使用该指标集' : '使用该指标集提问'"
+              :title="`${selectedConfigId === config.id ? '当前提问使用该指标集' : '使用该指标集提问'}（${getConfigScopeTitle(config)}）`"
               @click.stop="handleSelectConfig(selectedConfigId === config.id ? null : config.id)"
             >
               <i class="fa-solid fa-check"></i>
@@ -640,7 +657,7 @@ onUnmounted(() => {
             </span>
             <span
               class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
-              :title="`${getConfigDisplayName(config)}：${getConfigSummary(config)}`"
+              :title="`${getConfigDisplayName(config)}：${getConfigScopeTitle(config)}，${getConfigSummary(config)}`"
             >
               {{ getConfigSummary(config) }}
             </span>

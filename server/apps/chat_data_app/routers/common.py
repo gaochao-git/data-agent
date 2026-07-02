@@ -52,6 +52,30 @@ def _build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:
     return table_columns
 
 
+def _semantic_config_scope_type(config: Dict[str, Any]) -> str:
+    """读取指标集范围，缺省按公共指标集处理。"""
+    return str((config or {}).get("scope_type") or "public").strip().lower()
+
+
+def _is_public_semantic_config(config: Dict[str, Any]) -> bool:
+    """判断是否为系统公共指标集。"""
+    return bool(config and _semantic_config_scope_type(config) == "public")
+
+
+def _is_private_semantic_config_owner(config: Dict[str, Any], user_id: str) -> bool:
+    """判断当前用户是否拥有该个人指标集。"""
+    return bool(
+        config
+        and _semantic_config_scope_type(config) == "private"
+        and str((config or {}).get("create_by") or "").strip() == str(user_id or "").strip()
+    )
+
+
+def _can_mutate_semantic_config(config: Dict[str, Any], user_id: str, admin_manage: bool = False) -> bool:
+    """判断当前入口是否允许修改指标集。"""
+    return _is_public_semantic_config(config) if admin_manage else _is_private_semantic_config_owner(config, user_id)
+
+
 def _semantic_config_prompt_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     """裁剪语义配置上下文，避免提示词过长。"""
     return {

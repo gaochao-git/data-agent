@@ -37,12 +37,13 @@ from ..services.evaluation_service import (
     validate_eval_case_ids,
 )
 from ..services.llm_config import get_chat_data_llm
-from .common import _get_current_user, _semantic_config_prompt_payload
+from .common import _can_mutate_semantic_config, _get_current_user, _semantic_config_prompt_payload
 
 logger = get_logger(__name__)
 router = APIRouter()
 ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
 ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
+SEMANTIC_CONFIG_NOT_FOUND_CODE = 40404
 
 
 def _build_evaluation_service() -> EvaluationService:
@@ -560,15 +561,34 @@ def _eval_run_case_row_to_payload(row: Any) -> Dict[str, Any]:
     return eval_run_case_row_to_payload(row)
 
 
-@router.post("/evaluations/accuracy/run")
-async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
+async def _ensure_evaluation_semantic_permission(
+    datasource_id: str,
+    config_id: str,
+    current_user: Any,
+    *,
+    admin_manage: bool = False,
+) -> Dict[str, Any]:
+    """评测入口按指标集维护权限校验。"""
+    ds_manager = get_datasource_manager()
+    config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"语义配置不存在: {config_id}")
+    user_id = str(getattr(current_user, "user_id", "") or "").strip()
+    if not _can_mutate_semantic_config(config, user_id, admin_manage):
+        raise HTTPException(status_code=403, detail="无权限操作该指标集")
+    return config
+
+
+async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False):
     """运行智能问数准确率评测。"""
     try:
         current_user = _get_current_user(request)
+        await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
         report = await _run_accuracy_evaluation_payload(payload, request, current_user)
         return business_response(data=report, msg="评测完成")
     except HTTPException as e:
-        return business_response(msg=str(e.detail), code=e.status_code * 100 + 1, status="error")
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=40001, status="error")
     except Exception as e:
@@ -576,28 +596,36 @@ async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request
         return business_response(msg=f"评测失败: {e}", code=50056, status="error")
 
 
-@router.post("/evaluations/accuracy/run-stream")
-async def run_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
+async def _accuracy_error_stream(message: str):
+    yield f"data: {json.dumps({'event': 'error', 'message': message}, ensure_ascii=False)}\n\n"
+
+
+async def _run_accuracy_evaluation_stream_route(payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False):
     """流式运行准确率评测，逐条返回用例结果。"""
     try:
         current_user = _get_current_user(request)
-    except HTTPException as e:
-        message = str(e.detail)
-        async def auth_error_stream():
-            yield f"data: {json.dumps({'event': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-        return StreamingResponse(auth_error_stream(), media_type="text/event-stream")
+        await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
+    except (HTTPException, ValueError) as e:
+        message = str(getattr(e, "detail", None) or e)
+        return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")
     return _accuracy_sse_response(payload, request, current_user)
 
 
-@router.get("/evaluations/accuracy/runs")
-async def list_accuracy_evaluation_runs(
+async def _list_accuracy_evaluation_runs_route(
+    request: Request,
+    *,
     datasource_id: Optional[str] = None,
     semantic_config_id: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
+    admin_manage: bool = False,
 ):
-    """查询智能问数评测历史批次。"""
+    """按当前维护入口查询评测历史批次。"""
     try:
+        if not datasource_id or not semantic_config_id:
+            return business_response(msg="查询评测历史需要指定数据源和指标集", code=40001, status="error")
+        current_user = _get_current_user(request)
+        await _ensure_evaluation_semantic_permission(datasource_id, semantic_config_id, current_user, admin_manage=admin_manage)
         data = await _build_evaluation_service().list_eval_runs(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
@@ -605,22 +633,109 @@ async def list_accuracy_evaluation_runs(
             page_size=page_size,
         )
         return business_response(data=data, msg="获取成功")
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except Exception as e:
         logger.error("获取智能问数评测历史失败: datasource_id=%s config_id=%s error=%s", datasource_id, semantic_config_id, e, exc_info=True)
         return business_response(msg="获取评测历史失败，请稍后重试", code=50059, status="error")
 
 
-@router.get("/evaluations/accuracy/runs/{run_id}")
-async def get_accuracy_evaluation_run_detail(run_id: str):
-    """查询智能问数评测历史详情。"""
+async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Request, *, admin_manage: bool = False):
+    """按当前维护入口查询评测历史详情。"""
     try:
         data = await _build_evaluation_service().get_eval_run_detail(run_id)
         if not data:
             return business_response(msg="评测记录不存在", code=40404, status="error")
+        run = data.get("run") or {}
+        current_user = _get_current_user(request)
+        await _ensure_evaluation_semantic_permission(
+            str(run.get("datasource_id") or ""),
+            str(run.get("semantic_config_id") or ""),
+            current_user,
+            admin_manage=admin_manage,
+        )
         return business_response(data=data, msg="获取成功")
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except Exception as e:
         logger.error("获取智能问数评测历史详情失败: run_id=%s error=%s", run_id, e, exc_info=True)
         return business_response(msg="获取评测历史详情失败，请稍后重试", code=50060, status="error")
+
+
+@router.post("/evaluations/accuracy/run")
+async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
+    """运行个人指标集准确率评测。"""
+    return await _run_accuracy_evaluation_route(payload, request, admin_manage=False)
+
+
+@router.post("/admin/evaluations/accuracy/run")
+async def run_admin_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
+    """后台运行公共指标集准确率评测。"""
+    return await _run_accuracy_evaluation_route(payload, request, admin_manage=True)
+
+
+@router.post("/evaluations/accuracy/run-stream")
+async def run_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
+    """流式运行个人指标集准确率评测，逐条返回用例结果。"""
+    return await _run_accuracy_evaluation_stream_route(payload, request, admin_manage=False)
+
+
+@router.post("/admin/evaluations/accuracy/run-stream")
+async def run_admin_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
+    """后台流式运行公共指标集准确率评测，逐条返回用例结果。"""
+    return await _run_accuracy_evaluation_stream_route(payload, request, admin_manage=True)
+
+
+@router.get("/evaluations/accuracy/runs")
+async def list_accuracy_evaluation_runs(
+    request: Request,
+    datasource_id: Optional[str] = None,
+    semantic_config_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """查询个人指标集评测历史批次。"""
+    return await _list_accuracy_evaluation_runs_route(
+        request,
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        page=page,
+        page_size=page_size,
+        admin_manage=False,
+    )
+
+
+@router.get("/admin/evaluations/accuracy/runs")
+async def list_admin_accuracy_evaluation_runs(
+    request: Request,
+    datasource_id: Optional[str] = None,
+    semantic_config_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """后台查询公共指标集评测历史批次。"""
+    return await _list_accuracy_evaluation_runs_route(
+        request,
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        page=page,
+        page_size=page_size,
+        admin_manage=True,
+    )
+
+
+@router.get("/evaluations/accuracy/runs/{run_id}")
+async def get_accuracy_evaluation_run_detail(run_id: str, request: Request):
+    """查询个人指标集评测历史详情。"""
+    return await _get_accuracy_evaluation_run_detail_route(run_id, request, admin_manage=False)
+
+
+@router.get("/admin/evaluations/accuracy/runs/{run_id}")
+async def get_admin_accuracy_evaluation_run_detail(run_id: str, request: Request):
+    """后台查询公共指标集评测历史详情。"""
+    return await _get_accuracy_evaluation_run_detail_route(run_id, request, admin_manage=True)
 
 
 async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: str, case_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -640,10 +755,11 @@ async def _compile_scene_case_gold_sql(datasource_id: str, semantic_config_id: s
     return cloned
 
 
-@router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
-async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
+async def _get_scene_evaluation_cases_route(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
     """读取当前指标集场景的评测测试集。"""
     try:
+        current_user = _get_current_user(request)
+        await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
         scene_paths = _scene_case_paths(datasource_id, config_id)
         loaded = await _load_scene_case_set(datasource_id, config_id)
         cases = loaded.get("cases") or []
@@ -652,20 +768,28 @@ async def get_scene_evaluation_cases(datasource_id: str, config_id: str):
             data={"cases": cases, "total": len(cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
             msg="获取成功",
         )
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except Exception as e:
         logger.error("获取场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
         return business_response(msg=f"获取测试集失败: {e}", code=50057, status="error")
 
 
-@router.put("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
-async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
+async def _save_scene_evaluation_cases_route(
+    datasource_id: str,
+    config_id: str,
+    payload: AccuracyEvaluationCasesUpsertRequest,
+    request: Request,
+    *,
+    admin_manage: bool = False,
+):
     """保存当前指标集场景的评测测试集。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(getattr(current_user, "user_id", "") or "").strip()
         username = str(getattr(current_user, "username", "") or "").strip()
-        ds_manager = get_datasource_manager()
-        config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
         cases = [item.model_dump() for item in payload.cases]
         business_domain = str(payload.business_domain or _sanitize_scene_segment(config_id, "scene")).strip()
         compiled_cases: List[Dict[str, Any]] = []
@@ -686,6 +810,9 @@ async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payloa
             data={"cases": compiled_cases, "total": len(compiled_cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
             msg="保存成功",
         )
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=40001, status="error")
     except Exception as e:
@@ -693,14 +820,11 @@ async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payloa
         return business_response(msg=f"保存测试集失败: {e}", code=50058, status="error")
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/generate")
-async def generate_scene_evaluation_cases(datasource_id: str, config_id: str):
+async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
     """按当前语义配置生成场景评测测试集草稿，不直接保存。"""
     try:
-        ds_manager = get_datasource_manager()
-        config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
-        if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        current_user = _get_current_user(request)
+        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
         business_domain = _sanitize_scene_segment(config.get("name") or config_id, "scene")
         draft_cases = _build_seed_case_candidates(config_id, config, business_domain)
         compiled_cases: List[Dict[str, Any]] = []
@@ -711,6 +835,9 @@ async def generate_scene_evaluation_cases(datasource_id: str, config_id: str):
             data={"cases": compiled_cases, "total": len(compiled_cases), "business_domain": business_domain, "scene_id": scene_paths["scene_id"]},
             msg="生成草稿成功",
         )
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=40001, status="error")
     except Exception as e:
@@ -718,19 +845,74 @@ async def generate_scene_evaluation_cases(datasource_id: str, config_id: str):
         return business_response(msg=f"生成测试集失败: {e}", code=50059, status="error")
 
 
-@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
-async def draft_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest):
+async def _draft_scene_evaluation_case_route(
+    datasource_id: str,
+    config_id: str,
+    payload: AccuracyEvaluationDraftCaseRequest,
+    request: Request,
+    *,
+    admin_manage: bool = False,
+):
     """用 LLM 生成单条当前场景评测用例草稿。"""
     try:
-        ds_manager = get_datasource_manager()
-        config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
-        if not config:
-            return business_response(msg=f"语义配置不存在: {config_id}", code=40404, status="error")
+        current_user = _get_current_user(request)
+        config = await _ensure_evaluation_semantic_permission(datasource_id, config_id, current_user, admin_manage=admin_manage)
         case = await _generate_draft_case_by_llm(config_id, config, payload)
         compiled_case = await _compile_scene_case_gold_sql(datasource_id, config_id, case)
         return business_response(data={"case": compiled_case}, msg="生成成功")
+    except HTTPException as e:
+        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        return business_response(msg=str(e.detail), code=code, status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=40001, status="error")
     except Exception as e:
         logger.error("生成单条评测用例草稿失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
         return business_response(msg=f"生成用例草稿失败: {e}", code=50060, status="error")
+
+
+@router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
+async def get_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
+    """读取个人指标集场景的评测测试集。"""
+    return await _get_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=False)
+
+
+@router.get("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
+async def get_admin_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
+    """后台读取公共指标集场景的评测测试集。"""
+    return await _get_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=True)
+
+
+@router.put("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
+async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
+    """保存个人指标集场景的评测测试集。"""
+    return await _save_scene_evaluation_cases_route(datasource_id, config_id, payload, request, admin_manage=False)
+
+
+@router.put("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
+async def save_admin_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
+    """后台保存公共指标集场景的评测测试集。"""
+    return await _save_scene_evaluation_cases_route(datasource_id, config_id, payload, request, admin_manage=True)
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/generate")
+async def generate_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
+    """按个人指标集生成场景评测测试集草稿，不直接保存。"""
+    return await _generate_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=False)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/generate")
+async def generate_admin_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
+    """后台按公共指标集生成场景评测测试集草稿，不直接保存。"""
+    return await _generate_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=True)
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
+async def draft_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request):
+    """用 LLM 生成个人指标集评测用例草稿。"""
+    return await _draft_scene_evaluation_case_route(datasource_id, config_id, payload, request, admin_manage=False)
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
+async def draft_admin_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request):
+    """后台用 LLM 生成公共指标集评测用例草稿。"""
+    return await _draft_scene_evaluation_case_route(datasource_id, config_id, payload, request, admin_manage=True)

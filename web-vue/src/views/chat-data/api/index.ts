@@ -104,6 +104,8 @@ export interface AccuracyEvaluationRunParams {
   request_timeout?: number
 }
 
+type AdminModeApiOptions = { adminMode?: boolean }
+
 export interface AccuracyEvaluationCaseItem {
   id: string
   nl: string
@@ -230,10 +232,11 @@ function parseAccuracyEvaluationSseBuffer(buffer: string): { events: Array<{ dat
 export async function runAccuracyEvaluationStream(
   data: AccuracyEvaluationRunParams,
   handlers: AccuracyEvaluationStreamHandlers,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: AdminModeApiOptions
 ): Promise<void> {
   const response = await requestStream({
-    url: `/agents/api/chatdata/evaluations/accuracy/run-stream`,
+    url: options?.adminMode ? `/agents/api/chatdata/admin/evaluations/accuracy/run-stream` : `/agents/api/chatdata/evaluations/accuracy/run-stream`,
     method: 'post',
     data,
     signal,
@@ -273,31 +276,39 @@ export async function runAccuracyEvaluationStream(
   }
 }
 
-export function getAccuracyEvaluationCases(datasourceId: string, configId: string): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
+export function getAccuracyEvaluationCases(datasourceId: string, configId: string, options?: AdminModeApiOptions): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`
+      : `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`,
     method: 'get'
   })
 }
 
-export function saveAccuracyEvaluationCases(datasourceId: string, configId: string, data: { business_domain?: string; cases: AccuracyEvaluationCaseItem[] }): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
+export function saveAccuracyEvaluationCases(datasourceId: string, configId: string, data: { business_domain?: string; cases: AccuracyEvaluationCaseItem[] }, options?: AdminModeApiOptions): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`
+      : `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases`,
     method: 'put',
     data
   })
 }
 
-export function generateAccuracyEvaluationCases(datasourceId: string, configId: string): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
+export function generateAccuracyEvaluationCases(datasourceId: string, configId: string, options?: AdminModeApiOptions): Promise<ApiResponse<AccuracyEvaluationCaseSet>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/generate`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/generate`
+      : `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/generate`,
     method: 'post'
   })
 }
 
-export function draftAccuracyEvaluationCase(datasourceId: string, configId: string, data: { hint?: string; existing_questions?: string[] }): Promise<ApiResponse<{ case: AccuracyEvaluationCaseItem }>> {
+export function draftAccuracyEvaluationCase(datasourceId: string, configId: string, data: { hint?: string; existing_questions?: string[] }, options?: AdminModeApiOptions): Promise<ApiResponse<{ case: AccuracyEvaluationCaseItem }>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/draft-case`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/draft-case`
+      : `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/evaluation-cases/draft-case`,
     method: 'post',
     data
   })
@@ -308,17 +319,21 @@ export function getAccuracyEvaluationRuns(params: {
   semantic_config_id?: string
   page?: number
   page_size?: number
-}): Promise<ApiResponse<{ runs: AccuracyEvaluationRunHistoryItem[]; total: number; page: number; page_size: number }>> {
+}, options?: AdminModeApiOptions): Promise<ApiResponse<{ runs: AccuracyEvaluationRunHistoryItem[]; total: number; page: number; page_size: number }>> {
   return request({
-    url: `/agents/api/chatdata/evaluations/accuracy/runs`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/evaluations/accuracy/runs`
+      : `/agents/api/chatdata/evaluations/accuracy/runs`,
     method: 'get',
     params,
   })
 }
 
-export function getAccuracyEvaluationRunDetail(runId: string): Promise<ApiResponse<{ run: AccuracyEvaluationRunHistoryItem; cases: AccuracyEvaluationRunCaseHistoryItem[] }>> {
+export function getAccuracyEvaluationRunDetail(runId: string, options?: AdminModeApiOptions): Promise<ApiResponse<{ run: AccuracyEvaluationRunHistoryItem; cases: AccuracyEvaluationRunCaseHistoryItem[] }>> {
   return request({
-    url: `/agents/api/chatdata/evaluations/accuracy/runs/${runId}`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/evaluations/accuracy/runs/${runId}`
+      : `/agents/api/chatdata/evaluations/accuracy/runs/${runId}`,
     method: 'get',
   })
 }
@@ -812,6 +827,22 @@ export function getSemanticConfigs(datasourceId: string): Promise<ApiResponse<{ 
   })
 }
 
+/** 获取当前用户可维护的个人语义配置列表 */
+export function getMySemanticConfigs(datasourceId: string): Promise<ApiResponse<{ configs: SemanticConfigItem[] }>> {
+  return request({
+    url: `/agents/api/chatdata/datasources/${datasourceId}/my-semantic-configs`,
+    method: 'get'
+  })
+}
+
+/** 后台获取可维护的公共语义配置列表 */
+export function getAdminSemanticConfigs(datasourceId: string): Promise<ApiResponse<{ configs: SemanticConfigItem[] }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs`,
+    method: 'get'
+  })
+}
+
 /** 创建语义配置 */
 export function createSemanticConfig(datasourceId: string, data: SemanticConfigCreatePayload): Promise<ApiResponse<SemanticConfigItem>> {
   return request({
@@ -839,6 +870,15 @@ export function updateSemanticConfig(datasourceId: string, configId: string, dat
   })
 }
 
+/** 后台更新公共语义配置 */
+export function updateAdminSemanticConfig(datasourceId: string, configId: string, data: Partial<SemanticConfigItem>): Promise<ApiResponse<SemanticConfigItem>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}`,
+    method: 'put',
+    data
+  })
+}
+
 /** 删除语义配置 */
 export function deleteSemanticConfig(datasourceId: string, configId: string): Promise<ApiResponse<null>> {
   return request({
@@ -847,10 +887,27 @@ export function deleteSemanticConfig(datasourceId: string, configId: string): Pr
   })
 }
 
+/** 后台删除公共语义配置 */
+export function deleteAdminSemanticConfig(datasourceId: string, configId: string): Promise<ApiResponse<null>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}`,
+    method: 'delete'
+  })
+}
+
 /** 切换语义配置启用状态 */
 export function toggleSemanticConfig(datasourceId: string, configId: string, enabled: boolean): Promise<ApiResponse<SemanticConfigItem>> {
   return request({
     url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/toggle`,
+    method: 'patch',
+    params: { enabled }
+  })
+}
+
+/** 后台切换公共语义配置启用状态 */
+export function toggleAdminSemanticConfig(datasourceId: string, configId: string, enabled: boolean): Promise<ApiResponse<SemanticConfigItem>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/${configId}/toggle`,
     method: 'patch',
     params: { enabled }
   })
@@ -876,7 +933,8 @@ export function autoPrefillSemanticFields(
         description?: string
       }>
     }>
-  }
+  },
+  options?: AdminModeApiOptions
 ): Promise<ApiResponse<{
   fields: Array<{
     table: string
@@ -893,7 +951,7 @@ export function autoPrefillSemanticFields(
   knowledge?: { business_flow?: string }
 }>> {
   return request({
-    url: `/agents/api/chatdata/semantic/prefill`,
+    url: options?.adminMode ? `/agents/api/chatdata/admin/semantic/prefill` : `/agents/api/chatdata/semantic/prefill`,
     method: 'post',
     data
   })
@@ -981,10 +1039,13 @@ export function learnSemanticConfigFromHistory(
     limit: number
     sources: Array<'agent' | 'builder' | 'sql'>
     include_failed: boolean
-  }
+  },
+  options?: AdminModeApiOptions
 ): Promise<ApiResponse<SemanticHistoryLearningResult>> {
   return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/history-learning`,
+    url: options?.adminMode
+      ? `/agents/api/chatdata/admin/datasources/${datasourceId}/semantic-configs/${configId}/history-learning`
+      : `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/${configId}/history-learning`,
     method: 'post',
     data
   })

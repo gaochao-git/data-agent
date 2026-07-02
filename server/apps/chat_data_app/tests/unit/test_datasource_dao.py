@@ -76,12 +76,12 @@ def _table_model(group_id: str = "group_a", table_name: str = "orders", sort_no:
     )
 
 
-def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_by: str = "u1"):
+def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_by: str = "u1", name: str = "订单分析", sort_no: int = 0):
     return SimpleNamespace(
-        id=1,
+        id=1 + sort_no,
         semantic_config_id=config_id,
         group_id="group_a",
-        semantic_config_name="订单分析",
+        semantic_config_name=name,
         semantic_config_desc="描述",
         ontology_rules="业务规则",
         enabled_flag=1,
@@ -89,7 +89,7 @@ def _semantic_model(config_id: str = "sc_a", scope_type: str = "public", create_
         dimensions_json='[{"name":"城市"}]',
         relationships_json='[{"left_table":"orders"}]',
         scope_type=scope_type,
-        sort_no=0,
+        sort_no=sort_no,
         delete_flag=0,
         create_time=datetime(2026, 6, 2, 10, 0, 0),
         update_time=datetime(2026, 6, 2, 11, 0, 0),
@@ -236,7 +236,7 @@ class _FakeOrmSession:
             rows = [row for row in rows if row.semantic_config_id in values]
         if "scope_type = " in sql and {"public", "private"}.issubset(values):
             rows = [row for row in rows if row.scope_type == "public" or row.create_by in values]
-        return sorted(rows, key=lambda row: (row.sort_no, row.id))
+        return sorted(rows, key=lambda row: (0 if row.scope_type == "public" else 1, row.semantic_config_name, row.id))
 
 
 def _patch_store_session(monkeypatch, rows_by_table=None, executed=None):
@@ -523,9 +523,10 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
         "datasource_group": [_group_model()],
         "datasource_table": [],
         "semantic_config": [
-            _semantic_model("sc_public", "public", "admin"),
-            _semantic_model("sc_private", "private", "user_a"),
-            _semantic_model("sc_hidden", "private", "other"),
+            _semantic_model("sc_private", "private", "user_a", name="个人订单", sort_no=1),
+            _semantic_model("sc_public_b", "public", "admin", name="订单分析", sort_no=3),
+            _semantic_model("sc_hidden", "private", "other", name="其他个人", sort_no=0),
+            _semantic_model("sc_public_a", "public", "admin", name="高规格", sort_no=2),
         ],
     })
 
@@ -533,14 +534,14 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
         return (
             await store.get_semantic_configs_async("group_a"),
             await store.get_semantic_configs_by_group_id_async("group_a", user_id="user_a"),
-            await store.get_semantic_config_by_group_id_async("group_a", "sc_public"),
-            await store.get_semantic_config_async("missing", "sc_public"),
+            await store.get_semantic_config_by_group_id_async("group_a", "sc_public_b"),
+            await store.get_semantic_config_async("missing", "sc_public_b"),
         )
 
     configs, visible_configs, config, missing = asyncio.run(run_checks())
 
-    assert [item["id"] for item in configs] == ["sc_public", "sc_private", "sc_hidden"]
-    assert [item["id"] for item in visible_configs] == ["sc_public", "sc_private"]
+    assert [item["id"] for item in configs] == ["sc_public_b", "sc_public_a", "sc_private", "sc_hidden"]
+    assert [item["id"] for item in visible_configs] == ["sc_public_b", "sc_public_a", "sc_private"]
     assert config["name"] == "订单分析"
     assert config["metrics"] == [{"name": "订单金额"}]
     assert missing is None

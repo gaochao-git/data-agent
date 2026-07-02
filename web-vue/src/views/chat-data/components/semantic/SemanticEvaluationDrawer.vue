@@ -8,6 +8,7 @@ const props = defineProps<{
   datasourceId: string
   config: SemanticConfigItem | null
   hasUnsavedSemanticConfig: boolean
+  adminMode?: boolean
 }>()
 
 const visible = defineModel<boolean>('visible', { default: false })
@@ -81,6 +82,7 @@ const {
   datasourceId: toRef(props, 'datasourceId'),
   activeConfig: activeConfigRef,
   hasUnsavedSemanticConfig: hasUnsavedSemanticConfigRef,
+  adminMode: toRef(props, 'adminMode'),
 })
 
 const drawerTitle = computed(() => props.config?.name || '当前指标集')
