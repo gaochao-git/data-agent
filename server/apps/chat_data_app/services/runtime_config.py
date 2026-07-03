@@ -34,9 +34,27 @@ def read_bool_env(name: str, default: bool = False) -> bool:
 
 
 DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)
-TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHATDATA_TOOL_RESULT_OFFLOAD_SIZE", 150_000)
+TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHATDATA_TOOL_RESULT_OFFLOAD_SIZE", 32000)
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
+DEFAULT_CONTEXT_WINDOW = 128000
+CONTEXT_EDIT_ENABLED = read_bool_env("CHATDATA_CONTEXT_EDIT_ENABLED", True)
+CONTEXT_EDIT_TRIGGER_RATIO = 0.70
+
+
+def get_context_window(model_id: str | None) -> int:
+    """按模型名返回上下文窗口大小。"""
+    from .llm_config import get_chat_data_model_config
+
+    return int(get_chat_data_model_config(model_id).get("context_window") or DEFAULT_CONTEXT_WINDOW)
+
+
+def get_context_edit_config() -> dict:
+    """读取智能问数模型入口上下文编辑配置。"""
+    return {
+        "enabled": CONTEXT_EDIT_ENABLED,
+        "trigger_ratio": CONTEXT_EDIT_TRIGGER_RATIO,
+    }
 
 
 def get_chat_data_runtime_config() -> dict:
@@ -44,11 +62,13 @@ def get_chat_data_runtime_config() -> dict:
     from .llm_config import get_chat_data_model_options
 
     model_options = get_chat_data_model_options()
+    default_model = model_options.get("default_model")
     return {
         "models": model_options["models"],
         "data_analyze_enabled": read_bool_env("CHAT_DATA_ANALYZE_ENABLED", False),
         "default_row_limit": DEFAULT_ROW_LIMIT,
         "query_cache_enabled": QUERY_CACHE_ENABLED,
+        "context_window": get_context_window(default_model),
     }
 
 

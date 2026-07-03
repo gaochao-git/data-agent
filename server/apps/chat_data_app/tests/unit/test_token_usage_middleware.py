@@ -43,8 +43,6 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert get_context_window("") == 128000
     assert get_context_window("unknown-model") == 128000
     assert get_context_window("QWEN-Plus") == 128000
-    assert get_context_window("kimi-k2.5") == 256000
-    assert get_context_window("qwen3.6-35b-a3b") == 256000
 
     payload = build_token_usage_payload(used=-10, total=0)
     assert payload == {
@@ -84,7 +82,8 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
     assert count_tools_tokens([BadTool()]) == estimate_tokens('"bad tool schema"')
 
 
-def test_estimate_prompt_usage_marks_estimated():
+def test_estimate_prompt_usage_marks_estimated(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b;0.2;256000")
     usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
 
     assert usage["used"] > 0

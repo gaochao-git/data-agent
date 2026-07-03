@@ -11,7 +11,8 @@ from utils.lang_util.llm import get_llm
 
 DEFAULT_CHAT_DATA_MAX_TOKENS = 20000
 DEFAULT_CHAT_DATA_MODEL = "gpt-4o-mini"
-DEFAULT_CHAT_DATA_TEMPERATURE = 0.2
+DEFAULT_MODEL_TEMPERATURE = 0.2
+DEFAULT_CHAT_DATA_CONTEXT_WINDOW = 128000
 
 
 def _get_default_max_tokens() -> int:
@@ -26,44 +27,96 @@ def _get_default_max_tokens() -> int:
     return value if value > 0 else DEFAULT_CHAT_DATA_MAX_TOKENS
 
 
-def get_chat_data_temperature() -> float:
-    """读取智能问数和智能分析默认模型温度。"""
-    raw = str(os.getenv("CHAT_DATA_TEMPERATURE") or "").strip()
-    if not raw:
-        return DEFAULT_CHAT_DATA_TEMPERATURE
+def _parse_temperature(raw: str, *, model: str) -> float:
+    """解析模型温度，格式错误直接抛出。"""
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的温度不能为空")
     try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_CHAT_DATA_TEMPERATURE
-    return value if 0 <= value <= 2 else DEFAULT_CHAT_DATA_TEMPERATURE
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的温度必须为 0 到 2 的数字，当前值: {raw!r}") from exc
+    if value < 0 or value > 2:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的温度必须为 0 到 2 的数字，当前值: {value}")
+    return value
 
 
-def _split_model_names(raw_value: str | None) -> list[str]:
-    """按逗号拆分模型配置并去重。"""
-    models = []
+def _parse_context_window(raw: str, *, model: str) -> int:
+    """解析模型上下文窗口，格式错误直接抛出。"""
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的上下文窗口不能为空")
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的上下文窗口必须为正整数，当前值: {raw!r}") from exc
+    if value < 1:
+        raise ValueError(f"CHAT_DATA_MODEL 中模型 {model} 的上下文窗口必须为正整数，当前值: {value}")
+    return value
+
+
+def _parse_model_config_item(item: str) -> dict[str, Any]:
+    """解析单个模型配置项：model;temperature;context_window。"""
+    parts = [part.strip().strip("\"'") for part in str(item or "").split(";")]
+    if len(parts) != 3 or not parts[0]:
+        raise ValueError("CHAT_DATA_MODEL 格式错误，应为 model;temperature;context_window，多个模型用逗号分隔")
+    model = parts[0]
+    return {
+        "id": model,
+        "temperature": _parse_temperature(parts[1], model=model),
+        "context_window": _parse_context_window(parts[2], model=model),
+    }
+
+
+def get_chat_data_model_configs() -> list[dict[str, Any]]:
+    """读取智能问数模型配置列表。"""
+    raw = str(os.getenv("CHAT_DATA_MODEL") or "").strip()
+    if not raw:
+        return [{
+            "id": DEFAULT_CHAT_DATA_MODEL,
+            "temperature": DEFAULT_MODEL_TEMPERATURE,
+            "context_window": DEFAULT_CHAT_DATA_CONTEXT_WINDOW,
+        }]
+    configs = []
     seen = set()
-    for item in str(raw_value or "").split(","):
-        model = item.strip().strip("\"'")
-        if not model or model in seen:
+    for item in raw.split(","):
+        config = _parse_model_config_item(item)
+        if config["id"] in seen:
             continue
-        seen.add(model)
-        models.append(model)
-    return models
+        seen.add(config["id"])
+        configs.append(config)
+    return configs
 
 
 def get_chat_data_model_names() -> list[str]:
     """读取智能问数模型列表。"""
-    default_models = _split_model_names(os.getenv("CHAT_DATA_MODEL"))
-    models = [*default_models]
-    for model in _split_model_names(os.getenv("CHAT_DATA_MODELS")):
-        if model not in models:
-            models.append(model)
-    return models or [DEFAULT_CHAT_DATA_MODEL]
+    return [config["id"] for config in get_chat_data_model_configs()]
 
 
 def get_default_chat_data_model() -> str:
     """读取智能问数默认模型。"""
     return get_chat_data_model_names()[0]
+
+
+def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
+    """读取指定模型配置，未命中时返回默认上下文和温度。"""
+    selected = str(model or "").strip()
+    configs = get_chat_data_model_configs()
+    if not selected:
+        return configs[0]
+    for config in configs:
+        if config["id"] == selected:
+            return config
+    return {
+        "id": selected,
+        "temperature": DEFAULT_MODEL_TEMPERATURE,
+        "context_window": DEFAULT_CHAT_DATA_CONTEXT_WINDOW,
+    }
+
+
+def get_chat_data_temperature(model: str | None = None) -> float:
+    """读取模型温度。"""
+    return float(get_chat_data_model_config(model).get("temperature", DEFAULT_MODEL_TEMPERATURE))
 
 
 def _get_chat_data_extra_body(enable_thinking: bool | None = None) -> dict[str, Any]:
@@ -110,11 +163,12 @@ def get_chat_data_llm(
 ) -> BaseChatModel:
     """读取 CHAT_DATA_* 环境变量创建智能问数专用 LLM。"""
     selected_model = model or get_default_chat_data_model()
+    selected_config = get_chat_data_model_config(selected_model)
     return get_llm(
         model=selected_model,
         streaming=streaming,
         stream_usage=stream_usage,
-        temperature=get_chat_data_temperature() if temperature is None else temperature,
+        temperature=selected_config["temperature"] if temperature is None else temperature,
         max_tokens=max_tokens or _get_default_max_tokens(),
         timeout=timeout,
         api_key=_get_chat_data_api_key(),

@@ -11,15 +11,8 @@ from langchain.agents.middleware import wrap_model_call
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-DEFAULT_CONTEXT_WINDOW = 128_000
-MODEL_CONTEXT_WINDOWS = {
-    "gpt-4o": 128_000,
-    "gpt-4o-mini": 128_000,
-    "kimi-k2.5": 256_000,
-    "qwen3.6-35b-a3b": 256_000,
-    "qwen3.5-35b-a3b": 256_000,
-    "qwen": 128_000,
-}
+from ...services.runtime_config import get_context_window
+
 _AGENT_TOKEN_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 
 
@@ -54,17 +47,6 @@ def estimate_text_tokens(text: str) -> int:
     if not text:
         return 0
     return count_messages_tokens([HumanMessage(content=text)])
-
-
-def get_context_window(model_id: str | None) -> int:
-    """按模型名返回上下文窗口大小。"""
-    normalized = str(model_id or "").strip().lower()
-    if not normalized:
-        return DEFAULT_CONTEXT_WINDOW
-    for key, value in MODEL_CONTEXT_WINDOWS.items():
-        if key in normalized:
-            return value
-    return DEFAULT_CONTEXT_WINDOW
 
 
 def build_token_usage_payload(*, used: int, total: int) -> dict[str, Any]:

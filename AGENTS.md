@@ -18,7 +18,7 @@
 ### 2.1 后端
 - 入口：`server/main.py`
 - 依赖：`server/requirements.txt`
-- 环境变量示例：`server/conf/.env.example`
+- 环境变量示例：`server/.env.example`
 
 ### 2.2 前端
 - 入口：`web-vue/`

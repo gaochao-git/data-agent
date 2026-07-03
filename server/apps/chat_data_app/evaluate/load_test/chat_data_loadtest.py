@@ -64,6 +64,14 @@ def load_default_env() -> None:
     load_env_file(Path(__file__).resolve().parents[4] / ".env")
 
 
+def _default_model_id() -> str | None:
+    """从 CHAT_DATA_MODEL 统一配置中提取默认模型名。"""
+    first_item = str(os.getenv("CHAT_DATA_MODEL") or "").split(",", 1)[0].strip()
+    if not first_item:
+        return None
+    return first_item.split(";", 1)[0].strip().strip("\"'") or None
+
+
 @dataclass
 class RunResult:
     index: int
@@ -499,7 +507,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--datasource-id", help="数据源 ID")
     parser.add_argument("--semantic-config-id", help="语义配置 ID")
     parser.add_argument("--member-datasource-id", action="append", help="成员数据源 ID，可传多次")
-    parser.add_argument("--model-id", default=os.getenv("CHAT_DATA_MODEL") or None, help="模型 ID，默认读取当前进程环境变量 CHAT_DATA_MODEL")
+    parser.add_argument("--model-id", default=_default_model_id(), help="模型 ID，默认读取当前进程环境变量 CHAT_DATA_MODEL 的第一项模型名")
     parser.add_argument("--mode", default="query", help="智能问数模式，常用 generate/query")
     parser.add_argument("--option", action="append", help="额外 options，格式 key=value，可传多次")
     parser.add_argument("--reuse-conversation", action="store_true", help="每个 worker 复用一个会话；默认每个请求新建会话")

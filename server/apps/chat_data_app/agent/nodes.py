@@ -6,6 +6,8 @@ from typing import Any, Callable
 from langchain_core.messages import SystemMessage
 
 from utils.logger import get_logger
+from ..services.runtime_config import get_context_edit_config
+from .context_editing import edit_messages_for_llm
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
 from .middleware.token_usage_middleware import build_request_breakdown, build_token_usage_payload, count_messages_tokens, count_tools_tokens, get_context_window
 from .prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
@@ -144,6 +146,22 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     return header + build_semantic_prompt(semantic_config, "query")
 
 
+def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_window: int, model_id: str | None) -> None:
+    """上下文编辑实际触发时打印一条摘要日志。"""
+    if not context_edit.get("triggered"):
+        return
+    logger.info(
+        "[agent] 上下文编辑已触发: model=%s context_window=%s before=%s after=%s cleared=%s tool_results=%s history_trimmed=%s",
+        model_id or "-",
+        context_window,
+        context_edit.get("estimated_tokens_before"),
+        context_edit.get("estimated_tokens_after"),
+        context_edit.get("estimated_cleared_tokens"),
+        context_edit.get("cleared_tool_results"),
+        context_edit.get("history_trimmed"),
+    )
+
+
 def create_agent_node(
     tools: list,
     semantic_config: dict | None = None,
@@ -167,7 +185,7 @@ def create_agent_node(
         """
         logger.info("Agent 处理用户请求")
 
-        messages = list(state["messages"])
+        raw_messages = list(state["messages"])
         active_tools = tools
 
         # 当前时间
@@ -191,6 +209,13 @@ def create_agent_node(
         # logger.info(f"[agent] runtime system_prompt (semantic={bool(semantic_config)}):\n{system_prompt}")
 
         # 构建消息列表
+        context_window = get_context_window(model_id)
+        messages, context_edit = edit_messages_for_llm(
+            raw_messages,
+            context_window=context_window,
+            config=get_context_edit_config(),
+        )
+        _log_context_editing_if_triggered(context_edit, context_window=context_window, model_id=model_id)
         llm_messages = [SystemMessage(content=system_prompt)] + messages
 
         # 调用 LLM（指定模型失败时回退默认模型）
@@ -200,7 +225,6 @@ def create_agent_node(
         message_tokens = count_messages_tokens(llm_messages)
         tool_tokens = count_tools_tokens(active_tools)
         input_tokens = message_tokens + tool_tokens
-        context_window = get_context_window(model_id)
         token_usage = build_token_usage_payload(used=input_tokens, total=context_window)
         token_usage.update({
             "input_tokens": input_tokens,
@@ -209,6 +233,7 @@ def create_agent_node(
             "total_tokens": input_tokens,
             "context_window": context_window,
             "estimated": True,
+            "context_editing": context_edit,
             "breakdown": build_request_breakdown(
                 messages=llm_messages,
                 message_tokens=message_tokens,

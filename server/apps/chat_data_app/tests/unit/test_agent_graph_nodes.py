@@ -5,7 +5,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
@@ -178,6 +178,65 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
         [SimpleNamespace(name="select_semantic_config_tool")],
     )
     assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool_extra"
+
+
+def test_log_context_editing_only_when_triggered(monkeypatch):
+    logs = []
+
+    monkeypatch.setattr(nodes.logger, "info", lambda *args, **kwargs: logs.append(args))
+
+    nodes._log_context_editing_if_triggered({"triggered": False}, context_window=100, model_id="qwen-test")
+    assert logs == []
+
+    nodes._log_context_editing_if_triggered(
+        {
+            "triggered": True,
+            "estimated_tokens_before": 1000,
+            "estimated_tokens_after": 300,
+            "estimated_cleared_tokens": 700,
+            "cleared_tool_results": 2,
+            "history_trimmed": False,
+        },
+        context_window=128000,
+        model_id="qwen-test",
+    )
+
+    assert len(logs) == 1
+    assert "上下文编辑已触发" in logs[0][0]
+    assert "qwen-test" in logs[0]
+
+
+@pytest.mark.asyncio
+async def test_create_agent_node_uses_context_edited_messages_for_llm(monkeypatch):
+    fake_llm = FakeLLM("完成")
+    original_tool_content = "订单 " * 5000
+    recent_tool_content = "结果 " * 1000
+    messages = [
+        HumanMessage(content="历史问题"),
+        ToolMessage(content=original_tool_content, tool_call_id="call_old", name="semantic_query_tool"),
+        AIMessage(content="历史回答"),
+        HumanMessage(content="历史问题2"),
+        ToolMessage(content=recent_tool_content, tool_call_id="call_recent", name="semantic_query_tool"),
+        HumanMessage(content="当前问题"),
+    ]
+
+    monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
+    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 6000)
+    monkeypatch.setattr(nodes, "get_context_edit_config", lambda: {
+        "enabled": True,
+        "trigger_ratio": 0.70,
+    })
+
+    result = await nodes.create_agent_node([], semantic_config=None, model_id="qwen-test")({"messages": messages})
+
+    sent_messages = fake_llm.messages
+    assert sent_messages[1].content == "历史问题"
+    assert sent_messages[2].content.startswith("[工具结果已移出模型上下文]")
+    assert sent_messages[5].content == recent_tool_content
+    assert sent_messages[6].content == "当前问题"
+    assert messages[1].content == original_tool_content
+    assert result["token_usage"]["context_editing"]["triggered"] is True
+    assert result["token_usage"]["context_editing"]["cleared_tool_results"] == 1
 
 
 @pytest.mark.asyncio

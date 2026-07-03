@@ -21,6 +21,10 @@ def _assert_thinking_extra_body(extra_body, enabled: bool):
     }
 
 
+def _set_models(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("CHAT_DATA_MODEL", value)
+
+
 def test_chat_data_thinking_disabled_by_default(monkeypatch):
     captured = {}
 
@@ -28,7 +32,7 @@ def test_chat_data_thinking_disabled_by_default(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.6-35b-a3b")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -45,7 +49,7 @@ def test_chat_data_qwen_can_enable_thinking(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.6-35b-a3b")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm(enable_thinking=True)
@@ -60,7 +64,7 @@ def test_chat_data_glm_uses_same_thinking_payload(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1")
+    _set_models(monkeypatch, "glm-5.1;0.2;128000")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm(enable_thinking=True)
@@ -76,7 +80,7 @@ def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "gpt-4o-mini")
+    _set_models(monkeypatch, "gpt-4o-mini;0.2;128000")
     monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
@@ -102,9 +106,8 @@ def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch):
     assert captured["api_key"] == "plain:encrypted-api-key"
 
 
-def test_chat_data_model_options_reads_comma_separated_models(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
-    monkeypatch.setenv("CHAT_DATA_MODELS", "qwen3.5-35b-a3b,qwen3.5-36b-a3b")
+def test_chat_data_model_options_reads_model_configs(monkeypatch):
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000,qwen3.5-36b-a3b;0.1;256000")
 
     result = llm_config.get_chat_data_model_options()
 
@@ -113,29 +116,15 @@ def test_chat_data_model_options_reads_comma_separated_models(monkeypatch):
         {"id": "qwen3.5-35b-a3b", "label": "qwen3.5-35b-a3b", "value": "qwen3.5-35b-a3b", "is_default": True},
         {"id": "qwen3.5-36b-a3b", "label": "qwen3.5-36b-a3b", "value": "qwen3.5-36b-a3b", "is_default": False},
     ]
-
-
-def test_chat_data_model_options_includes_default_when_missing(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
-    monkeypatch.setenv("CHAT_DATA_MODELS", "qwen3.5-36b-a3b")
-
-    result = llm_config.get_chat_data_model_options()
-
-    assert [item["id"] for item in result["models"]] == ["qwen3.5-35b-a3b", "qwen3.5-36b-a3b"]
-
-
-def test_chat_data_model_options_splits_chat_data_model(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b,qwen3.6-35b-a3b")
-    monkeypatch.delenv("CHAT_DATA_MODELS", raising=False)
-
-    result = llm_config.get_chat_data_model_options()
-
-    assert result["default_model"] == "qwen3.5-35b-a3b"
-    assert [item["id"] for item in result["models"]] == ["qwen3.5-35b-a3b", "qwen3.6-35b-a3b"]
+    assert llm_config.get_chat_data_model_config("qwen3.5-36b-a3b") == {
+        "id": "qwen3.5-36b-a3b",
+        "temperature": 0.1,
+        "context_window": 256000,
+    }
 
 
 def test_chat_data_runtime_config_reads_data_analyze_feature(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;256000")
     monkeypatch.setenv("CHAT_DATA_ANALYZE_ENABLED", "true")
 
     result = get_chat_data_runtime_config()
@@ -143,6 +132,7 @@ def test_chat_data_runtime_config_reads_data_analyze_feature(monkeypatch):
     assert result["models"][0]["id"] == "qwen3.5-35b-a3b"
     assert "default_model" not in result
     assert result["data_analyze_enabled"] is True
+    assert result["context_window"] == 256000
 
 
 def test_chat_data_llm_uses_first_configured_model(monkeypatch):
@@ -152,7 +142,7 @@ def test_chat_data_llm_uses_first_configured_model(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b,qwen3.6-35b-a3b")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;128000,qwen3.6-35b-a3b;0.1;256000")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -160,15 +150,14 @@ def test_chat_data_llm_uses_first_configured_model(monkeypatch):
     assert captured["model"] == "qwen3.5-35b-a3b"
 
 
-def test_chat_data_llm_temperature_reads_single_env(monkeypatch):
+def test_chat_data_llm_temperature_reads_model_config(monkeypatch):
     captured = {}
 
     def fake_get_llm(**kwargs):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.5-35b-a3b")
-    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "0.35")
+    _set_models(monkeypatch, "qwen3.5-35b-a3b;0.35;128000")
     monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
 
     llm_config.get_chat_data_llm()
@@ -177,12 +166,17 @@ def test_chat_data_llm_temperature_reads_single_env(monkeypatch):
     llm_config.get_chat_data_llm(temperature=0)
     assert captured["temperature"] == 0
 
-    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "bad")
-    assert llm_config.get_chat_data_temperature() == 0.2
-    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "-0.1")
-    assert llm_config.get_chat_data_temperature() == 0.2
-    monkeypatch.setenv("CHAT_DATA_TEMPERATURE", "2.1")
-    assert llm_config.get_chat_data_temperature() == 0.2
+    assert llm_config.get_chat_data_temperature("qwen3.5-35b-a3b") == 0.35
+
+
+def test_chat_data_model_config_rejects_invalid_format(monkeypatch):
+    for value in ["qwen", "qwen;bad;128000", "qwen;-0.1;128000", "qwen;0.2;bad", "qwen;0.2;0"]:
+        monkeypatch.setenv("CHAT_DATA_MODEL", value)
+        try:
+            llm_config.get_chat_data_model_configs()
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid CHAT_DATA_MODEL was accepted: {value}")
 
 
 def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
@@ -204,7 +198,7 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setenv("CHAT_DATA_MODEL", "qwen3.6-35b-a3b")
+    _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
     monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", fake_get_chat_data_llm)
     monkeypatch.setattr(data_analyze_graph, "create_agent", fake_create_agent)
     monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *args, **kwargs: [])
