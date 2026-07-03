@@ -264,6 +264,8 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelOpen = ref(false)
 const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
 const expandedTokenMessageKeys = ref<Set<string>>(new Set())
+const tokenUsageButtonRef = ref<HTMLElement | null>(null)
+const tokenUsagePanelPosition = ref({ left: 24, bottom: 112 })
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 
 // 保存到看板弹窗
@@ -299,6 +301,51 @@ const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
 }
 
 const tokenUsageDisplay = computed(() => formatTokenUsageDisplay(tokenUsage.value))
+const tokenUsagePercentage = computed(() => Math.max(0, Math.min(100, Number(tokenUsage.value?.percentage ?? 0))))
+const tokenUsagePercentageText = computed(() => tokenUsageDisplay.value ? `${Math.round(tokenUsagePercentage.value)}` : '')
+const tokenUsageRingStyle = computed(() => {
+  const percentage = tokenUsageDisplay.value ? tokenUsagePercentage.value : 0
+  const color = percentage >= 90 ? '#ef4444' : percentage >= 70 ? '#f59e0b' : '#1677FF'
+  return {
+    background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
+  }
+})
+const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `上下文占用：${tokenUsageDisplay.value}` : '上下文计算中')
+const TOKEN_USAGE_PANEL_WIDTH = 460
+const TOKEN_USAGE_PANEL_MARGIN = 16
+const tokenUsagePanelStyle = computed(() => ({
+  left: `${tokenUsagePanelPosition.value.left}px`,
+  bottom: `${tokenUsagePanelPosition.value.bottom}px`,
+  width: `${TOKEN_USAGE_PANEL_WIDTH}px`,
+  maxWidth: `calc(100vw - ${TOKEN_USAGE_PANEL_MARGIN * 2}px)`,
+}))
+
+const updateTokenUsagePanelPosition = () => {
+  const rect = tokenUsageButtonRef.value?.getBoundingClientRect()
+  if (!rect || typeof window === 'undefined') return
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || TOKEN_USAGE_PANEL_WIDTH
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
+  const maxLeft = Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportWidth - TOKEN_USAGE_PANEL_WIDTH - TOKEN_USAGE_PANEL_MARGIN)
+  tokenUsagePanelPosition.value = {
+    left: Math.min(Math.max(rect.right - TOKEN_USAGE_PANEL_WIDTH, TOKEN_USAGE_PANEL_MARGIN), maxLeft),
+    bottom: Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportHeight - rect.top + 8),
+  }
+}
+
+const toggleTokenUsagePanel = () => {
+  if (!tokenUsageDisplay.value) return
+  if (!tokenUsagePanelOpen.value) {
+    updateTokenUsagePanelPosition()
+  }
+  tokenUsagePanelOpen.value = !tokenUsagePanelOpen.value
+}
+
+const handleTokenUsageViewportChange = () => {
+  if (tokenUsagePanelOpen.value) {
+    updateTokenUsagePanelPosition()
+  }
+}
+
 const tokenUsageBreakdown = computed(() => {
   const usage = tokenUsage.value
   if (!usage?.breakdown?.length) return []
@@ -389,6 +436,11 @@ const resetTokenUsagePanel = () => {
   expandedTokenMessageKeys.value = new Set()
 }
 
+const closeTokenUsagePanel = () => {
+  tokenUsagePanelOpen.value = false
+  expandedTokenMessageKeys.value = new Set()
+}
+
 const loadModelOptions = async () => {
   try {
     const response = await getChatDataConfig()
@@ -412,7 +464,14 @@ const loadModelOptions = async () => {
 
 onMounted(() => {
   document.addEventListener('click', handleAgentSelectorDocumentClick)
+  window.addEventListener('resize', handleTokenUsageViewportChange)
+  window.addEventListener('scroll', handleTokenUsageViewportChange, true)
   loadModelOptions()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleTokenUsageViewportChange)
+  window.removeEventListener('scroll', handleTokenUsageViewportChange, true)
 })
 
 // 收藏
@@ -486,6 +545,7 @@ const conversationIdRef = toRef(props, 'conversationId')
 const { isLoadingHistory, resetHistory } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
+  tokenUsage,
 })
 
 // 监听 conversationId 变化，清空消息以便重新加载历史
@@ -496,6 +556,7 @@ watch(
       selectedSkill.value = null
       resetSemanticQuestionDraft()
       resetTokenUsagePanel()
+      focusInput()
       // 切换会话时，如果是新会话（null），清空消息
       if (newId === null) {
         messages.value = []
@@ -650,6 +711,11 @@ watch(
 // 引用
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const focusInput = () => {
+  nextTick(() => textareaRef.value?.focus())
+}
+
+onMounted(focusInput)
 
 // SQL 生成器
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
@@ -1053,7 +1119,7 @@ const submitQuery = async (
   resetSemanticQuestionDraft()
   isGenerating.value = true
   toolCallsMap.value.clear()
-  resetTokenUsagePanel()
+  closeTokenUsagePanel()
 
   // 新一轮开始，关闭上一轮的分析面板
   handleCloseAnalysisPanel()
@@ -1148,6 +1214,9 @@ const submitQuery = async (
       (payload) => {
         tokenUsage.value = payload.usage || null
         updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
+      },
+      (usage) => {
+        tokenUsage.value = usage
       },
       (payload) => handleSemanticConfigSelected(payload, assistantMessageId),
       (payload) => handleSemanticConfigSelectRequired(payload, assistantMessageId),
@@ -1734,7 +1803,7 @@ const handleViewAnalysis = (msg: Message) => {
           <form class="relative" @submit.prevent="handleSubmit">
             <div
               :class="[
-                'rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
+                'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
                 inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
               ]"
             >
@@ -1760,7 +1829,7 @@ const handleViewAnalysis = (msg: Message) => {
                 ></textarea>
               </div>
               <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                <div class="flex items-center gap-2">
+                <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
                   <button
                     v-if="selectedAgent === 'chat_data'"
                     type="button"
@@ -1769,7 +1838,7 @@ const handleViewAnalysis = (msg: Message) => {
                     @click="isSkillManagerOpen = true"
                   >
                     <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                    <span>技能</span>
+                    <span class="toolbar-label">技能</span>
                   </button>
                   <div ref="agentSelectorRef" class="relative">
                     <button
@@ -1778,7 +1847,7 @@ const handleViewAnalysis = (msg: Message) => {
                       @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                     >
                       <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                      <span>{{ selectedAgentLabel }}</span>
+                      <span class="toolbar-label">{{ selectedAgentLabel }}</span>
                       <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
                     </button>
                     <div
@@ -1807,7 +1876,7 @@ const handleViewAnalysis = (msg: Message) => {
                     <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                     <select
                       v-model="selectedModel"
-                      class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
+                      class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
                     >
                       <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
                     </select>
@@ -1824,7 +1893,7 @@ const handleViewAnalysis = (msg: Message) => {
                     @click="enableDeepThinking = !enableDeepThinking"
                   >
                     <i class="fa-solid fa-brain text-[10px]"></i>
-                    <span>思考</span>
+                    <span class="toolbar-label">思考</span>
                   </button>
                   <ExecutionTargetPicker
                     v-if="!hideExecutionTargetSelector && executionTargets.length > 0"
@@ -2062,7 +2131,6 @@ const handleViewAnalysis = (msg: Message) => {
                 <i class="fa-solid fa-circle-exclamation"></i>
                 <span>{{ msg.error }}</span>
               </div>
-              <AiGeneratedNotice v-if="!msg.isStreaming" />
             </div>
 
             <div
@@ -2098,9 +2166,12 @@ const handleViewAnalysis = (msg: Message) => {
                 <i class="fa-solid fa-diagram-project text-[11px]"></i>
                 <span>分析</span>
               </button>
-              <span class="ml-auto whitespace-nowrap text-[11px] text-gray-400">
-                {{ formatMessageDateTime(msg.timestamp) }}
-              </span>
+              <div class="ml-auto flex items-center gap-3">
+                <AiGeneratedNotice />
+                <span class="whitespace-nowrap text-[11px] text-gray-400">
+                  {{ formatMessageDateTime(msg.timestamp) }}
+                </span>
+              </div>
             </div>
 
             <!-- 生成状态 -->
@@ -2128,7 +2199,7 @@ const handleViewAnalysis = (msg: Message) => {
         <form class="relative" @submit.prevent="handleSubmit">
           <div
             :class="[
-              'rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
+              'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
               inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
             ]"
           >
@@ -2153,8 +2224,8 @@ const handleViewAnalysis = (msg: Message) => {
                 @blur="inputFocused = false"
               ></textarea>
             </div>
-            <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-              <div class="flex items-center gap-2">
+              <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
+                <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
                 <button
                   v-if="selectedAgent === 'chat_data'"
                   type="button"
@@ -2163,7 +2234,7 @@ const handleViewAnalysis = (msg: Message) => {
                   @click="isSkillManagerOpen = true"
                 >
                   <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                  <span>技能</span>
+                  <span class="toolbar-label">技能</span>
                 </button>
                 <div ref="agentSelectorRef" class="relative">
                   <button
@@ -2172,7 +2243,7 @@ const handleViewAnalysis = (msg: Message) => {
                     @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                   >
                     <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                    <span>{{ selectedAgentLabel }}</span>
+                    <span class="toolbar-label">{{ selectedAgentLabel }}</span>
                     <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
                   </button>
                   <div
@@ -2201,7 +2272,7 @@ const handleViewAnalysis = (msg: Message) => {
                   <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
                   <select
                     v-model="selectedModel"
-                    class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
+                    class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
                   >
                     <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
                   </select>
@@ -2218,7 +2289,7 @@ const handleViewAnalysis = (msg: Message) => {
                   @click="enableDeepThinking = !enableDeepThinking"
                 >
                   <i class="fa-solid fa-brain text-[10px]"></i>
-                  <span>思考</span>
+                  <span class="toolbar-label">思考</span>
                 </button>
                 <ExecutionTargetPicker
                   v-if="!hideExecutionTargetSelector && executionTargets.length > 0"
@@ -2228,15 +2299,24 @@ const handleViewAnalysis = (msg: Message) => {
                 />
                 <div v-if="tokenUsageDisplay" class="relative">
                   <button
+                    ref="tokenUsageButtonRef"
                     type="button"
-                    class="text-xs text-gray-400 whitespace-nowrap border-none bg-transparent px-1 py-0.5 rounded cursor-pointer hover:text-gray-600 hover:bg-gray-100"
-                    @click="tokenUsagePanelOpen = !tokenUsagePanelOpen"
+                    class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border-none bg-transparent px-1.5 text-xs text-gray-500 cursor-pointer hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent"
+                    :disabled="!tokenUsageDisplay"
+                    :title="tokenUsageButtonTitle"
+                    @click="toggleTokenUsagePanel"
                   >
-                    {{ tokenUsageDisplay }}
+                    <span class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full" :style="tokenUsageRingStyle">
+                      <span class="flex h-4 w-4 items-center justify-center rounded-full bg-white text-[8px] font-semibold leading-none text-gray-500">
+                        {{ tokenUsagePercentageText }}
+                      </span>
+                    </span>
+                    <span class="toolbar-label">上下文</span>
                   </button>
                   <div
                     v-if="tokenUsagePanelOpen"
-                    class="absolute left-0 bottom-7 z-50 w-[460px] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
+                    class="fixed z-[10000] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
+                    :style="tokenUsagePanelStyle"
                   >
                     <div class="flex items-center justify-between mb-2">
                       <div class="font-semibold text-gray-800">上下文占用明细</div>
@@ -2431,6 +2511,31 @@ const handleViewAnalysis = (msg: Message) => {
 </template>
 
 <style scoped>
+.chat-input-box {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .chat-input-toolbar {
+    gap: 4px;
+  }
+
+  .chat-input-toolbar .toolbar-label {
+    display: none;
+  }
+
+  .chat-input-toolbar .model-select {
+    max-width: 92px;
+  }
+}
+
+@container (max-width: 430px) {
+  .chat-input-toolbar .model-select {
+    max-width: 0;
+    padding-right: 0;
+  }
+}
+
 .markdown-body {
   max-width: 100%;
   min-width: 0;

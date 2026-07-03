@@ -96,6 +96,7 @@ class DataAnalyzeFlowState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     task_stages: Annotated[list[dict[str, Any]], merge_task_stages]
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
+    token_usage: NotRequired[dict[str, Any] | None]
     task_run_id: str
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]
@@ -379,6 +380,7 @@ async def execute_data_analyze_agent(
     get_stream_writer()({"type": "token_usage", "usage": token_usage})
     if isinstance(result, dict):
         payload = dict(result)
+        payload["token_usage"] = token_usage
         messages = payload.get("messages")
         if isinstance(messages, list):
             payload["messages"] = [
@@ -386,7 +388,7 @@ async def execute_data_analyze_agent(
                 for message in messages
             ]
         return payload
-    return {"messages": [timestamp_message(result)]}
+    return {"messages": [timestamp_message(result)], "token_usage": token_usage}
 
 
 def create_data_analyze_flow_graph(

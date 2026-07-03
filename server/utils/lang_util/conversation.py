@@ -574,6 +574,7 @@ async def get_detail(
     messages = []
     task_stages = []
     reasoning_segments = []
+    token_usage = None
     pending_tool = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
@@ -588,6 +589,9 @@ async def get_detail(
                 messages = _serialize_messages(raw_messages)
                 task_stages = _serialize_task_stages(state.values.get("task_stages"))
                 reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
+                raw_token_usage = state.values.get("token_usage")
+                if isinstance(raw_token_usage, dict):
+                    token_usage = raw_token_usage
                 # 检查是否有待确认的工具
                 pending_tool = _get_interrupt_info(state)
 
@@ -597,6 +601,7 @@ async def get_detail(
         "messages": messages,
         "task_stages": task_stages,
         "reasoning_segments": reasoning_segments,
+        "token_usage": token_usage,
         "is_favorited": is_favorited,
         "pending_tool": pending_tool
     }

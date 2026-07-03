@@ -2277,45 +2277,47 @@ defineExpose({
             <template v-else>
               <!-- 历史消息 -->
               <div v-for="(msg, idx) in aiMessages" :key="idx" class="mb-3" :class="msg.role === 'user' ? 'flex flex-col items-end' : ''">
-                <div v-if="msg.role === 'assistant'" class="ai-assistant-message max-w-[85%] px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
-                  <template v-if="msg.content">
-                    <template v-for="(segment, segmentIdx) in splitAiMessageSegments(msg.content)" :key="segmentIdx">
-                      <div v-if="segment.type === 'markdown'" class="ai-message-markdown" v-html="renderMarkdown(segment.content)"></div>
-                      <div v-else class="ai-sql-block">
-                        <div class="ai-sql-actions">
-                          <button class="ai-sql-action-btn" title="复制 SQL" @click="copyToClipboard(segment.content)">
-                            <i class="fa-regular fa-copy"></i>
-                            复制
-                          </button>
-                          <button class="ai-sql-action-btn" title="添加到编辑器" @click="extractAndAddSql(segment.content)">
-                            <i class="fa-solid fa-check"></i>
-                            接受
-                          </button>
+                <div v-if="msg.role === 'assistant'" class="max-w-[85%]">
+                  <div class="ai-assistant-message px-4 py-3 rounded-2xl rounded-bl bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)] text-[13px] leading-relaxed break-words markdown-body">
+                    <template v-if="msg.content">
+                      <template v-for="(segment, segmentIdx) in splitAiMessageSegments(msg.content)" :key="segmentIdx">
+                        <div v-if="segment.type === 'markdown'" class="ai-message-markdown" v-html="renderMarkdown(segment.content)"></div>
+                        <div v-else class="ai-sql-block">
+                          <div class="ai-sql-actions">
+                            <button class="ai-sql-action-btn" title="复制 SQL" @click="copyToClipboard(segment.content)">
+                              <i class="fa-regular fa-copy"></i>
+                              复制
+                            </button>
+                            <button class="ai-sql-action-btn" title="添加到编辑器" @click="extractAndAddSql(segment.content)">
+                              <i class="fa-solid fa-check"></i>
+                              接受
+                            </button>
+                          </div>
+                          <pre><code>{{ segment.content }}</code></pre>
                         </div>
-                        <pre><code>{{ segment.content }}</code></pre>
-                      </div>
+                      </template>
+                      <span v-if="msg.isStreaming" class="animate-pulse text-gray-400">▌</span>
                     </template>
-                    <span v-if="msg.isStreaming" class="animate-pulse text-gray-400">▌</span>
-                  </template>
-                  <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
-                    <i class="fa-solid fa-spinner fa-spin"></i>
-                    <span>正在思考...</span>
+                    <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
+                      <i class="fa-solid fa-spinner fa-spin"></i>
+                      <span>正在思考...</span>
+                    </div>
                   </div>
-                  <AiGeneratedNotice v-if="!msg.isStreaming" />
+                  <div v-if="!msg.isStreaming" class="flex items-center gap-2 mt-2 pl-1">
+                    <button class="flex items-center gap-1 px-2 py-1 border-none rounded bg-transparent text-[11px] text-gray-400 cursor-pointer transition-all duration-150 hover:bg-black/[0.04] hover:text-[#1677FF]" title="复制" @click="copyToClipboard(msg.content)">
+                      <i class="fa-regular fa-copy"></i>
+                    </button>
+                    <AiGeneratedNotice class="ml-auto" />
+                  </div>
+                  <div v-if="msg.isStreaming" class="flex items-center gap-2 py-1 pl-1">
+                    <span class="text-xs font-medium text-gray-500">正在生成</span>
+                    <div class="flex gap-1">
+                      <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
+                    </div>
+                  </div>
                 </div>
                 <div v-if="msg.role === 'user'" class="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br bg-[#1677FF]/10 text-[#1F3A56] text-[13px] leading-relaxed">{{ msg.content }}</div>
                 <div v-if="msg.role === 'user' && msg.time" class="text-[11px] text-gray-400 mt-1">{{ msg.time }}</div>
-                <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="flex items-center gap-2 mt-2 pl-1">
-                  <button class="flex items-center gap-1 px-2 py-1 border-none rounded bg-transparent text-[11px] text-gray-400 cursor-pointer transition-all duration-150 hover:bg-black/[0.04] hover:text-[#1677FF]" title="复制" @click="copyToClipboard(msg.content)">
-                    <i class="fa-regular fa-copy"></i>
-                  </button>
-                </div>
-                <div v-if="msg.role === 'assistant' && msg.isStreaming" class="flex items-center gap-2 py-1 pl-1">
-                  <span class="text-xs font-medium text-gray-500">正在生成</span>
-                  <div class="flex gap-1">
-                    <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
-                  </div>
-                </div>
               </div>
             </template>
           </div>

@@ -85,10 +85,17 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelOpen = ref(false)
 const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
 const expandedTokenMessageKeys = ref<Set<string>>(new Set())
+const tokenUsageButtonRef = ref<HTMLElement | null>(null)
+const tokenUsagePanelPosition = ref({ left: 24, bottom: 112 })
 const collapsedReasoningStageKeys = ref<Set<string>>(new Set())
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const focusInput = () => {
+  nextTick(() => textareaRef.value?.focus())
+}
+
+onMounted(focusInput)
 const isNearBottom = ref(true)
 const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
   if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) {
@@ -110,6 +117,51 @@ const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
 }
 
 const tokenUsageDisplay = computed(() => formatTokenUsageDisplay(tokenUsage.value))
+const tokenUsagePercentage = computed(() => Math.max(0, Math.min(100, Number(tokenUsage.value?.percentage ?? 0))))
+const tokenUsagePercentageText = computed(() => tokenUsageDisplay.value ? `${Math.round(tokenUsagePercentage.value)}` : '')
+const tokenUsageRingStyle = computed(() => {
+  const percentage = tokenUsageDisplay.value ? tokenUsagePercentage.value : 0
+  const color = percentage >= 90 ? '#ef4444' : percentage >= 70 ? '#f59e0b' : '#1677FF'
+  return {
+    background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
+  }
+})
+const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `上下文占用：${tokenUsageDisplay.value}` : '上下文计算中')
+const TOKEN_USAGE_PANEL_WIDTH = 460
+const TOKEN_USAGE_PANEL_MARGIN = 16
+const tokenUsagePanelStyle = computed(() => ({
+  left: `${tokenUsagePanelPosition.value.left}px`,
+  bottom: `${tokenUsagePanelPosition.value.bottom}px`,
+  width: `${TOKEN_USAGE_PANEL_WIDTH}px`,
+  maxWidth: `calc(100vw - ${TOKEN_USAGE_PANEL_MARGIN * 2}px)`,
+}))
+
+const updateTokenUsagePanelPosition = () => {
+  const rect = tokenUsageButtonRef.value?.getBoundingClientRect()
+  if (!rect || typeof window === 'undefined') return
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || TOKEN_USAGE_PANEL_WIDTH
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
+  const maxLeft = Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportWidth - TOKEN_USAGE_PANEL_WIDTH - TOKEN_USAGE_PANEL_MARGIN)
+  tokenUsagePanelPosition.value = {
+    left: Math.min(Math.max(rect.right - TOKEN_USAGE_PANEL_WIDTH, TOKEN_USAGE_PANEL_MARGIN), maxLeft),
+    bottom: Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportHeight - rect.top + 8),
+  }
+}
+
+const toggleTokenUsagePanel = () => {
+  if (!tokenUsageDisplay.value) return
+  if (!tokenUsagePanelOpen.value) {
+    updateTokenUsagePanelPosition()
+  }
+  tokenUsagePanelOpen.value = !tokenUsagePanelOpen.value
+}
+
+const handleTokenUsageViewportChange = () => {
+  if (tokenUsagePanelOpen.value) {
+    updateTokenUsagePanelPosition()
+  }
+}
+
 const tokenUsageBreakdown = computed(() => {
   const usage = tokenUsage.value
   if (!usage?.breakdown?.length) return []
@@ -195,6 +247,11 @@ const toggleTokenMessage = (key: string) => {
 
 const resetTokenUsagePanel = () => {
   tokenUsage.value = null
+  tokenUsagePanelOpen.value = false
+  expandedTokenMessageKeys.value = new Set()
+}
+
+const closeTokenUsagePanel = () => {
   tokenUsagePanelOpen.value = false
   expandedTokenMessageKeys.value = new Set()
 }
@@ -1300,6 +1357,7 @@ const syncHistoryToolCalls = () => {
 const { isLoadingHistory, resetHistory } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
+  tokenUsage,
 })
 
 const renderMarkdown = (content: string) => md.render(hideSemanticConfigSelectionPayloads(content))
@@ -1362,11 +1420,15 @@ const loadModelOptions = async () => {
 
 onMounted(() => {
   document.addEventListener('click', handleDocumentClick)
+  window.addEventListener('resize', handleTokenUsageViewportChange)
+  window.addEventListener('scroll', handleTokenUsageViewportChange, true)
   loadModelOptions()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleDocumentClick)
+  window.removeEventListener('resize', handleTokenUsageViewportChange)
+  window.removeEventListener('scroll', handleTokenUsageViewportChange, true)
 })
 
 const selectCommandSkill = (skill: SkillInfo) => {
@@ -1451,6 +1513,7 @@ watch(
       collapsedReasoningStageKeys.value = new Set()
       resetTokenUsagePanel()
       resetHistory()
+      focusInput()
     }
   }
 )
@@ -1877,7 +1940,7 @@ const submitAnalysisQuery = async (
   }
   isGenerating.value = true
   activeToolCallId.value = null
-  resetTokenUsagePanel()
+  closeTokenUsagePanel()
 
   try {
     let convId = props.conversationId
@@ -1935,6 +1998,9 @@ const submitAnalysisQuery = async (
       (stage) => upsertTaskStage(stage),
       (payload) => {
         tokenUsage.value = payload.usage || null
+      },
+      (usage) => {
+        tokenUsage.value = usage
       },
       (payload) => handleSemanticConfigSelected(payload),
       (payload) => handleSemanticConfigSelectRequired(payload),
@@ -2075,7 +2141,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             <form class="relative" @submit.prevent="handleSubmit">
               <div
                 :class="[
-                  'rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
+                  'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
                   inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
                 ]"
               >
@@ -2101,7 +2167,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   ></textarea>
                 </div>
                 <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                  <div class="flex items-center gap-2">
+                  <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
                     <button
                       v-if="selectedAgent === 'chat_data_data_analyze'"
                       type="button"
@@ -2110,7 +2176,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       @click="isSkillManagerOpen = true"
                     >
                       <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                      <span>技能</span>
+                      <span class="toolbar-label">技能</span>
                     </button>
                     <div ref="agentSelectorRef" class="relative">
                       <button
@@ -2119,7 +2185,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                       >
                         <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                        <span>{{ selectedAgentLabel }}</span>
+                        <span class="toolbar-label">{{ selectedAgentLabel }}</span>
                         <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
                       </button>
                       <div
@@ -2146,7 +2212,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     </div>
                     <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
                       <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-                      <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
+                      <select v-model="selectedModel" class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                         <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
                       </select>
                       <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
@@ -2162,7 +2228,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       @click="enableDeepThinking = !enableDeepThinking"
                     >
                       <i class="fa-solid fa-brain text-[10px]"></i>
-                      <span>思考</span>
+                      <span class="toolbar-label">思考</span>
                     </button>
                   </div>
                   <button
@@ -2438,7 +2504,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </div>
                 </div>
                 <div v-if="msg.error" class="mt-2 text-sm text-red-500">{{ msg.error }}</div>
-                <AiGeneratedNotice v-if="!msg.isStreaming" />
+              </div>
+              <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="mt-1 flex justify-end px-1">
+                <AiGeneratedNotice />
               </div>
               <div v-if="msg.role === 'assistant' && msg.isStreaming && shouldShowStreamingStatus(msg)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
                 <i class="fa-solid fa-spinner fa-spin text-[11px]"></i>
@@ -2455,7 +2523,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       <div v-if="hasLocalConversationStarted || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
           <form class="relative" @submit.prevent="handleSubmit">
-            <div class="rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
+            <div class="chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
               <div class="min-h-[54px] px-4 pt-4 pb-2">
                 <div
                   v-if="selectedSkillTitle"
@@ -2478,7 +2546,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 ></textarea>
               </div>
               <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                <div class="flex items-center gap-2">
+                <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
                   <button
                     v-if="selectedAgent === 'chat_data_data_analyze'"
                     type="button"
@@ -2487,7 +2555,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     @click="isSkillManagerOpen = true"
                   >
                     <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                    <span>技能</span>
+                    <span class="toolbar-label">技能</span>
                   </button>
                   <div ref="agentSelectorRef" class="relative">
                     <button
@@ -2496,7 +2564,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       @click="isAgentSelectorOpen = !isAgentSelectorOpen"
                     >
                       <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                      <span>{{ selectedAgentLabel }}</span>
+                      <span class="toolbar-label">{{ selectedAgentLabel }}</span>
                       <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
                     </button>
                     <div
@@ -2523,7 +2591,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </div>
                   <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
                     <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-                    <select v-model="selectedModel" class="border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
+                    <select v-model="selectedModel" class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
                       <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
                     </select>
                     <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
@@ -2539,19 +2607,28 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     @click="enableDeepThinking = !enableDeepThinking"
                   >
                     <i class="fa-solid fa-brain text-[10px]"></i>
-                    <span>思考</span>
+                    <span class="toolbar-label">思考</span>
                   </button>
                   <div v-if="tokenUsageDisplay" class="relative">
                     <button
+                      ref="tokenUsageButtonRef"
                       type="button"
-                      class="text-xs text-gray-400 whitespace-nowrap border-none bg-transparent px-1 py-0.5 rounded cursor-pointer hover:text-gray-600 hover:bg-gray-100"
-                      @click="tokenUsagePanelOpen = !tokenUsagePanelOpen"
+                      class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border-none bg-transparent px-1.5 text-xs text-gray-500 cursor-pointer hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent"
+                      :disabled="!tokenUsageDisplay"
+                      :title="tokenUsageButtonTitle"
+                      @click="toggleTokenUsagePanel"
                     >
-                      {{ tokenUsageDisplay }}
+                      <span class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full" :style="tokenUsageRingStyle">
+                        <span class="flex h-4 w-4 items-center justify-center rounded-full bg-white text-[8px] font-semibold leading-none text-gray-500">
+                          {{ tokenUsagePercentageText }}
+                        </span>
+                      </span>
+                      <span class="toolbar-label">上下文</span>
                     </button>
                     <div
                       v-if="tokenUsagePanelOpen"
-                      class="absolute left-0 bottom-7 z-50 w-[460px] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
+                      class="fixed z-[10000] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
+                      :style="tokenUsagePanelStyle"
                     >
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-semibold text-gray-800">上下文占用明细</div>
@@ -2936,6 +3013,31 @@ const handleKeyDown = (event: KeyboardEvent) => {
 </template>
 
 <style scoped>
+.chat-input-box {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .chat-input-toolbar {
+    gap: 4px;
+  }
+
+  .chat-input-toolbar .toolbar-label {
+    display: none;
+  }
+
+  .chat-input-toolbar .model-select {
+    max-width: 92px;
+  }
+}
+
+@container (max-width: 430px) {
+  .chat-input-toolbar .model-select {
+    max-width: 0;
+    padding-right: 0;
+  }
+}
+
 .analysis-markdown :deep(p) {
   margin: 0 0 8px;
 }

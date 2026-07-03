@@ -854,12 +854,12 @@ async def _stream_sql_generation(
             persisted_reasoning_count = 0
 
             # 流式执行
-            # 使用 stream_mode="messages" 捕获 LLM 输出
-            # 通过 metadata["langgraph_node"] 区分来源，过滤工具内部的 LLM 调用
+            # 使用 messages 捕获 LLM 输出，custom 转发模型入口上下文占用等辅助事件。
+            # 通过 metadata["langgraph_node"] 区分来源，过滤工具内部的 LLM 调用。
             async for event in graph.astream(
                 initial_state,
                 config=config,
-                stream_mode="messages"
+                stream_mode=["messages", "custom"],
             ):
                 # 检测客户端断连，停止消费事件
                 if request and await request.is_disconnected():
@@ -873,7 +873,17 @@ async def _stream_sql_generation(
                     )
                     return
 
-                message_chunk, metadata = event
+                if isinstance(event, tuple) and len(event) == 2 and event[0] == "custom":
+                    payload = event[1]
+                    if isinstance(payload, dict) and payload.get("type") == "token_usage" and payload.get("usage"):
+                        token_usage = payload.get("usage")
+                        yield _format_sse("token_usage", token_usage)
+                    continue
+
+                if isinstance(event, tuple) and len(event) == 2 and event[0] == "messages":
+                    message_chunk, metadata = event[1]
+                else:
+                    message_chunk, metadata = event
 
                 # 过滤：只保留来自 agent 节点的消息（排除 tools 节点内部的 LLM 调用）
                 node_name = metadata.get("langgraph_node", "")
@@ -1198,6 +1208,7 @@ async def data_analyze_completion_handler(
                             usage = payload.get("usage")
                             if usage:
                                 latest_token_usage = usage
+                                yield _format_sse("token_usage", usage)
                         continue
                     message_chunk, metadata = payload
                     if not first_chunk_logged:

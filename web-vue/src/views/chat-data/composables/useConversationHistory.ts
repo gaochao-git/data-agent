@@ -4,7 +4,7 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
 import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
@@ -294,11 +294,13 @@ const applySemanticConfigSelectRequired = (message: Message, selectRequired: Sem
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>
   messages: Ref<Message[]>
+  tokenUsage?: Ref<ChatDataTokenUsage | null>
 }
 
 export function useConversationHistory({
   conversationId,
   messages,
+  tokenUsage,
 }: UseConversationHistoryOptions) {
   const isLoadingHistory = ref(false)
   const loadedConversationId = ref<string | null>(null)
@@ -326,6 +328,8 @@ export function useConversationHistory({
         const historyMessages = data.data?.messages || []
         const historyTaskStages = normalizeTaskStages(data.data?.task_stages)
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
+        const historyTokenUsage = data.data?.token_usage
+        tokenUsage && (tokenUsage.value = historyTokenUsage && typeof historyTokenUsage === 'object' ? historyTokenUsage as ChatDataTokenUsage : null)
 
         if (historyMessages.length > 0) {
           const formattedMessages: Message[] = historyMessages.map((msg: any) => {

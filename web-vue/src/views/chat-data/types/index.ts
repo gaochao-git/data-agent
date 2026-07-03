@@ -489,7 +489,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta' | 'semantic_config_selected' | 'semantic_config_select_required'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta' | 'semantic_config_selected' | 'semantic_config_select_required'
 
 // 工具状态
 export type ToolStatus = 'pending' | 'running' | 'completed'

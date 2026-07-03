@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from langchain_core.messages import SystemMessage
+from langgraph.config import get_stream_writer
 
 from utils.logger import get_logger
 from ..services.runtime_config import get_context_edit_config
@@ -162,6 +163,16 @@ def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_w
     )
 
 
+def _emit_token_usage_event(token_usage: dict[str, Any]) -> None:
+    """在 LangGraph 流式上下文中推送当前模型入口上下文占用。"""
+    if not token_usage:
+        return
+    try:
+        get_stream_writer()({"type": "token_usage", "usage": token_usage})
+    except Exception:
+        logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
+
+
 def create_agent_node(
     tools: list,
     semantic_config: dict | None = None,
@@ -242,6 +253,7 @@ def create_agent_node(
                 overhead_tokens=0,
             ),
         })
+        _emit_token_usage_event(token_usage)
         try:
             if active_tools:
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)

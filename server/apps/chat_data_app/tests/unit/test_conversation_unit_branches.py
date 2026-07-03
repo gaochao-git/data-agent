@@ -337,6 +337,7 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                     "task_stages": [
                         {"run_id": "run1", "stage": "thinking", "status": "completed", "content": "理解"}
                     ],
+                    "token_usage": {"used": 12, "total": 100},
                 },
                 tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
             )
@@ -347,6 +348,7 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
     assert detail["task_stages"][0]["stage"] == "thinking"
     assert detail["reasoning_segments"] == []
+    assert detail["token_usage"] == {"used": 12, "total": 100}
     assert detail["pending_tool"]["args"] == {"sql": "select 1"}
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
 
@@ -372,6 +374,7 @@ async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
     assert detail["messages"] == []
     assert detail["task_stages"] == []
     assert detail["reasoning_segments"] == []
+    assert detail["token_usage"] is None
     assert detail["pending_tool"] is None
 
 

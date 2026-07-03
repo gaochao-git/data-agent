@@ -88,6 +88,7 @@ export function useSqlGenerator() {
     onDashboardSpec?: (payload: DashboardSpecPayload) => void,
     onTaskStage?: (payload: TaskStageInfo) => void,
     onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
+    onTokenUsage?: (payload: ChatDataTokenUsage) => void,
     onSemanticConfigSelected?: (payload: SemanticConfigSelectionInfo) => void,
     onSemanticConfigSelectRequired?: (payload: SemanticConfigSelectRequiredInfo) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
@@ -216,6 +217,18 @@ export function useSqlGenerator() {
             } catch (err) {
               console.error('解析 message_end 数据失败:', err, dataStr)
               onMessageEnd?.({})
+            }
+            continue
+          }
+
+          if (event === 'token_usage') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data === 'object') {
+                onTokenUsage?.(data as ChatDataTokenUsage)
+              }
+            } catch (err) {
+              console.error('解析 token_usage 数据失败:', err, dataStr)
             }
             continue
           }
