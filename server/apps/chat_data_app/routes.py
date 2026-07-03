@@ -1140,9 +1140,7 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
         current_user = _get_current_user(request)
         body = body.model_copy(update={"user_id": current_user.user_id, "operator_name": current_user.username})
         logger.info(
-            "query-tasks current user: user_id=%s username=%s datasource_id=%s",
-            current_user.user_id,
-            current_user.username,
+            "query-tasks create: datasource_id=%s",
             body.datasource_id,
         )
         ds_manager = get_datasource_manager()
@@ -1321,9 +1319,7 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
         body = body.model_copy(update={"user_id": current_user.user_id})
         body = await _prepare_sql_request_for_execution(body)
         logger.info(
-            "execute-sql current user: user_id=%s username=%s datasource_id=%s",
-            current_user.user_id,
-            current_user.username,
+            "execute-sql request: datasource_id=%s",
             body.datasource_id,
         )
         result_data = await query_runtime.execute_sql_request_with_task(

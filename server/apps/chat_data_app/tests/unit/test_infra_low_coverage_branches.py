@@ -887,7 +887,7 @@ def test_pipe_log_formatter_and_context_helpers(monkeypatch):
     formatter = logger_module.PipeLogFormatter()
     monkeypatch.setattr(logger_module, "LOCAL_IP", "10.0.0.1")
     monkeypatch.setattr(logger_module, "get_current_log_idc", lambda: "idc-test")
-    logger_module.set_log_context(request_id="req-123", user_id="user-456")
+    logger_module.set_log_context(request_id="req-123", user_id="user-456", username="测试用户")
 
     record = logging.LogRecord(
         name="unit.logger",
@@ -899,7 +899,7 @@ def test_pipe_log_formatter_and_context_helpers(monkeypatch):
         exc_info=None,
     )
     record.request_id = "req-record"
-    record.user_id = "user-record"
+    record.user = "user-record-记录用户"
     record.idc = "idc-record"
     record.ip = "127.0.0.9"
     record.extra_fields = {"tenant": "ops"}
@@ -909,11 +909,11 @@ def test_pipe_log_formatter_and_context_helpers(monkeypatch):
 
     assert "|INFO|" in output
     assert "|req-record|idc-record|127.0.0.9|" in output
-    assert "|hello | user_id=user-record | custom=value, tenant=ops" in output
+    assert "|hello | user=user-record-记录用户 | custom=value, tenant=ops" in output
 
     logger_module.clear_log_context()
     assert logger_module.request_id_ctx.get() is None
-    assert logger_module.user_id_ctx.get() is None
+    assert logger_module.user_ctx.get() is None
 
 
 @pytest.mark.asyncio
@@ -941,7 +941,7 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
         "method": "GET",
         "path": "/demo",
         "query_string": b"a=1",
-        "headers": [(b"x-user-id", b"user-1"), (b"user-agent", b"pytest")],
+        "headers": [(b"x-user-id", b"user-1"), (b"x-username", "测试用户".encode("utf-8")), (b"user-agent", b"pytest")],
         "client": ("127.0.0.1", 12345),
     }
     sent = []
@@ -954,7 +954,7 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
 
     await middleware(scope, receive, send)
 
-    assert records["set"] == [{"request_id": "req-abc", "user_id": "user-1"}]
+    assert records["set"] == [{"request_id": "req-abc", "user": "user-1-测试用户"}]
     assert records["clear"] == 1
     assert sent[0]["type"] == "http.response.start"
     assert (b"x-request-id", b"req-abc") in sent[0]["headers"]
@@ -1002,7 +1002,7 @@ async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeyp
     with pytest.raises(RuntimeError, match="boom"):
         await middleware(scope, receive, send)
 
-    assert records["set"] == [{"request_id": "req-err", "user_id": "user-2"}]
+    assert records["set"] == [{"request_id": "req-err", "user": "user-2"}]
     assert records["clear"] == 1
     assert len(records["access_info"]) == 1
     assert records["access_info"][0][0] == "api_access_error"

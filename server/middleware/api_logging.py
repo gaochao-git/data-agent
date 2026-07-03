@@ -10,7 +10,7 @@ from urllib.parse import parse_qs
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from middleware.log_redaction import dump_masked_payload
-from utils.logger import clear_log_context, get_access_logger, get_logger, set_log_context
+from utils.logger import build_log_user, clear_log_context, get_access_logger, get_logger, set_log_context
 
 logger = get_logger(__name__)
 access_logger = get_access_logger()
@@ -99,21 +99,21 @@ def _format_start_time(started_at: float) -> str:
     return datetime.fromtimestamp(started_at).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
-def _access_ext1(client_ip: str, user_id: str | None) -> str:
+def _access_ext1(client_ip: str, user: str | None) -> str:
     parts = [f"client_ip:{client_ip or '-'}"]
-    if user_id:
-        parts.append(f"user_id:{user_id}")
+    if user:
+        parts.append(f"user:{user}")
     return ";".join(parts)
 
 
 class _ResponseLogState:
-    def __init__(self, request_id: str, method: str, path: str, query: dict[str, str], client_ip: str, user_id: str | None, started_at: float):
+    def __init__(self, request_id: str, method: str, path: str, query: dict[str, str], client_ip: str, user: str | None, started_at: float):
         self.request_id = request_id
         self.method = method
         self.path = path
         self.query = query
         self.client_ip = client_ip
-        self.user_id = user_id
+        self.user = user
         self.started_at = started_at
         self.status_code = 500
         self.content_type = ""
@@ -128,7 +128,7 @@ class _ResponseLogState:
             "start_time": _format_start_time(self.started_at),
             "cost_time": f"{elapsed_ms}ms",
             "error_code": error_code,
-            "ext1": _access_ext1(self.client_ip, self.user_id),
+            "ext1": _access_ext1(self.client_ip, self.user),
         }
 
     def log_response(self) -> None:
@@ -185,7 +185,9 @@ class APIAccessLogMiddleware:
         request_id = _build_request_id()
         started_at = time.time()
         user_id = headers.get("x-user-id")
-        set_log_context(request_id=request_id, user_id=user_id)
+        username = headers.get("x-username")
+        user = build_log_user(user_id, username)
+        set_log_context(request_id=request_id, user=user)
 
         response_state = _ResponseLogState(
             request_id=request_id,
@@ -193,7 +195,7 @@ class APIAccessLogMiddleware:
             path=str(scope.get("path", "")),
             query=_scope_query(scope),
             client_ip=_client_ip(scope, headers),
-            user_id=user_id,
+            user=user,
             started_at=started_at,
         )
 

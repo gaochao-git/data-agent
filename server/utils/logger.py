@@ -16,7 +16,7 @@ from utils.lang_util.common_util import get_active_idc, get_local_ip
 
 DEFAULT_BACKUP_COUNT = 30  # 保留30天
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
-user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+user_ctx: ContextVar[Optional[str]] = ContextVar("user", default=None)
 _STANDARD_LOG_RECORD_FIELDS = {
     "name",
     "msg",
@@ -43,6 +43,8 @@ _STANDARD_LOG_RECORD_FIELDS = {
     "stack_info",
     "request_id",
     "user_id",
+    "username",
+    "user",
     "idc",
     "ip",
     "extra_fields",
@@ -128,18 +130,28 @@ def resolve_log_path(path: str) -> str:
     return os.path.abspath(raw)
 
 
-def set_log_context(request_id: str | None = None, user_id: str | None = None) -> None:
+def build_log_user(user_id: str | None = None, username: str | None = None) -> str:
+    """构造日志中的统一用户标识。"""
+    normalized_user_id = str(user_id or "").strip()
+    normalized_username = str(username or "").strip()
+    if normalized_user_id and normalized_username and normalized_user_id != normalized_username:
+        return f"{normalized_user_id}-{normalized_username}"
+    return normalized_user_id or normalized_username
+
+
+def set_log_context(request_id: str | None = None, user_id: str | None = None, username: str | None = None, user: str | None = None) -> None:
     """设置当前请求日志上下文。"""
     if request_id:
         request_id_ctx.set(str(request_id))
-    if user_id:
-        user_id_ctx.set(str(user_id))
+    log_user = str(user or "").strip() or build_log_user(user_id, username)
+    if log_user:
+        user_ctx.set(log_user)
 
 
 def clear_log_context() -> None:
     """清理当前请求日志上下文。"""
     request_id_ctx.set(None)
-    user_id_ctx.set(None)
+    user_ctx.set(None)
 
 
 def _format_log_time(created: float) -> str:
@@ -165,10 +177,10 @@ def _collect_record_extra_fields(record: logging.LogRecord) -> dict[str, object]
     return extra_fields
 
 
-def _append_message_parts(message: str, user_id: object, extra_fields: dict[str, object]) -> str:
+def _append_message_parts(message: str, user: object, extra_fields: dict[str, object]) -> str:
     parts = [message]
-    if user_id:
-        parts.append(f"user_id={user_id}")
+    if user:
+        parts.append(f"user={user}")
     if extra_fields:
         parts.append(", ".join(f"{key}={value}" for key, value in extra_fields.items()))
     return " | ".join(parts)
@@ -180,13 +192,18 @@ class PipeLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         log_time = _format_log_time(record.created)
         trace_id = getattr(record, "request_id", None) or request_id_ctx.get() or "-"
-        user_id = getattr(record, "user_id", None) or user_id_ctx.get() or ""
+        user = (
+            getattr(record, "user", None)
+            or build_log_user(getattr(record, "user_id", None), getattr(record, "username", None))
+            or user_ctx.get()
+            or ""
+        )
         idc = getattr(record, "idc", None) or get_current_log_idc()
         ip = getattr(record, "ip", None) or LOCAL_IP
         message = record.getMessage()
         if record.exc_info:
             message = f"{message}\n{self.formatException(record.exc_info)}"
-        message = _append_message_parts(message, user_id, _collect_record_extra_fields(record))
+        message = _append_message_parts(message, user, _collect_record_extra_fields(record))
 
         return "|".join([
             log_time,

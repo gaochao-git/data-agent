@@ -4,10 +4,6 @@ from typing import Optional
 
 from fastapi import Request
 
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
-
 
 SERVICE_AUTH_HEADER = "X-Service-Token"
 SERVICE_USER_ID_HEADER = "X-User-Id"
@@ -52,7 +48,6 @@ def authenticate_request(req: Request) -> AuthenticatedUser:
     if not user_id or not username:
         raise AuthenticationError("Missing forwarded user headers.", status_code=401)
 
-    logger.info("user_id=%s username=%s", user_id, username)
     return AuthenticatedUser(user_id=user_id, username=username)
 
 
