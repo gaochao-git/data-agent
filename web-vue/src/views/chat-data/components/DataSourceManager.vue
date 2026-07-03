@@ -54,6 +54,7 @@ const groupForm = ref({
   group_name: '',
   group_desc: '',
   query_context: '',
+  recommended_questions_text: '',
   source_type: 'hive' as 'mysql' | 'hive',
   datasource_sources_text: '',
 })
@@ -685,6 +686,26 @@ const groupSourcePlaceholder = computed(() => {
   return '每行一个数据源，格式：\nHTTP：机构名称|机构编码|http|db_name\n直连：机构名称|机构编码|direct|ip:port:db_name\n机构编码用于权限匹配和 HTTP 执行标识，第一行默认作为模板数据源，用于拉取表结构\n例如：\n机构名称xx|机构编码xx|direct|db-host-1:3306:database_a\n机构名称yy|机构编码yy|http|database_b'
 })
 
+const parseRecommendedQuestions = () => {
+  const questions: string[] = []
+  const seen = new Set<string>()
+  const lines = groupForm.value.recommended_questions_text.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    const question = (lines[index] || '').trim()
+    if (!question) continue
+    if (question.length > 50) {
+      throw new Error(`推荐问题第 ${index + 1} 行不能超过 50 个字`)
+    }
+    if (seen.has(question)) continue
+    seen.add(question)
+    questions.push(question)
+    if (questions.length > 50) {
+      throw new Error('推荐问题不能超过 50 条')
+    }
+  }
+  return questions
+}
+
 const parseTemplateSourceForSnapshot = () => {
   const firstLine = groupForm.value.datasource_sources_text
     .split('\n')
@@ -853,6 +874,7 @@ const openGroupModal = () => {
     group_name: '',
     group_desc: '',
     query_context: '',
+    recommended_questions_text: '',
     source_type: 'hive',
     datasource_sources_text: '',
   }
@@ -877,6 +899,7 @@ const openEditGroupModal = (ds: DataSource) => {
     group_name: ds.group_name || '',
     group_desc: ds.ds_description || '',
     query_context: ds.query_context || '',
+    recommended_questions_text: (ds.recommended_questions || []).join('\n'),
     source_type: sourceType,
     datasource_sources_text: memberSourcesText
       ? memberSourcesText
@@ -1080,6 +1103,14 @@ const handleCreateDatasourceGroup = async () => {
     return
   }
 
+  let recommendedQuestions: string[] = []
+  try {
+    recommendedQuestions = parseRecommendedQuestions()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '推荐问题格式错误')
+    return
+  }
+
   const currentTemplateSnapshotKey = buildGroupSourceSnapshotKey()
   if (!currentTemplateSnapshotKey) {
     ElMessage.error('模板数据源格式错误，请先按固定格式修正第一行')
@@ -1105,6 +1136,7 @@ const handleCreateDatasourceGroup = async () => {
       group_name: groupName,
       group_desc: groupForm.value.group_desc.trim(),
       query_context: groupForm.value.query_context.trim(),
+      recommended_questions: recommendedQuestions,
       source_type: groupForm.value.source_type,
       template_source: templateSource,
       template_table_names: groupDbTables.value.length > 0 ? Array.from(selectedGroupTables.value) : undefined,
@@ -1538,6 +1570,17 @@ defineExpose({
               placeholder="可维护当前数据源组的查询规则、口径说明、正反例等，会注入智能问数上下文"
               class="min-w-0 flex-1 resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             ></textarea>
+          </div>
+          <div class="flex min-w-0 items-start gap-2">
+            <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">推荐问题</label>
+            <div class="min-w-0 flex-1">
+              <textarea
+                v-model="groupForm.recommended_questions_text"
+                rows="4"
+                placeholder="每行一个推荐问题，单条不超过 50 个字"
+                class="min-w-0 w-full resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              ></textarea>
+            </div>
           </div>
           <div class="flex items-center gap-2">
             <label class="w-24 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>

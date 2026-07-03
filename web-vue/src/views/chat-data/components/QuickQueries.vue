@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 常用查询快捷入口组件
- * 纯后端驱动，根据收藏记录动态渲染
- * 支持三种类型：conversation（问数问题）、sql（普通SQL）和 builder（可视化查询配置）
+ * 根据后端收藏记录动态渲染，也支持调用方传入空态推荐问题
+ * 支持 SQL / builder 收藏，也支持会话空态推荐问题
  */
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -80,10 +80,19 @@ interface QueryTemplate {
   id: string
   title: string
   query: string
-  query_type?: 'conversation' | 'sql' | 'builder'
+  query_type?: 'sql' | 'builder'
   builder_config?: BuilderConfig
   icon: string
   color: string
+  readonly?: boolean
+}
+
+export interface FallbackQuery {
+  id?: string
+  title: string
+  query?: string
+  icon?: string
+  color?: string
 }
 
 interface Props {
@@ -93,6 +102,11 @@ interface Props {
   maxItems?: number
   mode?: 'default' | 'conversation'
   contentType?: 'both' | 'skills' | 'queries'
+  fallbackQueries?: FallbackQuery[]
+  compact?: boolean
+  pageOffset?: number
+  preferFallback?: boolean
+  loadFavorites?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -101,7 +115,12 @@ const props = withDefaults(defineProps<Props>(), {
   refreshTrigger: 0,
   maxItems: 12,
   mode: 'default',
-  contentType: 'both'
+  contentType: 'both',
+  fallbackQueries: () => [],
+  compact: false,
+  pageOffset: 0,
+  preferFallback: false,
+  loadFavorites: true
 })
 
 const emit = defineEmits<{
@@ -125,12 +144,46 @@ const showEditModal = ref(false)
 const editingId = ref<string | null>(null)
 const editTitle = ref('')
 const editContent = ref('')
-const editQueryType = ref<'conversation' | 'sql' | 'builder'>('sql')
+const editQueryType = ref<'sql' | 'builder'>('sql')
 const savingEdit = ref(false)
+
+const normalizeFavoriteText = (value: unknown) => {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch (_err) {
+    return String(value)
+  }
+}
+
+const getFavoriteQueryText = (item: Record<string, any>) => {
+  return normalizeFavoriteText(
+    item.query_text ??
+    item.queryText ??
+    item.query ??
+    item.sql ??
+    item.content ??
+    item.favorite_content ??
+    item.favoriteContent
+  )
+}
+
+const normalizeBuilderConfig = (value: unknown): BuilderConfig | undefined => {
+  if (!value) return undefined
+  if (typeof value === 'object') return value as BuilderConfig
+  if (typeof value !== 'string') return undefined
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed as BuilderConfig : undefined
+  } catch (_err) {
+    return undefined
+  }
+}
 
 // 加载收藏查询
 const loadQueries = async () => {
-  if (props.mode === 'conversation' && props.contentType === 'skills') {
+  if (!props.loadFavorites || props.mode === 'conversation') {
     templates.value = []
     return
   }
@@ -144,16 +197,16 @@ const loadQueries = async () => {
     const response = await getQueryFavorites({
       datasource_id: props.datasourceId,
       limit: props.maxItems,
-      query_type: props.mode === 'conversation' ? 'conversation' : props.queryType
+      query_type: props.queryType
     })
 
     if (response.data?.queries) {
       templates.value = (response.data.queries as Array<Record<string, any>>).map((item) => ({
         id: String(item.id),
         title: String(item.favorite_title || item.title || '未命名收藏'),
-        query: String(item.query_text || item.query || ''),
+        query: getFavoriteQueryText(item),
         query_type: (item.query_type || 'sql') as 'sql' | 'builder',
-        builder_config: item.builder_config as BuilderConfig | undefined,
+        builder_config: normalizeBuilderConfig(item.builder_config ?? item.builderConfig),
         icon: String(item.icon || 'fa-star'),
         color: String(item.color || '#E8F3FF')
       }))
@@ -186,9 +239,41 @@ const loadSkills = async () => {
   }
 }
 
+const fallbackTemplates = computed<QueryTemplate[]>(() => {
+  if (props.mode !== 'conversation' || activeContentType.value !== 'queries') return []
+  const items: QueryTemplate[] = []
+  props.fallbackQueries.forEach((item, index) => {
+    const title = String(item.title || '').trim()
+    const query = String(item.query || item.title || '').trim()
+    if (!title || !query) return
+    items.push({
+      id: item.id ? `fallback-${item.id}` : `fallback-${index}-${title}`,
+      title,
+      query,
+      icon: item.icon || 'fa-lightbulb',
+      color: item.color || '#E8F3FF',
+      readonly: true,
+    })
+  })
+  return items
+})
+
+const querySourceTemplates = computed(() => {
+  if (props.preferFallback && fallbackTemplates.value.length > 0) return fallbackTemplates.value
+  if (templates.value.length > 0) return templates.value
+  return fallbackTemplates.value
+})
+
+const hasSearchableContent = computed(() => {
+  if (props.compact) return false
+  if (props.mode !== 'conversation') return templates.value.length > 0
+  if (activeContentType.value === 'skills') return skills.value.length > 0
+  return querySourceTemplates.value.length > 0
+})
+
 // 过滤后的模板
 const displayedTemplates = computed(() => {
-  let result = templates.value
+  let result = querySourceTemplates.value
 
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase()
@@ -198,7 +283,12 @@ const displayedTemplates = computed(() => {
     )
   }
 
-  return result.slice(0, props.maxItems)
+  if (!props.compact || result.length <= props.maxItems) {
+    return result.slice(0, props.maxItems)
+  }
+  const offset = Math.max(0, Number(props.pageOffset || 0)) % result.length
+  const cycled = [...result.slice(offset), ...result.slice(0, offset)]
+  return cycled.slice(0, props.maxItems)
 })
 
 const displayedSkills = computed(() => {
@@ -248,8 +338,63 @@ const handleSkillClick = (skill: SkillInfo) => {
   emit('selectSkill', skill)
 }
 
+const getConversationQuestionText = (template: QueryTemplate) => {
+  return String(template.query || template.title || '').trim()
+}
+
+const getTemplateIcon = (template: QueryTemplate) => {
+  return template.query_type === 'builder' ? 'fa-cubes' : template.icon || 'fa-star'
+}
+
+// 获取关联类型中文
+const getJoinTypeLabel = (type: string): string => {
+  const typeMap: Record<string, string> = {
+    'LEFT': '左',
+    'RIGHT': '右',
+    'INNER': '内',
+    'FULL': '全'
+  }
+  return typeMap[type] || type
+}
+
+const getTemplatePreview = (template: QueryTemplate) => {
+  const queryPreview = String(template.query || '').replace(/\s+/g, ' ').trim()
+  if (template.query_type !== 'builder') {
+    return queryPreview || 'SQL 查询'
+  }
+  const config = template.builder_config
+  if (!config) return queryPreview || '可视化查询配置'
+
+  const formatFields = (items: Array<Record<string, any>> | undefined, formatter: (item: Record<string, any>) => string) => {
+    const labels = (items || []).map(formatter).map(item => item.trim()).filter(Boolean)
+    if (labels.length <= 2) return labels.join('、')
+    return `${labels.slice(0, 2).join('、')} 等${labels.length}个`
+  }
+  const dimensions = formatFields(config.dimensions as Array<Record<string, any>> | undefined, item => String(item.alias || item.name || item.column || ''))
+  const aggregations = formatFields(config.aggregations as Array<Record<string, any>> | undefined, item => {
+    const alias = String(item.alias || item.name || '').trim()
+    if (alias) return alias
+    const func = String(item.func || '').trim()
+    const column = String(item.column || '').trim()
+    return func && column ? `${func}(${column})` : column
+  })
+  const joins = formatFields(config.joins as Array<Record<string, any>> | undefined, item => {
+    const table = String(item.rightTable || '').trim()
+    return table ? `${table}(${getJoinTypeLabel(String(item.joinType || ''))})` : ''
+  })
+  const parts = [
+    config.mainTable ? `表 ${config.mainTable}` : '',
+    dimensions ? `维度 ${dimensions}` : '',
+    aggregations ? `指标 ${aggregations}` : '',
+    joins ? `关联 ${joins}` : '',
+    config.filters?.length ? `筛选 ${config.filters.length}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || queryPreview || '可视化查询配置'
+}
+
 const handleDelete = (template: QueryTemplate, e: MouseEvent) => {
   e.stopPropagation()
+  if (template.readonly) return
   if (deletingId.value) return
   deletingTemplate.value = template
   showDeleteModal.value = true
@@ -282,10 +427,11 @@ const closeDeleteModal = () => {
 
 const openEdit = (template: QueryTemplate, e: MouseEvent) => {
   e.stopPropagation()
+  if (template.readonly) return
   editingId.value = template.id
   editTitle.value = template.title
   editContent.value = template.query
-  editQueryType.value = (template.query_type || 'sql') as 'conversation' | 'sql' | 'builder'
+  editQueryType.value = (template.query_type || 'sql') as 'sql' | 'builder'
   showEditModal.value = true
 }
 
@@ -329,17 +475,6 @@ const submitEdit = async () => {
   }
 }
 
-// 获取关联类型中文
-const getJoinTypeLabel = (type: string): string => {
-  const typeMap: Record<string, string> = {
-    'LEFT': '左',
-    'RIGHT': '右',
-    'INNER': '内',
-    'FULL': '全'
-  }
-  return typeMap[type] || type
-}
-
 // 监听变化重新加载
 watch(
   () => [props.datasourceId, props.queryType, props.refreshTrigger],
@@ -352,7 +487,7 @@ watch(
 </script>
 
 <template>
-  <div class="w-full min-h-full p-4 pt-8 flex flex-col">
+  <div :class="compact ? 'w-full min-h-0 flex flex-col' : 'w-full min-h-full p-4 pt-8 flex flex-col'">
     <div v-if="mode === 'conversation' && contentType === 'both'" class="mb-4 flex items-center gap-2">
       <button
         type="button"
@@ -377,7 +512,7 @@ watch(
     </div>
 
     <!-- 搜索框 -->
-    <div v-if="mode !== 'conversation' ? templates.length > 0 : (activeContentType === 'skills' ? skills.length > 0 : templates.length > 0)" class="mb-5">
+    <div v-if="hasSearchableContent" class="mb-5">
       <div class="relative w-full">
         <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400"></i>
         <input
@@ -425,104 +560,125 @@ watch(
       </div>
     </div>
 
-    <!-- 查询卡片网格 -->
-    <div v-else-if="(mode !== 'conversation' || activeContentType === 'queries') && displayedTemplates.length > 0" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <!-- 会话模式：普通问题列表 -->
+    <div
+      v-else-if="mode === 'conversation' && activeContentType === 'queries' && displayedTemplates.length > 0"
+      :class="compact ? 'flex flex-col items-start gap-2' : 'overflow-hidden rounded-xl border border-slate-200 bg-white/95'"
+    >
+      <div
+        v-for="template in displayedTemplates"
+        :key="template.id"
+        :class="[
+          'group flex items-center gap-2',
+          compact
+            ? 'min-h-10 max-w-full'
+            : 'min-h-11 border-b border-slate-100 last:border-b-0 hover:bg-blue-50/50'
+        ]"
+        @mouseenter="hoveredId = template.id"
+        @mouseleave="hoveredId = null"
+      >
+        <button
+          type="button"
+          :class="[
+            'flex min-w-0 flex-1 items-center gap-2 border-none bg-transparent text-left cursor-pointer',
+            compact
+              ? 'max-w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[14px] shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-blue-200 hover:bg-blue-50/40 hover:text-blue-700 hover:shadow-[0_4px_12px_rgba(15,23,42,0.06)]'
+              : 'px-3 py-2.5'
+          ]"
+          :title="getConversationQuestionText(template)"
+          @click="handleClick(template)"
+        >
+          <span
+            v-if="compact"
+            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-blue-50 text-[10px] text-blue-500"
+          >
+            <i class="fa-regular fa-message"></i>
+          </span>
+          <i v-else class="fa-regular fa-message shrink-0 text-[13px] text-slate-400"></i>
+          <span :class="compact ? 'min-w-0 flex-1 truncate leading-5 text-slate-700' : 'min-w-0 flex-1 truncate text-[14px] leading-5 text-slate-700'">
+            {{ getConversationQuestionText(template) }}
+          </span>
+        </button>
+        <div
+          v-if="!template.readonly"
+          class="mr-2 flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        >
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded-md border border-transparent bg-transparent text-[12px] text-slate-400 hover:border-blue-100 hover:bg-blue-50 hover:text-blue-600"
+            title="编辑收藏"
+            @click="openEdit(template, $event)"
+          >
+            <i class="fa-regular fa-pen-to-square"></i>
+          </button>
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded-md border border-transparent bg-transparent text-[12px] text-slate-400 hover:border-red-100 hover:bg-red-50 hover:text-red-500"
+            :title="deletingId === template.id ? '删除中...' : '删除收藏'"
+            @click="handleDelete(template, $event)"
+          >
+            <i :class="deletingId === template.id ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-trash'"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SQL / 可视化收藏：卡片网格 -->
+    <div v-else-if="mode !== 'conversation' && displayedTemplates.length > 0" class="grid grid-cols-[repeat(auto-fill,240px)] gap-3">
       <button
         v-for="template in displayedTemplates"
         :key="template.id"
-        class="query-card relative h-[115px] p-3 border border-black/[0.06] rounded-xl bg-white text-left cursor-pointer transition-all duration-300 overflow-hidden hover:border-[rgba(31,130,217,0.3)] hover:shadow-[0_8px_24px_rgba(31,130,217,0.12)] hover:-translate-y-[3px]"
-        :class="{ 'h-auto min-h-[60px]': mode === 'conversation' }"
+        class="query-card relative h-[115px] w-[240px] p-2.5 border border-black/[0.06] rounded-xl bg-white text-left cursor-pointer transition-all duration-300 overflow-hidden hover:border-[rgba(31,130,217,0.3)] hover:shadow-[0_8px_24px_rgba(31,130,217,0.12)] hover:-translate-y-[3px]"
         @click="handleClick(template)"
         @mouseenter="hoveredId = template.id"
         @mouseleave="hoveredId = null"
       >
-        <div class="absolute top-2 right-2 flex items-center gap-1 opacity-0 transition-opacity duration-150" :class="{ 'opacity-100': hoveredId === template.id }">
-          <span
-            class="w-6 h-6 flex items-center justify-center border border-transparent rounded bg-white/95 text-[11px] text-gray-400 transition-all duration-150 hover:text-[#1f82d9] hover:border-[#bfdbfe] hover:bg-[#eff6ff]"
-            title="编辑收藏"
-            role="button"
-            @click="openEdit(template, $event)"
-          >
-            <i class="fa-regular fa-pen-to-square"></i>
-          </span>
-          <span
-            class="w-6 h-6 flex items-center justify-center border border-transparent rounded bg-white/95 text-[11px] text-gray-400 transition-all duration-150 hover:text-red-500 hover:border-red-100 hover:bg-red-50"
-            :title="deletingId === template.id ? '删除中...' : '删除收藏'"
-            role="button"
-            @click="handleDelete(template, $event)"
-          >
-            <i :class="deletingId === template.id ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-trash'"></i>
-          </span>
-        </div>
-
-        <!-- 顶部：图标 + 标题 -->
-        <div class="flex items-center gap-2 mb-2">
+        <div class="mb-1 flex h-5 items-center gap-1">
           <div
-            class="card-icon w-8 h-8 flex items-center justify-center rounded-lg text-sm shrink-0 transition-all duration-300"
+            class="card-icon w-5 h-5 flex items-center justify-center rounded-md text-[10px] shrink-0 transition-all duration-300"
             :style="{ backgroundColor: '#E8F3FF', color: '#B3DBD2' }"
           >
-            <i :class="['fa-solid', mode === 'conversation' ? 'fa-comment-dots' : (template.query_type === 'builder' ? 'fa-cubes' : template.icon)]"></i>
+            <i :class="['fa-solid', getTemplateIcon(template)]"></i>
           </div>
           <h4
-            class="flex-1 min-w-0 text-[13px] font-medium text-gray-700 m-0 overflow-hidden text-ellipsis whitespace-nowrap"
+            class="flex-1 min-w-0 text-[12px] font-medium leading-4 text-gray-700 m-0 overflow-hidden text-ellipsis whitespace-nowrap"
             :title="template.title"
           >
-            {{ template.title.length > 12 ? template.title.substring(0, 12) + '...' : template.title }}
+            {{ template.title }}
           </h4>
+          <div
+            v-if="!template.readonly"
+            class="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150"
+            :class="{ 'opacity-100': hoveredId === template.id }"
+          >
+            <span
+              class="w-4.5 h-4.5 flex items-center justify-center border border-transparent rounded bg-white/95 text-[9px] text-gray-400 transition-all duration-150 hover:text-[#1f82d9] hover:border-[#bfdbfe] hover:bg-[#eff6ff]"
+              title="编辑收藏"
+              role="button"
+              @click="openEdit(template, $event)"
+            >
+              <i class="fa-regular fa-pen-to-square"></i>
+            </span>
+            <span
+              class="w-4.5 h-4.5 flex items-center justify-center border border-transparent rounded bg-white/95 text-[9px] text-gray-400 transition-all duration-150 hover:text-red-500 hover:border-red-100 hover:bg-red-50"
+              :title="deletingId === template.id ? '删除中...' : '删除收藏'"
+              role="button"
+              @click="handleDelete(template, $event)"
+            >
+              <i :class="deletingId === template.id ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-trash'"></i>
+            </span>
+          </div>
         </div>
 
-        <!-- 会话模式：显示完整问题文本 -->
-        <template v-if="mode === 'conversation'">
-          <div class="text-[13px] text-gray-500 leading-normal line-clamp-2">{{ template.title }}</div>
-        </template>
-
-        <!-- 默认模式：Builder 配置信息 -->
-        <template v-else>
-          <div v-if="template.query_type === 'builder' && template.builder_config" class="flex flex-col gap-1">
-            <!-- 主表 -->
-            <div class="flex items-center gap-1">
-              <span class="text-[11px] text-gray-400 shrink-0">表:</span>
-              <span class="text-[11px] text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap">{{ template.builder_config.mainTable }}</span>
-            </div>
-            <!-- 关联表 -->
-            <div v-if="template.builder_config.joins?.length" class="flex items-center gap-1">
-              <span class="text-[11px] text-gray-400 shrink-0">关联:</span>
-              <span class="text-[11px] text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ template.builder_config.joins.map(j => `${j.rightTable}(${getJoinTypeLabel(j.joinType)})`).join(', ') }}
-              </span>
-            </div>
-            <!-- 维度 -->
-            <div v-if="template.builder_config.dimensions?.length" class="flex items-center gap-1">
-              <span class="text-[11px] text-gray-400 shrink-0">维度:</span>
-              <span class="text-[11px] text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ template.builder_config.dimensions.map(d => d.column).join(', ') }}
-              </span>
-            </div>
-            <!-- 聚合 -->
-            <div v-if="template.builder_config.aggregations?.length" class="flex items-center gap-1">
-              <span class="text-[11px] text-gray-400 shrink-0">聚合:</span>
-              <span class="text-[11px] text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ template.builder_config.aggregations.map(a => `${a.func}(${a.column})`).join(', ') }}
-              </span>
-            </div>
-            <!-- 筛选 -->
-            <div v-if="template.builder_config.filters?.length" class="flex items-center gap-1">
-              <span class="text-[11px] text-gray-400 shrink-0">条件:</span>
-              <span class="text-[11px] text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ template.builder_config.filters.length === 1
-                  ? `${template.builder_config.filters[0]?.column ?? ''}${template.builder_config.filters[0]?.operator ?? ''}${template.builder_config.filters[0]?.value ?? ''}`
-                  : `${template.builder_config.filters[0]?.column ?? ''}${template.builder_config.filters[0]?.operator ?? ''}... 等${template.builder_config.filters.length}个`
-                }}
-              </span>
-            </div>
-          </div>
-
-          <!-- SQL 预览 -->
-          <div v-else class="py-2 px-2.5 rounded-md bg-slate-50 border border-black/[0.04] font-mono text-[11px] text-slate-500 leading-snug line-clamp-2">
-            {{ template.query }}
-          </div>
-        </template>
-
+        <div
+          :class="[
+            'h-[68px] overflow-hidden rounded-md border border-black/[0.04] px-2.5 py-1.5 text-[11px] leading-[18px] text-slate-500 line-clamp-3',
+            template.query_type === 'builder' ? 'bg-blue-50/40' : 'bg-slate-50 font-mono'
+          ]"
+          :title="getTemplatePreview(template)"
+        >
+          {{ getTemplatePreview(template) }}
+        </div>
       </button>
     </div>
 
@@ -589,8 +745,8 @@ watch(
 <style scoped>
 /* Card icon hover effect - requires parent selector */
 .query-card:hover .card-icon {
-  transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: scale(1.04);
+  box-shadow: 0 3px 8px rgba(31, 130, 217, 0.12);
 }
 
 </style>

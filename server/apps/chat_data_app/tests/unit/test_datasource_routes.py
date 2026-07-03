@@ -304,6 +304,7 @@ class _FakeDatasourceManager:
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
         query_context: str = "",
+        recommended_questions: list[str] | None = None,
         update_by: str = "",
         update_by_name: str = "",
     ):
@@ -313,6 +314,7 @@ class _FakeDatasourceManager:
         item["group_name"] = group_name
         item["ds_description"] = group_desc
         item["query_context"] = query_context
+        item["recommended_questions"] = list(recommended_questions or [])
         item["source_type"] = source_type
         item["query_executor_type"] = template_source_config.get("query_executor_type") or "direct"
         item["source_config"] = dict(template_source_config)
@@ -337,6 +339,7 @@ class _FakeDatasourceManager:
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
         query_context: str = "",
+        recommended_questions: list[str] | None = None,
         update_by: str = "",
         update_by_name: str = "",
     ):
@@ -349,6 +352,7 @@ class _FakeDatasourceManager:
             member_source_configs=member_source_configs,
             tables=tables,
             query_context=query_context,
+            recommended_questions=recommended_questions,
             update_by=update_by,
             update_by_name=update_by_name,
         )
@@ -430,6 +434,7 @@ class _FakeDatasourceManager:
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
         query_context: str = "",
+        recommended_questions: list[str] | None = None,
         create_by: str = "",
     ):
         datasource_id = "ds_group_from_template"
@@ -441,6 +446,7 @@ class _FakeDatasourceManager:
             "group_name": group_name,
             "ds_description": group_desc,
             "query_context": query_context,
+            "recommended_questions": list(recommended_questions or []),
             "source_type": source_type,
             "query_executor_type": template_source_config.get("query_executor_type") or "direct",
             "source_config": dict(template_source_config),
@@ -463,6 +469,7 @@ class _FakeDatasourceManager:
         member_source_configs: list[dict] | None = None,
         tables: list[dict] | None = None,
         query_context: str = "",
+        recommended_questions: list[str] | None = None,
         create_by: str = "",
         create_by_name: str = "",
     ):
@@ -474,6 +481,7 @@ class _FakeDatasourceManager:
             member_source_configs=member_source_configs,
             tables=tables,
             query_context=query_context,
+            recommended_questions=recommended_questions,
             create_by=create_by,
         )
 
@@ -3393,6 +3401,40 @@ def test_create_and_update_datasource_group_validation_branches(monkeypatch):
     assert _payload(runtime_update)["code"] == 50006
 
 
+def test_datasource_group_recommended_questions_validation():
+    template = {
+        "org_name": "机构A",
+        "org_code": "org_a",
+        "query_executor_type": "direct",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "database": "db_a",
+    }
+    body = DatasourceGroupCreateRequest(
+        group_name="推荐问题组",
+        source_type="mysql",
+        template_source=template,
+        recommended_questions=[" 查询订单总览 ", "", "查询订单总览", "按机构统计订单数"],
+    )
+    assert body.recommended_questions == ["查询订单总览", "按机构统计订单数"]
+
+    with pytest.raises(ValueError):
+        DatasourceGroupCreateRequest(
+            group_name="推荐问题过长",
+            source_type="mysql",
+            template_source=template,
+            recommended_questions=["超" * 51],
+        )
+
+    with pytest.raises(ValueError):
+        DatasourceGroupCreateRequest(
+            group_name="推荐问题过多",
+            source_type="mysql",
+            template_source=template,
+            recommended_questions=[f"问题{i}" for i in range(51)],
+        )
+
+
 def test_delete_datasource_error_branches(monkeypatch):
     _mock_authenticated_user(monkeypatch)
 
@@ -3809,6 +3851,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
         group_name="模板组",
         group_desc="描述",
         query_context="分库查询正反例",
+        recommended_questions=["查询订单总览", "按机构统计订单数"],
         source_type="mysql",
         template_source={
             "org_name": "template_a",
@@ -3835,6 +3878,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
     assert data["data"]["source_config"]["database"] == "db_template"
     assert data["data"]["member_datasource_ids"] == ["phy_template", "phy_member_a"]
     assert data["data"]["query_context"] == "分库查询正反例"
+    assert data["data"]["recommended_questions"] == ["查询订单总览", "按机构统计订单数"]
     assert data["data"]["create_by"] == "creator_1"
     assert data["data"]["update_by"] == "creator_1"
 
@@ -3923,6 +3967,7 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
         group_name="更新后的组",
         group_desc="新描述",
         query_context="更新后的智能问数说明",
+        recommended_questions=["查看更新后的核心指标"],
         source_type="mysql",
         template_source={
             "org_name": "template_new",
@@ -3950,6 +3995,7 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
     assert data["data"]["group_name"] == "更新后的组"
     assert data["data"]["source_config"]["database"] == "db_template_new"
     assert data["data"]["query_context"] == "更新后的智能问数说明"
+    assert data["data"]["recommended_questions"] == ["查看更新后的核心指标"]
     assert len(data["data"]["member_sources"]) == 2
     assert data["data"]["update_by"] == "updater_1"
 

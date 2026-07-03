@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createQueryFavorite } from '../api'
 
-type FavoriteMode = 'conversation' | 'sql' | 'builder'
+type FavoriteMode = 'sql' | 'builder'
 
 interface Props {
   visible: boolean
@@ -33,7 +33,6 @@ const saving = ref(false)
 
 const isBuilder = computed(() => props.mode === 'builder')
 const dialogTitle = computed(() => {
-  if (props.mode === 'conversation') return '收藏智能问数'
   if (props.mode === 'builder') return '收藏可视化查询'
   return '收藏 SQL 查询'
 })

@@ -42,6 +42,7 @@ def _group_model(group_id: str = "group_a", group_name: str = "订单组", is_de
         group_name=group_name,
         group_desc="描述",
         query_context="智能问数说明",
+        recommended_questions_json='["查询订单总览"]',
         source_type="mysql",
         template_source="机构A|ORG_A|direct|127.0.0.1:3306:demo",
         member_sources_text="机构A|ORG_A|direct|127.0.0.1:3306:demo\n机构B|ORG_B|http|127.0.0.2:3306:demo",
@@ -332,6 +333,7 @@ def test_map_group_row_and_member_sources_preserve_metadata():
 
     assert datasource["template_datasource_id"] == "ORG_A"
     assert datasource["mapped_modules"] == ["执法检查"]
+    assert datasource["recommended_questions"] == ["查询订单总览"]
     assert datasource["is_default"] is True
     assert datasource["source_config"] == {"host": "127.0.0.1", "port": 3306, "database": "demo"}
     assert [item["member_datasource_id"] for item in members] == ["ORG_A", "ORG_B"]
@@ -354,6 +356,29 @@ def test_map_group_row_and_member_sources_preserve_metadata():
     legacy = store._map_group_row(legacy_row)
     assert legacy["template_datasource_id"] == "127.0.0.1:3306:demo"
     assert legacy["source_config"] == {"host": "127.0.0.1", "port": 3306, "database": "demo"}
+    assert legacy["recommended_questions"] == []
+
+
+def test_map_group_row_normalizes_malformed_recommended_questions():
+    store = DataSourceDao.__new__(DataSourceDao)
+    row = store._group_model_to_row(_group_model())
+    row["recommended_questions_json"] = json.dumps(
+        [
+            " 查询订单总览 ",
+            "",
+            "查询订单总览",
+            "超" * 51,
+            123,
+            "按机构统计订单数",
+        ],
+        ensure_ascii=False,
+    )
+
+    datasource = store._map_group_row(row)
+    assert datasource["recommended_questions"] == ["查询订单总览", "123", "按机构统计订单数"]
+
+    row["recommended_questions_json"] = json.dumps({"question": "查询订单总览"}, ensure_ascii=False)
+    assert store._map_group_row(row)["recommended_questions"] == []
 
 
 def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):

@@ -1794,6 +1794,7 @@ onUnmounted(() => {
                   :selected-datasource-id="selectedDatasourceId"
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
+                  :semantic-configs="enabledSemanticConfigs"
                   :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
                   :execution-targets="executionTargets"

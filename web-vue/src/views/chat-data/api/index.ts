@@ -61,6 +61,7 @@ type DatasourceGroupPayload = {
   group_name: string
   group_desc?: string
   query_context?: string
+  recommended_questions?: string[]
   source_type: 'mysql' | 'hive'
   template_source: {
     org_name: string
@@ -1269,7 +1270,7 @@ export function getDatasourceSchema(datasourceId: string): Promise<ApiResponse<{
 export function getQueryFavorites(params: {
   datasource_id: string
   limit?: number
-  query_type?: 'conversation' | 'sql' | 'builder'
+  query_type?: 'sql' | 'builder'
 }): Promise<ApiResponse<{ queries: unknown[] }>> {
   return request({
     url: '/agents/api/chatdata/query-favorites',
@@ -1319,7 +1320,7 @@ export function getGlobalQueryHistory(params: {
 /** 创建收藏查询 */
 export function createQueryFavorite(data: {
   datasource_id: string
-  query_type: 'conversation' | 'sql' | 'builder'
+  query_type: 'sql' | 'builder'
   favorite_title: string
   query_text: string
   builder_config?: Record<string, unknown>

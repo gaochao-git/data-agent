@@ -37,6 +37,8 @@ logger = get_logger(__name__)
 
 _UNSET = object()
 _ORM_SESSION: ContextVar[Any] = ContextVar("chat_data_orm_session", default=None)
+_MAX_RECOMMENDED_QUESTION_COUNT = 50
+_MAX_RECOMMENDED_QUESTION_LENGTH = 50
 
 
 class DataSourceDao:
@@ -71,6 +73,7 @@ class DataSourceDao:
             "group_name": model.group_name,
             "group_desc": model.group_desc,
             "query_context": model.query_context,
+            "recommended_questions_json": getattr(model, "recommended_questions_json", None),
             "source_type": model.source_type,
             "template_source": model.template_source,
             "member_sources_text": model.member_sources_text,
@@ -113,6 +116,23 @@ class DataSourceDao:
             "columns_json": model.columns_json,
         }
 
+    def _normalize_recommended_questions(self, value: Any) -> List[str]:
+        raw_items = _load_json(value, [])
+        if not isinstance(raw_items, list):
+            return []
+
+        result: List[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            question = str(item or "").strip()
+            if not question or question in seen or len(question) > _MAX_RECOMMENDED_QUESTION_LENGTH:
+                continue
+            seen.add(question)
+            result.append(question)
+            if len(result) >= _MAX_RECOMMENDED_QUESTION_COUNT:
+                break
+        return result
+
     def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         group_id = row.get("group_id") or ""
         template_source = str(row.get("template_source") or "").strip()
@@ -141,6 +161,7 @@ class DataSourceDao:
             "group_name": row.get("group_name") or "",
             "ds_description": row.get("group_desc") or "",
             "query_context": row.get("query_context") or "",
+            "recommended_questions": self._normalize_recommended_questions(row.get("recommended_questions_json")),
             "source_type": row.get("source_type") or "",
             "query_executor_type": parsed_template.get("query_executor_type") or "direct",
             "create_time": _format_time(row.get("create_time")) or "",
@@ -588,6 +609,7 @@ class DataSourceDao:
         template_source: str = "",
         member_sources_text: Optional[str] = None,
         query_context: Optional[str] = None,
+        recommended_questions: Optional[List[str]] = None,
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
@@ -598,6 +620,7 @@ class DataSourceDao:
             group_name=group_name,
             group_desc=group_desc,
             query_context=query_context,
+            recommended_questions_json=json.dumps(recommended_questions or [], ensure_ascii=False),
             source_type=source_type,
             template_source=template_source,
             member_sources_text=member_sources_text or template_source,
@@ -613,6 +636,7 @@ class DataSourceDao:
                     group_name=stmt.inserted.group_name,
                     group_desc=stmt.inserted.group_desc,
                     query_context=stmt.inserted.query_context,
+                    recommended_questions_json=stmt.inserted.recommended_questions_json,
                     source_type=stmt.inserted.source_type,
                     template_source=stmt.inserted.template_source,
                     member_sources_text=stmt.inserted.member_sources_text,
@@ -628,6 +652,7 @@ class DataSourceDao:
         group_name: Any = _UNSET,
         group_desc: Any = _UNSET,
         query_context: Any = _UNSET,
+        recommended_questions: Any = _UNSET,
         source_type: Any = _UNSET,
         template_source: Any = _UNSET,
         member_sources_text: Any = _UNSET,
@@ -644,6 +669,8 @@ class DataSourceDao:
             values["group_desc"] = group_desc
         if query_context is not _UNSET:
             values["query_context"] = query_context
+        if recommended_questions is not _UNSET:
+            values["recommended_questions_json"] = json.dumps(recommended_questions or [], ensure_ascii=False)
         if source_type is not _UNSET:
             values["source_type"] = source_type
         if template_source is not _UNSET:

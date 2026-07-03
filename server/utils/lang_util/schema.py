@@ -162,6 +162,7 @@ CREATE TABLE `datasource_group` (
   `group_name` varchar(128) NOT NULL COMMENT '数据源名称',
   `group_desc` varchar(128) DEFAULT NULL COMMENT '描述',
   `query_context` text COMMENT '智能问数说明',
+  `recommended_questions_json` text COMMENT '推荐问题JSON',
   `source_type` varchar(32) NOT NULL COMMENT '数据源类型: mysql | hive',
   `template_source` varchar(256) NOT NULL COMMENT '模板数据源，格式 机构名称|机构编码|连接方式|host:port:database',
   `member_sources_text` text COMMENT '组内数据源，多行文本，格式 机构名称|机构编码|连接方式|host:port:database',

@@ -6,7 +6,7 @@
 import { ref, computed, watch, nextTick, toRef, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticConfigItem, SemanticDimension, SemanticMetric } from '../types'
 import { createDashboardFromSpec, getChatDataConfig, getSkills } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
@@ -15,9 +15,8 @@ import { useDeepThinking } from '../composables/useDeepThinking'
 import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs } from '../utils/semanticTool'
 import StructuredMessage from './StructuredMessage.vue'
 import QueryResultPanel from './QueryResultPanel.vue'
-import QuickQueries from './QuickQueries.vue'
+import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import AnalysisPanel from './AnalysisPanel.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import SkillManager from './SkillManager.vue'
@@ -55,6 +54,7 @@ interface Props {
   // 语义配置（指标集）ID
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
+  semanticConfigs?: SemanticConfigItem[]
   // 是否显示分析面板（由外层切换控制）
   showAnalysisPanel?: boolean
   executionTargets?: ExecutionTargetOption[]
@@ -74,6 +74,7 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingConversations: false,
   semanticConfigId: null,
   semanticConfigSelection: null,
+  semanticConfigs: () => [],
   showAnalysisPanel: true,
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false,
@@ -474,16 +475,11 @@ onUnmounted(() => {
   window.removeEventListener('scroll', handleTokenUsageViewportChange, true)
 })
 
-// 收藏
-const conversationFavoriteRefreshKey = ref(0)
 const selectedSkill = ref<SkillInfo | null>(null)
 const commandSkills = ref<SkillInfo[]>([])
 const isCommandSkillLoading = ref(false)
 const isSkillManagerOpen = ref(false)
 const highlightedSkillIndex = ref(0)
-const showFavoriteModal = ref(false)
-const favoriteTitle = ref('')
-const favoriteContent = ref('')
 const creatingDashboardMessageId = ref<string | null>(null)
 
 const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
@@ -525,21 +521,6 @@ const loadCommandSkills = async () => {
   }
 }
 
-const openFavoriteModalFromQuestion = (question: string) => {
-  if (!selectedDatasource.value) {
-    ElMessage.warning('请先选择数据源')
-    return
-  }
-  const content = (question || '').trim()
-  if (!content) return
-  favoriteTitle.value = content.slice(0, 40)
-  favoriteContent.value = content
-  showFavoriteModal.value = true
-}
-
-const handleFavoriteSaved = () => {
-  conversationFavoriteRefreshKey.value++
-}
 // 会话历史加载
 const conversationIdRef = toRef(props, 'conversationId')
 const { isLoadingHistory, resetHistory } = useConversationHistory({
@@ -622,6 +603,129 @@ const selectedDatasource = computed({
 
 const currentDatasource = computed(() =>
   props.datasources.find(item => item.id === selectedDatasource.value) || props.datasource || null
+)
+
+const selectedSemanticConfigForRecommendations = computed(() => {
+  const selectionId = String(props.semanticConfigSelection?.semantic_config_id || props.semanticConfigId || '').trim()
+  if (selectionId) {
+    return props.semanticConfigs.find(item => item.id === selectionId) || null
+  }
+  return props.semanticConfigs.find(item => item.enabled) || null
+})
+
+const getMetricDisplayName = (metric: SemanticMetric) => (
+  String(metric.name || metric.field_name || metric.expression || '').trim()
+)
+
+const getDimensionDisplayName = (dimension: SemanticDimension) => (
+  String(dimension.name || dimension.field_name || dimension.column || '').trim()
+)
+
+const recommendationPage = ref(0)
+const recommendationPageSize = 5
+const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)
+const canRefreshRecommendations = computed(() => fallbackConversationQueries.value.length > recommendationPageSize)
+const refreshRecommendations = () => {
+  if (!canRefreshRecommendations.value) return
+  const pageCount = Math.ceil(fallbackConversationQueries.value.length / recommendationPageSize)
+  recommendationPage.value = (recommendationPage.value + 1) % pageCount
+}
+
+const pushFallbackQuery = (items: FallbackQuery[], seen: Set<string>, title: string, icon = 'fa-lightbulb') => {
+  const normalizedTitle = String(title || '').trim()
+  if (!normalizedTitle || seen.has(normalizedTitle)) return
+  seen.add(normalizedTitle)
+  items.push({
+    id: String(items.length + 1),
+    title: normalizedTitle,
+    query: normalizedTitle,
+    icon,
+  })
+}
+
+const configuredConversationQueries = computed<FallbackQuery[]>(() => {
+  const items: FallbackQuery[] = []
+  const seen = new Set<string>()
+  ;(currentDatasource.value?.recommended_questions || []).forEach(question => {
+    pushFallbackQuery(items, seen, question, 'fa-message')
+  })
+  return items
+})
+
+const generatedConversationQueries = computed<FallbackQuery[]>(() => {
+  const config = selectedSemanticConfigForRecommendations.value
+  const metrics = (config?.metrics || []).map(getMetricDisplayName).filter(Boolean)
+  const dimensions = (config?.dimensions || []).map(getDimensionDisplayName).filter(Boolean)
+  const timeDimension = (config?.dimensions || []).find(item => item.type === 'time')
+  const timeDimensionName = timeDimension ? getDimensionDisplayName(timeDimension) : ''
+  const categoricalDimensions = (config?.dimensions || []).filter(item => item.type !== 'time').map(getDimensionDisplayName).filter(Boolean)
+  const firstMetric = metrics[0] || ''
+  const secondMetric = metrics[1] || ''
+  const thirdMetric = metrics[2] || ''
+  const firstDimension = dimensions[0] || ''
+  const secondDimension = dimensions.find(item => item !== firstDimension) || ''
+  const items: FallbackQuery[] = []
+  const seen = new Set<string>()
+
+  if (firstMetric) {
+    pushFallbackQuery(items, seen, `查询${firstMetric}总览`, 'fa-chart-simple')
+  }
+  if (firstMetric && firstDimension) {
+    pushFallbackQuery(items, seen, `按${firstDimension}统计${firstMetric}`, 'fa-table-cells')
+  }
+  if (firstMetric && timeDimensionName) {
+    pushFallbackQuery(items, seen, `查看${firstMetric}按${timeDimensionName}的变化趋势`, 'fa-chart-line')
+  }
+  if (firstMetric && secondMetric) {
+    pushFallbackQuery(items, seen, `对比${firstMetric}和${secondMetric}`, 'fa-scale-balanced')
+  }
+  if (firstMetric && secondDimension) {
+    pushFallbackQuery(items, seen, `按${secondDimension}分析${firstMetric}`, 'fa-layer-group')
+  }
+  if (secondMetric && firstDimension) {
+    pushFallbackQuery(items, seen, `按${firstDimension}统计${secondMetric}`, 'fa-table-cells')
+  }
+  if (thirdMetric) {
+    pushFallbackQuery(items, seen, `查询${thirdMetric}总览`, 'fa-chart-simple')
+  }
+  metrics.slice(0, 4).forEach(metric => {
+    pushFallbackQuery(items, seen, `查看${metric}排名前十`, 'fa-ranking-star')
+  })
+  categoricalDimensions.slice(0, 3).forEach(dimension => {
+    pushFallbackQuery(items, seen, `按${dimension}查看数据分布`, 'fa-chart-pie')
+  })
+  if (!firstMetric && firstDimension) {
+    pushFallbackQuery(items, seen, `查询${firstDimension}分布`, 'fa-chart-pie')
+  }
+
+  pushFallbackQuery(items, seen, '查询主要指标总览', 'fa-chart-simple')
+  pushFallbackQuery(items, seen, '按机构统计主要指标', 'fa-sitemap')
+  pushFallbackQuery(items, seen, '查看最近一段时间的数据趋势', 'fa-chart-line')
+  pushFallbackQuery(items, seen, '列出需要关注的异常数据', 'fa-triangle-exclamation')
+  pushFallbackQuery(items, seen, '找出排名靠前的记录', 'fa-ranking-star')
+  pushFallbackQuery(items, seen, '按类别对比核心指标', 'fa-table-cells')
+  pushFallbackQuery(items, seen, '查看数据量最大的分类', 'fa-chart-pie')
+
+  return items.slice(0, 20)
+})
+
+const fallbackConversationQueries = computed<FallbackQuery[]>(() => {
+  return configuredConversationQueries.value.length > 0
+    ? configuredConversationQueries.value
+    : generatedConversationQueries.value
+})
+
+watch(
+  () => [
+    selectedDatasource.value,
+    props.semanticConfigId || '',
+    props.semanticConfigSelection?.semantic_config_id || '',
+    configuredConversationQueries.value.map(item => item.title).join('|'),
+    fallbackConversationQueries.value.map(item => item.title).join('|'),
+  ],
+  () => {
+    recommendationPage.value = 0
+  }
 )
 
 const localExecutionTargets = computed<ExecutionTargetOption[]>(() => {
@@ -1662,24 +1766,6 @@ const handleCopyAssistantMessage = async (msg: Message) => {
   }
 }
 
-const getPreviousUserQuestion = (messageId: string): string => {
-  const index = messages.value.findIndex(item => item.id === messageId)
-  if (index < 0) return ''
-  for (let currentIndex = index - 1; currentIndex >= 0; currentIndex -= 1) {
-    const message = messages.value[currentIndex]
-    if (message?.role === 'user') return message.content || ''
-  }
-  return ''
-}
-
-const shouldShowMessageFavoriteButton = (msg: Message): boolean => {
-  return Boolean(getPreviousUserQuestion(msg.id).trim())
-}
-
-const handleFavoriteAssistantMessage = (msg: Message) => {
-  openFavoriteModalFromQuestion(getPreviousUserQuestion(msg.id))
-}
-
 // 打开分析面板
 const handleViewAnalysis = (msg: Message) => {
   const analysisData = createAnalysisData(msg)
@@ -1795,172 +1881,45 @@ const handleViewAnalysis = (msg: Message) => {
         <i class="fa-solid fa-spinner fa-spin text-2xl text-blue-500"></i>
         <span>加载历史消息...</span>
       </div>
-      <!-- 无消息时：欢迎界面 -->
-      <div v-else-if="messages.length === 0" class="flex-1 flex items-start justify-center pt-[10%]">
-        <div class="w-[774px] max-w-[90%] text-center">
-          <h3 class="text-xl font-semibold text-gray-800 m-0 mb-2">您好，有什么可以帮您？</h3>
-          <!-- 输入框 -->
-          <form class="relative" @submit.prevent="handleSubmit">
-            <div
-              :class="[
-                'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
-                inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
-              ]"
-            >
-              <div class="min-h-[54px] px-4 pt-4 pb-2">
-                <div
-                  v-if="selectedSkillTitle"
-                  class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
-                >
-                  <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                  <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
-                  <button type="button" class="text-blue-400 hover:text-blue-700" @click="clearSelectedSkill">
-                    <i class="fa-solid fa-xmark text-[10px]"></i>
-                  </button>
-                </div>
-                <textarea
-                  ref="textareaRef"
-                  v-model="input"
-                  placeholder="请输入问题查询数据，输入 / 可选择技能"
-                  class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
-                  @keydown="handleKeyDown"
-                  @focus="inputFocused = true"
-                  @blur="inputFocused = false"
-                ></textarea>
-              </div>
-              <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
-                  <button
-                    v-if="selectedAgent === 'chat_data'"
-                    type="button"
-                    class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                    title="技能管理"
-                    @click="isSkillManagerOpen = true"
-                  >
-                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                    <span class="toolbar-label">技能</span>
-                  </button>
-                  <div ref="agentSelectorRef" class="relative">
-                    <button
-                      type="button"
-                      class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                      @click="isAgentSelectorOpen = !isAgentSelectorOpen"
-                    >
-                      <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                      <span class="toolbar-label">{{ selectedAgentLabel }}</span>
-                      <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-                    </button>
-                    <div
-                      v-if="isAgentSelectorOpen"
-                      class="absolute left-0 bottom-8 z-50 min-w-[130px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
-                    >
-                      <button
-                        v-for="agent in agentOptions"
-                        :key="agent.id"
-                        type="button"
-                        :aria-disabled="agent.disabled"
-                        :title="agent.disabled ? '功能暂未开放' : undefined"
-                        :class="[
-                          'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs',
-                          selectedAgent === agent.id ? 'text-blue-600 bg-blue-50' : 'text-gray-600',
-                          agent.disabled ? '!text-gray-400 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'
-                        ]"
-                        @click="selectAgent(agent)"
-                      >
-                        <span>{{ agent.label }}</span>
-                        <i v-if="!agent.disabled && selectedAgent === agent.id" class="fa-solid fa-check text-[10px]"></i>
-                      </button>
-                    </div>
-                  </div>
-                    <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
-                    <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-                    <select
-                      v-model="selectedModel"
-                      class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
-                    >
-                      <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-                    </select>
-                    <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
-                  </div>
-                  <button
-                    type="button"
-                    :class="[
-                      'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
-                      enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
-                    ]"
-                    :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
-                    :aria-pressed="enableDeepThinking"
-                    @click="enableDeepThinking = !enableDeepThinking"
-                  >
-                    <i class="fa-solid fa-brain text-[10px]"></i>
-                    <span class="toolbar-label">思考</span>
-                  </button>
-                  <ExecutionTargetPicker
-                    v-if="!hideExecutionTargetSelector && executionTargets.length > 0"
-                    v-model="selectedMemberDatasourceIds"
-                    :targets="executionTargets"
-                    :multiple="executionTargetMultiple"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  :class="[
-                    'w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200',
-                    (isGenerating || !input.trim() || !selectedDatasource) ? 'bg-gray-200 shadow-none cursor-not-allowed text-gray-400' : 'hover:scale-105 active:scale-95'
-                  ]"
-                  :disabled="isGenerating || !input.trim() || !selectedDatasource"
-                >
-                  <i class="fa-solid fa-arrow-up"></i>
-                </button>
-              </div>
-            </div>
-            <div
-              v-if="showSkillCommand"
-              class="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
-            >
-              <div v-if="isCommandSkillLoading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
-              <div v-else-if="displayedCommandSkills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
-              <template v-else>
-                <button
-                  v-for="(skill, index) in displayedCommandSkills"
-                  :key="skill.name"
-                  type="button"
-                  :class="[
-                    'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
-                    index === highlightedSkillIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
-                  ]"
-                  @mousedown.prevent="selectCommandSkill(skill)"
-                >
-                  <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
-                    <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
-                  </span>
-                  <span
-                    :class="[
-                      'shrink-0 rounded-md px-2 py-0.5 text-[11px] leading-5',
-                      skill.source === 'system' ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'
-                    ]"
-                  >
-                    {{ skill.source === 'system' ? '系统' : '用户' }}
-                  </span>
-                </button>
-              </template>
-            </div>
-          </form>
+      <!-- 无消息时：推荐问题 -->
+      <div v-else-if="messages.length === 0" class="flex-1 flex justify-center pt-8 md:pt-10">
+        <div class="w-[774px] max-w-[90%]">
+          <div class="mb-5 rounded-2xl bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/80 px-5 py-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <div class="text-[17px] font-semibold leading-7 text-slate-800">你好，我是数据智能体</div>
+          </div>
 
-          <!-- 常用推荐 -->
-          <QuickQueries
-            v-if="selectedDatasource"
-            :key="recommendationContentType"
-            :datasource-id="selectedDatasource"
-            mode="conversation"
-            content-type="queries"
-            :refresh-trigger="conversationFavoriteRefreshKey"
-            :max-items="8"
-            @select-query="handleQuickQuerySelect"
-            @select-skill="handleSkillSelect"
-          />
+          <div v-if="selectedDatasource" class="max-w-[560px]">
+            <div class="mb-2 flex items-center justify-between gap-3">
+              <div class="flex items-center gap-1.5 text-[13px] font-medium text-slate-400">
+                <i class="fa-regular fa-lightbulb text-[12px] text-amber-400"></i>
+                <span>你可以这样问：</span>
+              </div>
+              <button
+                v-if="canRefreshRecommendations"
+                type="button"
+                class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 text-[12px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-blue-600"
+                title="换一批推荐问题"
+                @click="refreshRecommendations"
+              >
+                <i class="fa-solid fa-rotate-right text-[10px]"></i>
+                <span>换一批</span>
+              </button>
+            </div>
+            <QuickQueries
+              :key="recommendationContentType"
+              :datasource-id="selectedDatasource"
+              mode="conversation"
+              content-type="queries"
+              :fallback-queries="fallbackConversationQueries"
+              :max-items="5"
+              :page-offset="recommendationOffset"
+              prefer-fallback
+              :load-favorites="false"
+              compact
+              @select-query="handleQuickQuerySelect"
+              @select-skill="handleSkillSelect"
+            />
+          </div>
         </div>
       </div>
 
@@ -2134,7 +2093,7 @@ const handleViewAnalysis = (msg: Message) => {
             </div>
 
             <div
-              v-if="!msg.isStreaming && (shouldShowMessageCopyButton(msg) || shouldShowMessageFavoriteButton(msg) || shouldShowMessageAnalysisButton(msg))"
+              v-if="!msg.isStreaming && (shouldShowMessageCopyButton(msg) || shouldShowMessageAnalysisButton(msg))"
               class="flex items-center gap-2 px-1"
             >
               <button
@@ -2144,14 +2103,6 @@ const handleViewAnalysis = (msg: Message) => {
               >
                 <i class="fa-regular fa-copy text-[11px]"></i>
                 <span>复制</span>
-              </button>
-              <button
-                v-if="shouldShowMessageFavoriteButton(msg)"
-                class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
-                @click="handleFavoriteAssistantMessage(msg)"
-              >
-                <i class="fa-regular fa-star text-[11px]"></i>
-                <span>收藏</span>
               </button>
               <button
                 v-if="shouldShowMessageAnalysisButton(msg)"
@@ -2193,8 +2144,8 @@ const handleViewAnalysis = (msg: Message) => {
       </div>
     </div>
 
-    <!-- 底部输入区（有消息时显示） -->
-    <div v-if="messages.length > 0" class="p-4 bg-gray-50">
+    <!-- 底部输入区 -->
+    <div v-if="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50">
       <div class="max-w-[774px] mx-auto w-[90%]">
         <form class="relative" @submit.prevent="handleSubmit">
           <div
@@ -2492,15 +2443,6 @@ const handleViewAnalysis = (msg: Message) => {
       :chart-type="saveChartType"
       :datasource-id="selectedDatasource"
       :member-datasource-id="saveMemberDatasourceId"
-    />
-    <QueryFavoriteModal
-      v-model:visible="showFavoriteModal"
-      mode="conversation"
-      :datasource-id="selectedDatasource || ''"
-      :semantic-config-id="props.semanticConfigId"
-      :initial-title="favoriteTitle"
-      :initial-content="favoriteContent"
-      @saved="handleFavoriteSaved"
     />
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[72vh]">

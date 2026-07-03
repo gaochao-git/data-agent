@@ -43,6 +43,7 @@ export interface DataSource {
   group_name: string
   ds_description: string
   query_context?: string
+  recommended_questions?: string[]
   ds_tables: TableInfo[]
   is_default?: boolean
   source_type?: string

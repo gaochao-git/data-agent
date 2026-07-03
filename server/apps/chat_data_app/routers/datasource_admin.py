@@ -110,6 +110,7 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
             member_source_configs=member_sources,
             tables=tables,
             query_context=(body.query_context or "").strip(),
+            recommended_questions=body.recommended_questions,
             create_by=user_id,
             create_by_name=username,
         )
@@ -192,6 +193,7 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
             member_source_configs=member_sources,
             tables=tables,
             query_context=(body.query_context or "").strip(),
+            recommended_questions=body.recommended_questions,
             update_by=user_id,
             update_by_name=username,
         )

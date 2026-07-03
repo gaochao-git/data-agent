@@ -3,11 +3,37 @@ ChatData API 数据模型定义
 """
 
 from typing import Optional, Dict, List, Literal, Union, Any
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
 from .services.runtime_config import DEFAULT_ROW_LIMIT
 
 QueryExecutorType = Literal["direct", "http"]
+MAX_RECOMMENDED_QUESTION_COUNT = 50
+MAX_RECOMMENDED_QUESTION_LENGTH = 50
+
+
+def _normalize_recommended_questions(value: Any) -> List[str]:
+    if value is None:
+        return []
+    raw_items = value.splitlines() if isinstance(value, str) else value
+    if not isinstance(raw_items, list):
+        raise ValueError("recommended_questions 必须是数组")
+
+    result: List[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_items):
+        question = str(item or "").strip()
+        if not question:
+            continue
+        if len(question) > MAX_RECOMMENDED_QUESTION_LENGTH:
+            raise ValueError(f"推荐问题第 {index + 1} 行不能超过 {MAX_RECOMMENDED_QUESTION_LENGTH} 个字")
+        if question in seen:
+            continue
+        seen.add(question)
+        result.append(question)
+        if len(result) > MAX_RECOMMENDED_QUESTION_COUNT:
+            raise ValueError(f"推荐问题不能超过 {MAX_RECOMMENDED_QUESTION_COUNT} 条")
+    return result
 
 
 # ============ NL2SQL 请求模型 ============
@@ -289,10 +315,16 @@ class DatasourceGroupCreateRequest(BaseModel):
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
     query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
+    recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
+
+    @field_validator("recommended_questions", mode="before")
+    @classmethod
+    def validate_recommended_questions(cls, value: Any) -> List[str]:
+        return _normalize_recommended_questions(value)
 
 
 class DatasourceGroupUpdateRequest(BaseModel):
@@ -300,10 +332,16 @@ class DatasourceGroupUpdateRequest(BaseModel):
     group_name: str = Field(..., min_length=1, max_length=128, description="数据源组名称")
     group_desc: Optional[str] = Field(default=None, description="数据源组描述")
     query_context: Optional[str] = Field(default=None, max_length=20000, description="智能问数说明")
+    recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
     template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
+
+    @field_validator("recommended_questions", mode="before")
+    @classmethod
+    def validate_recommended_questions(cls, value: Any) -> List[str]:
+        return _normalize_recommended_questions(value)
 
 
 # ============ 语义层配置模型 ============

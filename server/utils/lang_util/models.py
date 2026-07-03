@@ -614,6 +614,7 @@ class DatasourceGroup(Base):
     group_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     group_desc: Mapped[Optional[str]] = mapped_column(String(128))
     query_context: Mapped[Optional[str]] = mapped_column(Text)
+    recommended_questions_json: Mapped[Optional[str]] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
     template_source: Mapped[str] = mapped_column(String(256), nullable=False)
     member_sources_text: Mapped[Optional[str]] = mapped_column(Text)

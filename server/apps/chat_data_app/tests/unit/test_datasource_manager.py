@@ -1131,6 +1131,7 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         "group_id": "group_a",
         "group_name": "旧名称",
         "ds_description": "旧描述",
+        "recommended_questions": ["旧推荐问题"],
         "source_type": "mysql",
         "query_executor_type": "direct",
         "template_datasource_id": "ORG_A",
@@ -1161,6 +1162,7 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         template_source_config={"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"},
         member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "host": "127.0.0.2", "port": 3306, "database": "demo"}],
         tables=[{"table_name": "orders"}],
+        recommended_questions=["新推荐问题"],
         create_by="u1",
     ))
     updated = asyncio.run(manager.update_datasource_group_from_sources_async(
@@ -1175,9 +1177,11 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
 
     assert created["id"].startswith("ds_20260602101112_345678")
     assert saved_calls[0]["member_source_configs"][0]["org_code"] == "ORG_A"
+    assert saved_calls[0]["recommended_questions"] == ["新推荐问题"]
     assert updated["name"] == "更新组"
     assert len(saved_calls[1]["member_source_configs"]) == 2
     assert saved_calls[1]["mapped_modules"] == ["执法检查"]
+    assert saved_calls[1]["recommended_questions"] == ["旧推荐问题"]
     assert asyncio.run(manager.update_datasource_group_from_sources_async("missing", "x", "", "mysql", {})) is None
 
 
