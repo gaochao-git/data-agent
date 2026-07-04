@@ -11,6 +11,7 @@ interface Props {
   fullWidth?: boolean
   hideIcon?: boolean
   inline?: boolean
+  rootLabel?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -19,6 +20,7 @@ const props = withDefaults(defineProps<Props>(), {
   fullWidth: false,
   hideIcon: false,
   inline: false,
+  rootLabel: '数据源组',
 })
 
 const emit = defineEmits<{
@@ -30,6 +32,7 @@ const searchText = ref('')
 const pendingSelectedIds = ref<string[]>([])
 const selectedIdSet = computed(() => new Set(pendingSelectedIds.value))
 const allSelected = computed(() => props.targets.length > 0 && pendingSelectedIds.value.length === props.targets.length)
+const partiallySelected = computed(() => pendingSelectedIds.value.length > 0 && !allSelected.value)
 const getTargetName = (target: ExecutionTargetOption) => target.org_name || target.label || target.member_datasource_id
 const getTargetOrgCode = (target: ExecutionTargetOption) => target.org_code || target.member_datasource_id || '-'
 const filteredTargets = computed(() => {
@@ -102,6 +105,15 @@ const handleClearAll = () => {
   }
 }
 
+const handleRootToggle = (checked: boolean) => {
+  if (!props.multiple) return
+  if (checked) {
+    handleSelectAll()
+  } else {
+    handleClearAll()
+  }
+}
+
 const toggleRowSelection = (datasourceId: string) => {
   if (!props.multiple) {
     handleToggleSelect(datasourceId, true)
@@ -122,61 +134,44 @@ const handleConfirm = () => {
 
 <template>
   <div v-if="inline">
-    <div class="flex items-center justify-between mb-3">
-      <div v-if="multiple" class="flex items-center gap-2">
-        <button
-          class="h-8 px-3 border rounded text-[12px] cursor-pointer transition-all duration-150 border-[#e5e7eb] bg-white text-[#374151] disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="targets.length === 0 || allSelected"
-          @click="handleSelectAll"
-        >
-          全选
-        </button>
-        <button
-          class="h-8 px-3 border rounded text-[12px] cursor-pointer transition-all duration-150 border-[#e5e7eb] bg-white text-[#374151] disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="pendingSelectedIds.length === 0"
-          @click="handleClearAll"
-        >
-          清空
-        </button>
+    <div class="rounded-lg border border-slate-200 bg-white">
+      <div class="flex min-h-11 items-center gap-3 border-b border-slate-100 px-3 text-[13px] text-slate-700">
+        <input
+          v-if="multiple"
+          type="checkbox"
+          :checked="allSelected"
+          :indeterminate.prop="partiallySelected"
+          @change="handleRootToggle(($event.target as HTMLInputElement).checked)"
+        />
+        <i class="fa-solid fa-database text-[13px] text-slate-400"></i>
+        <span class="min-w-0 flex-1 truncate font-medium" :title="rootLabel">{{ rootLabel }}</span>
+        <span class="shrink-0 text-[12px] text-slate-400">{{ pendingSelectedIds.length }}/{{ targets.length }}</span>
       </div>
-      <span class="text-[12px] text-[#6b7280]">
-        {{ multiple ? `已选 ${pendingSelectedIds.length} 个` : (selectedSummary === '未选择' ? '未选择执行对象' : `当前：${selectedSummary}`) }}
-      </span>
-    </div>
 
-    <div class="mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 h-9">
-      <i class="fa-solid fa-magnifying-glass text-[12px] text-slate-400"></i>
-      <input
-        v-model="searchText"
-        type="text"
-        class="flex-1 border-none bg-transparent text-[13px] text-slate-700 outline-none"
-        placeholder="搜索执行对象"
-      />
-    </div>
-
-    <el-table :data="filteredTargets" border max-height="420" @row-click="(row: ExecutionTargetOption) => toggleRowSelection(row.member_datasource_id)">
-      <el-table-column label="选择" width="72" align="center">
-        <template #default="{ row }">
+      <div class="max-h-[420px] overflow-auto py-1">
+        <div
+          v-for="target in filteredTargets"
+          :key="target.member_datasource_id"
+          class="ml-4 flex min-h-10 cursor-pointer items-center gap-3 px-3 py-2 text-[13px] text-slate-700 transition-colors hover:bg-slate-50"
+          @click="toggleRowSelection(target.member_datasource_id)"
+        >
           <input
             :type="multiple ? 'checkbox' : 'radio'"
-            :checked="selectedIdSet.has(row.member_datasource_id)"
+            :checked="selectedIdSet.has(target.member_datasource_id)"
             name="execution-target-inline"
             @click.stop
-            @change="handleToggleSelect(row.member_datasource_id, ($event.target as HTMLInputElement).checked)"
+            @change="handleToggleSelect(target.member_datasource_id, ($event.target as HTMLInputElement).checked)"
           />
-        </template>
-      </el-table-column>
-      <el-table-column prop="org_name" label="名称" min-width="220">
-        <template #default="{ row }">
-          {{ getTargetName(row) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="org_code" label="机构编码" min-width="180">
-        <template #default="{ row }">
-          {{ getTargetOrgCode(row) }}
-        </template>
-      </el-table-column>
-    </el-table>
+          <span class="min-w-0 flex-1 truncate" :title="getTargetName(target)">{{ getTargetName(target) }}</span>
+          <span class="max-w-[180px] shrink-0 truncate font-mono text-[12px] text-slate-500" :title="getTargetOrgCode(target)">
+            {{ getTargetOrgCode(target) }}
+          </span>
+        </div>
+        <div v-if="filteredTargets.length === 0" class="px-4 py-8 text-center text-[13px] text-slate-400">
+          暂无匹配执行对象
+        </div>
+      </div>
+    </div>
   </div>
 
   <template v-else>

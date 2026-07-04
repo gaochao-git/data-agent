@@ -1254,30 +1254,24 @@ const selectedExecutionTargetSummary = computed(() => {
 })
 
 const showContextSelectorDialog = ref(false)
-const draftDatasourceId = ref('')
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
 const draftDefaultAllExecutionTargets = ref(false)
 
-const draftDatasource = computed(() => {
-  return datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
-})
-
-const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(draftDatasource.value))
+const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
 
 const openContextSelector = () => {
-  draftDatasourceId.value = selectedDatasourceId.value
   draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
   draftDefaultAllExecutionTargets.value = isConversationContextMode.value
   showContextSelectorDialog.value = true
 }
 
 watch(
-  () => [draftDatasourceId.value, draftExecutionTargets.value.map(item => item.member_datasource_id).join(',')],
+  () => [selectedDatasourceId.value, draftExecutionTargets.value.map(item => item.member_datasource_id).join(',')],
   () => {
     const nextIds = resolveSelectedExecutionTargetIds(
       draftExecutionTargets.value,
       draftSelectedMemberDatasourceIds.value,
-      draftDatasource.value?.template_datasource_id,
+      currentDatasource.value?.template_datasource_id,
       true,
       draftDefaultAllExecutionTargets.value
     )
@@ -1291,13 +1285,10 @@ const handleConfirmContextSelector = () => {
     ElMessage.warning('请选择执行对象')
     return
   }
-  selectedDatasourceId.value = draftDatasourceId.value
-  const nextDatasource = datasources.value.find(ds => ds.id === draftDatasourceId.value) || null
-  const nextTargets = buildExecutionTargets(nextDatasource)
   const nextIds = resolveSelectedExecutionTargetIds(
-    nextTargets,
+    draftExecutionTargets.value,
     draftSelectedMemberDatasourceIds.value,
-    nextDatasource?.template_datasource_id,
+    currentDatasource.value?.template_datasource_id,
     true,
     draftDefaultAllExecutionTargets.value
   )
@@ -1904,20 +1895,12 @@ onUnmounted(() => {
       />
     </div>
 
-    <el-dialog v-model="showContextSelectorDialog" width="520px" title="切换数据源组与执行对象">
+    <el-dialog v-model="showContextSelectorDialog" width="520px" title="选择执行对象">
       <div class="space-y-4">
         <div>
-          <div class="min-w-0 flex-1">
-            <div class="mb-2 text-[13px] font-medium text-slate-700">数据源组</div>
-            <select
-              v-model="draftDatasourceId"
-              class="w-full h-10 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-800 outline-none"
-            >
-              <option v-if="datasources.length === 0" value="">暂无数据源</option>
-              <option v-for="ds in datasources" :key="ds.id" :value="ds.id">
-                {{ ds.group_name }}
-              </option>
-            </select>
+          <div class="mb-2 text-[13px] font-medium text-slate-700">当前数据源组</div>
+          <div class="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-800">
+            {{ currentDatasource?.group_name || '暂无数据源' }}
           </div>
         </div>
 

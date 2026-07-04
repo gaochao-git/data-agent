@@ -66,7 +66,7 @@ interface Props {
   semanticParams?: SemanticParams
   visualization?: VisualizationConfig
   sql?: string
-  onSave?: (sql: string, chartType: string, memberDatasourceId?: string) => void
+  onSave?: (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
   paginationEnabled?: boolean
@@ -190,6 +190,11 @@ const tabs = computed<ResultTabItem[]>(() =>
 const activeItem = computed(() => normalizedItems.value[activeIndex.value] || normalizedItems.value[0] || null)
 const activeResultData = computed(() => activeItem.value?.resultData || '')
 const activeSql = computed(() => activeItem.value?.sql || props.sql)
+const activeMemberDatasourceIds = computed(() =>
+  normalizedItems.value
+    .map(item => String(item.memberDatasourceId || '').trim())
+    .filter((id, index, list) => id && list.indexOf(id) === index)
+)
 const showTabs = computed(() => {
   if (tabs.value.length > 1) return true
   const item = activeItem.value
@@ -280,6 +285,7 @@ watch(
         :semantic-params="semanticParams"
         :visualization="visualization"
         :sql="activeSql"
+        :member-datasource-ids="activeMemberDatasourceIds"
         :on-save="onSave"
         :on-view-analysis="onViewAnalysis"
         :is-analysis-active="isAnalysisActive"

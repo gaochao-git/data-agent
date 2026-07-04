@@ -3,16 +3,18 @@
  * 面板卡片组件
  * 负责渲染图表内容
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { Codemirror } from 'vue-codemirror'
 import { sql } from '@codemirror/lang-sql'
 import { EditorView } from '@codemirror/view'
+import { ElMessage } from 'element-plus'
 import type { Panel, PanelData } from '../../../api/dashboard'
-import type { DataSource } from '../../../types'
+import type { DataSource, ExecutionTargetOption } from '../../../types'
 import type { ThemeConfig } from '../constants'
-import { CHART_ICONS, CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
+import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
 import { registerChinaMap, normalizeProvinceName, isChinaMapRegistered } from '../../../utils/mapRegistry'
+import ExecutionTargetPicker from '../../ExecutionTargetPicker.vue'
 
 // SQL 编辑器主题（浅色）
 const sqlReadonlyTheme = EditorView.theme({
@@ -103,11 +105,14 @@ interface Props {
 
 const props = defineProps<Props>()
 
+const currentDatasource = computed(() => {
+  if (!props.panel.datasource_id || !props.datasources) return null
+  return props.datasources.find(d => d.id === props.panel.datasource_id) || null
+})
+
 // 数据源名称
 const datasourceName = computed(() => {
-  if (!props.panel.datasource_id || !props.datasources) return ''
-  const ds = props.datasources.find(d => d.id === props.panel.datasource_id)
-  return ds?.group_name || props.panel.datasource_id
+  return currentDatasource.value?.group_name || props.panel.datasource_id || ''
 })
 
 const displayError = computed(() => {
@@ -146,44 +151,145 @@ const emit = defineEmits<{
   updateSql: [sql: string]
   changeChartType: [type: string]
   updateChartConfig: [config: Record<string, unknown>]
+  updateMemberDatasourceId: [memberDatasourceId: string]
 }>()
 
-// 配置弹窗状态
-const showKpiConfigModal = ref(false)
-const showChartStyleModal = ref(false)
-const showFieldConfigModal = ref(false)
-const showSqlModal = ref(false)
-const showRenameModal = ref(false)
-const editingName = ref('')
-const editingSql = ref('')
-const savingSql = ref(false)
+// 编辑弹窗状态
+const showEditModal = ref(false)
+const editModalTab = ref<'basic' | 'chart'>('basic')
+const editState = reactive({
+  name: '',
+  sql: '',
+  chartType: props.panel.chart_type as Panel['chart_type'],
+  chartConfig: {} as Record<string, unknown>,
+  memberDatasourceIds: [] as string[],
+})
 
-const openRenameModal = () => {
-  editingName.value = props.panel.name || ''
-  showRenameModal.value = true
+const executionTargets = computed<ExecutionTargetOption[]>(() => {
+  const datasource = currentDatasource.value
+  if (!datasource) {
+    return props.panel.member_datasource_id
+      ? [{ member_datasource_id: props.panel.member_datasource_id, label: props.panel.member_datasource_id }]
+      : []
+  }
+
+  const members = datasource.member_sources || []
+  if (members.length) {
+    return members
+      .filter(member => member.member_datasource_id)
+      .map(member => ({
+        member_datasource_id: String(member.member_datasource_id),
+        org_name: member.org_name || '',
+        org_code: member.org_code || '',
+        source_type: member.source_type || datasource.source_type || '',
+        host: member.host,
+        port: member.port,
+        database: member.database,
+        label: member.org_name || `${member.host}:${member.port}/${member.database}`,
+      }))
+  }
+
+  const fallbackId = datasource.template_datasource_id || props.panel.member_datasource_id || datasource.id
+  if (!fallbackId) return []
+  return [{
+    member_datasource_id: fallbackId,
+    label: datasource.group_name || fallbackId,
+    source_type: datasource.source_type || '',
+  }]
+})
+
+const allExecutionTargetIds = computed(() => executionTargets.value.map(item => item.member_datasource_id).filter(Boolean))
+const isAllEditTargetsSelected = computed(() => (
+  allExecutionTargetIds.value.length > 0 && allExecutionTargetIds.value.every(id => editState.memberDatasourceIds.includes(id))
+))
+
+const normalizeMemberIds = (ids: unknown): string[] => {
+  const result: string[] = []
+  if (!Array.isArray(ids)) return result
+  ids.forEach(item => {
+    const memberId = String(item || '').trim()
+    if (memberId && !result.includes(memberId)) {
+      result.push(memberId)
+    }
+  })
+  return result
 }
 
-const handleSaveName = () => {
-  const trimmed = editingName.value.trim()
-  if (!trimmed) return
-  emit('editName', trimmed)
-  showRenameModal.value = false
+const filterAvailableMemberIds = (ids: string[]) => {
+  const availableIds = allExecutionTargetIds.value
+  if (!availableIds.length) return ids
+  return ids.filter(id => availableIds.includes(id))
 }
 
-// 打开 SQL 编辑弹窗
-const openSqlModal = () => {
-  editingSql.value = formattedSql.value
-  showSqlModal.value = true
+const getPanelSelectedMemberIds = () => {
+  const config = props.panel.chart_config || {}
+  const multiSource = config.multiSource as { enabled?: boolean; memberDatasourceIds?: unknown } | undefined
+  const configuredIds = multiSource?.enabled
+    ? normalizeMemberIds(multiSource.memberDatasourceIds)
+    : normalizeMemberIds([props.panel.member_datasource_id])
+  const availableConfiguredIds = filterAvailableMemberIds(configuredIds)
+  if (availableConfiguredIds.length) return availableConfiguredIds
+  return allExecutionTargetIds.value.length ? [allExecutionTargetIds.value[0]] : []
 }
 
-// 保存 SQL
-const handleSaveSql = () => {
-  const trimmed = editingSql.value.trim()
-  if (!trimmed) return
-  savingSql.value = true
-  emit('updateSql', trimmed)
-  showSqlModal.value = false
-  savingSql.value = false
+const getExecutionTargetName = (target: ExecutionTargetOption) => target.org_name || target.label || target.member_datasource_id
+const selectAllEditingTargets = () => {
+  editState.memberDatasourceIds = [...allExecutionTargetIds.value]
+}
+const clearEditingTargets = () => {
+  editState.memberDatasourceIds = []
+}
+
+const cloneChartConfig = (value: Record<string, unknown> | undefined | null) => {
+  try {
+    return JSON.parse(JSON.stringify(value || {})) as Record<string, unknown>
+  } catch {
+    return { ...(value || {}) }
+  }
+}
+
+const resetEditState = () => {
+  editState.name = props.panel.name || ''
+  editState.sql = formattedSql.value
+  editState.chartType = props.panel.chart_type
+  editState.chartConfig = cloneChartConfig(props.panel.chart_config || {})
+  editState.memberDatasourceIds = getPanelSelectedMemberIds()
+}
+
+const openEditModal = () => {
+  resetEditState()
+  editModalTab.value = 'basic'
+  showEditModal.value = true
+}
+
+const handleSaveEditModal = () => {
+  const trimmedSql = editState.sql.trim()
+  if (!trimmedSql) return
+  const trimmedName = editState.name.trim()
+  const selectedIds = filterAvailableMemberIds(normalizeMemberIds(editState.memberDatasourceIds))
+  if (executionTargets.value.length > 0 && selectedIds.length === 0) {
+    ElMessage.warning('请选择执行对象')
+    return
+  }
+  const { multiSource: _oldMultiSource, ...baseChartConfig } = editState.chartConfig || {}
+  const nextChartConfig = {
+    ...baseChartConfig,
+    ...(selectedIds.length > 1
+      ? { multiSource: { enabled: true, memberDatasourceIds: selectedIds } }
+      : {})
+  }
+  if (trimmedName && trimmedName !== (props.panel.name || '').trim()) {
+    emit('editName', trimmedName)
+  }
+  if (editState.chartType !== props.panel.chart_type) {
+    emit('changeChartType', editState.chartType)
+  }
+  if (selectedIds.length > 0) {
+    emit('updateMemberDatasourceId', selectedIds[0])
+  }
+  emit('updateChartConfig', nextChartConfig)
+  emit('updateSql', trimmedSql)
+  showEditModal.value = false
 }
 
 // 地图加载状态
@@ -279,6 +385,8 @@ const buildColorOptions = (themeColors: string[], baseOptions: { color: string; 
 // KPI 配置
 const currentKpiIcon = computed(() => (props.panel.chart_config?.kpiIcon as string) || 'fa-users')
 const currentKpiColor = computed(() => (props.panel.chart_config?.kpiColor as string) || defaultAccentColor.value)
+const editKpiIcon = computed(() => (editState.chartConfig?.kpiIcon as string) || 'fa-users')
+const editKpiColor = computed(() => (editState.chartConfig?.kpiColor as string) || defaultAccentColor.value)
 const kpiColorOptions = computed(() => buildColorOptions(themeChartPalette.value, KPI_COLORS))
 const currentKpiBgColor = computed(() => {
   const color = currentKpiColor.value
@@ -293,24 +401,24 @@ const currentKpiBgColor = computed(() => {
 })
 
 const handleKpiIconSelect = (icon: string) => {
-  emit('updateChartConfig', { ...props.panel.chart_config, kpiIcon: icon })
+  editState.chartConfig = { ...editState.chartConfig, kpiIcon: icon }
 }
 
 const handleKpiColorSelect = (color: string) => {
-  emit('updateChartConfig', { ...props.panel.chart_config, kpiColor: color })
+  editState.chartConfig = { ...editState.chartConfig, kpiColor: color }
 }
 
 const handleKpiReset = () => {
-  const newConfig = { ...props.panel.chart_config }
+  const newConfig = { ...editState.chartConfig }
   delete newConfig.kpiIcon
   delete newConfig.kpiColor
-  emit('updateChartConfig', newConfig)
+  editState.chartConfig = newConfig
 }
 
 // 图表样式配置
-const currentChartColor = computed(() => (props.panel.chart_config?.chartColor as string) || defaultAccentColor.value)
+const editChartColor = computed(() => (editState.chartConfig?.chartColor as string) || defaultAccentColor.value)
 const chartColorOptions = computed(() => buildColorOptions(themeChartPalette.value, CHART_COLOR_OPTIONS))
-const currentLineStyle = computed(() => (props.panel.chart_config?.lineStyle as string) || 'smooth')
+const editLineStyle = computed(() => (editState.chartConfig?.lineStyle as string) || 'smooth')
 
 const getBarGradientColor = (color: string, isHorizontal: boolean) => {
   const fadeColor = getAlphaColor(color, 0.22)
@@ -335,29 +443,31 @@ const getLineAreaGradientColor = (color: string) => {
 }
 
 const handleChartColorSelect = (color: string) => {
-  emit('updateChartConfig', { ...props.panel.chart_config, chartColor: color })
+  editState.chartConfig = { ...editState.chartConfig, chartColor: color }
 }
 
 const handleLineStyleSelect = (styleId: string) => {
-  emit('updateChartConfig', { ...props.panel.chart_config, lineStyle: styleId })
+  editState.chartConfig = { ...editState.chartConfig, lineStyle: styleId }
 }
 
 const handleChartStyleReset = () => {
-  const newConfig = { ...props.panel.chart_config }
+  const newConfig = { ...editState.chartConfig }
   delete newConfig.chartColor
   delete newConfig.lineStyle
-  emit('updateChartConfig', newConfig)
+  editState.chartConfig = newConfig
 }
 
 // 图表容器
 const chartRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
-let kpiAnimationFrame: number | null = null
-
-// 图表类型菜单
-const showChartMenu = ref(false)
 
 const chartTypes = CHART_TYPES
+const chartStyleConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'combo', 'funnel', 'graph']
+const fieldConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel', 'graph']
+const supportsChartStyleConfig = computed(() => editState.chartType === 'kpi' || chartStyleConfigTypes.includes(editState.chartType))
+const supportsFieldConfig = computed(() => fieldConfigTypes.includes(editState.chartType))
+const DASHBOARD_MEMBER_COLUMN = '执行对象'
+const DASHBOARD_MEMBER_ID_COLUMN = '__member_datasource_id'
 
 const parseNumericValue = (value: unknown): number | null => {
   if (typeof value === 'number') {
@@ -384,7 +494,7 @@ const availableColumns = computed(() => {
   if (!result?.columns || !result?.data?.length) {
     return { all: [] as string[], categoryColumns: [] as string[], numericColumns: [] as string[] }
   }
-  const columns = result.columns
+  const columns = result.columns.filter(col => col !== DASHBOARD_MEMBER_ID_COLUMN)
   const sampleRows = result.data.slice(0, 5)
   const categoryColumns: string[] = []
   const numericColumns: string[] = []
@@ -402,22 +512,24 @@ const availableColumns = computed(() => {
   return { all: columns, categoryColumns, numericColumns }
 })
 
-// 智能推断字段（支持手动覆盖）
-const inferredFields = computed(() => {
+const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string, unknown> | undefined | null) => {
   const { all, categoryColumns, numericColumns } = availableColumns.value
   if (all.length === 0) {
     return { xField: '', yFields: [] as string[], seriesField: '' }
   }
 
-  const config = props.panel.chart_config || {}
+  const config = chartConfig || {}
   const manualX = config.xField as string | undefined
   const manualY = config.yField as string | undefined
   const manualSeries = config.seriesField as string | undefined
 
-  // X 轴：手动设定 > 第一个分类字段 > 第一列
-  const xField = (manualX && all.includes(manualX)) ? manualX : (categoryColumns[0] ?? all[0] ?? '')
+  const isMultiSourceResult = all.includes(DASHBOARD_MEMBER_COLUMN)
+  const preferredCategoryColumns = categoryColumns.filter(field => field !== DASHBOARD_MEMBER_COLUMN)
 
-  if (props.panel.chart_type === 'graph') {
+  // X 轴：手动设定 > 第一个业务分类字段 > 第一列
+  const xField = (manualX && all.includes(manualX)) ? manualX : (preferredCategoryColumns[0] ?? all[0] ?? '')
+
+  if (chartType === 'graph') {
     const targetField = (manualY && all.includes(manualY))
       ? manualY
       : (categoryColumns.find(field => field !== xField) ?? all.find(field => field !== xField) ?? '')
@@ -432,24 +544,31 @@ const inferredFields = computed(() => {
     yFields = numericColumns.length > 0 ? numericColumns : [all[1] ?? all[0] ?? ''].filter((field): field is string => !!field)
   }
 
-  // 分组字段：手动设定 > 第二个分类字段
-  const seriesField = (manualSeries && all.includes(manualSeries)) ? manualSeries : (categoryColumns[1] || '')
+  // 分组字段：手动设定 > 多数据源执行对象 > 第二个业务分类字段
+  const seriesField = (manualSeries && all.includes(manualSeries))
+    ? manualSeries
+    : (isMultiSourceResult && ['bar', 'horizontal_bar', 'line', 'area'].includes(chartType)
+      ? DASHBOARD_MEMBER_COLUMN
+      : (preferredCategoryColumns.find(field => field !== xField) || ''))
 
   return { xField, yFields, seriesField }
-})
+}
+
+// 智能推断字段（支持手动覆盖）
+const inferredFields = computed(() => inferFields(props.panel.chart_type, props.panel.chart_config || {}))
+const editInferredFields = computed(() => inferFields(editState.chartType, editState.chartConfig))
 
 // 字段配置处理
 const handleFieldConfigChange = (field: 'xField' | 'yField' | 'seriesField', value: string) => {
-  emit('updateChartConfig', { ...props.panel.chart_config, [field]: value || undefined })
+  editState.chartConfig = { ...editState.chartConfig, [field]: value || undefined }
 }
 
 const handleFieldConfigReset = () => {
-  const newConfig = { ...props.panel.chart_config }
+  const newConfig = { ...editState.chartConfig }
   delete newConfig.xField
   delete newConfig.yField
   delete newConfig.seriesField
-  emit('updateChartConfig', newConfig)
-  showFieldConfigModal.value = false
+  editState.chartConfig = newConfig
 }
 
 const buildGraphData = (
@@ -486,12 +605,37 @@ const buildGraphData = (
   return { nodes, links }
 }
 
+const buildSeriesByField = (
+  rows: Record<string, unknown>[],
+  xField: string,
+  yField: string,
+  seriesField: string,
+) => {
+  if (!seriesField) return null
+  const xValues = Array.from(new Set(rows.map(row => String(row[xField] || ''))))
+  const seriesNames = Array.from(new Set(rows.map(row => String(row[seriesField] || '')).filter(Boolean)))
+  if (!seriesNames.length) return null
+  return {
+    xValues,
+    seriesNames,
+    valuesBySeries: seriesNames.map(seriesName => {
+      const rowMap = new Map<string, Record<string, unknown>>()
+      rows.forEach(row => {
+        if (String(row[seriesField] || '') === seriesName) {
+          rowMap.set(String(row[xField] || ''), row)
+        }
+      })
+      return xValues.map(xValue => parseNumericValue(rowMap.get(xValue)?.[yField]) ?? 0)
+    })
+  }
+}
+
 // 生成图表配置
 const chartOption = computed(() => {
   const result = props.data?.result
   if (!result?.data?.length) return null
 
-  const { xField, yFields } = inferredFields.value
+  const { xField, yFields, seriesField } = inferredFields.value
   if (!xField || yFields.length === 0) return null
   const primaryYField = yFields[0]
   if (!primaryYField) return null
@@ -525,15 +669,21 @@ const chartOption = computed(() => {
   // 柱状图
   if (chartType === 'bar' || chartType === 'horizontal_bar') {
     const isHorizontal = chartType === 'horizontal_bar'
-    const xData = data.map(row => String(row[xField] || ''))
+    const grouped = seriesField && seriesField !== xField
+      ? buildSeriesByField(data, xField, primaryYField, seriesField)
+      : null
+    const xData = grouped?.xValues ?? data.map(row => String(row[xField] || ''))
     const configuredColor = props.panel.chart_config?.chartColor as string | undefined
     const defaultColors = themeChartPalette.value
-    const series = yFields.map((field, idx) => {
+    const seriesSource = grouped
+      ? grouped.seriesNames.map((name, idx) => ({ name, field: primaryYField, data: grouped.valuesBySeries[idx] || [] }))
+      : yFields.map(field => ({ name: field, field, data: data.map(row => parseNumericValue(row[field]) ?? 0) }))
+    const series = seriesSource.map((item, idx) => {
       const color = configuredColor && idx === 0 ? configuredColor : defaultColors[idx % defaultColors.length]!
       return {
-        name: field,
+        name: item.name,
         type: 'bar' as const,
-        data: data.map(row => parseNumericValue(row[field]) ?? 0),
+        data: item.data,
         barMaxWidth: 26,
         showBackground: true,
         backgroundStyle: {
@@ -572,18 +722,24 @@ const chartOption = computed(() => {
 
   // 折线图、面积图、柱线组合图
   if (chartType === 'line' || chartType === 'area' || chartType === 'combo') {
-    const xData = data.map(row => String(row[xField] || ''))
+    const grouped = seriesField && seriesField !== xField
+      ? buildSeriesByField(data, xField, primaryYField, seriesField)
+      : null
+    const xData = grouped?.xValues ?? data.map(row => String(row[xField] || ''))
     const configuredColor = props.panel.chart_config?.chartColor as string | undefined
     const lineStyleId = (props.panel.chart_config?.lineStyle as string) || 'smooth'
     const lineStyleConfig = LINE_STYLES.find(s => s.id === lineStyleId) ?? LINE_STYLES[0]!
     const defaultColors = themeChartPalette.value
-    const series = yFields.map((field, idx) => {
+    const seriesSource = grouped
+      ? grouped.seriesNames.map((name, idx) => ({ name, field: primaryYField, data: grouped.valuesBySeries[idx] || [] }))
+      : yFields.map(field => ({ name: field, field, data: data.map(row => parseNumericValue(row[field]) ?? 0) }))
+    const series = seriesSource.map((item, idx) => {
       const color = configuredColor && idx === 0 ? configuredColor : defaultColors[idx % defaultColors.length]!
       const isComboBar = chartType === 'combo' && idx === 0
       return {
-        name: field,
+        name: item.name,
         type: isComboBar ? 'bar' as const : 'line' as const,
-        data: data.map(row => parseNumericValue(row[field]) ?? 0),
+        data: item.data,
         smooth: !isComboBar && lineStyleConfig.smooth,
         showSymbol: !isComboBar && data.length <= 12,
         symbolSize: isComboBar ? undefined : 6,
@@ -916,10 +1072,6 @@ onUnmounted(() => {
   resizeObserver.disconnect()
   chartInstance?.dispose()
   chartInstance = null
-  if (kpiAnimationFrame !== null) {
-    cancelAnimationFrame(kpiAnimationFrame)
-    kpiAnimationFrame = null
-  }
 })
 
 // 数字人性化格式
@@ -953,57 +1105,37 @@ const kpiRawValue = computed(() => {
   return firstRow[primaryYField]
 })
 
-const animatedKpiRawValue = ref<number | null>(null)
-
-watch(kpiRawValue, (value, oldValue) => {
-  const nextValue = parseNumericValue(value)
-  const previousValue = parseNumericValue(oldValue)
-  if (kpiAnimationFrame !== null) {
-    cancelAnimationFrame(kpiAnimationFrame)
-    kpiAnimationFrame = null
-  }
-  if (nextValue === null) {
-    animatedKpiRawValue.value = null
-    return
-  }
-  const startValue = previousValue ?? animatedKpiRawValue.value ?? 0
-  const startTime = performance.now()
-  const duration = 850
-  const tick = (now: number) => {
-    const progress = Math.min((now - startTime) / duration, 1)
-    const eased = 1 - Math.pow(1 - progress, 3)
-    animatedKpiRawValue.value = startValue + (nextValue - startValue) * eased
-    if (progress < 1) {
-      kpiAnimationFrame = requestAnimationFrame(tick)
-    } else {
-      animatedKpiRawValue.value = nextValue
-      kpiAnimationFrame = null
-    }
-  }
-  kpiAnimationFrame = requestAnimationFrame(tick)
-}, { immediate: true })
-
 // KPI 值格式化
 const kpiValue = computed(() => {
   const value = kpiRawValue.value
-  if (value === null || value === undefined) return { value: '-', unit: '' }
-  const numericValue = parseNumericValue(value)
-  if (numericValue !== null) {
-    return formatNumber(animatedKpiRawValue.value ?? numericValue)
-  }
-  return { value: String(value || '-'), unit: '' }
+  if (value === null || value === undefined || value === '') return { value: '-', unit: '' }
+  return { value: String(value), unit: '' }
 })
 
 // KPI 完整值（用于 tooltip）
 const kpiFullValue = computed(() => {
   const value = kpiRawValue.value
-  if (value === null || value === undefined) return ''
-  const numericValue = parseNumericValue(value)
-  if (numericValue !== null) {
-    return numericValue.toLocaleString()
-  }
+  if (value === null || value === undefined || value === '') return ''
   return String(value)
 })
+
+const kpiItems = computed(() => {
+  const result = props.data?.result
+  if (!result?.data?.length || !result.columns?.includes(DASHBOARD_MEMBER_COLUMN)) return []
+  const { yFields } = inferredFields.value
+  const primaryYField = yFields[0]
+  if (!primaryYField) return []
+  return result.data.map(row => {
+    const rawValue = row[primaryYField]
+    return {
+      name: String(row[DASHBOARD_MEMBER_COLUMN] || '执行对象'),
+      display: { value: String(rawValue ?? '-'), unit: '' },
+      fullValue: String(rawValue ?? ''),
+    }
+  })
+})
+
+const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
 </script>
 
 <template>
@@ -1037,54 +1169,30 @@ const kpiFullValue = computed(() => {
         <span class="overflow-hidden text-ellipsis whitespace-nowrap">{{ panel.name }}</span>
       </div>
       <div v-if="!isPreviewMode" class="flex gap-0.5 flex-shrink-0">
-        <!-- 图表类型切换 -->
-        <button class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15" @click="showChartMenu = true" :style="{ color: theme.textMuted }">
-          <i class="fa-solid fa-chart-bar"></i>
-        </button>
-        <!-- 图表样式配置（折线图/柱状图/条形图/饼图） -->
         <button
-          v-if="['bar', 'horizontal_bar', 'line', 'area', 'pie', 'combo', 'funnel', 'graph'].includes(panel.chart_type)"
-          class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15"
-          @click="showChartStyleModal = true"
-          :style="{ color: panel.chart_config?.chartColor ? theme.accentColor : theme.textMuted }"
-          title="配置图表颜色和样式"
+          type="button"
+          class="action-btn inline-flex h-6 w-6 items-center justify-center rounded border-none bg-transparent text-xs transition-all duration-200 hover:bg-gray-500/15"
+          :style="{ color: theme.textMuted }"
+          title="修改"
+          @click="openEditModal"
         >
-          <i class="fa-solid fa-palette"></i>
+          <i class="fa-solid fa-pen-to-square"></i>
         </button>
-        <!-- KPI图标配置（仅KPI类型） -->
         <button
-          v-if="panel.chart_type === 'kpi'"
           class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15"
-          @click="showKpiConfigModal = true"
-          :style="{ color: panel.chart_config?.kpiIcon ? theme.accentColor : theme.textMuted }"
-          title="配置图标和颜色"
+          @click="emit('refresh')"
+          :style="{ color: theme.textMuted }"
+          title="刷新"
         >
-          <i class="fa-solid fa-palette"></i>
-        </button>
-        <!-- 字段配置（图表类型时显示） -->
-        <button
-          v-if="['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel', 'graph'].includes(panel.chart_type)"
-          class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15"
-          @click="showFieldConfigModal = true"
-          :style="{ color: panel.chart_config?.xField || panel.chart_config?.yField ? theme.accentColor : theme.textMuted }"
-          title="配置X轴/Y轴字段"
-        >
-          <i class="fa-solid fa-sliders"></i>
-        </button>
-        <!-- 编辑SQL -->
-        <button class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15" @click="openSqlModal" :style="{ color: theme.textMuted }" title="编辑SQL">
-          <i class="fa-solid fa-code"></i>
-        </button>
-        <!-- 刷新 -->
-        <button class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15" @click="emit('refresh')" :style="{ color: theme.textMuted }">
           <i class="fa-solid fa-sync-alt"></i>
         </button>
-        <!-- 重命名 -->
-        <button class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-gray-500/15" @click="openRenameModal" :style="{ color: theme.textMuted }" title="重命名">
-          <i class="fa-solid fa-pen"></i>
-        </button>
         <!-- 删除 -->
-        <button class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-red-500/20 hover:!text-red-500" @click="emit('delete')" :style="{ color: theme.textMuted }">
+        <button
+          class="action-btn w-6 h-6 flex items-center justify-center border-none bg-transparent rounded cursor-pointer transition-all duration-200 text-xs hover:bg-red-500/20 hover:!text-red-500"
+          @click="emit('delete')"
+          :style="{ color: theme.textMuted }"
+          title="删除"
+        >
           <i class="fa-solid fa-trash"></i>
         </button>
       </div>
@@ -1128,7 +1236,29 @@ const kpiFullValue = computed(() => {
 
       <!-- KPI 卡片 -->
       <template v-else-if="panel.chart_type === 'kpi'">
-        <div class="flex-1 flex flex-row items-center justify-between px-5 pb-4">
+        <div v-if="isMultiKpiCard" class="flex-1 min-h-0 overflow-auto px-4 pb-4 pt-1">
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div
+              v-for="item in kpiItems"
+              :key="item.name"
+              class="flex min-h-[88px] flex-col justify-between rounded-xl px-3 py-3"
+              :style="{ background: currentKpiBgColor }"
+              :title="`${item.name}: ${item.fullValue}`"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <span class="min-w-0 truncate text-[12px] font-medium tracking-normal" :style="{ color: theme.textMuted }">{{ item.name }}</span>
+                <div class="kpi-mini-icon flex h-7 w-7 items-center justify-center rounded-lg text-[14px]" :style="{ color: currentKpiColor, background: `${currentKpiColor}14` }">
+                  <i :class="['fa-solid', currentKpiIcon]"></i>
+                </div>
+              </div>
+              <div class="flex items-end gap-1 leading-none">
+                <span class="text-[26px] font-bold tabular-nums" :style="{ color: theme.textColor }">{{ item.display.value }}</span>
+                <span v-if="item.display.unit" class="pb-0.5 text-sm font-medium" :style="{ color: theme.textMuted }">{{ item.display.unit }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="flex-1 flex flex-row items-center justify-between px-5 pb-4">
           <div class="flex items-baseline leading-none" :title="kpiFullValue">
             <span class="kpi-value text-[32px] font-bold tabular-nums" :style="{ color: theme.textColor }">{{ kpiValue.value }}</span>
             <span v-if="kpiValue.unit" class="text-lg font-medium ml-0.5" :style="{ color: theme.textMuted }">{{ kpiValue.unit }}</span>
@@ -1176,187 +1306,166 @@ const kpiFullValue = computed(() => {
       </template>
     </div>
 
-    <!-- 图表类型切换弹窗 -->
-    <el-dialog v-model="showChartMenu" title="切换图表类型" width="280px" append-to-body>
-      <div class="grid grid-cols-2 gap-2">
-        <button
-          v-for="type in chartTypes"
-          :key="type.key"
-          class="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border-none text-sm cursor-pointer transition-all duration-200"
-          :style="{
-            background: panel.chart_type === type.key ? 'rgba(22,119,255,0.1)' : 'transparent',
-            color: panel.chart_type === type.key ? '#1677FF' : '#333',
-            fontWeight: panel.chart_type === type.key ? '500' : '400'
-          }"
-          @click="emit('changeChartType', type.key); showChartMenu = false"
-        >
-          <i :class="['fa-solid', type.icon]"></i>
-          <span>{{ type.label }}</span>
-        </button>
-      </div>
-    </el-dialog>
+    <el-dialog v-model="showEditModal" title="修改面板" width="860px" append-to-body>
+      <el-tabs v-model="editModalTab">
+        <el-tab-pane label="基础" name="basic">
+          <div class="space-y-4">
+            <div>
+              <label class="mb-1.5 block text-[13px] text-gray-500">面板名称</label>
+              <el-input
+                v-model="editState.name"
+                maxlength="24"
+                show-word-limit
+                placeholder="请输入面板名称"
+              />
+            </div>
 
-    <!-- KPI 配置弹窗 -->
-    <el-dialog v-model="showKpiConfigModal" title="KPI 图标配置" width="360px" append-to-body>
-      <!-- 图标选择 -->
-      <div class="mb-5 last:mb-0">
-        <div class="text-[13px] mb-3 text-gray-500">选择图标</div>
-        <div class="grid grid-cols-6 gap-2">
-          <button
-            v-for="item in KPI_ICONS"
-            :key="item.icon"
-            class="w-10 h-10 flex items-center justify-center border border-solid bg-transparent rounded-lg cursor-pointer text-base transition-all duration-200 hover:scale-110"
-            :class="{ 'bg-[rgba(22,119,255,0.1)]': currentKpiIcon === item.icon }"
-            :style="{
-              color: currentKpiIcon === item.icon ? currentKpiColor : '#999',
-              borderColor: currentKpiIcon === item.icon ? currentKpiColor : '#e5e7eb'
-            }"
-            @click="handleKpiIconSelect(item.icon)"
-            :title="item.label"
-          >
-            <i :class="['fa-solid', item.icon]"></i>
-          </button>
-        </div>
-      </div>
-      <!-- 颜色选择 -->
-      <div class="mb-5 last:mb-0">
-        <div class="text-[13px] mb-3 text-gray-500">选择颜色</div>
-        <div class="flex flex-wrap gap-2.5">
-          <button
-            v-for="item in kpiColorOptions"
-            :key="item.color"
-            class="w-9 h-9 flex items-center justify-center border-2 border-transparent rounded-full cursor-pointer transition-all duration-200 text-white text-xs hover:scale-110"
-            :class="{ 'border-gray-300 shadow-[0_0_8px_currentColor]': currentKpiColor === item.color }"
-            :style="{ background: item.color }"
-            @click="handleKpiColorSelect(item.color)"
-            :title="item.label"
-          >
-            <i v-if="currentKpiColor === item.color" class="fa-solid fa-check"></i>
-          </button>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-between w-full">
-          <el-button text @click="handleKpiReset">恢复默认</el-button>
-          <el-button type="primary" @click="showKpiConfigModal = false">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+            <div v-if="panel.datasource_id">
+              <ExecutionTargetPicker
+                v-if="executionTargets.length > 0"
+                v-model="editState.memberDatasourceIds"
+                :targets="executionTargets"
+                :multiple="true"
+                :root-label="datasourceName"
+                inline
+              />
+            </div>
 
-    <!-- 图表样式配置弹窗 -->
-    <el-dialog v-model="showChartStyleModal" title="图表样式配置" width="360px" append-to-body>
-      <!-- 颜色选择 -->
-      <div class="mb-5 last:mb-0">
-        <div class="text-[13px] mb-3 text-gray-500">主题颜色</div>
-        <div class="flex flex-wrap gap-2.5">
-          <button
-            v-for="item in chartColorOptions"
-            :key="item.color"
-            class="w-9 h-9 flex items-center justify-center border-2 border-transparent rounded-full cursor-pointer transition-all duration-200 text-white text-xs hover:scale-110"
-            :class="{ 'border-gray-300 shadow-[0_0_8px_currentColor]': currentChartColor === item.color }"
-            :style="{ background: item.color }"
-            @click="handleChartColorSelect(item.color)"
-            :title="item.label"
-          >
-            <i v-if="currentChartColor === item.color" class="fa-solid fa-check"></i>
-          </button>
-        </div>
-      </div>
-      <!-- 折线图样式选择（仅折线图显示） -->
-      <div v-if="['line', 'area', 'combo'].includes(panel.chart_type)" class="mb-5 last:mb-0">
-        <div class="text-[13px] mb-3 text-gray-500">线条样式</div>
-        <div class="flex flex-col gap-2">
-          <button
-            v-for="item in LINE_STYLES"
-            :key="item.id"
-            class="px-4 py-2.5 border border-solid bg-transparent rounded-lg cursor-pointer text-left text-[13px] transition-all duration-200 hover:opacity-90"
-            :class="currentLineStyle === item.id ? 'border-blue-500 text-blue-500 bg-blue-50' : 'border-gray-200 text-gray-700'"
-            @click="handleLineStyleSelect(item.id)"
-          >
-            {{ item.label }}
-          </button>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-between w-full">
-          <el-button text @click="handleChartStyleReset">恢复默认</el-button>
-          <el-button type="primary" @click="showChartStyleModal = false">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+            <div>
+              <label class="mb-1.5 block text-[13px] text-gray-500">SQL</label>
+              <div class="sql-editor-body rounded border border-gray-200 !p-0">
+                <Codemirror
+                  v-model="editState.sql"
+                  :extensions="sqlExtensions"
+                  :style="{ maxHeight: '300px', overflow: 'auto' }"
+                />
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
 
-    <!-- 字段配置弹窗 -->
-    <el-dialog v-model="showFieldConfigModal" title="字段配置" width="380px" append-to-body>
-      <div class="space-y-4">
-        <!-- X 轴 -->
-        <div>
-          <label class="block text-[13px] mb-1.5 text-gray-500">
-            {{ panel.chart_type === 'graph' ? '起点字段' : 'X轴（分类维度）' }}
-            <span v-if="availableColumns.categoryColumns.length" class="ml-1 opacity-60">推荐: 分类列</span>
-          </label>
-          <el-select :model-value="inferredFields.xField" class="w-full" @change="(val: string) => handleFieldConfigChange('xField', val)">
-            <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.categoryColumns.includes(col) ? ' (分类)' : ' (数值)'}`" />
-          </el-select>
-        </div>
-        <!-- Y 轴 -->
-        <div>
-          <label class="block text-[13px] mb-1.5 text-gray-500">
-            {{ panel.chart_type === 'graph' ? '终点字段' : 'Y轴（数值）' }}
-            <span v-if="panel.chart_type !== 'graph' && availableColumns.numericColumns.length" class="ml-1 opacity-60">推荐: 数值列</span>
-          </label>
-          <el-select :model-value="inferredFields.yFields[0] || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('yField', val)">
-            <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.numericColumns.includes(col) ? ' (数值)' : ' (分类)'}`" />
-          </el-select>
-        </div>
-        <!-- 分组字段（可选） -->
-        <div v-if="['bar', 'horizontal_bar', 'line', 'area', 'combo'].includes(panel.chart_type)">
-          <label class="block text-[13px] mb-1.5 text-gray-500">分组字段（可选）</label>
-          <el-select :model-value="(panel.chart_config?.seriesField as string) || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('seriesField', val)">
-            <el-option value="" label="不分组" />
-            <el-option v-for="col in availableColumns.categoryColumns" :key="col" :value="col" :label="col" />
-          </el-select>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-between w-full">
-          <el-button text @click="handleFieldConfigReset">重置为智能推断</el-button>
-          <el-button type="primary" @click="showFieldConfigModal = false">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+        <el-tab-pane label="图表" name="chart">
+          <div class="space-y-5">
+            <section>
+              <div class="mb-2 text-[13px] text-gray-500">展示方式</div>
+              <div class="grid grid-cols-5 gap-2.5">
+                <button
+                  v-for="type in chartTypes"
+                  :key="type.key"
+                  type="button"
+                  class="flex min-h-11 items-center justify-center gap-2 rounded-lg border border-solid px-3 py-2 text-sm transition-all duration-200"
+                  :class="editState.chartType === type.key ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50/50'"
+                  @click="editState.chartType = type.key"
+                >
+                  <i :class="['fa-solid', type.icon]"></i>
+                  <span class="whitespace-nowrap">{{ type.label }}</span>
+                </button>
+              </div>
+            </section>
 
-    <!-- SQL 查看弹窗 -->
-    <el-dialog v-model="showSqlModal" title="编辑 SQL" width="700px" append-to-body>
-      <div v-if="panel.datasource_id" class="flex items-center gap-2 mb-3 text-xs text-gray-400">
-        <i class="fa-solid fa-database"></i>
-        <span>数据源: {{ datasourceName }}</span>
-      </div>
-      <div class="sql-editor-body !p-0">
-        <Codemirror
-          v-model="editingSql"
-          :extensions="sqlExtensions"
-          :style="{ maxHeight: '300px', overflow: 'auto' }"
-        />
-      </div>
+            <section v-if="supportsChartStyleConfig" class="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <div class="text-[13px] font-medium text-gray-600">
+                  {{ editState.chartType === 'kpi' ? 'KPI 样式' : '图表样式' }}
+                </div>
+                <el-button text size="small" @click="editState.chartType === 'kpi' ? handleKpiReset() : handleChartStyleReset()">恢复默认</el-button>
+              </div>
+
+              <div v-if="editState.chartType === 'kpi'" class="mb-4">
+                <div class="mb-2 text-[12px] text-gray-500">图标</div>
+                <div class="grid grid-cols-10 gap-2">
+                  <button
+                    v-for="item in KPI_ICONS"
+                    :key="item.icon"
+                    type="button"
+                    class="flex h-9 w-9 items-center justify-center rounded-lg border border-solid bg-white text-sm transition-all duration-200 hover:scale-105"
+                    :style="{
+                      color: editKpiIcon === item.icon ? editKpiColor : '#999',
+                      borderColor: editKpiIcon === item.icon ? editKpiColor : '#e5e7eb'
+                    }"
+                    @click="handleKpiIconSelect(item.icon)"
+                    :title="item.label"
+                  >
+                    <i :class="['fa-solid', item.icon]"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div class="mb-2 text-[12px] text-gray-500">颜色</div>
+                <div class="flex flex-wrap gap-2.5">
+                  <button
+                    v-for="item in editState.chartType === 'kpi' ? kpiColorOptions : chartColorOptions"
+                    :key="item.color"
+                    type="button"
+                    class="flex h-9 w-9 items-center justify-center rounded-full border-2 border-transparent text-xs text-white transition-all duration-200 hover:scale-105"
+                    :class="{ 'border-gray-300 shadow-[0_0_8px_currentColor]': (editState.chartType === 'kpi' ? editKpiColor : editChartColor) === item.color }"
+                    :style="{ background: item.color }"
+                    @click="editState.chartType === 'kpi' ? handleKpiColorSelect(item.color) : handleChartColorSelect(item.color)"
+                    :title="item.label"
+                  >
+                    <i v-if="(editState.chartType === 'kpi' ? editKpiColor : editChartColor) === item.color" class="fa-solid fa-check"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="['line', 'area', 'combo'].includes(editState.chartType)" class="mt-4">
+                <div class="mb-2 text-[12px] text-gray-500">线条样式</div>
+                <div class="grid grid-cols-3 gap-2">
+                  <button
+                    v-for="item in LINE_STYLES"
+                    :key="item.id"
+                    type="button"
+                    class="rounded-lg border border-solid px-4 py-2.5 text-left text-[13px] transition-all duration-200"
+                    :class="editLineStyle === item.id ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'"
+                    @click="handleLineStyleSelect(item.id)"
+                  >
+                    {{ item.label }}
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="supportsFieldConfig" class="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <div class="text-[13px] font-medium text-gray-600">字段配置</div>
+                <el-button text size="small" @click="handleFieldConfigReset">重置为智能推断</el-button>
+              </div>
+              <div class="grid grid-cols-3 gap-3">
+                <div>
+                  <label class="mb-1.5 block text-[12px] text-gray-500">
+                    {{ editState.chartType === 'graph' ? '起点字段' : 'X轴（分类维度）' }}
+                  </label>
+                  <el-select :model-value="editInferredFields.xField" class="w-full" @change="(val: string) => handleFieldConfigChange('xField', val)">
+                    <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.categoryColumns.includes(col) ? ' (分类)' : ' (数值)'}`" />
+                  </el-select>
+                </div>
+                <div>
+                  <label class="mb-1.5 block text-[12px] text-gray-500">
+                    {{ editState.chartType === 'graph' ? '终点字段' : 'Y轴（数值）' }}
+                  </label>
+                  <el-select :model-value="editInferredFields.yFields[0] || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('yField', val)">
+                    <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.numericColumns.includes(col) ? ' (数值)' : ' (分类)'}`" />
+                  </el-select>
+                </div>
+                <div v-if="['bar', 'horizontal_bar', 'line', 'area', 'combo'].includes(editState.chartType)">
+                  <label class="mb-1.5 block text-[12px] text-gray-500">分组字段（可选）</label>
+                  <el-select :model-value="(editState.chartConfig?.seriesField as string) || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('seriesField', val)">
+                    <el-option value="" label="不分组" />
+                    <el-option v-for="col in availableColumns.categoryColumns" :key="col" :value="col" :label="col" />
+                  </el-select>
+                </div>
+              </div>
+            </section>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+
       <template #footer>
-        <el-button @click="showSqlModal = false">取消</el-button>
-        <el-button type="primary" @click="handleSaveSql">
-          <i class="fa-solid fa-play mr-1.5"></i>保存并执行
+        <el-button @click="showEditModal = false">取消</el-button>
+        <el-button type="primary" :disabled="!editState.name.trim() || !editState.sql.trim()" @click="handleSaveEditModal">
+          保存并执行
         </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="showRenameModal" title="修改卡片名称" width="420px" append-to-body>
-      <el-input
-        v-model="editingName"
-        maxlength="24"
-        show-word-limit
-        placeholder="请输入卡片名称"
-        @keyup.enter="handleSaveName"
-      />
-      <template #footer>
-        <el-button @click="showRenameModal = false">取消</el-button>
-        <el-button type="primary" :disabled="!editingName.trim()" @click="handleSaveName">确定</el-button>
       </template>
     </el-dialog>
   </div>

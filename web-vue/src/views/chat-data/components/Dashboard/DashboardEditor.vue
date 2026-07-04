@@ -162,6 +162,7 @@ const buildPanelConfigSignature = (panel: any) => {
     chart_type: panel?.chart_type || 'table',
     chart_config: panel?.chart_config || {},
     refresh_interval: panel?.refresh_interval ?? null,
+    member_datasource_id: panel?.member_datasource_id || '',
   })
 }
 
@@ -261,6 +262,7 @@ const handleSaveLayout = async () => {
         sql: panel.sql,
         chart_type: panel.chart_type,
         chart_config: panel.chart_config,
+        member_datasource_id: panel.member_datasource_id,
       })
       if (!updated) ok = false
     }
@@ -382,6 +384,17 @@ const handleUpdatePanelSql = (panelId: string, sql: string) => {
   dashboard.value = {
     ...dashboard.value,
     panels: dashboard.value.panels.map((p: any) => p.id === panelId ? { ...p, sql } : p)
+  }
+}
+
+const handleUpdatePanelMemberDatasourceId = (panelId: string, memberDatasourceId: string) => {
+  if (!canEditDashboard.value) return
+  if (!dashboard.value?.panels) return
+  dashboard.value = {
+    ...dashboard.value,
+    panels: dashboard.value.panels.map((p: any) => (
+      p.id === panelId ? { ...p, member_datasource_id: memberDatasourceId } : p
+    ))
   }
 }
 
@@ -626,6 +639,7 @@ onUnmounted(() => {
             @update-sql="(sql) => handleUpdatePanelSql(item.i, sql)"
             @change-chart-type="(type) => handleChangeChartType(item.i, type)"
             @update-chart-config="(config) => handleUpdateChartConfig(item.i, config)"
+            @update-member-datasource-id="(memberId) => handleUpdatePanelMemberDatasourceId(item.i, memberId)"
           />
         </GridItem>
       </GridLayout>

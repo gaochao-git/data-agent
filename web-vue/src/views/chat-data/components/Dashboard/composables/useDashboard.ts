@@ -331,6 +331,7 @@ export function useDashboard(
     sql?: string
     chart_type?: Panel['chart_type']
     chart_config?: Record<string, unknown>
+    member_datasource_id?: string
   }) => {
     if (!dashboardId) return
 

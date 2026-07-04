@@ -3,10 +3,11 @@
  * 保存到看板的弹窗组件
  * 将生成的 SQL 保存到分析大屏的面板中
  */
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listDashboards, addPanel, createDashboard, generatePanelName, type Dashboard } from '../api/dashboard'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
+import type { ExecutionTargetOption } from '../types'
 
 interface Props {
   visible: boolean
@@ -17,6 +18,8 @@ interface Props {
   sourceThreadId?: string
   datasourceId?: string
   memberDatasourceId?: string
+  memberDatasourceIds?: string[]
+  executionTargets?: ExecutionTargetOption[]
   hideSql?: boolean
   hideChartType?: boolean
 }
@@ -40,6 +43,47 @@ const chartType = ref<ChartType>(normalizeChartType(props.chartType))
 const loading = ref(false)
 const showNewDashboard = ref(false)
 const newDashboardName = ref('')
+const selectedMemberDatasourceIds = ref<string[]>([])
+
+const canUseMultiSource = computed(() => (props.executionTargets?.length || 0) > 1)
+const selectedMemberDatasourceId = computed(() => selectedMemberDatasourceIds.value[0] || props.memberDatasourceId || '')
+const singleSelectedMemberDatasourceId = computed({
+  get: () => selectedMemberDatasourceId.value,
+  set: (value: string) => {
+    selectedMemberDatasourceIds.value = value ? [value] : []
+  }
+})
+
+const normalizeMemberIds = (ids: unknown): string[] => {
+  const result: string[] = []
+  if (!Array.isArray(ids)) return result
+  ids.forEach(item => {
+    const memberId = String(item || '').trim()
+    if (memberId && !result.includes(memberId)) {
+      result.push(memberId)
+    }
+  })
+  return result
+}
+
+const resetSelectedMembers = () => {
+  const availableIds = (props.executionTargets || []).map(item => item.member_datasource_id)
+  const defaultIds = normalizeMemberIds(props.memberDatasourceIds?.length ? props.memberDatasourceIds : [props.memberDatasourceId])
+    .filter(item => !availableIds.length || availableIds.includes(item))
+  selectedMemberDatasourceIds.value = defaultIds.length ? defaultIds : (props.memberDatasourceId ? [props.memberDatasourceId] : [])
+}
+
+const getExecutionTargetName = (target: ExecutionTargetOption) => target.org_name || target.label || target.member_datasource_id
+const allExecutionTargetIds = computed(() => (props.executionTargets || []).map(item => item.member_datasource_id).filter(Boolean))
+const isAllExecutionTargetsSelected = computed(() => (
+  allExecutionTargetIds.value.length > 0 && allExecutionTargetIds.value.every(id => selectedMemberDatasourceIds.value.includes(id))
+))
+const selectAllExecutionTargets = () => {
+  selectedMemberDatasourceIds.value = [...allExecutionTargetIds.value]
+}
+const clearExecutionTargets = () => {
+  selectedMemberDatasourceIds.value = []
+}
 
 // 图表类型选项
 const chartTypeOptions = CHART_TYPES.map(item => ({ value: item.key, label: item.label, icon: item.icon }))
@@ -50,10 +94,17 @@ watch(
   async (visible) => {
     if (visible) {
       chartType.value = normalizeChartType(props.chartType)
+      resetSelectedMembers()
       await loadDashboards()
     }
   }
 )
+
+watch(chartType, () => {
+  if (!canUseMultiSource.value && selectedMemberDatasourceIds.value.length > 1) {
+    selectedMemberDatasourceIds.value = selectedMemberDatasourceIds.value.slice(0, 1)
+  }
+})
 
 // 加载看板列表
 const loadDashboards = async () => {
@@ -102,19 +153,31 @@ const handleSave = async () => {
   }
   loading.value = true
   try {
+    if ((props.executionTargets?.length || 0) > 0 && selectedMemberDatasourceIds.value.length === 0) {
+      ElMessage.warning('请选择执行对象')
+      return
+    }
     const titleResult = await generatePanelName({
       name: props.defaultName,
       sql: props.sql,
       chart_type: chartType.value
     })
+    const selectedIds = canUseMultiSource.value ? selectedMemberDatasourceIds.value : selectedMemberDatasourceIds.value.slice(0, 1)
+    const { multiSource: _oldMultiSource, ...baseChartConfig } = props.chartConfig || {}
+    const chartConfig = {
+      ...baseChartConfig,
+      ...(selectedIds.length > 1
+        ? { multiSource: { enabled: true, memberDatasourceIds: selectedIds } }
+        : {})
+    }
     await addPanel(selectedDashboardId.value, {
       name: titleResult.name,
       sql: props.sql,
       chart_type: chartType.value,
-      chart_config: props.chartConfig,
+      chart_config: chartConfig,
       source_thread_id: props.sourceThreadId,
       datasource_id: props.datasourceId,
-      member_datasource_id: props.memberDatasourceId
+      member_datasource_id: selectedIds[0] || selectedMemberDatasourceId.value
     })
     ElMessage.success('面板添加成功')
     handleClose()
@@ -182,14 +245,60 @@ const handleClose = () => {
           <button
             v-for="ct in chartTypeOptions"
             :key="ct.value"
-            class="flex min-h-[58px] flex-col items-center justify-center gap-0.5 px-2 py-1.5 border border-gray-200 rounded-md bg-white text-gray-500 text-xs cursor-pointer transition-all duration-200 hover:border-[#1f82d9] hover:bg-[#f0f7ff] hover:text-[#1f82d9]"
+            class="flex min-h-[46px] flex-col items-center justify-center gap-0.5 px-2 py-1 border border-gray-200 rounded-md bg-white text-gray-500 text-xs cursor-pointer transition-all duration-200 hover:border-[#1f82d9] hover:bg-[#f0f7ff] hover:text-[#1f82d9]"
             :class="{ 'border-[#1f82d9] bg-gradient-to-br from-[#e0f0ff] to-[#f0f7ff] text-[#1f82d9]': chartType === ct.value }"
             @click="chartType = ct.value"
           >
-            <i :class="['fa-solid', ct.icon, 'text-sm']"></i>
+            <i :class="['fa-solid', ct.icon, 'text-xs']"></i>
             <span class="text-center leading-4 text-[11px]">{{ ct.label }}</span>
           </button>
         </div>
+      </div>
+
+      <div v-if="executionTargets?.length" class="mb-4 last:mb-0">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <label class="block text-sm font-medium text-gray-700">执行对象</label>
+          <div v-if="canUseMultiSource" class="flex items-center gap-3 text-xs">
+            <span class="text-gray-400">已选 {{ selectedMemberDatasourceIds.length }}/{{ executionTargets.length }}</span>
+            <button
+              type="button"
+              class="border-none bg-transparent p-0 text-[#1f82d9] cursor-pointer hover:text-[#0f5fa8]"
+              @click="isAllExecutionTargetsSelected ? clearExecutionTargets() : selectAllExecutionTargets()"
+            >
+              {{ isAllExecutionTargetsSelected ? '取消全选' : '全选' }}
+            </button>
+          </div>
+        </div>
+        <el-checkbox-group
+          v-if="canUseMultiSource"
+          v-model="selectedMemberDatasourceIds"
+          class="grid max-h-[132px] grid-cols-3 gap-2 overflow-auto rounded-lg border border-gray-200 p-2"
+        >
+          <el-checkbox
+            v-for="target in executionTargets"
+            :key="target.member_datasource_id"
+            :label="target.member_datasource_id"
+            border
+            class="!mr-0"
+          >
+            <span class="inline-block max-w-[140px] truncate align-bottom" :title="getExecutionTargetName(target)">
+              {{ getExecutionTargetName(target) }}
+            </span>
+          </el-checkbox>
+        </el-checkbox-group>
+        <el-radio-group v-else v-model="singleSelectedMemberDatasourceId" class="grid max-h-[132px] grid-cols-3 gap-2 overflow-auto rounded-lg border border-gray-200 p-2">
+          <el-radio
+            v-for="target in executionTargets"
+            :key="target.member_datasource_id"
+            :label="target.member_datasource_id"
+            border
+            class="!mr-0"
+          >
+            <span class="inline-block max-w-[140px] truncate align-bottom" :title="getExecutionTargetName(target)">
+              {{ getExecutionTargetName(target) }}
+            </span>
+          </el-radio>
+        </el-radio-group>
       </div>
 
       <!-- SQL 预览 -->
@@ -210,6 +319,7 @@ const handleClose = () => {
           <pre class="m-0 text-xs font-mono leading-relaxed text-gray-700 whitespace-pre-wrap break-all">{{ sql }}</pre>
         </div>
       </div>
+
     </template>
 
     <template #footer>

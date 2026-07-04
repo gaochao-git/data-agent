@@ -52,7 +52,8 @@ interface Props {
   semanticParams?: SemanticParams
   visualization?: VisualizationConfig
   sql?: string
-  onSave?: (sql: string, chartType: string, memberDatasourceId?: string) => void
+  memberDatasourceIds?: string[]
+  onSave?: (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
   paginationEnabled?: boolean
@@ -328,7 +329,8 @@ const handleSave = () => {
     props.onSave(
       sql,
       viewMode.value === 'vertical' || viewMode.value === 'card' ? 'table' : viewMode.value,
-      activeResult.value?.member_datasource_id
+      activeResult.value?.member_datasource_id,
+      props.memberDatasourceIds
     )
   }
 }

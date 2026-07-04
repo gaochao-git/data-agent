@@ -953,10 +953,15 @@ const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref('table')
 const saveMemberDatasourceId = ref('')
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
+const saveMemberDatasourceIds = ref<string[]>([])
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
   saveSql.value = sql
   saveChartType.value = chartType
   saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
+  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
+  saveMemberDatasourceIds.value = executedMemberIds.length > 1
+    ? executedMemberIds
+    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
   showSaveModal.value = true
 }
 
@@ -2441,6 +2446,8 @@ defineExpose({
     :chart-type="saveChartType"
     :datasource-id="datasourceId"
     :member-datasource-id="saveMemberDatasourceId"
+    :member-datasource-ids="saveMemberDatasourceIds"
+    :execution-targets="executionTargets"
   />
 
   <QueryFavoriteModal
