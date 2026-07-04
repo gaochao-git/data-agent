@@ -7,7 +7,7 @@ export const CHART_TYPES = [
   { key: 'area', label: '面积图', icon: 'fa-chart-area', echarts: true, supportsDualAxis: false, supportsSeriesType: false },
   { key: 'pie', label: '饼图', icon: 'fa-chart-pie', echarts: true, supportsDualAxis: false, supportsSeriesType: false },
   { key: 'map', label: '地图', icon: 'fa-map', echarts: true, supportsDualAxis: false, supportsSeriesType: false },
-  { key: 'combo', label: '柱线组合图', icon: 'fa-chart-simple', echarts: true, supportsDualAxis: true, supportsSeriesType: true },
+  { key: 'combo', label: '柱线组合图', icon: 'fa-chart-simple', echarts: true, supportsDualAxis: true, supportsSeriesType: false },
   { key: 'funnel', label: '漏斗图', icon: 'fa-filter', echarts: true, supportsDualAxis: false, supportsSeriesType: false },
   { key: 'graph', label: '关系图', icon: 'fa-diagram-project', echarts: true, supportsDualAxis: false, supportsSeriesType: false },
 ] as const

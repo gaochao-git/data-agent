@@ -305,7 +305,7 @@ function buildOption(): echarts.EChartsOption {
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: isBar ? 'shadow' : 'line' } },
     legend: { show: axisYFields.length > 1, top: 0, textStyle: { color: '#475569', fontSize: 11 } },
-    grid: { left: 24, right: 16, top: axisYFields.length > 1 ? 34 : 18, bottom: 28, containLabel: true },
+    grid: { left: 24, right: useDualAxisCombo ? 42 : 16, top: axisYFields.length > 1 ? 34 : 18, bottom: 28, containLabel: true },
     xAxis: isHorizontalBar
       ? {
           type: 'value',

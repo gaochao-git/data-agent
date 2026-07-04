@@ -822,14 +822,14 @@ const chartOption = computed(() => {
       value: parseNumericValue(row[primaryYField]) ?? 0,
     }))
     const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
-    const formattedPieTotal = formatNumber(pieTotal)
+    const formattedPieTotal = formatRawNumber(pieTotal)
 
     return {
       ...baseOption,
       color: pieColors,
       title: {
         text: formattedPieTotal.value,
-        subtext: formattedPieTotal.unit ? `合计(${formattedPieTotal.unit})` : '合计',
+        subtext: '合计',
         left: 'center',
         top: 'center',
         textStyle: {
@@ -1111,24 +1111,10 @@ onUnmounted(() => {
   chartInstance = null
 })
 
-// 数字人性化格式
-const formatNumber = (num: number): { value: string; unit: string } => {
-  const absNum = Math.abs(num)
-  const sign = num < 0 ? '-' : ''
-
-  if (absNum >= 100000000) {
-    // 亿
-    const val = absNum / 100000000
-    return { value: sign + (val >= 10 ? val.toFixed(0) : val.toFixed(2)), unit: '亿' }
-  } else if (absNum >= 10000) {
-    // 万
-    const val = absNum / 10000
-    return { value: sign + (val >= 10 ? val.toFixed(0) : val.toFixed(2)), unit: '万' }
-  } else if (absNum >= 1000) {
-    return { value: sign + absNum.toLocaleString(), unit: '' }
-  } else {
-    return { value: sign + (Number.isInteger(absNum) ? absNum.toString() : absNum.toFixed(2)), unit: '' }
-  }
+const formatRawNumber = (num: number): { value: string } => {
+  if (!Number.isFinite(num)) return { value: '-' }
+  if (Number.isInteger(num)) return { value: num.toLocaleString() }
+  return { value: num.toLocaleString(undefined, { maximumFractionDigits: 6 }) }
 }
 
 // KPI 原始值

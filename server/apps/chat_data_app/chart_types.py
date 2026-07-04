@@ -97,7 +97,7 @@ CHART_TYPE_ITEMS: tuple[ChartTypeItem, ...] = (
         "data_shape": "维度字段 + 2个数值字段",
         "echarts": True,
         "supports_dual_axis": True,
-        "supports_series_type": True,
+        "supports_series_type": False,
     },
     {
         "key": "funnel",
