@@ -540,7 +540,7 @@ def normalize_dashboard_card_chart_config(card: Dict[str, Any]) -> Dict[str, Any
     line_style = str(chart_config.get("lineStyle") or "").strip()
     if line_style in DASHBOARD_ALLOWED_LINE_STYLES:
         result["lineStyle"] = line_style
-    for key in ("xField", "yField", "seriesField"):
+    for key in ("xField", "yField", "yField2", "seriesField"):
         value = chart_config.get(key)
         if isinstance(value, str) and value.strip():
             result[key] = value.strip()

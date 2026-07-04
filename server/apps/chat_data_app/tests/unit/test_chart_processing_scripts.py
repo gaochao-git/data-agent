@@ -23,6 +23,22 @@ def load_compare_period_chart_module():
     return module
 
 
+def load_chart_script_module(script_name: str):
+    script_path = (
+        Path(__file__).resolve().parents[2]
+        / "agent"
+        / "skills"
+        / "chart-processing"
+        / "scripts"
+        / script_name
+    )
+    spec = importlib.util.spec_from_file_location(script_name.replace(".py", ""), script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_month_yoy_chart_uses_month_label_axis(tmp_path):
     current = tmp_path / "current.json"
     previous = tmp_path / "previous.json"
@@ -255,3 +271,55 @@ def test_compare_period_parse_args_and_script_entrypoint(tmp_path, monkeypatch):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["chart_type"] == "bar"
     assert payload["series"][0]["field"] == "本期销售额"
+
+
+def test_single_result_combo_limits_to_two_y_fields(tmp_path):
+    payload_path = tmp_path / "payload.json"
+    output_path = tmp_path / "nested" / "chart.json"
+    payload_path.write_text(json.dumps({
+        "sql": "select month, a, b, c from t",
+        "columns": ["month", "a", "b", "c"],
+        "data": [{"month": "2026-01", "a": 1, "b": 2, "c": 3}],
+    }), encoding="utf-8")
+    module = load_chart_script_module("single_result_chart.py")
+
+    chart_spec = module.build_chart_spec(argparse.Namespace(
+        input=str(payload_path),
+        output=str(output_path),
+        title="柱线组合",
+        chart_type="combo",
+        x_field="month",
+        y_fields=["a", "b", "c"],
+    ))
+
+    assert chart_spec["encoding"] == {"x": "month", "y": ["a", "b"]}
+    assert [item["field"] for item in chart_spec["series"]] == ["a", "b"]
+    assert chart_spec["series"][0]["format"] == "number"
+
+
+def test_join_results_combo_limits_to_two_y_fields(tmp_path):
+    manifest_path = tmp_path / "manifest.json"
+    output_path = tmp_path / "nested" / "chart.json"
+    series_a = tmp_path / "a.json"
+    series_b = tmp_path / "b.json"
+    series_c = tmp_path / "c.json"
+    series_a.write_text(json.dumps({"data": [{"month": "2026-01", "value": 1}], "sql": "select a"}), encoding="utf-8")
+    series_b.write_text(json.dumps({"data": [{"month": "2026-01", "value": 2}], "sql": "select b"}), encoding="utf-8")
+    series_c.write_text(json.dumps({"data": [{"month": "2026-01", "value": 3}], "sql": "select c"}), encoding="utf-8")
+    manifest_path.write_text(json.dumps({
+        "title": "柱线组合",
+        "chart_type": "combo",
+        "key_field": "month",
+        "series": [
+            {"label": "A", "path": str(series_a), "value_field": "value"},
+            {"label": "B", "path": str(series_b), "value_field": "value"},
+            {"label": "C", "path": str(series_c), "value_field": "value"},
+        ],
+    }), encoding="utf-8")
+    module = load_chart_script_module("join_results_chart.py")
+
+    chart_spec = module.build_chart_spec(json.loads(manifest_path.read_text(encoding="utf-8")))
+
+    assert chart_spec["encoding"] == {"x": "month", "y": ["a", "b"]}
+    assert [item["field"] for item in chart_spec["series"]] == ["a", "b"]
+    assert [item["name"] for item in chart_spec["sources"]] == ["A", "B"]

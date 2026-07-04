@@ -108,7 +108,10 @@ def build_chart_spec(manifest: dict[str, Any]) -> dict[str, Any]:
     if missing_policy not in {"fill_zero", "keep_null", "drop_missing"}:
         raise ValueError("missing_policy must be fill_zero, keep_null, or drop_missing")
 
+    chart_type = str(manifest.get("chart_type") or "line")
     series_items = normalize_series(manifest)
+    if chart_type == "combo":
+        series_items = series_items[:2]
     maps: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     all_keys: set[str] = set()
@@ -133,10 +136,12 @@ def build_chart_spec(manifest: dict[str, Any]) -> dict[str, Any]:
         data.append(row)
 
     y_fields = [item["field"] for item in series_items]
+    if str(manifest.get("chart_type") or "").strip() == "combo":
+        y_fields = y_fields[:2]
     return {
         "version": "1.0",
         "title": str(manifest.get("title") or "多系列图表"),
-        "chart_type": str(manifest.get("chart_type") or "line"),
+        "chart_type": chart_type,
         "data": data,
         "encoding": {"x": key_field, "y": y_fields},
         "series": [{"field": item["field"], "label": item["label"], "format": "number"} for item in series_items],

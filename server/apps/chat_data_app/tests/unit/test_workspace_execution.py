@@ -941,6 +941,7 @@ def test_artifact_payload_additional_renderers_and_invalid_chart_edges():
         {"version": "1.0", "chart_type": "line", "data": [{"x": 1}], "encoding": {"x": "x", "y": []}},
         {"version": "1.0", "chart_type": "line", "data": [{"y": 2}], "encoding": {"x": "x", "y": ["y"]}},
         {"version": "1.0", "chart_type": "line", "data": [{"x": 1}], "encoding": {"x": "x", "y": ["missing"]}},
+        {"version": "1.0", "chart_type": "combo", "data": [{"x": 1, "a": 1, "b": 2, "c": 3}], "encoding": {"x": "x", "y": ["a", "b", "c"]}},
         {"version": "1.0", "chart_type": "graph", "data": {"nodes": [], "edges": []}},
     ]:
         assert workspace_execution._parse_chart_spec_payload(payload) is None

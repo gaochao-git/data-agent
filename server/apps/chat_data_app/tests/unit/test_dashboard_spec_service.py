@@ -716,13 +716,14 @@ def test_dashboard_layout_and_chart_config_error_helpers():
     assert layout == {"x": 11, "y": 0, "w": 1, "h": 3}
 
     config = normalize_dashboard_card_chart_config({
-        "chart_config": {"seriesField": "机构", "xField": "月份", "yField": "销售额"},
+        "chart_config": {"seriesField": "机构", "xField": "月份", "yField": "销售额", "yField2": "订单数"},
         "metrics": ["销售额"],
         "dimensions": ["月份"],
     })
     assert config["seriesField"] == "机构"
     assert config["xField"] == "月份"
     assert config["yField"] == "销售额"
+    assert config["yField2"] == "订单数"
 
 
 def test_create_dashboard_from_spec_payload_invalid_and_cleanup_branches(monkeypatch):

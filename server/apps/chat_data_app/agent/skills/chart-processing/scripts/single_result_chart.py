@@ -114,6 +114,8 @@ def build_chart_spec(args: argparse.Namespace) -> dict[str, Any]:
     y_fields = args.y_fields or (infer_graph_y_fields(columns, x_field, numeric_columns) if chart_type == "graph" else numeric_columns[:3])
     if not y_fields:
         raise ValueError("at least one y field is required")
+    if chart_type == "combo":
+        y_fields = y_fields[:2]
     data = normalize_rows(rows, y_fields, chart_type)
     series = [
         {"field": field, "label": field, "format": "text" if chart_type == "graph" and index == 0 else "number"}

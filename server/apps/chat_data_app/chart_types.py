@@ -93,8 +93,8 @@ CHART_TYPE_ITEMS: tuple[ChartTypeItem, ...] = (
     {
         "key": "combo",
         "label": "柱线组合图",
-        "description": "同一维度下不同量纲指标组合展示",
-        "data_shape": "维度字段 + 多个数值字段",
+        "description": "同一维度下两个量纲指标柱线组合展示",
+        "data_shape": "维度字段 + 2个数值字段",
         "echarts": True,
         "supports_dual_axis": True,
         "supports_series_type": True,
@@ -168,6 +168,13 @@ def chart_type_requires_x(chart_type: Any) -> bool:
 def chart_type_requires_y(chart_type: Any) -> bool:
     """Return whether chart spec encoding.y is required."""
     return normalize_chart_type(chart_type) in CHART_TYPES_REQUIRING_Y
+
+
+def chart_type_max_y_fields(chart_type: Any) -> int | None:
+    """Return max supported encoding.y fields for a chart type, or None if unlimited."""
+    if normalize_chart_type(chart_type) == "combo":
+        return 2
+    return None
 
 
 def get_chart_type_items() -> tuple[ChartTypeItem, ...]:

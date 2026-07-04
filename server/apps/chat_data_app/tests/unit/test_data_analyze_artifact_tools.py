@@ -94,6 +94,17 @@ def test_chart_artifact_payload_supports_graph_and_rejects_incomplete_specs(tmp_
     assert artifact_payloads.parse_chart_spec_payload(graph_empty_nodes) is None
 
 
+def test_chart_artifact_payload_limits_combo_to_two_y_fields(tmp_path):
+    target = _write_json(tmp_path / "outputs" / "combo.json", {
+        "version": "1.0",
+        "chart_type": "combo",
+        "data": [{"month": "2026-01", "a": 1, "b": 2, "c": 3}],
+        "encoding": {"x": "month", "y": ["a", "b", "c"]},
+    })
+
+    assert artifact_payloads.parse_chart_spec_payload(target) is None
+
+
 def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(tmp_path):
     invalid_json = tmp_path / "outputs" / "invalid-json.json"
     invalid_json.parent.mkdir(parents=True, exist_ok=True)

@@ -68,6 +68,10 @@ const yFields = computed(() => {
   if (Array.isArray(fields) && fields.length) return fields.map(item => String(item)).filter(Boolean)
   return inferYFields()
 })
+const comboYFields = computed(() => {
+  const fields = yFields.value
+  return chartType.value === 'combo' ? fields.slice(0, 2) : fields
+})
 const tableColumns = computed(() => {
   const seen = new Set<string>()
   dataRows.value.forEach((row) => {
@@ -296,10 +300,12 @@ function buildOption(): echarts.EChartsOption {
   const isHorizontalBar = chartType.value === 'horizontal_bar'
   const isBar = chartType.value === 'bar' || isHorizontalBar
   const isCombo = chartType.value === 'combo'
+  const axisYFields = comboYFields.value
+  const useDualAxisCombo = isCombo && axisYFields.length > 1
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: isBar ? 'shadow' : 'line' } },
-    legend: { show: ys.length > 1, top: 0, textStyle: { color: '#475569', fontSize: 11 } },
-    grid: { left: 24, right: 16, top: ys.length > 1 ? 34 : 18, bottom: 28, containLabel: true },
+    legend: { show: axisYFields.length > 1, top: 0, textStyle: { color: '#475569', fontSize: 11 } },
+    grid: { left: 24, right: 16, top: axisYFields.length > 1 ? 34 : 18, bottom: 28, containLabel: true },
     xAxis: isHorizontalBar
       ? {
           type: 'value',
@@ -323,16 +329,35 @@ function buildOption(): echarts.EChartsOption {
           axisLine: { lineStyle: { color: '#CBD5E1' } },
           axisLabel: { color: '#64748B', fontSize: 11 },
         }
-      : {
-          type: 'value',
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { color: '#64748B', fontSize: 11 },
-          splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } },
-        },
-    series: ys.map((field, index) => ({
+      : useDualAxisCombo
+        ? [
+            {
+              type: 'value',
+              axisLine: { show: false },
+              axisTick: { show: false },
+              axisLabel: { color: '#64748B', fontSize: 11 },
+              splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } },
+            },
+            {
+              type: 'value',
+              position: 'right',
+              axisLine: { show: true, lineStyle: { color: '#CBD5E1' } },
+              axisTick: { show: false },
+              axisLabel: { color: '#64748B', fontSize: 11, margin: 10 },
+              splitLine: { show: false },
+            },
+          ]
+        : {
+            type: 'value',
+            axisLine: { show: false },
+            axisTick: { show: false },
+            axisLabel: { color: '#64748B', fontSize: 11 },
+            splitLine: { lineStyle: { color: '#E2E8F0', type: 'dashed' } },
+          },
+    series: axisYFields.map((field, index) => ({
       name: getLabel(field),
       type: (isBar || (isCombo && index === 0)) ? 'bar' : 'line',
+      yAxisIndex: useDualAxisCombo ? (index === 0 ? 0 : 1) : 0,
       smooth: !(isBar || (isCombo && index === 0)),
       barMaxWidth: 36,
       areaStyle: chartType.value === 'area' ? { opacity: 0.18 } : undefined,

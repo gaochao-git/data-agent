@@ -273,6 +273,18 @@ DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT = """# 示例
 → 查询关系边数据后，生成 `encoding.x=起点字段`、`encoding.y=[终点字段]`，可保留关系强度字段。
 回复示例：服务调用关系图已生成。
 
+## 示例13：柱线组合图
+用户：查看订单数量和销售额趋势
+内部语义判断：
+- chart_type: combo
+- dimensions: 时间字段
+- metrics: ["订单数量", "销售额"]
+- encoding.y 只放两个指标，第一个画柱、第二个画线
+工具顺序：
+→ 如用户要求生成图表，先加载 `chart-processing` 技能。
+→ 查询完成后生成 `encoding.x=时间字段`、`encoding.y=[订单数量, 销售额]`。
+回复示例：柱线组合图已生成。
+
 """
 
 DATA_ANALYZE_HIVE_DIALECT_CONTEXT = """当前数据库方言：Hive。

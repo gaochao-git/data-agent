@@ -272,6 +272,11 @@ const handleSaveEditModal = () => {
     return
   }
   const { multiSource: _oldMultiSource, ...baseChartConfig } = editState.chartConfig || {}
+  if (editState.chartType === 'combo') {
+    delete baseChartConfig.seriesField
+  } else {
+    delete baseChartConfig.yField2
+  }
   const nextChartConfig = {
     ...baseChartConfig,
     ...(selectedIds.length > 1
@@ -521,7 +526,7 @@ const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string,
   const config = chartConfig || {}
   const manualX = config.xField as string | undefined
   const manualY = config.yField as string | undefined
-  const manualSeries = config.seriesField as string | undefined
+  const manualYSecondary = config.yField2 as string | undefined
 
   const isMultiSourceResult = all.includes(DASHBOARD_MEMBER_COLUMN)
   const preferredCategoryColumns = categoryColumns.filter(field => field !== DASHBOARD_MEMBER_COLUMN)
@@ -536,6 +541,17 @@ const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string,
     return { xField, yFields: targetField ? [targetField] : [], seriesField: '' }
   }
 
+  if (chartType === 'combo') {
+    const primaryYField = (manualY && all.includes(manualY))
+      ? manualY
+      : (numericColumns[0] ?? all[1] ?? all[0] ?? '')
+    const secondaryYField = (manualYSecondary && all.includes(manualYSecondary) && manualYSecondary !== primaryYField)
+      ? manualYSecondary
+      : (numericColumns.find(field => field !== primaryYField) ?? all.find(field => field !== xField && field !== primaryYField) ?? '')
+    const yFields = [primaryYField, secondaryYField].filter((field): field is string => !!field)
+    return { xField, yFields, seriesField: '' }
+  }
+
   // Y 轴：手动设定 > 所有数值字段 > 第二列
   let yFields: string[]
   if (manualY && all.includes(manualY)) {
@@ -545,8 +561,8 @@ const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string,
   }
 
   // 分组字段：手动设定 > 多数据源执行对象 > 第二个业务分类字段
-  const seriesField = (manualSeries && all.includes(manualSeries))
-    ? manualSeries
+  const seriesField = (config.seriesField as string | undefined && all.includes(config.seriesField as string))
+    ? String(config.seriesField)
     : (isMultiSourceResult && ['bar', 'horizontal_bar', 'line', 'area'].includes(chartType)
       ? DASHBOARD_MEMBER_COLUMN
       : (preferredCategoryColumns.find(field => field !== xField) || ''))
@@ -559,7 +575,7 @@ const inferredFields = computed(() => inferFields(props.panel.chart_type, props.
 const editInferredFields = computed(() => inferFields(editState.chartType, editState.chartConfig))
 
 // 字段配置处理
-const handleFieldConfigChange = (field: 'xField' | 'yField' | 'seriesField', value: string) => {
+const handleFieldConfigChange = (field: 'xField' | 'yField' | 'yField2' | 'seriesField', value: string) => {
   editState.chartConfig = { ...editState.chartConfig, [field]: value || undefined }
 }
 
@@ -567,6 +583,7 @@ const handleFieldConfigReset = () => {
   const newConfig = { ...editState.chartConfig }
   delete newConfig.xField
   delete newConfig.yField
+  delete newConfig.yField2
   delete newConfig.seriesField
   editState.chartConfig = newConfig
 }
@@ -659,7 +676,7 @@ const chartOption = computed(() => {
     },
     grid: {
       left: 10,
-      right: 20,
+      right: chartType === 'combo' && yFields.length > 1 ? 44 : 20,
       top: 40,
       bottom: 10,
       containLabel: true,
@@ -733,6 +750,7 @@ const chartOption = computed(() => {
     const seriesSource = grouped
       ? grouped.seriesNames.map((name, idx) => ({ name, field: primaryYField, data: grouped.valuesBySeries[idx] || [] }))
       : yFields.map(field => ({ name: field, field, data: data.map(row => parseNumericValue(row[field]) ?? 0) }))
+    const useDualAxisCombo = chartType === 'combo' && !grouped && seriesSource.length > 1
     const series = seriesSource.map((item, idx) => {
       const color = configuredColor && idx === 0 ? configuredColor : defaultColors[idx % defaultColors.length]!
       const isComboBar = chartType === 'combo' && idx === 0
@@ -740,6 +758,7 @@ const chartOption = computed(() => {
         name: item.name,
         type: isComboBar ? 'bar' as const : 'line' as const,
         data: item.data,
+        yAxisIndex: useDualAxisCombo ? (idx === 0 ? 0 : 1) : 0,
         smooth: !isComboBar && lineStyleConfig.smooth,
         showSymbol: !isComboBar && data.length <= 12,
         symbolSize: isComboBar ? undefined : 6,
@@ -769,7 +788,25 @@ const chartOption = computed(() => {
     return {
       ...baseOption,
       xAxis: { type: 'category', data: xData, axisLabel: { color: theme.chartAxisText }, splitLine: { show: false } },
-      yAxis: { type: 'value', axisLabel: { color: theme.chartAxisText }, splitLine: splitLineStyle },
+      yAxis: useDualAxisCombo
+        ? [
+            {
+              type: 'value',
+              axisLine: { show: false },
+              axisTick: { show: false },
+              axisLabel: { color: theme.chartAxisText },
+              splitLine: splitLineStyle,
+            },
+            {
+              type: 'value',
+              position: 'right',
+              axisLine: { show: true, lineStyle: { color: theme.chartGridLine } },
+              axisTick: { show: false },
+              axisLabel: { color: theme.chartAxisText, margin: 10 },
+              splitLine: { show: false },
+            },
+          ]
+        : { type: 'value', axisLabel: { color: theme.chartAxisText }, splitLine: splitLineStyle },
       series,
     }
   }
@@ -1442,13 +1479,19 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                 </div>
                 <div>
                   <label class="mb-1.5 block text-[12px] text-gray-500">
-                    {{ editState.chartType === 'graph' ? '终点字段' : 'Y轴（数值）' }}
+                    {{ editState.chartType === 'graph' ? '终点字段' : editState.chartType === 'combo' ? '柱状指标' : 'Y轴（数值）' }}
                   </label>
                   <el-select :model-value="editInferredFields.yFields[0] || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('yField', val)">
                     <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.numericColumns.includes(col) ? ' (数值)' : ' (分类)'}`" />
                   </el-select>
                 </div>
-                <div v-if="['bar', 'horizontal_bar', 'line', 'area', 'combo'].includes(editState.chartType)">
+                <div v-if="editState.chartType === 'combo'">
+                  <label class="mb-1.5 block text-[12px] text-gray-500">折线指标</label>
+                  <el-select :model-value="editInferredFields.yFields[1] || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('yField2', val)">
+                    <el-option v-for="col in availableColumns.numericColumns" :key="col" :value="col" :label="col" />
+                  </el-select>
+                </div>
+                <div v-else-if="['bar', 'horizontal_bar', 'line', 'area'].includes(editState.chartType)">
                   <label class="mb-1.5 block text-[12px] text-gray-500">分组字段（可选）</label>
                   <el-select :model-value="(editState.chartConfig?.seriesField as string) || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('seriesField', val)">
                     <el-option value="" label="不分组" />
@@ -1464,7 +1507,7 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
       <template #footer>
         <el-button @click="showEditModal = false">取消</el-button>
         <el-button type="primary" :disabled="!editState.name.trim() || !editState.sql.trim()" @click="handleSaveEditModal">
-          保存并执行
+          应用修改
         </el-button>
       </template>
     </el-dialog>

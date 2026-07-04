@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from utils.logger import get_logger
-from ..chart_types import chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
+from ..chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
 
 logger = get_logger(__name__)
 
@@ -656,6 +656,10 @@ def _parse_chart_spec_payload(payload: Any) -> dict[str, Any] | None:
     y_fields = encoding.get("y")
     if chart_type_requires_y(chart_type) and (not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)):
         return None
+    max_y_fields = chart_type_max_y_fields(chart_type)
+    if max_y_fields is not None and isinstance(y_fields, list):
+        if len([item for item in y_fields if str(item).strip()]) > max_y_fields:
+            return None
     if chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip():
         return None
     if data:
