@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelGlobalRunningQueryHistory, getGlobalQueryHistory } from '../api'
 import type { DataSource, SqlHistoryItem } from '../types'
+import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
 
 const props = withDefaults(defineProps<{
   datasources?: DataSource[]
@@ -23,13 +24,14 @@ const page = ref(1)
 const pageSize = ref(20)
 const errorDialogVisible = ref(false)
 const errorDialogMessage = ref('')
+const buildDefaultTimeRange = () => buildRecentDaysDateTimeRange(7)
 const filters = ref({
   datasource_id: '',
   username: '',
   keyword: '',
   source: 'all',
   status: 'all',
-  time_range: null as [string, string] | null,
+  time_range: buildDefaultTimeRange() as [string, string] | null,
 })
 
 const defaultVisibleColumnKeys = [
@@ -203,7 +205,7 @@ const handleReset = () => {
     keyword: '',
     source: 'all',
     status: 'all',
-    time_range: null,
+    time_range: buildDefaultTimeRange(),
   }
   page.value = 1
   loadHistories()

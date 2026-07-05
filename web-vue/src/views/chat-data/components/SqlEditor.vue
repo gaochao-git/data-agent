@@ -17,6 +17,7 @@ import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
+import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
 
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
 const renderMarkdown = (text: string) => md.render(text)
@@ -663,7 +664,8 @@ const historyPageSize = ref(10)
 const historyTotal = ref(0)
 const historySourceFilter = ref<'all' | 'sql' | 'agent' | 'builder' | 'dashboard'>('all')
 const historyStatusFilter = ref<'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'>('all')
-const historyTimeRange = ref<[string, string] | null>(null)
+const buildDefaultHistoryTimeRange = () => buildRecentDaysDateTimeRange(7)
+const historyTimeRange = ref<[string, string] | null>(buildDefaultHistoryTimeRange())
 const defaultVisibleHistoryColumnKeys = [
   'source',
   'query',
