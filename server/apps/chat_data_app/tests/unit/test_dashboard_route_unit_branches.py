@@ -384,6 +384,76 @@ async def test_dashboard_batch_context_and_task_items(dashboard_context, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_dashboard_batch_shared_sql_semaphore_caps_panel_and_member_queries(dashboard_context, monkeypatch):
+    _service, runtime, _user = dashboard_context
+    active_count = 0
+    max_active_count = 0
+
+    monkeypatch.setattr(dashboard_runtime, "DASHBOARD_PANEL_MAX_CONCURRENCY", 2)
+    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
+
+    async def execute_sql_for_member(**kwargs):
+        nonlocal active_count, max_active_count
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        await asyncio.sleep(0.01)
+        active_count -= 1
+        return {
+            "member_datasource_id": kwargs["execution_target"].get("member_datasource_id"),
+            "member_name": kwargs["execution_target"].get("member_name"),
+            "success": True,
+            "columns": ["c"],
+            "data": [{"c": 1}],
+            "total_count": 1,
+            "execution_time_ms": 1,
+            "sql": kwargs["sql"],
+        }
+
+    runtime.execute_sql_for_member = execute_sql_for_member
+    panel_map = {
+        "panel_a": {
+            "id": "panel_a",
+            "name": "面板A",
+            "chart_type": "table",
+            "chart_config": {"multiSource": {"enabled": True, "memberDatasourceIds": ["m1", "m2", "m3"]}},
+            "sql": "select 1",
+            "datasource_id": "ds_a",
+        },
+        "panel_b": {
+            "id": "panel_b",
+            "name": "面板B",
+            "chart_type": "table",
+            "chart_config": {"multiSource": {"enabled": True, "memberDatasourceIds": ["m1", "m2", "m3"]}},
+            "sql": "select 2",
+            "datasource_id": "ds_a",
+        },
+    }
+
+    class MultiMemberDatasourceManager:
+        async def get_execution_datasources_async(self, _datasource_id, selected_member_ids=None):
+            return [
+                {"member_datasource_id": member_id, "member_name": member_id, "source_type": "mysql"}
+                for member_id in selected_member_ids or []
+            ]
+
+    runtime.ds_manager = MultiMemberDatasourceManager()
+    task = {
+        "request_payload": json.dumps({
+            "dashboard_id": "dash_a",
+            "panel_ids": ["panel_a", "panel_b"],
+            "user_id": "u1",
+            "operator_name": "用户一",
+        }),
+    }
+    monkeypatch.setattr(dashboard_runtime, "prepare_dashboard_batch_context", lambda *_args, **_kwargs: asyncio.sleep(0, result=(panel_map, {})))
+
+    await dashboard_runtime.run_dashboard_batch_task("task_shared_limit", task)
+
+    assert max_active_count <= 2
+    assert len(runtime.executions) == 0
+
+
+@pytest.mark.asyncio
 async def test_dashboard_batch_context_reuses_execution_target_cache(dashboard_context, monkeypatch):
     _service, runtime, _user = dashboard_context
     calls = []

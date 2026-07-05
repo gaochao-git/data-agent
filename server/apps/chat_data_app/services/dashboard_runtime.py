@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
@@ -23,6 +24,7 @@ logger = get_logger(__name__)
 DASHBOARD_PANEL_MAX_CONCURRENCY = read_positive_int_env("CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY", 8)
 DASHBOARD_MEMBER_COLUMN = "执行对象"
 DASHBOARD_MEMBER_ID_COLUMN = "__member_datasource_id"
+_dashboard_sql_semaphore: ContextVar[Optional[asyncio.Semaphore]] = ContextVar("dashboard_sql_semaphore", default=None)
 
 
 @dataclass
@@ -51,6 +53,18 @@ def dashboard_runtime() -> DashboardRuntime:
     return _dashboard_runtime_value
 
 
+async def run_dashboard_sql_operation(
+    operation: Callable[[], Awaitable[Dict[str, Any]]],
+    fallback_semaphore: Optional[asyncio.Semaphore] = None,
+) -> Dict[str, Any]:
+    """执行看板 SQL，批量任务内共用同一个并发槽，避免面板和成员并发相乘。"""
+    semaphore = _dashboard_sql_semaphore.get() or fallback_semaphore
+    if semaphore is None:
+        return await operation()
+    async with semaphore:
+        return await operation()
+
+
 async def execute_dashboard_panel_sql(
     panel: Dict[str, Any],
     member_datasource_id: Optional[str] = None,
@@ -64,7 +78,10 @@ async def execute_dashboard_panel_sql(
     sql = panel.get("sql") or ""
 
     if not datasource_id:
-        result = await execute_sql_direct_runner(sql, None)
+        async def execute_direct() -> Dict[str, Any]:
+            return await execute_sql_direct_runner(sql, None)
+
+        result = await run_dashboard_sql_operation(execute_direct)
         return {
             "member_datasource_id": None,
             "member_name": None,
@@ -90,17 +107,20 @@ async def execute_dashboard_panel_sql(
             query_task_id=query_task_id,
         )
     execution_target = execution_targets[0]
-    return await dashboard_runtime().execute_sql_for_member(
-        execution_target=execution_target,
-        sql=sql,
-        limit=DEFAULT_ROW_LIMIT,
-        timeout=resolve_query_timeout(execution_target.get("source_type")),
-        user_id=user_id,
-        username=operator_name,
-        query_task_id=query_task_id,
-        execution_id=execution_id,
-        datasource_id=datasource_id,
-    )
+    async def execute_single() -> Dict[str, Any]:
+        return await dashboard_runtime().execute_sql_for_member(
+            execution_target=execution_target,
+            sql=sql,
+            limit=DEFAULT_ROW_LIMIT,
+            timeout=resolve_query_timeout(execution_target.get("source_type")),
+            user_id=user_id,
+            username=operator_name,
+            query_task_id=query_task_id,
+            execution_id=execution_id,
+            datasource_id=datasource_id,
+        )
+
+    return await run_dashboard_sql_operation(execute_single)
 
 
 async def execute_dashboard_panel_sql_with_target(
@@ -123,17 +143,21 @@ async def execute_dashboard_panel_sql_with_target(
             execution_id=execution_id,
         )
     sql = panel.get("sql") or ""
-    return await dashboard_runtime().execute_sql_for_member(
-        execution_target=execution_target,
-        sql=sql,
-        limit=DEFAULT_ROW_LIMIT,
-        timeout=resolve_query_timeout(execution_target.get("source_type")),
-        user_id=user_id,
-        username=operator_name,
-        query_task_id=query_task_id,
-        execution_id=execution_id,
-        datasource_id=panel.get("datasource_id"),
-    )
+
+    async def execute_single() -> Dict[str, Any]:
+        return await dashboard_runtime().execute_sql_for_member(
+            execution_target=execution_target,
+            sql=sql,
+            limit=DEFAULT_ROW_LIMIT,
+            timeout=resolve_query_timeout(execution_target.get("source_type")),
+            user_id=user_id,
+            username=operator_name,
+            query_task_id=query_task_id,
+            execution_id=execution_id,
+            datasource_id=panel.get("datasource_id"),
+        )
+
+    return await run_dashboard_sql_operation(execute_single)
 
 
 async def execute_dashboard_panel_sql_for_targets(
@@ -149,7 +173,7 @@ async def execute_dashboard_panel_sql_for_targets(
     semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
 
     async def execute_one(target: Dict[str, Any]) -> Dict[str, Any]:
-        async with semaphore:
+        async def execute_member() -> Dict[str, Any]:
             execution_id = await create_dashboard_panel_execution(
                 task_id=query_task_id or "",
                 panel=panel,
@@ -168,6 +192,7 @@ async def execute_dashboard_panel_sql_for_targets(
                 execution_id=execution_id,
                 datasource_id=panel.get("datasource_id"),
             )
+        return await run_dashboard_sql_operation(execute_member, semaphore)
 
     raw_results = await asyncio.gather(
         *(execute_one(target) for target in execution_targets),
@@ -571,17 +596,9 @@ async def execute_dashboard_panel_task_item(
     operator_name: Optional[str] = None,
 ) -> tuple[str, Dict[str, Any]]:
     """执行批量任务中的单个面板。"""
-    if semaphore is not None:
-        async with semaphore:
-            return await execute_dashboard_panel_task_item(
-                panel_id,
-                member_datasource_id,
-                panel=panel,
-                execution_target=execution_target,
-                query_task_id=query_task_id,
-                user_id=user_id,
-                operator_name=operator_name,
-            )
+    context_token = None
+    if semaphore is not None and _dashboard_sql_semaphore.get() is None:
+        context_token = _dashboard_sql_semaphore.set(semaphore)
     started_at = time.perf_counter()
     try:
         panel = panel or await load_dashboard_panel_or_raise(panel_id, user_id=user_id, include_public=True)
@@ -610,6 +627,9 @@ async def execute_dashboard_panel_task_item(
         log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "failed", member_datasource_id, str(e))
         logger.error("执行看板面板任务失败: panel_id=%s err=%s", panel_id, e)
         return panel_id, {"status": "failed", "error": str(e)}
+    finally:
+        if context_token is not None:
+            _dashboard_sql_semaphore.reset(context_token)
 
 
 async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
@@ -670,27 +690,29 @@ async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
         panel_map,
         panel_member_datasource_ids,
     )
-    semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
-    tasks = [
-        asyncio.create_task(
-            execute_dashboard_panel_task_item(
-                panel_id,
-                effective_panel_member_datasource_ids.get(panel_id),
-                semaphore,
-                panel=panel_map.get(panel_id),
-                execution_target=execution_target_map.get(
-                    build_dashboard_execution_target_cache_key(
-                        str((panel_map.get(panel_id) or {}).get("datasource_id") or ""),
-                        effective_panel_member_datasource_ids.get(panel_id),
-                    )
-                ),
-                query_task_id=task_id,
-                user_id=user_id,
-                operator_name=operator_name,
+    context_token = _dashboard_sql_semaphore.set(asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY))
+    try:
+        tasks = [
+            asyncio.create_task(
+                execute_dashboard_panel_task_item(
+                    panel_id,
+                    effective_panel_member_datasource_ids.get(panel_id),
+                    panel=panel_map.get(panel_id),
+                    execution_target=execution_target_map.get(
+                        build_dashboard_execution_target_cache_key(
+                            str((panel_map.get(panel_id) or {}).get("datasource_id") or ""),
+                            effective_panel_member_datasource_ids.get(panel_id),
+                        )
+                    ),
+                    query_task_id=task_id,
+                    user_id=user_id,
+                    operator_name=operator_name,
+                )
             )
-        )
-        for panel_id in panel_ids
-    ]
+            for panel_id in panel_ids
+        ]
+    finally:
+        _dashboard_sql_semaphore.reset(context_token)
     for completed_task in asyncio.as_completed(tasks):
         if await cancel_dashboard_batch_if_needed(task_id, tasks):
             return
@@ -725,45 +747,50 @@ async def execute_dashboard_stream_panel(
     semaphore: asyncio.Semaphore,
 ) -> Dict[str, Any]:
     """执行流式批量接口中的单个面板，返回前端 SSE payload。"""
-    async with semaphore:
-        panel = panel_map.get(panel_id)
-        started_at = time.perf_counter()
-        try:
-            if not panel:
-                return {"panel_id": panel_id, "error": f"面板不存在: {panel_id}"}
-            member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
-            execution_target = execution_target_map.get(
-                build_dashboard_execution_target_cache_key(
-                    str(panel.get("datasource_id") or ""),
-                    member_datasource_id,
-                )
+    context_token = None
+    if _dashboard_sql_semaphore.get() is None:
+        context_token = _dashboard_sql_semaphore.set(semaphore)
+    panel = panel_map.get(panel_id)
+    started_at = time.perf_counter()
+    try:
+        if not panel:
+            return {"panel_id": panel_id, "error": f"面板不存在: {panel_id}"}
+        member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
+        execution_target = execution_target_map.get(
+            build_dashboard_execution_target_cache_key(
+                str(panel.get("datasource_id") or ""),
+                member_datasource_id,
             )
-            execution_id = None
-            if not is_panel_multi_member_execution(panel, member_datasource_id):
-                execution_id = await create_dashboard_panel_execution(
-                    task_id=task_id,
-                    panel=panel,
-                    execution_target=execution_target,
-                    user_id=user_id,
-                    operator_name=operator_name,
-                )
-            payload = await build_dashboard_panel_execution_result(
+        )
+        execution_id = None
+        if not is_panel_multi_member_execution(panel, member_datasource_id):
+            execution_id = await create_dashboard_panel_execution(
+                task_id=task_id,
                 panel=panel,
-                member_datasource_id=member_datasource_id,
                 execution_target=execution_target,
                 user_id=user_id,
                 operator_name=operator_name,
-                query_task_id=task_id,
-                execution_id=execution_id,
             )
-            raise_if_dashboard_panel_execution_failed(payload)
-            log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "succeeded", member_datasource_id)
-            return payload
-        except Exception as exc:
-            member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
-            log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "failed", member_datasource_id, str(exc))
-            logger.error("执行面板 %s 失败: %s", panel_id, exc)
-            return {"panel_id": panel_id, "error": str(exc)}
+        payload = await build_dashboard_panel_execution_result(
+            panel=panel,
+            member_datasource_id=member_datasource_id,
+            execution_target=execution_target,
+            user_id=user_id,
+            operator_name=operator_name,
+            query_task_id=task_id,
+            execution_id=execution_id,
+        )
+        raise_if_dashboard_panel_execution_failed(payload)
+        log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "succeeded", member_datasource_id)
+        return payload
+    except Exception as exc:
+        member_datasource_id = effective_panel_member_datasource_ids.get(panel_id)
+        log_dashboard_panel_timing(panel, int((time.perf_counter() - started_at) * 1000), "failed", member_datasource_id, str(exc))
+        logger.error("执行面板 %s 失败: %s", panel_id, exc)
+        return {"panel_id": panel_id, "error": str(exc)}
+    finally:
+        if context_token is not None:
+            _dashboard_sql_semaphore.reset(context_token)
 
 
 def create_dashboard_stream_tasks(
@@ -777,21 +804,25 @@ def create_dashboard_stream_tasks(
 ) -> Dict[asyncio.Task, str]:
     """创建流式批量面板执行任务。"""
     semaphore = asyncio.Semaphore(DASHBOARD_PANEL_MAX_CONCURRENCY)
-    return {
-        asyncio.create_task(
-            execute_dashboard_stream_panel(
-                panel_id,
-                panel_map,
-                execution_target_map,
-                effective_panel_member_datasource_ids,
-                task_id,
-                user_id,
-                operator_name,
-                semaphore,
-            )
-        ): panel_id
-        for panel_id in panel_ids
-    }
+    context_token = _dashboard_sql_semaphore.set(semaphore)
+    try:
+        return {
+            asyncio.create_task(
+                execute_dashboard_stream_panel(
+                    panel_id,
+                    panel_map,
+                    execution_target_map,
+                    effective_panel_member_datasource_ids,
+                    task_id,
+                    user_id,
+                    operator_name,
+                    semaphore,
+                )
+            ): panel_id
+            for panel_id in panel_ids
+        }
+    finally:
+        _dashboard_sql_semaphore.reset(context_token)
 
 
 def build_sse_data(payload: Any) -> str:
