@@ -467,10 +467,73 @@ const chartRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 
 const chartTypes = CHART_TYPES
+const chartTypeHelpText: Record<string, { summary: string; example: string; sql: string }> = {
+  table: {
+    summary: '适合查看明细记录和多字段结果。',
+    example: '示例：近30天订单明细列表',
+    sql: 'SELECT order_id, user_name, amount, order_time FROM orders ORDER BY order_time DESC LIMIT 100',
+  },
+  kpi: {
+    summary: '适合展示单个核心指标结果。',
+    example: '示例：今日销售额、活跃用户数',
+    sql: 'SELECT SUM(amount) AS total_amount FROM orders WHERE order_date = CURRENT_DATE',
+  },
+  bar: {
+    summary: '适合分类对比和排行分析。',
+    example: '示例：各城市销售额对比',
+    sql: 'SELECT city, SUM(amount) AS total_amount FROM orders GROUP BY city ORDER BY total_amount DESC',
+  },
+  horizontal_bar: {
+    summary: '适合名称较长的分类排行。',
+    example: '示例：各渠道订单量排行',
+    sql: 'SELECT channel_name, COUNT(*) AS order_count FROM orders GROUP BY channel_name ORDER BY order_count DESC',
+  },
+  line: {
+    summary: '适合查看时间趋势和连续变化。',
+    example: '示例：近12个月销售额趋势',
+    sql: 'SELECT month, SUM(amount) AS total_amount FROM orders GROUP BY month ORDER BY month',
+  },
+  area: {
+    summary: '适合查看趋势规模和累计变化。',
+    example: '示例：近30天活跃用户趋势',
+    sql: 'SELECT stat_date, COUNT(DISTINCT user_id) AS active_users FROM user_events GROUP BY stat_date ORDER BY stat_date',
+  },
+  pie: {
+    summary: '适合查看分类占比分布。',
+    example: '示例：各品类销售额占比',
+    sql: 'SELECT category_name, SUM(amount) AS total_amount FROM orders GROUP BY category_name',
+  },
+  map: {
+    summary: '适合查看区域分布和省市对比。',
+    example: '示例：各省销售额分布',
+    sql: 'SELECT province, SUM(amount) AS total_amount FROM orders GROUP BY province',
+  },
+  combo: {
+    summary: '适合同维度下同时展示柱状和折线指标。',
+    example: '示例：按月份看订单数和销售额',
+    sql: 'SELECT month, COUNT(*) AS order_count, SUM(amount) AS total_amount FROM orders GROUP BY month ORDER BY month',
+  },
+  funnel: {
+    summary: '适合查看阶段转化和流程流失。',
+    example: '示例：访问、下单、支付转化漏斗',
+    sql: 'SELECT stage_name, COUNT(DISTINCT user_id) AS user_count FROM funnel_events GROUP BY stage_name',
+  },
+  graph: {
+    summary: '适合查看实体关系和上下游连接。',
+    example: '示例：用户、订单、商品关系图',
+    sql: 'SELECT user_name AS source, product_name AS target, COUNT(*) AS value FROM order_items GROUP BY user_name, product_name',
+  },
+}
 const chartStyleConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'combo', 'funnel', 'graph']
 const fieldConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel', 'graph']
 const supportsChartStyleConfig = computed(() => editState.chartType === 'kpi' || chartStyleConfigTypes.includes(editState.chartType))
 const supportsFieldConfig = computed(() => fieldConfigTypes.includes(editState.chartType))
+const currentChartTypeMeta = computed(() => {
+  return chartTypes.find(item => item.key === editState.chartType) ?? chartTypes[0]
+})
+const currentChartTypeHelp = computed(() => {
+  return chartTypeHelpText[editState.chartType] ?? chartTypeHelpText.table
+})
 const DASHBOARD_MEMBER_COLUMN = '执行对象'
 const DASHBOARD_MEMBER_ID_COLUMN = '__member_datasource_id'
 
@@ -1371,18 +1434,30 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
           <div class="space-y-5">
             <section>
               <div class="mb-2 text-[13px] text-gray-500">展示方式</div>
-              <div class="grid grid-cols-5 gap-2.5">
+              <div class="grid grid-cols-6 gap-2">
                 <button
                   v-for="type in chartTypes"
                   :key="type.key"
                   type="button"
-                  class="flex min-h-11 items-center justify-center gap-2 rounded-lg border border-solid px-3 py-2 text-sm transition-all duration-200"
+                  class="flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-lg border border-solid px-2 py-2 text-[12px] transition-all duration-200"
                   :class="editState.chartType === type.key ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50/50'"
                   @click="editState.chartType = type.key"
                 >
-                  <i :class="['fa-solid', type.icon]"></i>
-                  <span class="whitespace-nowrap">{{ type.label }}</span>
+                  <i :class="['fa-solid', type.icon, type.key === 'kpi' ? 'text-[14px]' : 'text-[13px]']"></i>
+                  <span class="max-w-full text-center leading-4">{{ type.label }}</span>
                 </button>
+              </div>
+              <div class="mt-3 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2.5">
+                <div class="flex items-center gap-2 text-[12px] font-medium text-blue-700">
+                  <i :class="['fa-solid', currentChartTypeMeta.icon]"></i>
+                  <span>{{ currentChartTypeMeta.label }}</span>
+                </div>
+                <div class="mt-1 text-[12px] leading-5 text-blue-700/90">{{ currentChartTypeHelp.summary }}</div>
+                <div class="mt-1 text-[12px] leading-5 text-blue-600">场景：{{ currentChartTypeHelp.example.replace(/^示例：/, '') }}</div>
+                <div class="mt-1 flex min-w-0 items-start gap-1.5 text-[12px] leading-5 text-blue-600">
+                  <span class="shrink-0">SQL：</span>
+                  <code class="min-w-0 flex-1 truncate rounded bg-white/80 px-1.5 py-0.5 font-mono text-[11px] text-blue-700">{{ currentChartTypeHelp.sql }}</code>
+                </div>
               </div>
             </section>
 
