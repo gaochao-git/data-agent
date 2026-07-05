@@ -138,6 +138,30 @@ const formatNullableText = (value?: string | number | null) => {
   return text || '-'
 }
 
+const getPanelExecutionPlanMemberIds = (item: SqlHistoryItem) => {
+  const plan = item.panel_execution_plan
+  if (!plan || typeof plan !== 'object') return []
+  const result: string[] = []
+  Object.values(plan).forEach((entry) => {
+    const ids = Array.isArray(entry?.member_datasource_ids) ? entry.member_datasource_ids : []
+    ids.forEach((rawId) => {
+      const memberId = String(rawId || '').trim()
+      if (memberId && !result.includes(memberId)) {
+        result.push(memberId)
+      }
+    })
+  })
+  return result
+}
+
+const getExecutionTargetText = (item: SqlHistoryItem) => {
+  const memberIds = getPanelExecutionPlanMemberIds(item)
+  if ((item.query_type === 'dashboard' || item.source === '看板') && memberIds.length > 1) {
+    return `${memberIds.length}个执行对象`
+  }
+  return item.member_name || item.member_datasource_id || '-'
+}
+
 const loadHistories = async () => {
   loading.value = true
   try {
@@ -377,7 +401,13 @@ defineExpose({
               <span :class="['rounded-full px-2 py-0.5', getStatusClass(item)]">{{ getStatusText(item) }}</span>
             </td>
             <td v-if="isColumnVisible('user')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.operator_name || item.user_id || '-' }}</td>
-            <td v-if="isColumnVisible('member')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600">{{ item.member_name || item.member_datasource_id || '-' }}</td>
+            <td
+              v-if="isColumnVisible('member')"
+              class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-600"
+              :title="getExecutionTargetText(item)"
+            >
+              {{ getExecutionTargetText(item) }}
+            </td>
             <td v-if="isColumnVisible('duration')" class="whitespace-nowrap border-b border-slate-50 px-3 py-2 text-slate-500">{{ formatDurationSeconds(item.execution_time_ms) }}</td>
             <td v-if="isColumnVisible('sql')" class="max-w-[460px] border-b border-slate-50 px-3 py-2">
               <div class="truncate font-mono text-[11px] text-slate-700" :title="item.query">{{ item.query }}</div>

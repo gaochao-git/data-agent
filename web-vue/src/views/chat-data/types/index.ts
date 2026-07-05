@@ -420,6 +420,11 @@ export interface SqlHistoryItem {
   user_id?: string | null
   operator_name?: string | null
   source?: string
+  panel_execution_plan?: Record<string, {
+    mode?: 'single' | 'multi'
+    member_datasource_ids?: string[]
+    primary_member_datasource_id?: string
+  }> | null
 }
 
 // 看板

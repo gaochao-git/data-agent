@@ -609,6 +609,15 @@ async def execute_panel(
             panel,
             request.member_datasource_id if request else None,
         )
+        panel_execution_plan = dashboard_runtime.build_panel_execution_plan(
+            [panel_id],
+            {panel_id: panel},
+            (
+                {panel_id: request.member_datasource_id}
+                if request and request.member_datasource_id
+                else {}
+            ),
+        )
         task_info = await dashboard_runtime.dashboard_runtime().create_task_record(
             task_type="dashboard_batch",
             datasource_id=str(panel.get("datasource_id") or ""),
@@ -621,6 +630,7 @@ async def execute_panel(
                     if effective_member_datasource_id
                     else {}
                 ),
+                "panel_execution_plan": panel_execution_plan,
                 "user_id": current_user.user_id,
                 "operator_name": current_user.username,
             },
@@ -885,6 +895,11 @@ async def create_dashboard_query_task(
             panel_map,
             panel_member_datasource_ids,
         )
+        panel_execution_plan = dashboard_runtime.build_panel_execution_plan(
+            effective_panel_ids,
+            panel_map,
+            panel_member_datasource_ids,
+        )
 
         task_info = await dashboard_runtime.dashboard_runtime().create_task_record(
             task_type="dashboard_batch",
@@ -894,6 +909,7 @@ async def create_dashboard_query_task(
                 "dashboard_id": dashboard_id,
                 "panel_ids": panel_ids or [],
                 "panel_member_datasource_ids": effective_panel_member_datasource_ids,
+                "panel_execution_plan": panel_execution_plan,
                 "user_id": current_user.user_id,
                 "operator_name": current_user.username,
             },

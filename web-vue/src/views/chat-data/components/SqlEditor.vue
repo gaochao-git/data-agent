@@ -817,7 +817,27 @@ const getHistorySourceText = (item: SqlHistoryItem) => {
   return 'SQL编辑器'
 }
 
+const getHistoryPanelExecutionPlanMemberIds = (item: SqlHistoryItem) => {
+  const plan = item.panel_execution_plan
+  if (!plan || typeof plan !== 'object') return []
+  const result: string[] = []
+  Object.values(plan).forEach((entry) => {
+    const ids = Array.isArray(entry?.member_datasource_ids) ? entry.member_datasource_ids : []
+    ids.forEach((rawId) => {
+      const memberId = String(rawId || '').trim()
+      if (memberId && !result.includes(memberId)) {
+        result.push(memberId)
+      }
+    })
+  })
+  return result
+}
+
 const getHistoryExecutionTargetText = (item: SqlHistoryItem) => {
+  const executionPlanMemberIds = getHistoryPanelExecutionPlanMemberIds(item)
+  if ((item.query_type === 'dashboard' || item.source === '看板') && executionPlanMemberIds.length > 1) {
+    return `${executionPlanMemberIds.length}个执行对象`
+  }
   return item.member_name || item.member_datasource_id || '-'
 }
 

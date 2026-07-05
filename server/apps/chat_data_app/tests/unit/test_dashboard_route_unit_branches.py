@@ -227,6 +227,28 @@ def test_dashboard_permission_and_small_helpers(dashboard_context):
         },
         {"p1": "override_1"},
     ) == {"p1": "override_1", "p2": "saved_2"}
+    assert dashboard_runtime.build_panel_execution_plan(
+        ["p1", "p2"],
+        {
+            "p1": {
+                "member_datasource_id": "saved_1",
+                "chart_config": {"multiSource": {"enabled": True, "memberDatasourceIds": ["saved_1", "saved_2"]}},
+            },
+            "p2": {"member_datasource_id": "saved_3"},
+        },
+        {"p2": "override_3"},
+    ) == {
+        "p1": {
+            "mode": "multi",
+            "member_datasource_ids": ["saved_1", "saved_2"],
+            "primary_member_datasource_id": "saved_1",
+        },
+        "p2": {
+            "mode": "single",
+            "member_datasource_ids": ["override_3"],
+            "primary_member_datasource_id": "override_3",
+        },
+    }
     assert dashboard_runtime.build_dashboard_panel_sql_preview(" select   *  from t ", 100) == "select * from t"
     assert dashboard_runtime.build_dashboard_panel_sql_preview("x" * 200, 10) == "x" * 10 + "..."
     assert dashboard_routes._truncate_text("  abcdef  ", 3) == "abc"

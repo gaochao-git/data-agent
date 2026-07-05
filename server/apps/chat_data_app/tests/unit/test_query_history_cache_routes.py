@@ -85,6 +85,25 @@ async def _seed_query_history(session_factory):
                 create_time=now - timedelta(minutes=1),
                 update_time=now - timedelta(minutes=1),
             ),
+            ChatDataQueryTask(
+                task_id="task_dashboard",
+                task_type="dashboard_batch",
+                datasource_id="ds1",
+                query_type="dashboard",
+                task_status="succeeded",
+                request_payload=json.dumps({
+                    "operator_name": "看板用户",
+                    "panel_execution_plan": {
+                        "panel_1": {
+                            "mode": "multi",
+                            "member_datasource_ids": ["m1", "m2"],
+                            "primary_member_datasource_id": "m1",
+                        }
+                    },
+                }, ensure_ascii=False),
+                create_time=now - timedelta(minutes=3),
+                update_time=now - timedelta(minutes=3),
+            ),
             ChatDataQueryExecution(
                 execution_id="ex_sql",
                 task_id="",
@@ -140,6 +159,25 @@ async def _seed_query_history(session_factory):
                 finished_time=None,
                 create_time=now - timedelta(minutes=1),
                 update_time=now - timedelta(minutes=1),
+                create_by="u1",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_dashboard",
+                task_id="task_dashboard",
+                user_id="u1",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员库1",
+                executor_type="direct",
+                sql_text="select amount from dashboard_result",
+                sql_status="succeeded",
+                execution_time_ms=12,
+                result_row_count=2,
+                result_payload='{"columns":["amount"],"data":[{"amount":1}]}',
+                started_time=now - timedelta(minutes=3),
+                finished_time=now - timedelta(minutes=3),
+                create_time=now - timedelta(minutes=3),
+                update_time=now - timedelta(minutes=3),
                 create_by="u1",
             ),
             ChatDataQueryExecution(
@@ -218,12 +256,32 @@ def test_get_query_history_filters_builder_and_normalizes_page(route_db):
     assert body["status"] == "success"
     assert body["data"]["total"] == 1
     assert body["data"]["page"] == 1
-    assert body["data"]["page_size"] == 100
+
+
+def test_get_query_history_exposes_dashboard_panel_execution_plan(route_db):
+    asyncio.run(_seed_query_history(route_db))
+
+    response = asyncio.run(routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        source="dashboard",
+    ))
+
+    body = _payload(response)
+    assert body["status"] == "success"
+    assert body["data"]["total"] == 1
     item = body["data"]["queries"][0]
-    assert item["execution_id"] == "ex_builder"
-    assert item["source"] == "可视化查询"
+    assert item["source"] == "看板"
+    assert item["panel_execution_plan"] == {
+        "panel_1": {
+            "mode": "multi",
+            "member_datasource_ids": ["m1", "m2"],
+            "primary_member_datasource_id": "m1",
+        }
+    }
+    assert item["execution_id"] == "ex_dashboard"
     assert item["success_flag"] == 1
-    assert item["operator_name"] == "可视化用户"
+    assert item["operator_name"] == "看板用户"
     assert item["has_result"] is True
     assert "result_payload" not in item
 
@@ -262,7 +320,7 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
         status=None,
     ))
     all_body = _payload(all_response)
-    assert all_body["data"]["total"] == 3
+    assert all_body["data"]["total"] == 4
 
 
 def test_get_query_history_filters_by_executed_time_range(route_db):

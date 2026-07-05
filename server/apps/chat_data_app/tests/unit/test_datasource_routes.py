@@ -2444,6 +2444,11 @@ def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):
     assert captured["kwargs"]["task_type"] == "dashboard_batch"
     assert captured["kwargs"]["request_payload"]["panel_ids"] == ["panel_a"]
     assert captured["kwargs"]["request_payload"]["panel_member_datasource_ids"]["panel_a"] == "phy_b"
+    assert captured["kwargs"]["request_payload"]["panel_execution_plan"]["panel_a"] == {
+        "mode": "single",
+        "member_datasource_ids": ["phy_b"],
+        "primary_member_datasource_id": "phy_b",
+    }
     assert captured["task_id"] == "panel_task_001"
 
 
@@ -2642,6 +2647,11 @@ def test_create_dashboard_query_task_schedules_dashboard_batch_task(monkeypatch)
     assert captured["kwargs"]["task_type"] == "dashboard_batch"
     assert captured["kwargs"]["request_payload"]["dashboard_id"] == "dash_a"
     assert captured["kwargs"]["request_payload"]["panel_member_datasource_ids"]["panel_a"] == "phy_b"
+    assert captured["kwargs"]["request_payload"]["panel_execution_plan"]["panel_a"] == {
+        "mode": "single",
+        "member_datasource_ids": ["phy_b"],
+        "primary_member_datasource_id": "phy_b",
+    }
     assert captured["task_id"] == "dash_task_001"
 
 

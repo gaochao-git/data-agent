@@ -400,6 +400,31 @@ def build_effective_panel_member_datasource_ids(
     return result
 
 
+def build_panel_execution_plan(
+    panel_ids: List[str],
+    panel_map: Dict[str, Dict[str, Any]],
+    requested_member_datasource_ids: Optional[Dict[str, str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """构造面板执行计划，供任务记录和历史排查展示完整执行对象信息。"""
+    plan: Dict[str, Dict[str, Any]] = {}
+    requested_member_datasource_ids = requested_member_datasource_ids or {}
+    for panel_id in panel_ids:
+        panel = panel_map.get(panel_id) or {}
+        requested_member_id = str(requested_member_datasource_ids.get(panel_id) or "").strip()
+        member_datasource_ids = resolve_panel_member_datasource_ids(panel, requested_member_id)
+        if not member_datasource_ids:
+            continue
+        primary_member_datasource_id = resolve_panel_member_datasource_id(panel, requested_member_id)
+        if not primary_member_datasource_id:
+            primary_member_datasource_id = member_datasource_ids[0]
+        plan[panel_id] = {
+            "mode": "multi" if len(member_datasource_ids) > 1 else "single",
+            "member_datasource_ids": member_datasource_ids,
+            "primary_member_datasource_id": primary_member_datasource_id,
+        }
+    return plan
+
+
 def build_dashboard_panel_sql_preview(sql: Any, max_length: int = 160) -> str:
     """构造面板 SQL 日志预览。"""
     preview = " ".join(str(sql or "").split())

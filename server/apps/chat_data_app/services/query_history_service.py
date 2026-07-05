@@ -151,6 +151,8 @@ class QueryHistoryService:
         query_type = task.query_type if task else "sql"
         task_status = str(task.task_status or "").strip().lower() if task else ""
         task_data = _task_runtime_data(task)
+        request_payload = _safe_json_loads(task_data.get("request_payload"), {}) or {}
+        panel_execution_plan = request_payload.get("panel_execution_plan")
         operator_name = cls._history_operator_name(item, task, task_data)
         display_sql_status = "cancelled" if task_status == "cancelled" else item.sql_status
         payload = item.to_dict()
@@ -167,6 +169,7 @@ class QueryHistoryService:
             "success_flag": 1 if display_sql_status == "succeeded" else 0,
             "operator_name": operator_name,
             "has_result": bool(item.result_payload or item.remote_task_id),
+            "panel_execution_plan": panel_execution_plan if isinstance(panel_execution_plan, dict) else None,
         })
         return payload
 
