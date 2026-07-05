@@ -5,7 +5,7 @@
  */
 import { computed, ref, watch, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
-import type { SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ExecutionTargetOption, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import ToolCallList from './ToolCallList.vue'
 
 // 分析过程数据
@@ -22,6 +22,7 @@ interface Props {
   isOpen: boolean
   data: AnalysisData | null
   datasourceId?: string
+  executionTargets?: ExecutionTargetOption[]
   isStreaming?: boolean
   showSwitchConversation?: boolean
 }
@@ -270,6 +271,7 @@ const renderMarkdown = (content: string) => md.render(content)
               <ToolCallList
                 :tool-calls="[entry.tool]"
                 :datasource-id="datasourceId"
+                :execution-targets="executionTargets"
                 :default-expanded="false"
               />
             </template>

@@ -6,7 +6,7 @@
 import { ref, computed } from 'vue'
 import { format as formatSQL } from 'sql-formatter'
 import { ElMessage } from 'element-plus'
-import type { ToolCallInfo } from '../types'
+import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractSemanticDslFromArgs } from '../utils/semanticTool'
@@ -17,6 +17,7 @@ interface Props {
   compact?: boolean
   active?: boolean
   datasourceId?: string
+  executionTargets?: ExecutionTargetOption[]
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
 }
@@ -37,10 +38,15 @@ const showSaveModal = ref(false)
 const saveSql = ref('')
 const saveChartType = ref('table')
 const saveMemberDatasourceId = ref('')
-const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string) => {
+const saveMemberDatasourceIds = ref<string[]>([])
+const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => {
   saveSql.value = sql
   saveChartType.value = chartType
   saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
+  const executedMemberIds = (memberDatasourceIds || []).map(item => String(item || '').trim()).filter(Boolean)
+  saveMemberDatasourceIds.value = executedMemberIds.length > 1
+    ? executedMemberIds
+    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
   showSaveModal.value = true
 }
 
@@ -704,6 +710,8 @@ function getSqlTokenClass(type: string): string {
       :chart-type="saveChartType"
       :datasource-id="datasourceId"
       :member-datasource-id="saveMemberDatasourceId"
+      :member-datasource-ids="saveMemberDatasourceIds"
+      :execution-targets="executionTargets"
     />
   </div>
 </template>

@@ -804,6 +804,11 @@ async def execute_panels_batch(
         panel_map,
         panel_member_datasource_ids,
     )
+    panel_execution_plan = dashboard_runtime.build_panel_execution_plan(
+        panel_ids,
+        panel_map,
+        panel_member_datasource_ids,
+    )
     task_datasource_id = str((dashboard or {}).get("datasource_id") or "").strip()
     if not task_datasource_id:
         task_datasource_id = next(
@@ -823,6 +828,7 @@ async def execute_panels_batch(
             "dashboard_id": dashboard_id,
             "panel_ids": panel_ids,
             "panel_member_datasource_ids": effective_panel_member_datasource_ids,
+            "panel_execution_plan": panel_execution_plan,
             "user_id": current_user.user_id,
             "operator_name": current_user.username,
         },

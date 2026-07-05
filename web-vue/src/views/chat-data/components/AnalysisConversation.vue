@@ -2295,6 +2295,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   v-if="msg.toolCalls?.length"
                   :tool-calls="msg.toolCalls"
                   :datasource-id="selectedDatasource"
+                  :execution-targets="props.executionTargets"
                   compact
                   :active-tool-call-id="activeToolCallId"
                   @select-tool="selectToolCall"
@@ -2347,6 +2348,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       <ToolCallList
                         :tool-calls="[getMessageToolCall(msg, segment.toolCallId)!]"
                         :datasource-id="selectedDatasource"
+                        :execution-targets="props.executionTargets"
                         compact
                         :active-tool-call-id="activeToolCallId"
                         @select-tool="selectToolCall"

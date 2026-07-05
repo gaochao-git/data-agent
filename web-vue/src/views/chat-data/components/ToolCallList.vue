@@ -5,11 +5,12 @@
  */
 import { ref, watch } from 'vue'
 import ToolCallCard from './ToolCallCard.vue'
-import type { ToolCallInfo } from '../types'
+import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 
 interface Props {
   toolCalls: ToolCallInfo[]
   datasourceId?: string
+  executionTargets?: ExecutionTargetOption[]
   defaultExpanded?: boolean
   compact?: boolean
   activeToolCallId?: string | null
@@ -67,6 +68,7 @@ const toggleExpand = (id: string) => {
       :compact="compact"
       :active="activeToolCallId === tc.tool_call_id"
       :datasource-id="datasourceId"
+      :execution-targets="executionTargets"
       :on-view-analysis="tc.tool_name === 'semantic_query_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
       :is-analysis-active="Boolean(tc.tool_name === 'semantic_query_tool' && tc.renderId && isAnalysisActive)"
       @toggle-expand="toggleExpand(tc.tool_call_id)"

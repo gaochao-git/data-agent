@@ -593,6 +593,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :semantic-params="semanticParams"
         :visualization="visualization"
         :sql="sql"
+        :member-datasource-ids="memberDatasourceIds"
         :on-save="onSave"
         :on-view-analysis="onViewAnalysis"
         :is-analysis-active="isAnalysisActive"

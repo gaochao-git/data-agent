@@ -2433,6 +2433,7 @@ const handleViewAnalysis = (msg: Message) => {
             :is-open="isAnalysisPanelOpen"
             :data="analysisPanelData"
             :datasource-id="selectedDatasource"
+            :execution-targets="executionTargets"
             :is-streaming="analysisStreaming"
             @switch-conversation="emit('switchToConversation')"
             @close="emit('switchToConversation')"
