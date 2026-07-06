@@ -14,7 +14,7 @@ import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFile
 import type { Dashboard } from '../api/dashboard'
 import type { DataAnalyzeWorkspaceFile } from '../api'
 import ToolCallList from './ToolCallList.vue'
-import QuickQueries from './QuickQueries.vue'
+import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import ChartSpecRenderer from './ChartSpecRenderer.vue'
 import { normalizeChartType } from '../chartTypes'
 import SkillManager from './SkillManager.vue'
@@ -67,9 +67,6 @@ const selectedAgent = ref<'chat_data' | 'chat_data_data_analyze'>(
 )
 const isAgentSelectorOpen = ref(false)
 const agentSelectorRef = ref<HTMLElement | null>(null)
-const recommendationContentType = computed<'skills' | 'queries'>(() =>
-  selectedAgent.value === 'chat_data_data_analyze' ? 'skills' : 'queries'
-)
 const modelOptions = ref<ChatDataModelOption[]>([])
 const selectedModel = computed({
   get: () => props.selectedModelId || '',
@@ -306,6 +303,34 @@ const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
 
 const selectedDatasource = computed(() => props.selectedDatasourceId || props.datasource?.id || '')
+const recommendationPage = ref(0)
+const recommendationPageSize = 5
+const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)
+const pushFallbackQuery = (items: FallbackQuery[], seen: Set<string>, title: string, icon = 'fa-message') => {
+  const normalizedTitle = String(title || '').trim()
+  if (!normalizedTitle || seen.has(normalizedTitle)) return
+  seen.add(normalizedTitle)
+  items.push({
+    id: String(items.length + 1),
+    title: normalizedTitle,
+    query: normalizedTitle,
+    icon,
+  })
+}
+const fallbackConversationQueries = computed<FallbackQuery[]>(() => {
+  const items: FallbackQuery[] = []
+  const seen = new Set<string>()
+  ;(props.datasource?.recommended_questions || []).forEach(question => {
+    pushFallbackQuery(items, seen, question)
+  })
+  return items
+})
+const canRefreshRecommendations = computed(() => fallbackConversationQueries.value.length > recommendationPageSize)
+const refreshRecommendations = () => {
+  if (!canRefreshRecommendations.value) return
+  const pageCount = Math.ceil(fallbackConversationQueries.value.length / recommendationPageSize)
+  recommendationPage.value = (recommendationPage.value + 1) % pageCount
+}
 const selectedMemberDatasourceIds = computed({
   get: () => props.selectedMemberDatasourceIds,
   set: (value: string[]) => emit('update:selectedMemberDatasourceIds', props.executionTargetMultiple ? value : value.slice(0, 1)),
@@ -1481,6 +1506,16 @@ watch(skillCommandKeyword, (keyword) => {
 })
 
 watch(
+  () => [
+    selectedDatasource.value,
+    fallbackConversationQueries.value.map(item => item.title).join('|'),
+  ],
+  () => {
+    recommendationPage.value = 0
+  }
+)
+
+watch(
   () => props.conversationAgentId,
   (agentId) => {
     selectedAgent.value = agentId === 'chat_data_data_analyze' && dataAnalyzeEnabled.value ? 'chat_data_data_analyze' : 'chat_data'
@@ -2135,150 +2170,44 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
         </div>
-        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex items-start justify-center pt-[10%]">
-          <div class="w-[774px] max-w-[90%] text-center">
-            <h3 class="text-xl font-semibold text-gray-800 m-0 mb-2">您好，有什么可以帮您？</h3>
-            <form class="relative" @submit.prevent="handleSubmit">
-              <div
-                :class="[
-                  'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
-                  inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
-                ]"
-              >
-                <div class="min-h-[54px] px-4 pt-4 pb-2">
-                  <div
-                    v-if="selectedSkillTitle"
-                    class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
-                  >
-                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                    <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
-                    <button type="button" class="text-blue-400 hover:text-blue-700" @click="clearSelectedSkill">
-                      <i class="fa-solid fa-xmark text-[10px]"></i>
-                    </button>
-                  </div>
-                  <textarea
-                    ref="textareaRef"
-                    v-model="input"
-                    placeholder="请输入分析任务，输入 / 可选择技能"
-                    class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
-                    @keydown="handleKeyDown"
-                    @focus="inputFocused = true"
-                    @blur="inputFocused = false"
-                  ></textarea>
+        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex justify-center pt-8 md:pt-10">
+          <div class="w-[774px] max-w-[90%]">
+            <div class="mb-5 rounded-2xl bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/80 px-5 py-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+              <div class="text-[17px] font-semibold leading-7 text-slate-800">你好，我是数据智能体</div>
+            </div>
+
+            <div v-if="selectedDatasource" class="max-w-[560px]">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-1.5 text-[13px] font-medium text-slate-400">
+                  <i class="fa-regular fa-lightbulb text-[12px] text-amber-400"></i>
+                  <span>你可以这样问：</span>
                 </div>
-                <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                  <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
-                    <button
-                      v-if="selectedAgent === 'chat_data_data_analyze'"
-                      type="button"
-                      class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                      title="技能管理"
-                      @click="isSkillManagerOpen = true"
-                    >
-                      <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                      <span class="toolbar-label">技能</span>
-                    </button>
-                    <div ref="agentSelectorRef" class="relative">
-                      <button
-                        type="button"
-                        class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                        @click="isAgentSelectorOpen = !isAgentSelectorOpen"
-                      >
-                        <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                        <span class="toolbar-label">{{ selectedAgentLabel }}</span>
-                        <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-                      </button>
-                      <div
-                        v-if="isAgentSelectorOpen"
-                        class="absolute left-0 bottom-8 z-50 min-w-[110px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
-                      >
-                        <button
-                          v-for="agent in agentOptions"
-                          :key="agent.id"
-                          type="button"
-                          :aria-disabled="agent.disabled"
-                          :title="agent.disabled ? '功能暂未开放' : undefined"
-                          :class="[
-                            'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs',
-                            selectedAgent === agent.id ? 'text-blue-600 bg-blue-50' : 'text-gray-600',
-                            agent.disabled ? '!text-gray-400 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'
-                          ]"
-                          @click="selectAgent(agent)"
-                        >
-                          <span>{{ agent.label }}</span>
-                          <i v-if="!agent.disabled && selectedAgent === agent.id" class="fa-solid fa-check text-[10px]"></i>
-                        </button>
-                      </div>
-                    </div>
-                    <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
-                      <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-                      <select v-model="selectedModel" class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
-                        <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-                      </select>
-                      <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
-                    </div>
-                    <button
-                      type="button"
-                      :class="[
-                        'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
-                        enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
-                      ]"
-                      :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
-                      :aria-pressed="enableDeepThinking"
-                      @click="enableDeepThinking = !enableDeepThinking"
-                    >
-                      <i class="fa-solid fa-brain text-[10px]"></i>
-                      <span class="toolbar-label">思考</span>
-                    </button>
-                  </div>
-                  <button
-                    type="submit"
-                    :class="[
-                      'w-8 h-8 flex items-center justify-center border-none rounded-full bg-gradient-to-br from-[#1677FF] to-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200',
-                      (isGenerating || !input.trim() || !selectedDatasource) ? 'bg-gray-200 shadow-none cursor-not-allowed text-gray-400' : 'hover:scale-105 active:scale-95'
-                    ]"
-                    :disabled="isGenerating || !input.trim() || !selectedDatasource"
-                  >
-                    <i class="fa-solid fa-arrow-up"></i>
-                  </button>
-                </div>
+                <button
+                  v-if="canRefreshRecommendations"
+                  type="button"
+                  class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 text-[12px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-blue-600"
+                  title="换一批推荐问题"
+                  @click="refreshRecommendations"
+                >
+                  <i class="fa-solid fa-rotate-right text-[10px]"></i>
+                  <span>换一批</span>
+                </button>
               </div>
-              <div
-                v-if="showSkillCommand"
-                class="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
-              >
-                <div v-if="isCommandSkillLoading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
-                <div v-else-if="filteredCommandSkills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
-                <template v-else>
-                  <button
-                    v-for="(skill, index) in filteredCommandSkills"
-                    :key="skill.name"
-                    type="button"
-                    :class="[
-                      'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
-                      index === highlightedSkillIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
-                    ]"
-                    @mousedown.prevent="selectCommandSkill(skill)"
-                  >
-                    <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
-                      <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
-                    </span>
-                  </button>
-                </template>
-              </div>
-            </form>
-            <QuickQueries
-              v-if="selectedDatasource"
-              :key="recommendationContentType"
-              :datasource-id="selectedDatasource"
-              mode="conversation"
-              :content-type="recommendationContentType"
-              :max-items="8"
-              @select-query="(query: string) => input = query"
-              @select-skill="handleSkillSelect"
-            />
+              <QuickQueries
+                key="conversation-recommendations"
+                :datasource-id="selectedDatasource"
+                mode="conversation"
+                content-type="queries"
+                :fallback-queries="fallbackConversationQueries"
+                :max-items="5"
+                :page-offset="recommendationOffset"
+                prefer-fallback
+                :load-favorites="false"
+                compact
+                @select-query="(query: string) => input = query"
+                @select-skill="handleSkillSelect"
+              />
+            </div>
           </div>
         </div>
 
@@ -2522,7 +2451,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
         </div>
       </div>
 
-      <div v-if="hasLocalConversationStarted || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
+      <div v-if="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
           <form class="relative" @submit.prevent="handleSubmit">
             <div class="chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
@@ -2540,7 +2469,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 <textarea
                   ref="textareaRef"
                   v-model="input"
-                  placeholder="继续输入分析任务，输入 / 可选择技能"
+                  :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入分析任务，输入 / 可选择技能' : '请输入分析任务，输入 / 可选择技能'"
                   class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
                   @keydown="handleKeyDown"
                   @focus="inputFocused = true"

@@ -135,6 +135,10 @@ const canCreateFileInDir = (dirName?: SkillFileDir) => {
   if (!dirName) return false
   return !(props.agent === 'query' && dirName === 'scripts')
 }
+const canAccessFileDir = (dirName?: SkillFileDir) => {
+  if (!dirName) return false
+  return !(props.agent === 'query' && dirName === 'scripts')
+}
 const availableFileDirs = computed<SkillFileDir[]>(() => (
   props.agent === 'query' ? ['references', 'assets'] : ['references', 'assets', 'scripts']
 ))
@@ -188,7 +192,7 @@ const fileTree = computed<SkillFileTreeNode[]>(() => [{
     { key: 'skill-root:SKILL.md', label: 'SKILL.md', path: 'SKILL.md', type: 'skill', children: [] },
     buildFixedDirNode('references', skillFiles.value.references || selectedSkill.value?.references || []),
     buildFixedDirNode('assets', skillFiles.value.assets || selectedSkill.value?.assets || []),
-    buildFixedDirNode('scripts', skillFiles.value.scripts || selectedSkill.value?.scripts || []),
+    ...(props.agent === 'query' ? [] : [buildFixedDirNode('scripts', skillFiles.value.scripts || selectedSkill.value?.scripts || [])]),
   ],
 }])
 const getSkillStatusLabel = (skill?: SkillInfo | null) => {
@@ -411,6 +415,7 @@ const selectSkillContentFile = (editing = false) => {
 }
 
 const openFileContent = async (dirName: SkillFileDir, filePath: string, editing = false) => {
+  if (!canAccessFileDir(dirName)) return
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
   const versionNo = editing ? editableVersionNo.value : currentVersionNo.value
   if (!skillId || !versionNo) return
@@ -430,6 +435,10 @@ const openFileContent = async (dirName: SkillFileDir, filePath: string, editing 
 const handleSaveFile = async () => {
   if (!canEditSelectedFile.value) {
     ElMessage.warning('系统技能文件仅支持查看')
+    return
+  }
+  if (selectedFileNode.value?.type === 'file' && !canAccessFileDir(fileForm.dir_name)) {
+    ElMessage.warning('智能问数技能不支持脚本文件')
     return
   }
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
@@ -483,6 +492,7 @@ const handleSaveFile = async () => {
 }
 
 const handleDeleteFile = async (dirName: SkillFileDir, filePath: string) => {
+  if (!canAccessFileDir(dirName)) return
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
   const versionNo = currentVersionNo.value
   if (!skillId || !versionNo) return
