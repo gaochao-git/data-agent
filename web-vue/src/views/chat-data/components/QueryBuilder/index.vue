@@ -179,6 +179,7 @@ interface Props {
   datasources?: DataSource[]
   semanticConfigId?: string | null
   semanticConfig?: SemanticConfigItem | null
+  semanticConfigs?: SemanticConfigItem[]
   initialBuilderConfig?: BuilderConfig | null
   hideSidebar?: boolean
   hideChartPanel?: boolean
@@ -194,6 +195,7 @@ const props = withDefaults(defineProps<Props>(), {
   datasources: () => [],
   semanticConfigId: null,
   semanticConfig: null,
+  semanticConfigs: () => [],
   initialBuilderConfig: null,
   hideSidebar: false,
   hideChartPanel: false,
@@ -205,6 +207,7 @@ const { submitSqlTask } = useQueryTask()
 
 const emit = defineEmits<{
   datasourceChange: [dsId: string]
+  semanticConfigChange: [configId: string]
   'update:selectedMemberDatasourceIds': [value: string[]]
 }>()
 
@@ -442,6 +445,7 @@ const showFavoriteModal = ref(false)
 const favoriteTitle = ref('')
 const favoriteContent = ref('')
 const favoriteBuilderConfig = ref<Record<string, unknown> | null>(null)
+const pendingFavoriteBuilderConfig = ref<BuilderConfig | null>(null)
 
 // 保存到看板
 const showSaveModal = ref(false)
@@ -2637,6 +2641,8 @@ const buildBuilderConfigPayload = () => {
     : filters.value.map(f => serializeFlatFilterCondition(f))
 
   return {
+    semantic_config_id: props.semanticConfigId || undefined,
+    semantic_config_name: props.semanticConfig?.name || undefined,
     mainTable: selectedTables.value[0]?.name || '',
     mainAlias: selectedTables.value[0] ? getSelectedTableAlias(selectedTables.value[0]) : '',
     joins: selectedTables.value.slice(1).map(t => ({
@@ -3631,6 +3637,42 @@ const parseAdvancedFilterFromConfig = (node: any): AdvancedFilterGroup | Advance
   }
 }
 
+const getBuilderSemanticConfigId = (config: BuilderConfig | null | undefined) => {
+  return String(config?.semantic_config_id || config?.semanticConfigId || '').trim()
+}
+
+const getBuilderSemanticConfigName = (config: BuilderConfig | null | undefined) => {
+  return String(config?.semantic_config_name || config?.semanticConfigName || '').trim()
+}
+
+const isAvailableSemanticConfig = (configId: string) => {
+  if (!props.semanticConfigs.length) return true
+  return props.semanticConfigs.some(item => item.id === configId)
+}
+
+const applyBuilderConfig = (config: BuilderConfig) => {
+  loadBuilderConfig(config)
+  savedBuilderConfigSnapshot.value = buildBuilderConfigSnapshot()
+}
+
+const handleQuickBuilderConfig = (config: BuilderConfig) => {
+  const targetConfigId = getBuilderSemanticConfigId(config)
+  if (!targetConfigId || targetConfigId === props.semanticConfigId) {
+    pendingFavoriteBuilderConfig.value = null
+    applyBuilderConfig(config)
+    return
+  }
+
+  if (!isAvailableSemanticConfig(targetConfigId)) {
+    const configName = getBuilderSemanticConfigName(config) || targetConfigId
+    ElMessage.warning(`收藏关联的指标集不可用：${configName}`)
+    return
+  }
+
+  pendingFavoriteBuilderConfig.value = config
+  emit('semanticConfigChange', targetConfigId)
+}
+
 // 从快捷查询加载 Builder 配置
 const loadBuilderConfig = (config: BuilderConfig) => {
   // 清空当前配置
@@ -4072,6 +4114,16 @@ watch(
 
 // 切换语义指标集时，自动清空上一个指标集的构建配置
 watch(() => props.semanticConfigId, (nextId, prevId) => {
+  const pendingConfig = pendingFavoriteBuilderConfig.value
+  const pendingConfigId = getBuilderSemanticConfigId(pendingConfig)
+  if (pendingConfig && (!pendingConfigId || pendingConfigId === nextId)) {
+    pendingFavoriteBuilderConfig.value = null
+    applyBuilderConfig(pendingConfig)
+    return
+  }
+  if (pendingConfig && pendingConfigId && pendingConfigId !== nextId) {
+    pendingFavoriteBuilderConfig.value = null
+  }
   if (!prevId || nextId === prevId) return
   clearAll()
 })
@@ -5132,7 +5184,7 @@ defineExpose({
             query-type="builder"
             :refresh-trigger="quickQueryRefresh"
             :max-items="8"
-            @select-builder-config="loadBuilderConfig"
+            @select-builder-config="handleQuickBuilderConfig"
           />
         </div>
       </div>

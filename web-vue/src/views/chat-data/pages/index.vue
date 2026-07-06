@@ -1840,6 +1840,7 @@ onUnmounted(() => {
                 :datasources="datasources"
                 :semantic-config-id="selectedSemanticConfigId"
                 :semantic-config="currentSemanticConfig"
+                :semantic-configs="semanticConfigs"
                 :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
                 :execution-targets="executionTargets"
                 :execution-target-multiple="true"
@@ -1850,6 +1851,7 @@ onUnmounted(() => {
                 hide-sidebar
                 class="h-full"
                 @datasource-change="handleDatasourceChange"
+                @semantic-config-change="(id: string) => selectedSemanticConfigId = id"
                 @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
               />
             </div>

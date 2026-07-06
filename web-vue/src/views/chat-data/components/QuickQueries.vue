@@ -12,6 +12,10 @@ import type { SkillInfo } from '../types'
 
 // Builder 配置类型
 export interface BuilderConfig {
+  semantic_config_id?: string
+  semantic_config_name?: string
+  semanticConfigId?: string
+  semanticConfigName?: string
   mainTable: string
   mainAlias?: string
   joins: Array<{
@@ -81,6 +85,8 @@ interface QueryTemplate {
   title: string
   query: string
   query_type?: 'sql' | 'builder'
+  semantic_config_id?: string
+  semantic_config_name?: string
   builder_config?: BuilderConfig
   icon: string
   color: string
@@ -181,6 +187,19 @@ const normalizeBuilderConfig = (value: unknown): BuilderConfig | undefined => {
   }
 }
 
+const normalizeText = (value: unknown) => String(value || '').trim()
+
+const mergeBuilderSemanticConfig = (builderConfig: BuilderConfig | undefined, item: Record<string, any>) => {
+  if (!builderConfig) return undefined
+  const semanticConfigId = normalizeText(item.semantic_config_id || item.semanticConfigId || builderConfig.semantic_config_id || builderConfig.semanticConfigId)
+  const semanticConfigName = normalizeText(item.semantic_config_name || item.semanticConfigName || builderConfig.semantic_config_name || builderConfig.semanticConfigName)
+  return {
+    ...builderConfig,
+    ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {}),
+    ...(semanticConfigName ? { semantic_config_name: semanticConfigName } : {})
+  }
+}
+
 // 加载收藏查询
 const loadQueries = async () => {
   if (!props.loadFavorites || props.mode === 'conversation') {
@@ -201,15 +220,22 @@ const loadQueries = async () => {
     })
 
     if (response.data?.queries) {
-      templates.value = (response.data.queries as Array<Record<string, any>>).map((item) => ({
-        id: String(item.id),
-        title: String(item.favorite_title || item.title || '未命名收藏'),
-        query: getFavoriteQueryText(item),
-        query_type: (item.query_type || 'sql') as 'sql' | 'builder',
-        builder_config: normalizeBuilderConfig(item.builder_config ?? item.builderConfig),
-        icon: String(item.icon || 'fa-star'),
-        color: String(item.color || '#E8F3FF')
-      }))
+      templates.value = (response.data.queries as Array<Record<string, any>>).map((item) => {
+        const builderConfig = mergeBuilderSemanticConfig(normalizeBuilderConfig(item.builder_config ?? item.builderConfig), item)
+        const semanticConfigId = normalizeText(item.semantic_config_id || item.semanticConfigId || builderConfig?.semantic_config_id || builderConfig?.semanticConfigId)
+        const semanticConfigName = normalizeText(item.semantic_config_name || item.semanticConfigName || builderConfig?.semantic_config_name || builderConfig?.semanticConfigName)
+        return {
+          id: String(item.id),
+          title: String(item.favorite_title || item.title || '未命名收藏'),
+          query: getFavoriteQueryText(item),
+          query_type: (item.query_type || 'sql') as 'sql' | 'builder',
+          semantic_config_id: semanticConfigId || undefined,
+          semantic_config_name: semanticConfigName || undefined,
+          builder_config: builderConfig,
+          icon: String(item.icon || 'fa-star'),
+          color: String(item.color || '#E8F3FF')
+        }
+      })
     } else {
       templates.value = []
     }
@@ -383,6 +409,7 @@ const getTemplatePreview = (template: QueryTemplate) => {
     return table ? `${table}(${getJoinTypeLabel(String(item.joinType || ''))})` : ''
   })
   const parts = [
+    config.semantic_config_name ? `指标集 ${config.semantic_config_name}` : '',
     config.mainTable ? `表 ${config.mainTable}` : '',
     dimensions ? `维度 ${dimensions}` : '',
     aggregations ? `指标 ${aggregations}` : '',
