@@ -251,3 +251,17 @@ def test_crypto_command_line_encrypt_decrypt_and_error(monkeypatch, capsys):
         runpy.run_module("utils.crypto", run_name="__main__")
     assert exc.value.code == 1
     assert "错误:" in capsys.readouterr().out
+
+
+def test_decrypt_env_value_requires_ciphertext_when_configured(monkeypatch):
+    monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
+    monkeypatch.delenv("OPTIONAL_SECRET", raising=False)
+    assert crypto.decrypt_env_value("OPTIONAL_SECRET") == ""
+
+    encrypted = crypto.encrypt_password("secret")
+    monkeypatch.setenv("OPTIONAL_SECRET", encrypted)
+    assert crypto.decrypt_env_value("OPTIONAL_SECRET") == "secret"
+
+    monkeypatch.setenv("OPTIONAL_SECRET", "plain-secret")
+    with pytest.raises(ValueError, match="OPTIONAL_SECRET 配置错误"):
+        crypto.decrypt_env_value("OPTIONAL_SECRET")

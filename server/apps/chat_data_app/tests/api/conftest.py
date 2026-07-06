@@ -12,7 +12,8 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
-os.environ.setdefault("SERVICE_AUTH_TOKEN", "test-service-token")
+os.environ["ENCRYPT_KEY"] = "00112233445566778899aabbccddeeff"
+os.environ["SERVICE_AUTH_TOKEN"] = "qP+o6uU+z1wAYeHWi7ODmQ==:CIvqkqQXRoZf69isR8yD2PKhVNUQwM9ahic5sA1UGW0="
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -24,8 +25,10 @@ from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
 from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
+from utils.crypto import decrypt_env_value  # noqa: E402
 
-auth.SERVICE_AUTH_TOKEN = os.environ["SERVICE_AUTH_TOKEN"]
+SERVICE_AUTH_TOKEN_PLAIN = decrypt_env_value("SERVICE_AUTH_TOKEN")
+auth.SERVICE_AUTH_TOKEN = SERVICE_AUTH_TOKEN_PLAIN
 
 
 app = FastAPI(title="ChatData API Contract Test")
@@ -36,7 +39,7 @@ app.include_router(conversation_router)
 @pytest.fixture()
 def auth_headers():
     return {
-        "X-Service-Token": os.environ["SERVICE_AUTH_TOKEN"],
+        "X-Service-Token": SERVICE_AUTH_TOKEN_PLAIN,
         "X-User-Id": "user_a",
         "X-Username": "测试用户".encode("utf-8"),
     }

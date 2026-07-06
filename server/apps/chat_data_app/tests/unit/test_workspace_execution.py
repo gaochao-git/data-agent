@@ -259,7 +259,8 @@ def test_connection_config_uses_server_proxy_env(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
-    monkeypatch.setenv("OPENSANDBOX_API_KEY", "test-key")
+    monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
+    monkeypatch.setenv("OPENSANDBOX_API_KEY", "l0D82gnkiw6cjYcqnix6pQ==:hQ0qFQm+0jAK7lGsighnbQ==")
     monkeypatch.setenv("OPENSANDBOX_USE_SERVER_PROXY", "true")
     monkeypatch.setattr(workspace_execution, "_import_opensandbox_sdk", lambda: (None, FakeConnectionConfig, None, None))
 

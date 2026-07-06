@@ -17,6 +17,7 @@ import time
 from typing import Any
 from urllib.parse import unquote
 
+from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
 from ..chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
 
@@ -211,7 +212,7 @@ def _connection_config(timeout_seconds: int) -> Any:
         raise ValueError("未配置 OPENSANDBOX_URL，无法创建 OpenSandbox")
     return ConnectionConfig(
         domain=sandbox_url,
-        api_key=str(os.getenv("OPENSANDBOX_API_KEY") or "").strip() or None,
+        api_key=decrypt_env_value("OPENSANDBOX_API_KEY") or None,
         request_timeout=timedelta(seconds=max(30, timeout_seconds)),
         use_server_proxy=_str_to_bool(os.getenv("OPENSANDBOX_USE_SERVER_PROXY"), False),
     )

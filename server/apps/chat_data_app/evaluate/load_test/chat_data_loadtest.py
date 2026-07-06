@@ -27,10 +27,17 @@ import json
 import os
 from pathlib import Path
 import statistics
+import sys
 import time
 from typing import Any
 
 import httpx
+
+SERVER_ROOT = Path(__file__).resolve().parents[4]
+if str(SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVER_ROOT))
+
+from utils.crypto import decrypt_env_value
 
 
 DEFAULT_QUERIES = [
@@ -61,7 +68,7 @@ def load_env_file(path: Path) -> None:
 
 
 def load_default_env() -> None:
-    load_env_file(Path(__file__).resolve().parents[4] / ".env")
+    load_env_file(SERVER_ROOT / ".env")
 
 
 def _default_model_id() -> str | None:
@@ -70,6 +77,10 @@ def _default_model_id() -> str | None:
     if not first_item:
         return None
     return first_item.split(";", 1)[0].strip().strip("\"'") or None
+
+
+def _default_service_token() -> str:
+    return decrypt_env_value("SERVICE_AUTH_TOKEN") or "loadtest-service-token"
 
 
 @dataclass
@@ -501,7 +512,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--requests", type=int, default=10, help="总请求数")
     parser.add_argument("--concurrency", type=int, default=2, help="并发 worker 数")
     parser.add_argument("--queries-file", help="JSON 文件，格式为字符串数组或 {\"queries\": [...]}")
-    parser.add_argument("--service-token", default=os.getenv("SERVICE_AUTH_TOKEN") or "loadtest-service-token", help="X-Service-Token，默认读取当前进程环境变量 SERVICE_AUTH_TOKEN")
+    parser.add_argument("--service-token", default=_default_service_token(), help="X-Service-Token，默认读取当前进程环境变量 SERVICE_AUTH_TOKEN 密文并解密")
     parser.add_argument("--user-id", default="10001")
     parser.add_argument("--username", default="5Y6L5rWL55So5oi3", help="X-Username，按网关口径传 UTF-8 Base64 后的用户名")
     parser.add_argument("--datasource-id", help="数据源 ID")

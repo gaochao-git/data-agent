@@ -1,14 +1,15 @@
-import os
 from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Request
 
+from utils.crypto import decrypt_env_value
+
 
 SERVICE_AUTH_HEADER = "X-Service-Token"
 SERVICE_USER_ID_HEADER = "X-User-Id"
 SERVICE_USERNAME_HEADER = "X-Username"
-SERVICE_AUTH_TOKEN = os.getenv("SERVICE_AUTH_TOKEN") or ""
+SERVICE_AUTH_TOKEN = decrypt_env_value("SERVICE_AUTH_TOKEN")
 
 
 class AuthenticationError(Exception):

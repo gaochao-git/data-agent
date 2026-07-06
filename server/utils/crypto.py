@@ -108,6 +108,19 @@ def decrypt_password(encrypted_password: str) -> str:
         raise ValueError("密码解密失败，密钥或密文不匹配，请重新加密")
 
 
+def decrypt_env_value(name: str, *, required: bool = False) -> str:
+    """读取加密环境变量；有值时必须是 SM4 密文。"""
+    encrypted_value = str(os.getenv(name) or "").strip()
+    if not encrypted_value:
+        if required:
+            raise ValueError(f"{name} 未配置")
+        return ""
+    try:
+        return decrypt_password(encrypted_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} 配置错误: {exc}") from exc
+
+
 # ============ 命令行工具 ============
 
 if __name__ == "__main__":
