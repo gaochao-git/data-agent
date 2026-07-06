@@ -373,7 +373,7 @@ async def compile_dsl_locally(
         get_dashboard_spec_semantic_config,
         remove_mixed_raw_metrics_for_aggregate_dsl,
     )
-    from apps.chat_data_app.semantic import SemanticSQLGenerator
+    from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
 
     semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id)
     payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl, semantic_config)

@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.schema import ExecuteSemanticInput
-from apps.chat_data_app.semantic import SemanticSQLGenerator
+from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
 
 
 def build_config(source_type: str = "mysql") -> dict:
@@ -625,7 +625,7 @@ def test_structured_expression_filter_rejects_invalid_operands():
 
 
 def test_structured_expression_filter_helper_edges(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -861,7 +861,7 @@ def test_generate_raw_metric_becomes_group_dimension_for_aggregate_query():
 
 
 def test_generate_compile_failure_returns_error(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     monkeypatch.setattr(generator_module, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")))
 
@@ -918,7 +918,7 @@ def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
 
 
 def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -968,7 +968,7 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
 
 
 def test_generator_captures_builder_config_for_count_star_and_metric_columns(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1028,7 +1028,7 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
 
 
 def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1082,7 +1082,7 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
 
 
 def test_generator_additional_helper_and_join_edges(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1172,7 +1172,7 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
 
 
 def test_generator_builder_config_branches_for_metric_columns_and_table_sets(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1270,7 +1270,7 @@ def test_generator_error_validation_edges():
 
 
 def test_generator_remaining_branch_edges(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1342,7 +1342,7 @@ def test_generator_remaining_branch_edges(monkeypatch):
 
 
 def test_generator_disconnected_join_and_missing_dimension_metric_branches(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1401,7 +1401,7 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
 
 
 def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1436,7 +1436,7 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
 
 
 def test_generator_remaining_builder_mapping_edges(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1516,7 +1516,7 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
 
 
 def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1568,7 +1568,7 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
 
 
 def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 
@@ -1599,7 +1599,7 @@ def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypa
 
 
 def test_generator_remaining_coverage_branches(monkeypatch):
-    import apps.chat_data_app.semantic.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_sql_generator as generator_module
 
     captured = {}
 

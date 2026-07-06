@@ -22,7 +22,7 @@ from ..schema import (
     DatasourceTableGroupsUpdateRequest,
     DatasourceUpdateRequest,
 )
-from ..semantic import parse_llm_json
+from ..services.semantic_json_parser import parse_llm_json
 from ..services.datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials
 from ..services.datasource_manager import get_datasource_manager
 from ..services.hive_meta_http import get_hive_meta_tables_async

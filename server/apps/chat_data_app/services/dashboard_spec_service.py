@@ -11,7 +11,7 @@ from utils.logger import get_logger
 from ..chart_types import get_chart_type_label, is_supported_chart_type_input, normalize_chart_type
 from .dashboard_service import get_dashboard_service
 from .datasource_manager import get_datasource_manager
-from ..semantic import SemanticSQLGenerator
+from .semantic_sql_generator import SemanticSQLGenerator
 from .sql_executor import get_executor, resolve_query_timeout
 
 logger = get_logger(__name__)

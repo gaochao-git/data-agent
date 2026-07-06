@@ -17,8 +17,8 @@ from ..agent import get_chat_data_graph
 from ..agent.data_analyze_graph import get_data_analyze_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
-from ..routers.common import AGENT_ID, DATA_ANALYZE_AGENT_ID, _build_table_columns_map, _semantic_config_prompt_payload
-from ..semantic import parse_llm_json
+from .semantic_common import AGENT_ID, DATA_ANALYZE_AGENT_ID, _build_table_columns_map, _semantic_config_prompt_payload
+from .semantic_json_parser import parse_llm_json
 from .llm_config import get_chat_data_llm
 from .sql_parser import extract_physical_tables
 

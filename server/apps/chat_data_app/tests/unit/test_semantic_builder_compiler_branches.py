@@ -447,7 +447,7 @@ def test_semantic_sql_generator_remaining_join_and_metric_branches(monkeypatch):
 
     monkeypatch.setattr(compiler_module, "compile_builder_sql", fail_compile)
     # semantic_sql_generator imports compile_builder_sql directly, patch that symbol too.
-    monkeypatch.setattr("apps.chat_data_app.semantic.semantic_sql_generator.compile_builder_sql", fail_compile)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_sql_generator.compile_builder_sql", fail_compile)
     failed = generator.generate_sql(metrics=["销售额"], dimensions=["城市"], filters=[], having=[])
     assert failed["success"] is False
     assert "SQL 转换失败" in failed["error"]

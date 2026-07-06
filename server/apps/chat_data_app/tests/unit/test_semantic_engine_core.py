@@ -10,7 +10,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.semantic import (
+from apps.chat_data_app.services.semantic_dialect import (
     DialectRegistry,
     HiveDialect,
     MySQLDialect,
@@ -18,17 +18,19 @@ from apps.chat_data_app.semantic import (
     SQLDialect,
     get_dialect,
 )
-from apps.chat_data_app.semantic import (
-    JSONParseError,
+from apps.chat_data_app.services.semantic_formatter import (
     format_error_message,
     format_params_for_display,
     format_sql_for_display,
+)
+from apps.chat_data_app.services.semantic_json_parser import (
+    JSONParseError,
     parse_llm_json,
     safe_get,
     safe_get_dict,
     safe_get_list,
 )
-from apps.chat_data_app.semantic import InputValidator
+from apps.chat_data_app.services.semantic_input_validator import InputValidator
 from apps.chat_data_app.services.sql_parser import (
     _is_query_sql,
     _parse_sql,

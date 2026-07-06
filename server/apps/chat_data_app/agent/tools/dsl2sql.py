@@ -12,7 +12,7 @@ from ...services.dashboard_spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
 )
-from ...semantic import SemanticSQLGenerator
+from ...services.semantic_sql_generator import SemanticSQLGenerator
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)

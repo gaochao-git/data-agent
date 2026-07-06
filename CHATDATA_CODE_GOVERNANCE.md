@@ -163,8 +163,8 @@
 - `server/apps/chat_data_app/services/sql_executor.py`
 - `server/apps/chat_data_app/agent/tools/sql.py`
 - `server/apps/chat_data_app/handlers.py`
-- `server/apps/chat_data_app/semantic/compiler/semantic_sql_generator.py`
-- `server/apps/chat_data_app/semantic/compiler/builder_sql_compiler.py`
+- `server/apps/chat_data_app/services/semantic_sql_generator.py`
+- `server/apps/chat_data_app/services/semantic_builder_sql_compiler.py`
 - `web-vue/src/views/chat-data/components/QueryBuilder/index.vue`
 - `web-vue/src/views/chat-data/components/SqlEditor.vue`
 - `web-vue/src/views/chat-data/components/SqlConversation.vue`

@@ -20,7 +20,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
-from ..semantic import parse_llm_json
+from ..services.semantic_json_parser import parse_llm_json
 from ..services.datasource_manager import get_datasource_manager
 from ..services.evaluation_service import (
     EvaluationService,

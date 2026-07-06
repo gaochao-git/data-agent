@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
-from ..semantic import SemanticSQLGenerator
+from .semantic_sql_generator import SemanticSQLGenerator
 from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput
 from .datasource_manager import get_datasource_manager
 from .semantic_config_selector import _summarize_semantic_config, select_semantic_config_for_query

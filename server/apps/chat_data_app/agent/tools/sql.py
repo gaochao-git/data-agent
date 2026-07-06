@@ -19,7 +19,7 @@ from ...services.llm_config import get_chat_data_llm
 from ...services.semantic_tools import load_runtime_semantic_config
 from ...services import query_runtime
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
-from ...semantic import SemanticSQLGenerator
+from ...services.semantic_sql_generator import SemanticSQLGenerator
 from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 

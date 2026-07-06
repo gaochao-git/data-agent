@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 from utils.logger import get_logger
 from ...services.dashboard_spec_service import get_dashboard_spec_semantic_config, remove_mixed_raw_metrics_for_aggregate_dsl
 from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
-from ...semantic import SemanticSQLGenerator
+from ...services.semantic_sql_generator import SemanticSQLGenerator
 from .common import json_dumps, normalize_json_like_payload
 from .sql import _execute_sql_real, _normalize_member_datasource_ids
 

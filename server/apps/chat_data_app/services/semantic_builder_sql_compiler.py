@@ -7,8 +7,8 @@ Builder DSL -> SQL 编译器
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..services.runtime_config import normalize_row_limit
-from .dialect import get_dialect
+from .runtime_config import normalize_row_limit
+from .semantic_dialect import get_dialect
 
 AGG_EXPR_PATTERN = re.compile(r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$", re.IGNORECASE)
 SQL_FUNCTION_PATTERN = re.compile(r"^([a-z_][a-z0-9_]*)\s*\((.*)\)$", re.IGNORECASE)
