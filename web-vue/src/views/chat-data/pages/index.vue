@@ -28,7 +28,6 @@ import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
-import QueryCapabilityHelp from '../components/help/QueryCapabilityHelp.vue'
 import { formatSemanticConfigOptionLabel } from '../utils'
 
 // 模式图标组件映射（经典样式使用）
@@ -1515,7 +1514,6 @@ onUnmounted(() => {
         </div>
 
         <div class="relative shrink-0 flex items-center gap-2">
-          <QueryCapabilityHelp />
           <button
             v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
