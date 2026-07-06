@@ -26,6 +26,7 @@ def test_prompt_formatters():
     assert "本轮未提供完整指标集" in nodes.build_semantic_layer_context(None)
     assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in nodes.build_semantic_layer_context(None)
     assert "指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答" in nodes.build_semantic_layer_context(None)
+    assert "未选中完整指标集前，不要推荐具体查数样例" in nodes.build_semantic_layer_context(None)
     assert "搜索后仍未找到、候选不唯一或口径不清时再澄清" in nodes.build_semantic_layer_context(None)
     assert "订单分析" in nodes.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"})
     assert "semantic_config_id: sc_only" in nodes.build_semantic_layer_context({"id": "sc_only"})
@@ -100,6 +101,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     assert "custom-query-skill" in system_prompt
     assert "技能使用" in system_prompt
     assert "当前指标集是唯一可执行事实源" in system_prompt
+    assert "未选指标集时，可以推荐的问题应是下一步引导类" in system_prompt
     assert "真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准" in system_prompt
     assert "只有用户本轮显式引用技能" in system_prompt
     assert "禁止再向用户确认是否加载" in system_prompt

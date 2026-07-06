@@ -130,7 +130,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     if not semantic_config:
         return (
             "## 当前指标集\n"
-            "本轮未提供完整指标集。业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
+            "本轮未提供完整指标集。业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
         )
     from .tools import build_semantic_prompt
     config_id = str(semantic_config.get("id") or "").strip()
