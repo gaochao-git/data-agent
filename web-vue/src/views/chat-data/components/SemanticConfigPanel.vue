@@ -22,7 +22,13 @@ import {
   getDatasourceColumnDict,
   getDatasourceTableColumnDicts,
 } from '../api'
-import { formatSemanticConfigOptionLabel } from '../utils'
+import {
+  SQL_EXPRESSION_FUNCTION_KEYWORDS,
+  SQL_FUNCTION_GROUPS,
+  buildSqlFunctionExpression,
+  getSqlFunctionOptions,
+  formatSemanticConfigOptionLabel,
+} from '../utils'
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
@@ -737,46 +743,17 @@ const AGG_FUNCTION_OPTIONS = [
   { value: 'MIN', label: 'MIN', desc: '最小值' },
 ]
 
-const COMMON_FUNCTION_OPTIONS = [
-  { value: 'RAW', label: '原始列', desc: '`col`' },
-  { value: 'CASE_WHEN', label: 'CASE WHEN', desc: '条件分组' },
-]
-
-const DATE_FUNCTION_OPTIONS = [
-  { value: 'DATE', label: 'DATE', desc: '按日' },
-  { value: 'DATE_FORMAT_MONTH', label: 'DATE_FORMAT(月)', desc: '按月' },
-  { value: 'YEAR', label: 'YEAR', desc: '按年' },
-]
-const HIVE_DATE_FUNCTION_OPTIONS = [
-  { value: 'HIVE_DATE_FORMAT_DAY', label: '日期格式化(日)', desc: 'yyyy-MM-dd' },
-  { value: 'HIVE_DATE_FORMAT_MONTH', label: '日期格式化(月)', desc: 'yyyy-MM' },
-  { value: 'HIVE_DATE_FORMAT_YEAR', label: '日期格式化(年)', desc: 'yyyy' },
-]
-const visibleDateFunctionOptions = computed(() => {
-  const sourceType = String(props.datasourceType || '').trim().toLowerCase()
-  if (sourceType === 'mysql') {
-    return [
-      ...DATE_FUNCTION_OPTIONS,
-      { value: 'STR_TO_DATE', label: 'STR_TO_DATE', desc: '字符串转日期' },
-    ]
-  }
-  if (sourceType === 'hive') {
-    return HIVE_DATE_FUNCTION_OPTIONS
-  }
-  return DATE_FUNCTION_OPTIONS
+const dimensionFunctionOptions = computed(() => (
+  getSqlFunctionOptions(props.datasourceType, true).filter(item => item.usesExpression !== false)
+))
+const visibleDimensionFunctionGroups = computed(() => {
+  return SQL_FUNCTION_GROUPS
+    .map(group => ({
+      ...group,
+      items: dimensionFunctionOptions.value.filter(item => item.group === group.key),
+    }))
+    .filter(group => group.items.length > 0)
 })
-
-const STRING_FUNCTION_OPTIONS = [
-  { value: 'LOWER', label: 'LOWER', desc: '转小写' },
-  { value: 'UPPER', label: 'UPPER', desc: '转大写' },
-  { value: 'TRIM', label: 'TRIM', desc: '去首尾空格' },
-  { value: 'CONCAT', label: 'CONCAT', desc: '拼接字符串' },
-  { value: 'SUBSTRING', label: 'SUBSTRING', desc: '截取子串' },
-  { value: 'LEFT', label: 'LEFT', desc: '左截取' },
-  { value: 'RIGHT', label: 'RIGHT', desc: '右截取' },
-  { value: 'LENGTH', label: 'LENGTH', desc: '字符串长度' },
-  { value: 'REPLACE', label: 'REPLACE', desc: '替换字符' },
-]
 const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(rows.map(row => ({
   key: row.key,
   table: row.table,
@@ -1405,15 +1382,17 @@ const extractExpressionColumns = (expression: string) => {
   const keywords = new Set([
     'case', 'when', 'then', 'else', 'end', 'filter', 'where', 'distinct', 'count', 'sum', 'avg', 'max', 'min',
     'and', 'or', 'not', 'null', 'is', 'in', 'as', 'on', 'if', 'cast', 'char', 'date', 'date_format', 'str_to_date',
-    'unix_timestamp', 'from_unixtime', 'year', 'month', 'day'
+    'unix_timestamp', 'from_unixtime', 'year', 'month', 'day',
+    ...SQL_EXPRESSION_FUNCTION_KEYWORDS,
   ])
   const result = new Set<string>()
   const pattern = /`([^`]+)`|(?<!['"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['"])/g
   let match: RegExpExecArray | null
   while ((match = pattern.exec(text)) !== null) {
     if (text.slice(match.index + match[0].length).trimStart().startsWith('.')) continue
+    const isQuotedIdentifier = Boolean(match[1])
     const token = (match[1] || match[2] || '').trim().split('.').pop() || ''
-    if (!token || keywords.has(token.toLowerCase())) continue
+    if (!token || (!isQuotedIdentifier && keywords.has(token.toLowerCase()))) continue
     result.add(token)
   }
   return Array.from(result)
@@ -2270,24 +2249,7 @@ const viewColumnDict = async (row: FieldConfigRow) => {
 
 const buildDimensionExpression = (func: string, column: string) => {
   const quoted = quoteIdentifier(column)
-  if (func === 'CASE_WHEN') return `CASE\n  WHEN ${quoted} = '条件值1' THEN '分类1'\n  WHEN ${quoted} = '条件值2' THEN '分类2'\n  ELSE '其他'\nEND`
-  if (func === 'DATE') return `DATE(${quoted})`
-  if (func === 'DATE_FORMAT_MONTH') return `DATE_FORMAT(${quoted}, '%Y-%m')`
-  if (func === 'STR_TO_DATE') return `STR_TO_DATE(CAST(${quoted} AS CHAR), '%Y-%m-%d')`
-  if (func === 'HIVE_DATE_FORMAT_DAY') return `from_unixtime(unix_timestamp(${quoted}, 'yyyyMMdd'), 'yyyy-MM-dd')`
-  if (func === 'HIVE_DATE_FORMAT_MONTH') return `from_unixtime(unix_timestamp(${quoted}, 'yyyyMMdd'), 'yyyy-MM')`
-  if (func === 'HIVE_DATE_FORMAT_YEAR') return `from_unixtime(unix_timestamp(${quoted}, 'yyyyMMdd'), 'yyyy')`
-  if (func === 'YEAR') return `YEAR(${quoted})`
-  if (func === 'LOWER') return `LOWER(${quoted})`
-  if (func === 'UPPER') return `UPPER(${quoted})`
-  if (func === 'TRIM') return `TRIM(${quoted})`
-  if (func === 'CONCAT') return `CONCAT(${quoted}, '_suffix')`
-  if (func === 'SUBSTRING') return `SUBSTRING(${quoted}, 1, 10)`
-  if (func === 'LEFT') return `LEFT(${quoted}, 10)`
-  if (func === 'RIGHT') return `RIGHT(${quoted}, 10)`
-  if (func === 'LENGTH') return `LENGTH(${quoted})`
-  if (func === 'REPLACE') return `REPLACE(${quoted}, '旧值', '新值')`
-  return quoted
+  return buildSqlFunctionExpression(func, quoted, props.datasourceType)
 }
 
 const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
@@ -3449,15 +3411,25 @@ const saveOntologyRules = () => {
           </div>
           <div v-if="editingExpressionRow.isDimension" class="rounded-md border border-gray-200 p-3">
             <div class="mb-1.5 text-xs font-medium text-gray-600">常用函数</div>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="fn in [...COMMON_FUNCTION_OPTIONS, ...visibleDateFunctionOptions, ...STRING_FUNCTION_OPTIONS]"
-                :key="`expr-dim-${fn.value}`"
-                class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                @click="insertExpressionFromEditor(buildDimensionExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
+            <div class="max-h-[220px] overflow-auto pr-1">
+              <div
+                v-for="group in visibleDimensionFunctionGroups"
+                :key="`expr-dim-group-${group.key}`"
+                class="mb-2 last:mb-0"
               >
-                {{ fn.label }}
-              </button>
+                <div class="mb-1 text-[11px] font-medium text-gray-400">{{ group.label }}</div>
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    v-for="fn in group.items"
+                    :key="`expr-dim-${fn.value}`"
+                    class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
+                    :title="fn.desc"
+                    @click="insertExpressionFromEditor(buildDimensionExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
+                  >
+                    {{ fn.label }}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

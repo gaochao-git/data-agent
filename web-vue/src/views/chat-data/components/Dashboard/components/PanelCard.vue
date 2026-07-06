@@ -199,7 +199,10 @@ const executionTargets = computed<ExecutionTargetOption[]>(() => {
   }]
 })
 
-const allExecutionTargetIds = computed(() => executionTargets.value.map(item => item.member_datasource_id).filter(Boolean))
+const allExecutionTargetIds = computed<string[]>(() => executionTargets.value
+  .map(item => String(item.member_datasource_id || '').trim())
+  .filter(Boolean)
+)
 const isAllEditTargetsSelected = computed(() => (
   allExecutionTargetIds.value.length > 0 && allExecutionTargetIds.value.every(id => editState.memberDatasourceIds.includes(id))
 ))
@@ -222,7 +225,7 @@ const filterAvailableMemberIds = (ids: string[]) => {
   return ids.filter(id => availableIds.includes(id))
 }
 
-const getPanelSelectedMemberIds = () => {
+const getPanelSelectedMemberIds = (): string[] => {
   const config = props.panel.chart_config || {}
   const multiSource = config.multiSource as { enabled?: boolean; memberDatasourceIds?: unknown } | undefined
   const configuredIds = multiSource?.enabled
@@ -230,7 +233,8 @@ const getPanelSelectedMemberIds = () => {
     : normalizeMemberIds([props.panel.member_datasource_id])
   const availableConfiguredIds = filterAvailableMemberIds(configuredIds)
   if (availableConfiguredIds.length) return availableConfiguredIds
-  return allExecutionTargetIds.value.length ? [allExecutionTargetIds.value[0]] : []
+  const firstAvailableId = allExecutionTargetIds.value[0] || ''
+  return firstAvailableId ? [firstAvailableId] : []
 }
 
 const getExecutionTargetName = (target: ExecutionTargetOption) => target.org_name || target.label || target.member_datasource_id
@@ -290,8 +294,9 @@ const handleSaveEditModal = () => {
   if (editState.chartType !== props.panel.chart_type) {
     emit('changeChartType', editState.chartType)
   }
-  if (selectedIds.length > 0) {
-    emit('updateMemberDatasourceId', selectedIds[0])
+  const firstSelectedId = selectedIds[0] || ''
+  if (firstSelectedId) {
+    emit('updateMemberDatasourceId', firstSelectedId)
   }
   emit('updateChartConfig', nextChartConfig)
   emit('updateSql', trimmedSql)

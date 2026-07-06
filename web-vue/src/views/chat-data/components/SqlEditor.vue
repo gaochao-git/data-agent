@@ -16,7 +16,9 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
+import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog } from '../utils'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
+import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
 
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
@@ -48,14 +50,6 @@ const safeRandomId = (): string => {
 type SqlEditorSSEEventType = 'message' | 'error'
 type AiChatMessage = { role: 'user' | 'assistant'; content: string; time?: string; isStreaming?: boolean }
 type AiMessageSegment = { type: 'markdown' | 'sql'; content: string }
-type SqlContextFunctionGroup = 'string' | 'date' | 'condition'
-type SqlContextFunction = {
-  key: string
-  label: string
-  desc: string
-  group: SqlContextFunctionGroup
-  build: (expression: string) => string
-}
 type QueryResultPanelItem = {
   key?: string | number
   title?: string
@@ -253,53 +247,11 @@ const sqlContextMenu = ref({
   selection: null as { from: number; to: number } | null,
 })
 
-const sqlContextFunctionGroups: Array<{ key: SqlContextFunctionGroup; label: string }> = [
-  { key: 'string', label: '字符串函数' },
-  { key: 'date', label: '日期函数' },
-  { key: 'condition', label: '条件/空值' },
-]
+const sqlContextFunctionGroups = SQL_FUNCTION_GROUPS.filter(group => group.key !== 'common') as Array<{ key: SqlFunctionGroupKey; label: string }>
 
-const sqlContextFunctions = computed<SqlContextFunction[]>(() => {
+const sqlContextFunctions = computed<SqlFunctionCatalogItem[]>(() => {
   const sourceType = String(props.datasource?.source_type || '').trim().toLowerCase()
-  const stringFunctions: SqlContextFunction[] = [
-    { key: 'LOWER', label: 'LOWER', desc: '转小写', group: 'string', build: expr => `LOWER(${expr})` },
-    { key: 'UPPER', label: 'UPPER', desc: '转大写', group: 'string', build: expr => `UPPER(${expr})` },
-    { key: 'TRIM', label: 'TRIM', desc: '去首尾空格', group: 'string', build: expr => `TRIM(${expr})` },
-    { key: 'LENGTH', label: 'LENGTH', desc: '字符串长度', group: 'string', build: expr => `LENGTH(${expr})` },
-    { key: 'SUBSTRING', label: 'SUBSTRING', desc: '截取子串', group: 'string', build: expr => `SUBSTRING(${expr}, 1, 10)` },
-    { key: 'LEFT', label: 'LEFT', desc: '左截取', group: 'string', build: expr => `LEFT(${expr}, 10)` },
-    { key: 'RIGHT', label: 'RIGHT', desc: '右截取', group: 'string', build: expr => `RIGHT(${expr}, 10)` },
-    { key: 'REPLACE', label: 'REPLACE', desc: '替换字符', group: 'string', build: expr => `REPLACE(${expr}, '旧值', '新值')` },
-    { key: 'CONCAT', label: 'CONCAT', desc: '拼接字符串', group: 'string', build: expr => `CONCAT(${expr}, '')` },
-  ]
-  const mysqlDateFunctions: SqlContextFunction[] = [
-    { key: 'DATE', label: 'DATE', desc: '提取日期', group: 'date', build: expr => `DATE(${expr})` },
-    { key: 'DATE_FORMAT_DAY', label: 'DATE_FORMAT(日)', desc: 'yyyy-MM-dd', group: 'date', build: expr => `DATE_FORMAT(${expr}, '%Y-%m-%d')` },
-    { key: 'DATE_FORMAT_MONTH', label: 'DATE_FORMAT(月)', desc: 'yyyy-MM', group: 'date', build: expr => `DATE_FORMAT(${expr}, '%Y-%m')` },
-    { key: 'YEAR', label: 'YEAR', desc: '年份', group: 'date', build: expr => `YEAR(${expr})` },
-    { key: 'STR_TO_DATE_YYYYMMDD', label: 'STR_TO_DATE', desc: 'yyyyMMdd转日期', group: 'date', build: expr => `STR_TO_DATE(CAST(${expr} AS CHAR), '%Y%m%d')` },
-  ]
-  const hiveDateFunctions: SqlContextFunction[] = [
-    { key: 'HIVE_DATE_FORMAT_DAY', label: '日期格式化(日)', desc: 'yyyy-MM-dd', group: 'date', build: expr => `from_unixtime(unix_timestamp(${expr}, 'yyyyMMdd'), 'yyyy-MM-dd')` },
-    { key: 'HIVE_DATE_FORMAT_MONTH', label: '日期格式化(月)', desc: 'yyyy-MM', group: 'date', build: expr => `from_unixtime(unix_timestamp(${expr}, 'yyyyMMdd'), 'yyyy-MM')` },
-    { key: 'HIVE_DATE_FORMAT_YEAR', label: '日期格式化(年)', desc: 'yyyy', group: 'date', build: expr => `from_unixtime(unix_timestamp(${expr}, 'yyyyMMdd'), 'yyyy')` },
-  ]
-  const conditionFunctions: SqlContextFunction[] = [
-    {
-      key: 'CASE_WHEN',
-      label: 'CASE WHEN',
-      desc: '条件分组',
-      group: 'condition',
-      build: expr => `CASE\n  WHEN ${expr} = '条件值1' THEN '结果1'\n  WHEN ${expr} = '条件值2' THEN '结果2'\n  ELSE '其他'\nEND`,
-    },
-    { key: 'COALESCE', label: 'COALESCE', desc: '空值兜底', group: 'condition', build: expr => `COALESCE(${expr}, '默认值')` },
-    { key: 'NULLIF', label: 'NULLIF', desc: '相等转空', group: 'condition', build: expr => `NULLIF(${expr}, '比较值')` },
-  ]
-  return [
-    ...stringFunctions,
-    ...(sourceType === 'hive' ? hiveDateFunctions : mysqlDateFunctions),
-    ...conditionFunctions,
-  ]
+  return getSqlFunctionCatalog(sourceType).filter(item => item.usesExpression !== false)
 })
 
 const rememberEditorSelection = () => {
@@ -357,7 +309,7 @@ const handleSqlEditorContextMenu = (event: MouseEvent, view: EditorView) => {
   return true
 }
 
-const applySqlContextFunction = (fn: SqlContextFunction) => {
+const applySqlContextFunction = (fn: SqlFunctionCatalogItem) => {
   const view = editorViewRef.value
   const menuState = sqlContextMenu.value
   if (!view || !menuState.selection || !menuState.selectedText) return

@@ -33,6 +33,11 @@ def test_builder_sql_compiler_helper_branches():
     assert compiler._is_sql_function("current_date() -- comment") is False
     assert compiler._is_sql_function("current_date(") is False
     assert compiler._is_sql_function("date_add(current_date(), interval 1 day)") is True
+    assert compiler._is_sql_function("add_months(dt, 1)") is True
+    assert compiler._is_sql_function("instr(name, 'a')") is True
+    assert compiler._is_sql_function("locate('a', name)") is True
+    assert compiler._is_sql_function("lpad(code, 4, '0')") is True
+    assert compiler._is_sql_function("repeat(code, 2)") is True
     assert compiler._is_sql_function("current_date() /* comment */") is False
     assert compiler._has_balanced_parentheses("concat('(', col)") is True
     assert compiler._has_balanced_parentheses("concat('x'") is False

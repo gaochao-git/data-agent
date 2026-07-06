@@ -7,6 +7,13 @@ export { hideSemanticConfigSelectionPayloads, normalizeMarkdownFences } from './
 export { parseStructuredContent } from './parseContent'
 export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export {
+  SQL_EXPRESSION_FUNCTION_KEYWORDS,
+  SQL_FUNCTION_GROUPS,
+  buildSqlFunctionExpression,
+  getSqlFunctionCatalog,
+  getSqlFunctionOptions,
+} from './sqlFunctionCatalog'
+export {
   buildSemanticParamsFromDsl,
   extractGeneratedSqlFromToolCall,
   extractQueryResultPayload,
@@ -15,3 +22,4 @@ export {
   parseJsonObject,
 } from './semanticTool'
 export type { ContentSegment, ParsedContent } from './parseContent'
+export type { SqlFunctionCatalogItem, SqlFunctionGroupKey, SqlFunctionOption } from './sqlFunctionCatalog'
