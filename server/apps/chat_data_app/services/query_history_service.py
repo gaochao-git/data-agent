@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime, time as datetime_time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from urllib.parse import unquote
 
 from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
@@ -95,7 +96,7 @@ class QueryHistoryService:
         raw_value = cls.clean_optional_text(value)
         if not raw_value:
             return None
-        normalized = raw_value.replace("T", " ")
+        normalized = unquote(raw_value).replace("T", " ")
         formats = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
         for fmt in formats:
             try:

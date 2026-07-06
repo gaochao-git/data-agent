@@ -348,6 +348,12 @@ def test_get_query_history_filters_by_executed_time_range(route_db):
     assert invalid_body["code"] == 40001
 
 
+def test_query_history_accepts_url_encoded_datetime():
+    from apps.chat_data_app.services.query_history_service import QueryHistoryService
+
+    assert QueryHistoryService.parse_history_time("2026-07-06%2010%3A37%3A58") == datetime(2026, 7, 6, 10, 37, 58)
+
+
 def test_get_admin_query_history_filters_globally(route_db):
     asyncio.run(_seed_query_history(route_db))
 
