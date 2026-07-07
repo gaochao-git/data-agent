@@ -38,6 +38,7 @@ from utils.lang_util.models import (
     ChatDataQueryTask,
     ChatDataQueryExecution,
 )
+from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
 from .routers.common import _get_current_user
@@ -159,7 +160,7 @@ async def get_query_favorites(
             return business_response(data={"queries": results, "total": len(results)}, msg="获取成功")
     except Exception as e:
         logger.error("获取收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="获取收藏查询失败，请稍后重试", code=50012, status="error")
+        return business_response(msg="获取收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_LIST_FAILED, status="error")
 
 
 @router.get("/query-history")
@@ -189,10 +190,10 @@ async def get_query_history(
         )
         return business_response(data=data, msg="获取成功")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("获取查询历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取查询历史失败，请稍后重试", code=50016, status="error")
+        return business_response(msg="获取查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
 
 
 @router.get("/admin/query-history")
@@ -228,10 +229,10 @@ async def get_admin_query_history(
         )
         return business_response(data=data, msg="获取成功")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("获取全局查询历史失败: %s", e, exc_info=True)
-        return business_response(msg="获取全局查询历史失败，请稍后重试", code=50016, status="error")
+        return business_response(msg="获取全局查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
 
 
 @router.post("/query-history/cancel-running")
@@ -249,10 +250,10 @@ async def cancel_my_running_query_history(
         )
         return business_response(data=result, msg="停止请求已提交")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error("批量停止个人查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(msg="批量停止失败，请稍后重试", code=50010, status="error")
+        return business_response(msg="批量停止失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.post("/admin/query-history/cancel-running")
@@ -269,10 +270,10 @@ async def cancel_admin_running_query_history(
         )
         return business_response(data=result, msg="停止请求已提交")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error("批量停止全局查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(msg="批量停止失败，请稍后重试", code=50010, status="error")
+        return business_response(msg="批量停止失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.get("/query-history/{execution_id}/result")
@@ -287,11 +288,11 @@ async def get_query_history_result(execution_id: str, request: Request):
             fetch_remote_result=fetch_http_query_task_result,
         )
         if not data:
-            return business_response(msg="查询历史不存在", code=40404, status="error")
+            return business_response(msg="查询历史不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=data, msg="获取成功")
     except Exception as e:
         logger.error("获取查询历史结果失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
-        return business_response(msg="获取查询历史结果失败，请稍后重试", code=50016, status="error")
+        return business_response(msg="获取查询历史结果失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
 
 
 @router.post("/query-favorites")
@@ -302,7 +303,7 @@ async def create_query_favorite(payload: QueryFavoriteCreateRequest, request: Re
         user_id = str(current_user.user_id)
         username = str(current_user.username or "")
         if payload.query_type == "builder" and payload.builder_config is None:
-            return business_response(msg="builder 类型收藏必须包含 builder_config", code=40012, status="error")
+            return business_response(msg="builder 类型收藏必须包含 builder_config", code=ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG, status="error")
 
         builder_config_json = None
         if payload.builder_config is not None:
@@ -331,7 +332,7 @@ async def create_query_favorite(payload: QueryFavoriteCreateRequest, request: Re
             return business_response(data=item.to_dict(), msg="收藏成功")
     except Exception as e:
         logger.error("创建收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="创建收藏查询失败，请稍后重试", code=50013, status="error")
+        return business_response(msg="创建收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED, status="error")
 
 
 @router.put("/query-favorites/{favorite_id}")
@@ -346,7 +347,7 @@ async def update_query_favorite(favorite_id: int, payload: QueryFavoriteUpdateRe
             result = await db.execute(stmt)
             item = result.scalar_one_or_none()
             if item is None:
-                return business_response(msg="收藏不存在", code=40412, status="error")
+                return business_response(msg="收藏不存在", code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
 
             if payload.favorite_title is not None:
                 item.favorite_title = payload.favorite_title.strip()
@@ -354,7 +355,7 @@ async def update_query_favorite(favorite_id: int, payload: QueryFavoriteUpdateRe
             if item.query_type == "builder":
                 # builder 收藏原始配置不可编辑
                 if payload.query_text is not None or payload.builder_config is not None:
-                    return business_response(msg="builder 收藏不支持编辑原始内容", code=40013, status="error")
+                    return business_response(msg="builder 收藏不支持编辑原始内容", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
             else:
                 if payload.query_text is not None:
                     item.query_text = payload.query_text
@@ -371,7 +372,7 @@ async def update_query_favorite(favorite_id: int, payload: QueryFavoriteUpdateRe
             return business_response(data=item.to_dict(), msg="更新成功")
     except Exception as e:
         logger.error("更新收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="更新收藏查询失败，请稍后重试", code=50014, status="error")
+        return business_response(msg="更新收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED, status="error")
 
 
 @router.delete("/query-favorites/{favorite_id}")
@@ -386,7 +387,7 @@ async def delete_query_favorite(favorite_id: int, request: Request):
             result = await db.execute(stmt)
             item = result.scalar_one_or_none()
             if item is None:
-                return business_response(msg="收藏不存在", code=40412, status="error")
+                return business_response(msg="收藏不存在", code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
             item.delete_flag = 1
             item.update_time = datetime.now()
             item.update_by = user_id
@@ -395,7 +396,7 @@ async def delete_query_favorite(favorite_id: int, request: Request):
             return business_response(data={"id": favorite_id}, msg="删除成功")
     except Exception as e:
         logger.error("删除收藏查询失败: %s", e, exc_info=True)
-        return business_response(msg="删除收藏查询失败，请稍后重试", code=50015, status="error")
+        return business_response(msg="删除收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED, status="error")
 
 
 @router.post("/nl2sql")
@@ -1148,7 +1149,7 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
         if not datasource:
             return business_response(
                 msg=f"数据源不存在: {body.datasource_id}",
-                code=40404,
+                code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
         body = await _prepare_sql_request_for_execution(body, datasource)
@@ -1166,20 +1167,20 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
     except AuthenticationError as e:
         return business_response(
             msg=e.message,
-            code=40101,
+            code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
             status="error"
         )
     except ValueError as e:
         return business_response(
             msg=str(e),
-            code=40001,
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error"
         )
     except Exception as e:
         logger.error(f"创建异步查询任务失败: {str(e)}", exc_info=True)
         return business_response(
             msg="创建异步查询任务失败，请稍后重试",
-            code=50010,
+            code=ErrorCode.CHATDATA_SERVICE_ERROR,
             status="error"
         )
 
@@ -1194,13 +1195,13 @@ async def get_query_task(task_id: str, request: Request):
         if not task_data:
             return business_response(
                 msg=f"任务不存在: {task_id}",
-                code=40404,
+                code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
         response_data = _build_query_task_response_data(task_data)
         executions = await _get_query_executions(response_data["task_id"])
         if not _is_query_task_owned_by_user(task_data, executions, current_user_id):
-            return business_response(msg=f"任务不存在: {task_id}", code=40404, status="error")
+            return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         if response_data["task_type"] == "sql" and response_data["remote_tasks"]:
             live_remote_payload = await _build_live_remote_sql_result(response_data, executions)
             if live_remote_payload:
@@ -1236,16 +1237,16 @@ async def get_query_task(task_id: str, request: Request):
     except AuthenticationError as e:
         return business_response(
             msg=e.message,
-            code=40101,
+            code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
             status="error"
         )
     except HTTPException as e:
-        return business_response(msg=str(e.detail), code=e.status_code * 100 + 1, status="error")
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except Exception as e:
         logger.error(f"查询异步任务失败: {str(e)}", exc_info=True)
         return business_response(
             msg="查询异步任务失败，请稍后重试",
-            code=50010,
+            code=ErrorCode.CHATDATA_SERVICE_ERROR,
             status="error"
         )
 
@@ -1258,7 +1259,7 @@ async def cancel_query_task(task_id: str, request: Request):
         current_user_id = str(current_user.user_id)
         task_data = await _get_query_task(task_id)
         if not task_data:
-            return business_response(msg=f"任务不存在: {task_id}", code=40404, status="error")
+            return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         executions = await _get_query_execution_models(task_id)
         owner_ids = {str(item.user_id or "").strip() for item in executions if str(item.user_id or "").strip()}
         if not owner_ids:
@@ -1266,7 +1267,7 @@ async def cancel_query_task(task_id: str, request: Request):
             if task_user_id:
                 owner_ids.add(task_user_id)
         if owner_ids and current_user_id not in owner_ids:
-            return business_response(msg="无权停止该查询任务", code=40301, status="error")
+            return business_response(msg="无权停止该查询任务", code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
         operator_name = _get_task_operator_name(task_data) or str(getattr(current_user, "username", "") or "").strip()
         cancellable_executions = [
             item for item in executions
@@ -1305,10 +1306,10 @@ async def cancel_query_task(task_id: str, request: Request):
             msg="停止请求已提交"
         )
     except HTTPException as e:
-        return business_response(msg=str(e.detail), code=e.status_code * 100 + 1, status="error")
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except Exception as e:
         logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
-        return business_response(msg="停止查询任务失败，请稍后重试", code=50010, status="error")
+        return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.post("/execute-sql")
@@ -1331,27 +1332,27 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
             return business_response(
                 data=result_data,
                 msg=result_data.get("error") or "SQL 执行失败，请稍后重试或联系管理员",
-                code=50010,
+                code=ErrorCode.CHATDATA_SERVICE_ERROR,
                 status="error"
             )
         return business_response(data=result_data, msg="执行完成")
     except AuthenticationError as e:
         return business_response(
             msg=e.message,
-            code=40101,
+            code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
             status="error"
         )
     except ValueError as e:
         return business_response(
             msg=str(e),
-            code=40001,
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error"
         )
     except Exception as e:
         logger.error(f"执行 SQL 失败: {str(e)}", exc_info=True)
         return business_response(
             msg="SQL 执行失败，请稍后重试或联系管理员",
-            code=50010,
+            code=ErrorCode.CHATDATA_SERVICE_ERROR,
             status="error"
         )
 
@@ -1367,12 +1368,12 @@ async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderS
         )
         return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
     except LookupError as err:
-        return business_response(msg=str(err), code=40404, status="error")
+        return business_response(msg=str(err), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as err:
-        return business_response(msg=str(err), code=40001, status="error")
+        return business_response(msg=str(err), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as err:
         logger.error(f"Semantic Builder DSL 编译失败: {err}", exc_info=True)
-        return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=50010, status="error")
+        return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 # ============ 对话接口 ============

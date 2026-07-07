@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import data_analyze_workspace as workspace_routes
 from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE, DATA_ANALYZE_DISABLED_MESSAGE
 from utils.response import business_response
@@ -54,7 +55,7 @@ def test_data_analyze_workspace_rejects_inaccessible_conversation(client, auth_h
     response = client.get("/api/chatdata/data-analyze/conversations/missing/workspace-files", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json()["code"] == 40404
+    assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_data_analyze_workspace_file_error_mapping(client, auth_headers, monkeypatch, tmp_path):
@@ -108,11 +109,11 @@ def test_data_analyze_workspace_file_error_mapping(client, auth_headers, monkeyp
         headers=auth_headers,
     )
 
-    assert missing_response.json()["code"] == 40404
-    assert bad_list_response.json()["code"] == 40001
-    assert bad_read_response.json()["code"] == 40001
-    assert crashed_list_response.json()["code"] == 50053
-    assert crashed_read_response.json()["code"] == 50054
+    assert missing_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert bad_list_response.json()["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert bad_read_response.json()["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert crashed_list_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED
+    assert crashed_read_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
 
 
 def test_data_analyze_workspace_import_skill_route(client, auth_headers, monkeypatch, tmp_path):
@@ -151,7 +152,7 @@ def test_data_analyze_workspace_import_skill_route(client, auth_headers, monkeyp
 
     assert success_response.status_code == 200
     assert success_response.json()["data"]["skill_id"] == "skill_a"
-    assert rejected_response.json()["code"] == 40055
+    assert rejected_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID
 
 
 def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monkeypatch, tmp_path):
@@ -198,9 +199,9 @@ def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monke
         headers=auth_headers,
     )
 
-    assert value_error_response.json()["code"] == 40055
-    assert runtime_error_response.json()["code"] == 50055
-    assert inaccessible_response.json()["code"] == 40404
+    assert value_error_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID
+    assert runtime_error_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED
+    assert inaccessible_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_data_analyze_workspace_rejects_when_feature_disabled(client, auth_headers, monkeypatch):
@@ -231,9 +232,9 @@ def test_data_analyze_workspace_rejects_when_feature_disabled(client, auth_heade
         headers=auth_headers,
     )
 
-    assert list_response.json()["code"] == 40302
-    assert read_response.json()["code"] == 40302
-    assert import_response.json()["code"] == 40302
+    assert list_response.json()["code"] == DATA_ANALYZE_DISABLED_CODE
+    assert read_response.json()["code"] == DATA_ANALYZE_DISABLED_CODE
+    assert import_response.json()["code"] == DATA_ANALYZE_DISABLED_CODE
 
 
 def test_can_access_data_analyze_conversation_queries_user_thread(monkeypatch):

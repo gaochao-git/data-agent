@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.schema import (
     DashboardCreateRequest,
@@ -494,9 +495,9 @@ async def test_dashboard_permission_name_and_panel_loader_branches(dashboard_con
     service, _runtime, _user = dashboard_context
 
     denied = response_payload(await dashboard_routes._dashboard_permission_error(service, "forbidden"))
-    assert denied["code"] == 40304
+    assert denied["code"] == ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED
     not_found = response_payload(await dashboard_routes._dashboard_permission_error(service, "missing"))
-    assert not_found["code"] == 40404
+    assert not_found["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     assert (await dashboard_runtime.load_dashboard_panel_or_raise("panel_a"))["id"] == "panel_a"
     with pytest.raises(ValueError, match="面板不存在"):
@@ -660,11 +661,11 @@ async def test_dashboard_route_crud_handlers(dashboard_context, monkeypatch):
     detail = response_payload(await dashboard_routes.get_dashboard("dash_a", request))
     assert detail["data"]["can_manage"] is True
     missing_detail = response_payload(await dashboard_routes.get_dashboard("missing", request))
-    assert missing_detail["code"] == 40404
+    assert missing_detail["code"] == ErrorCode.CHATDATA_NOT_FOUND
     updated = response_payload(await dashboard_routes.update_dashboard("dash_a", DashboardUpdateRequest(name="更新"), request))
     assert updated["data"]["name"] == "更新"
     missing_update = response_payload(await dashboard_routes.update_dashboard("missing", DashboardUpdateRequest(name="更新"), request))
-    assert missing_update["code"] in {40304, 40404}
+    assert missing_update["code"] in {ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED, ErrorCode.CHATDATA_NOT_FOUND}
     published = response_payload(await dashboard_routes.publish_dashboard("dash_a", request))
     unpublished = response_payload(await dashboard_routes.unpublish_dashboard("dash_a", request))
     assert published["data"]["is_public"] is True
@@ -675,20 +676,20 @@ async def test_dashboard_route_crud_handlers(dashboard_context, monkeypatch):
     added = response_payload(await dashboard_routes.add_panel("dash_a", PanelCreateRequest(sql="select 1", chart_type="table"), request))
     assert added["data"]["id"] == "panel_new"
     missing_added = response_payload(await dashboard_routes.add_panel("missing", PanelCreateRequest(sql="select 1"), request))
-    assert missing_added["code"] == 40404
+    assert missing_added["code"] == ErrorCode.CHATDATA_NOT_FOUND
     panel_updated = response_payload(await dashboard_routes.update_panel("dash_a", "panel_a", PanelUpdateRequest(name="p2"), request))
     assert panel_updated["data"]["id"] == "panel_a"
     missing_panel_update = response_payload(await dashboard_routes.update_panel("dash_a", "missing", PanelUpdateRequest(name="p2"), request))
-    assert missing_panel_update["code"] == 40404
+    assert missing_panel_update["code"] == ErrorCode.CHATDATA_NOT_FOUND
     panel_deleted = response_payload(await dashboard_routes.delete_panel("dash_a", "panel_a", request))
     assert panel_deleted["data"]["panel_id"] == "panel_a"
     layout = response_payload(await dashboard_routes.update_layout("dash_a", LayoutUpdateRequest(layouts=[{"panel_id": "panel_a"}]), request))
     assert layout["data"]["updated"] == 1
-    assert response_payload(await dashboard_routes.publish_dashboard("missing", request))["code"] == 40404
-    assert response_payload(await dashboard_routes.unpublish_dashboard("forbidden", request))["code"] == 40304
-    assert response_payload(await dashboard_routes.delete_dashboard("missing", request))["code"] == 40404
-    assert response_payload(await dashboard_routes.delete_panel("dash_a", "missing", request))["code"] == 40404
-    assert response_payload(await dashboard_routes.update_layout("missing", LayoutUpdateRequest(layouts=[]), request))["code"] == 40404
+    assert response_payload(await dashboard_routes.publish_dashboard("missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert response_payload(await dashboard_routes.unpublish_dashboard("forbidden", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED
+    assert response_payload(await dashboard_routes.delete_dashboard("missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert response_payload(await dashboard_routes.delete_panel("dash_a", "missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert response_payload(await dashboard_routes.update_layout("missing", LayoutUpdateRequest(layouts=[]), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     monkeypatch.setattr(dashboard_routes, "generate_query_metadata", lambda _sql: asyncio.sleep(0, result={"title": "SQL查询"}))
     generated = response_payload(await dashboard_routes.generate_panel_name(PanelNameGenerateRequest(sql="select 1", chart_type="table", name="  显式标题  ")))
@@ -700,10 +701,10 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
     service, runtime, _user = dashboard_context
     request = object()
 
-    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={}, datasource_id=None), request))["code"] == 40010
-    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"need_clarify": True}, datasource_id="ds"), request))["code"] == 40013
-    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"cards": []}, datasource_id="ds"), request))["code"] == 40011
-    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"cards": [{}]}, datasource_id="ds"), request))["code"] == 40014
+    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={}, datasource_id=None), request))["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"need_clarify": True}, datasource_id="ds"), request))["code"] == ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED
+    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"cards": []}, datasource_id="ds"), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED
+    assert response_payload(await dashboard_routes.create_dashboard_from_spec(DashboardFromSpecRequest(dashboard_spec={"cards": [{}]}, datasource_id="ds"), request))["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED
 
     async def fake_create_dashboard_from_spec_payload(**kwargs):
         return {"dashboard": {"id": "dash"}, "panels": [{"id": "p"}], "warnings": []}
@@ -723,7 +724,7 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
         DashboardFromSpecRequest(dashboard_spec={"cards": [{}], "semantic_config_id": "cfg"}, datasource_id="ds"),
         request,
     ))
-    assert empty_spec["code"] == 40012
+    assert empty_spec["code"] == ErrorCode.CHATDATA_DASHBOARD_NO_VALID_CARD
 
     async def raising_create_dashboard_from_spec_payload(**_kwargs):
         raise RuntimeError("spec failed")
@@ -733,13 +734,13 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
         DashboardFromSpecRequest(dashboard_spec={"cards": [{}], "semantic_config_id": "cfg"}, datasource_id="ds"),
         request,
     ))
-    assert failed_spec["code"] == 50035
+    assert failed_spec["code"] == ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED
 
     monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
     executed = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request, PanelExecuteRequest(member_datasource_id="member_a")))
     assert executed["status"] == "success"
     missing = response_payload(await dashboard_routes.execute_panel("dash_a", "missing", request))
-    assert missing["code"] == 40404
+    assert missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     task = response_payload(await dashboard_routes.create_panel_query_task("dash_a", "panel_a", request, PanelExecuteRequest(member_datasource_id="member_a")))
     assert task["data"]["task_id"].startswith("task_")
@@ -756,7 +757,7 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
     list_batch_task = response_payload(await dashboard_routes.create_dashboard_query_task("dash_a", request, ["panel_a"]))
     assert list_batch_task["data"]["task_id"].startswith("task_")
     missing_batch_task = response_payload(await dashboard_routes.create_dashboard_query_task("missing", request, PanelBatchExecuteRequest(panel_ids=["panel_a"])))
-    assert missing_batch_task["code"] == 40404
+    assert missing_batch_task["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -797,23 +798,23 @@ async def test_dashboard_route_exception_branches(dashboard_context, monkeypatch
 
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: RaisingService())
 
-    assert response_payload(await dashboard_routes.list_dashboards(request))["code"] == 50020
-    assert response_payload(await dashboard_routes.create_dashboard(DashboardCreateRequest(name="新看板"), request))["code"] == 50021
-    assert response_payload(await dashboard_routes.get_dashboard("dash_a", request))["code"] == 50022
-    assert response_payload(await dashboard_routes.update_dashboard("dash_a", DashboardUpdateRequest(name="更新"), request))["code"] == 50023
-    assert response_payload(await dashboard_routes.delete_dashboard("dash_a", request))["code"] == 50024
-    assert response_payload(await dashboard_routes.publish_dashboard("dash_a", request))["code"] == 50036
-    assert response_payload(await dashboard_routes.unpublish_dashboard("dash_a", request))["code"] == 50037
-    assert response_payload(await dashboard_routes.add_panel("dash_a", PanelCreateRequest(sql="select 1"), request))["code"] == 50025
-    assert response_payload(await dashboard_routes.update_panel("dash_a", "panel_a", PanelUpdateRequest(name="更新"), request))["code"] == 50026
-    assert response_payload(await dashboard_routes.delete_panel("dash_a", "panel_a", request))["code"] == 50027
-    assert response_payload(await dashboard_routes.update_layout("dash_a", LayoutUpdateRequest(layouts=[]), request))["code"] == 50028
+    assert response_payload(await dashboard_routes.list_dashboards(request))["code"] == ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED
+    assert response_payload(await dashboard_routes.create_dashboard(DashboardCreateRequest(name="新看板"), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED
+    assert response_payload(await dashboard_routes.get_dashboard("dash_a", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_GET_FAILED
+    assert response_payload(await dashboard_routes.update_dashboard("dash_a", DashboardUpdateRequest(name="更新"), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED
+    assert response_payload(await dashboard_routes.delete_dashboard("dash_a", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED
+    assert response_payload(await dashboard_routes.publish_dashboard("dash_a", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED
+    assert response_payload(await dashboard_routes.unpublish_dashboard("dash_a", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED
+    assert response_payload(await dashboard_routes.add_panel("dash_a", PanelCreateRequest(sql="select 1"), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED
+    assert response_payload(await dashboard_routes.update_panel("dash_a", "panel_a", PanelUpdateRequest(name="更新"), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED
+    assert response_payload(await dashboard_routes.delete_panel("dash_a", "panel_a", request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED
+    assert response_payload(await dashboard_routes.update_layout("dash_a", LayoutUpdateRequest(layouts=[]), request))["code"] == ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED
 
     async def name_raises(*_args, **_kwargs):
         raise RuntimeError("name failed")
 
     monkeypatch.setattr(dashboard_routes, "_resolve_panel_name", name_raises)
-    assert response_payload(await dashboard_routes.generate_panel_name(PanelNameGenerateRequest(sql="select 1")))["code"] == 50031
+    assert response_payload(await dashboard_routes.generate_panel_name(PanelNameGenerateRequest(sql="select 1")))["code"] == ErrorCode.CHATDATA_DASHBOARD_LAYOUT_FAILED
 
 
 @pytest.mark.asyncio
@@ -827,7 +828,7 @@ async def test_execute_panel_error_branches_update_task(dashboard_context, monke
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_value_error)
     value_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert value_error["code"] == 40001
+    assert value_error["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def runtime_failure(**kwargs):
         panel = kwargs["panel"]
@@ -841,7 +842,7 @@ async def test_execute_panel_error_branches_update_task(dashboard_context, monke
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", runtime_failure)
     runtime_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert runtime_error["code"] == 50029
+    assert runtime_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
     assert runtime.updates[-1]["status"] == "failed"
     assert runtime.updates[-1]["result_payload"]["result"]["error"] == "runtime failed"
 
@@ -850,13 +851,13 @@ async def test_execute_panel_error_branches_update_task(dashboard_context, monke
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", generic_failure)
     generic_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert generic_error["code"] == 50029
+    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
     assert "generic failed" in generic_error["msg"]
     assert runtime.updates[-1]["status"] == "failed"
 
     service.dashboard["panels"][0]["member_datasource_id"] = "missing_member"
     invalid_member = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert invalid_member["code"] == 40001
+    assert invalid_member["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert runtime.updates[-1]["status"] == "failed"
     assert "missing_member" in runtime.updates[-1]["error_message"]
     service.dashboard["panels"][0]["member_datasource_id"] = ""
@@ -869,7 +870,7 @@ async def test_dashboard_batch_route_immediate_error_branches(dashboard_context,
     monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
 
     missing = response_payload(await dashboard_routes.execute_panels_batch("missing", request))
-    assert missing["code"] == 40404
+    assert missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     empty = response_payload(await dashboard_routes.execute_panels_batch("empty", request))
     assert empty["data"]["results"] == {}
@@ -949,7 +950,7 @@ async def test_dashboard_batch_route_generic_create_task_error(dashboard_context
 
     runtime.create_task_record = create_task_raises
     created = response_payload(await dashboard_routes.create_dashboard_query_task("dash_a", request, PanelBatchExecuteRequest(panel_ids=["panel_a"])))
-    assert created["code"] == 50029
+    assert created["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
 
 
 @pytest.mark.asyncio
@@ -1105,7 +1106,7 @@ async def test_execute_panel_and_dashboard_query_task_remaining_branches(dashboa
 
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: RuntimeRaisingService())
     runtime_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert runtime_error["code"] == 50029
+    assert runtime_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
 
     class GenericRaisingService(FakeDashboardService):
         async def get_panel(self, *_args, **_kwargs):
@@ -1113,7 +1114,7 @@ async def test_execute_panel_and_dashboard_query_task_remaining_branches(dashboa
 
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: GenericRaisingService())
     generic_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert generic_error["code"] == 50029
+    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
 
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
     runtime.is_query_task_cancelled = lambda _task_id: asyncio.sleep(0, result=False)

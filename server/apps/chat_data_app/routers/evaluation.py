@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
+from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.lang_util.database import get_session
 from utils.logger import get_logger
 from utils.response import business_response
@@ -44,12 +45,22 @@ logger = get_logger(__name__)
 router = APIRouter()
 ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
 ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
-SEMANTIC_CONFIG_NOT_FOUND_CODE = 40404
+SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND
 
 
 def _build_evaluation_service() -> EvaluationService:
     """构建评测服务，保留路由模块 get_session 测试替换点。"""
     return EvaluationService(session_context=lambda: get_session())
+
+
+def _evaluation_http_exception_code(exc: HTTPException) -> int:
+    """评测路由 HTTPException 固定业务码映射。"""
+    if exc.status_code == 404:
+        return SEMANTIC_CONFIG_NOT_FOUND_CODE
+    feature_code = feature_disabled_error_code(exc)
+    if feature_code is not None:
+        return feature_code
+    return chatdata_http_exception_error_code(exc.status_code)
 
 
 def _sanitize_scene_segment(value: str, fallback: str) -> str:
@@ -590,15 +601,12 @@ async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, 
         report = await _run_accuracy_evaluation_payload(payload, request, current_user)
         return business_response(data=report, msg="评测完成")
     except HTTPException as e:
-        code = feature_disabled_error_code(e)
-        if code is None:
-            code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("智能问数准确率评测失败: %s", e, exc_info=True)
-        return business_response(msg=f"评测失败: {e}", code=50056, status="error")
+        return business_response(msg=f"评测失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_RUN_FAILED, status="error")
 
 
 async def _accuracy_error_stream(message: str):
@@ -629,7 +637,7 @@ async def _list_accuracy_evaluation_runs_route(
     """按当前维护入口查询评测历史批次。"""
     try:
         if not datasource_id or not semantic_config_id:
-            return business_response(msg="查询评测历史需要指定数据源和指标集", code=40001, status="error")
+            return business_response(msg="查询评测历史需要指定数据源和指标集", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(datasource_id, semantic_config_id, current_user, admin_manage=admin_manage)
         data = await _build_evaluation_service().list_eval_runs(
@@ -640,11 +648,10 @@ async def _list_accuracy_evaluation_runs_route(
         )
         return business_response(data=data, msg="获取成功")
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
         logger.error("获取智能问数评测历史失败: datasource_id=%s config_id=%s error=%s", datasource_id, semantic_config_id, e, exc_info=True)
-        return business_response(msg="获取评测历史失败，请稍后重试", code=50059, status="error")
+        return business_response(msg="获取评测历史失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error")
 
 
 async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Request, *, admin_manage: bool = False):
@@ -652,7 +659,7 @@ async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Reques
     try:
         data = await _build_evaluation_service().get_eval_run_detail(run_id)
         if not data:
-            return business_response(msg="评测记录不存在", code=40404, status="error")
+            return business_response(msg="评测记录不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         run = data.get("run") or {}
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(
@@ -663,11 +670,10 @@ async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Reques
         )
         return business_response(data=data, msg="获取成功")
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
         logger.error("获取智能问数评测历史详情失败: run_id=%s error=%s", run_id, e, exc_info=True)
-        return business_response(msg="获取评测历史详情失败，请稍后重试", code=50060, status="error")
+        return business_response(msg="获取评测历史详情失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
 
 
 @router.post("/evaluations/accuracy/run")
@@ -775,11 +781,10 @@ async def _get_scene_evaluation_cases_route(datasource_id: str, config_id: str, 
             msg="获取成功",
         )
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except Exception as e:
         logger.error("获取场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"获取测试集失败: {e}", code=50057, status="error")
+        return business_response(msg=f"获取测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED, status="error")
 
 
 async def _save_scene_evaluation_cases_route(
@@ -817,13 +822,12 @@ async def _save_scene_evaluation_cases_route(
             msg="保存成功",
         )
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("保存场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"保存测试集失败: {e}", code=50058, status="error")
+        return business_response(msg=f"保存测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED, status="error")
 
 
 async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: str, request: Request, *, admin_manage: bool = False):
@@ -842,13 +846,12 @@ async def _generate_scene_evaluation_cases_route(datasource_id: str, config_id: 
             msg="生成草稿成功",
         )
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("生成场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"生成测试集失败: {e}", code=50059, status="error")
+        return business_response(msg=f"生成测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error")
 
 
 async def _draft_scene_evaluation_case_route(
@@ -867,13 +870,12 @@ async def _draft_scene_evaluation_case_route(
         compiled_case = await _compile_scene_case_gold_sql(datasource_id, config_id, case)
         return business_response(data={"case": compiled_case}, msg="生成成功")
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
-        return business_response(msg=str(e.detail), code=code, status="error")
+        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40001, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("生成单条评测用例草稿失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"生成用例草稿失败: {e}", code=50060, status="error")
+        return business_response(msg=f"生成用例草稿失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")

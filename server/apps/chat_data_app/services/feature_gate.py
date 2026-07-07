@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from utils.error_codes import ErrorCode
 from utils.lang_util.conversation_router import AgentAvailabilityResult, get_agent_availability
 from utils.response import business_response
 from .runtime_config import read_bool_env
 
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
-DATA_ANALYZE_DISABLED_CODE = 40302
+DATA_ANALYZE_DISABLED_CODE = ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
 DATA_ANALYZE_DISABLED_MESSAGE = "智能分析功能暂未开放"
 _FEATURE_DISABLED_MESSAGES = {DATA_ANALYZE_DISABLED_MESSAGE}
 

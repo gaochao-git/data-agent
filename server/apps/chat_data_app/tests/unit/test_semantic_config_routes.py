@@ -14,6 +14,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
 from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
@@ -126,7 +127,7 @@ def test_history_belongs_to_config_for_agent_builder_and_sql(monkeypatch):
 
 
 def test_history_learning_compact_sample_and_normalize_item_branches():
-    long_text = "x" * 2000
+    long_text = "x" * ErrorCode.SUCCESS
     compact_agent = semantic_config._compact_history_sample_for_llm({
         "execution_id": "exec_1",
         "source": "agent",
@@ -400,7 +401,7 @@ def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch)
     payload = json.loads(response.body.decode("utf-8"))
 
     assert payload["status"] == "error"
-    assert payload["code"] == 50010
+    assert payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
 def test_semantic_prefill_additional_edge_branches(monkeypatch):
@@ -444,7 +445,7 @@ def test_semantic_prefill_additional_edge_branches(monkeypatch):
             return b"x" * (semantic_config.SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE + 1)
 
     too_big = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(FakeFile())))
-    assert too_big["code"] == 40010
+    assert too_big["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
 
     class BadFile:
         filename = "bad.bin"
@@ -454,7 +455,7 @@ def test_semantic_prefill_additional_edge_branches(monkeypatch):
 
     monkeypatch.setattr(semantic_config, "extract_text_from_file_bytes", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad file")))
     bad = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(BadFile())))
-    assert bad["code"] == 40010
+    assert bad["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
 
 
 def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
@@ -495,11 +496,11 @@ def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
     manager.delete_semantic_config_async = delete_returns_false
     vanished_delete = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
 
-    assert missing_ds["code"] == 40404
-    assert invalid_update["code"] == 40010
-    assert vanished_update["code"] == 40404
-    assert vanished_toggle["code"] == 40404
-    assert vanished_delete["code"] == 40404
+    assert missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert invalid_update["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert vanished_update["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert vanished_toggle["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert vanished_delete["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def _response_payload(response):
@@ -633,7 +634,7 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     assert [item["id"] for item in my_list_payload["data"]["configs"]] == ["cfg_a"]
     assert [item["id"] for item in admin_list_payload["data"]["configs"]] == ["cfg_public"]
     assert admin_list_payload["data"]["configs"][0]["can_manage"] is True
-    assert missing_list["code"] == 40404
+    assert missing_list["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert create_response["data"]["name"] == "新指标集"
     assert create_response["data"]["scope_type"] == "private"
     assert admin_create_response["data"]["scope_type"] == "public"
@@ -674,11 +675,11 @@ def test_semantic_config_route_error_mappings(monkeypatch):
     )))
     missing_update = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "missing", SemanticConfigUpdateRequest(name="x"), object())))
 
-    assert other_user_update["code"] == 40304
-    assert other_user_delete["code"] == 40304
-    assert other_user_toggle["code"] == 40304
-    assert invalid_create["code"] == 40010
-    assert missing_update["code"] == 40404
+    assert other_user_update["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
+    assert other_user_delete["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
+    assert other_user_toggle["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
+    assert invalid_create["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert missing_update["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypatch):
@@ -812,10 +813,10 @@ def test_history_learning_route_validates_sources_and_missing_objects(monkeypatc
         object(),
     )))
 
-    assert empty_sources["code"] == 40010
-    assert unsupported_sources["code"] == 40010
-    assert missing_datasource["code"] == 40404
-    assert missing_config["code"] == 40404
+    assert empty_sources["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert unsupported_sources["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert missing_datasource["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_semantic_helper_edge_cases():
@@ -1319,12 +1320,12 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
     )))
 
     assert manager.config["id"] == "cfg_a"
-    assert auto_missing_ds["code"] == 40404
-    assert auto_missing_config["code"] == 40404
-    assert short_missing_ds["code"] == 40404
-    assert short_missing_config["code"] == 40404
+    assert auto_missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert auto_missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert short_missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert short_missing_config["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert short_success["data"]["total"] == 1
-    assert public_denied["code"] == 40304
+    assert public_denied["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
     assert admin_public_success["data"]["total"] == 1
 
 
@@ -1362,11 +1363,11 @@ def test_semantic_config_route_failure_branches(monkeypatch):
     delete_failed = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
     toggle_failed = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
 
-    assert missing_create_ds["code"] == 40404
-    assert create_failed["code"] == 50010
-    assert update_failed["code"] == 40404
-    assert delete_failed["code"] == 40404
-    assert toggle_failed["code"] == 40404
+    assert missing_create_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert create_failed["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert update_failed["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert delete_failed["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert toggle_failed["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert manager.updated_kwargs["enabled"] is True
 
 
@@ -1399,11 +1400,11 @@ def test_semantic_route_exception_branches(monkeypatch):
         table_model_type="detail",
     ), object())))
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
-    assert list_error["code"] == 50010
-    assert create_error["code"] == 50010
-    assert prefill_error["code"] == 50010
-    assert short_prefill_error["code"] == 50010
-    assert update_error["code"] == 50010
+    assert list_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert create_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert prefill_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert short_prefill_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert update_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     class RaisingMutationManager(_FakeSemanticManager):
         async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
@@ -1415,8 +1416,8 @@ def test_semantic_route_exception_branches(monkeypatch):
     _patch_semantic_route_user_and_manager(monkeypatch, RaisingMutationManager())
     delete_error = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
     toggle_error = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
-    assert delete_error["code"] == 50010
-    assert toggle_error["code"] == 50010
+    assert delete_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
+    assert toggle_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
 def test_history_learning_route_skip_and_auth_branches(monkeypatch):
@@ -1496,7 +1497,7 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
     )))
 
     assert manager.datasource["id"] == "ds_a"
-    assert auth_response["code"] == 40101
+    assert auth_response["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 def test_semantic_config_low_level_helper_branches(monkeypatch):
@@ -1835,7 +1836,7 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
         SemanticAutoPrefillRequest(selected_tables=["orders"], table_model_type="detail"),
         object(),
     )))
-    assert auto_incomplete["code"] == 50010
+    assert auto_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     class FileOk:
         filename = "rules.txt"
@@ -1855,7 +1856,7 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
             raise RuntimeError("read failed")
 
     failed_file = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(RaisingFile())))
-    assert failed_file["code"] == 50010
+    assert failed_file["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert manager.config["id"] == "cfg_a"
 
 
@@ -1891,8 +1892,8 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
     _patch_semantic_route_user_and_manager(monkeypatch, MissingConfigManager())
     delete_missing = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "missing", object())))
     toggle_missing = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "missing", True, object())))
-    assert delete_missing["code"] == 40404
-    assert toggle_missing["code"] == 40404
+    assert delete_missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert toggle_missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_history_learning_route_exception_and_cache_branches(monkeypatch):
@@ -1983,7 +1984,7 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
         SemanticHistoryLearningRequest(days=7, limit=1, sources=["sql"], include_failed=True),
         object(),
     )))
-    assert failed["code"] == 50010
+    assert failed["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
 def test_semantic_config_remaining_history_helper_edges():

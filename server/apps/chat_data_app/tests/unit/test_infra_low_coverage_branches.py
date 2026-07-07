@@ -1,7 +1,9 @@
+import ast
 import asyncio
 import importlib
 import json
 import logging
+from pathlib import Path
 import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -17,6 +19,7 @@ from apps.chat_data_app.agent.tools import skill_load
 from apps.chat_data_app.routers import common, data_analyze_workspace
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
+from utils.error_codes import ErrorCode
 from utils import response as response_module
 from utils import logger as logger_module
 from utils.lang_util import checkpoint, common_util, database, llm
@@ -27,6 +30,35 @@ def _payload(response):
     import json
 
     return json.loads(response.body.decode("utf-8"))
+
+
+def test_production_business_response_codes_are_centralized():
+    server_root = Path(__file__).resolve().parents[4]
+    scan_roots = [
+        server_root / "apps" / "chat_data_app",
+        server_root / "utils",
+    ]
+    violations = []
+    for root in scan_roots:
+        for path in root.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            text = path.read_text()
+            compact = text.replace(" ", "")
+            if "status_code*100" in compact or "*100+1" in compact:
+                violations.append(f"{path}: dynamic error code formula")
+            tree = ast.parse(text, filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+                if name != "business_response":
+                    continue
+                for keyword in node.keywords:
+                    if keyword.arg == "code" and isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, int):
+                        violations.append(f"{path}:{node.lineno}: business_response code must use ErrorCode")
+    assert violations == []
 
 
 def test_authenticate_request_success_and_error_branches(monkeypatch):
@@ -1012,17 +1044,19 @@ async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeyp
 def test_route_common_and_schema_edge_branches(monkeypatch):
     with pytest.raises(ValueError, match="success/error"):
         response_module.business_response(status="bad")
+    with pytest.raises(ValueError, match="未定义的错误码"):
+        response_module.business_response(msg="bad code", code=49999, status="error")
 
     internal_error = (
         "获取失败: (pymysql.err.OperationalError) "
         "(2003, \"Can't connect to MySQL server on '62.234.152.217'\") "
         "(Background on this error at: https://sqlalche.me/e/20/e3q8)"
     )
-    sanitized = _payload(response_module.business_response(msg=internal_error, code=50005, status="error"))
+    sanitized = _payload(response_module.business_response(msg=internal_error, code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED, status="error"))
     assert sanitized["msg"] == "后端服务异常，请稍后重试"
     assert "62.234.152.217" not in sanitized["msg"]
     assert "pymysql" not in sanitized["msg"].lower()
-    business_error = _payload(response_module.business_response(msg="数据源不存在: ds_a", code=40404, status="error"))
+    business_error = _payload(response_module.business_response(msg="数据源不存在: ds_a", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"))
     assert business_error["msg"] == "数据源不存在: ds_a"
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
@@ -1153,9 +1187,9 @@ async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
     monkeypatch.setattr(data_analyze_workspace, "list_workspace_files_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result=[{"path": "a.txt"}]))
     monkeypatch.setattr(data_analyze_workspace, "read_workspace_file_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result={"content": "hello"}))
 
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("denied", SimpleNamespace()))["code"] == 40404
+    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("denied", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv_ok", SimpleNamespace()))["data"]["files"] == [{"path": "a.txt"}]
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("denied", "a.txt", SimpleNamespace()))["code"] == 40404
+    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("denied", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv_ok", "a.txt", SimpleNamespace()))["data"]["content"] == "hello"
 
     skill_dir = tmp_path / "conv_ok" / "workspace" / "skill-a"
@@ -1174,7 +1208,7 @@ async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
         SkillImportFromWorkspaceRequest(skill_dir_path="../outside"),
         SimpleNamespace(),
     ))
-    assert outside["code"] == 40055
+    assert outside["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID
 
 
 @pytest.mark.asyncio
@@ -1184,13 +1218,13 @@ async def test_data_analyze_workspace_exception_branches(monkeypatch):
     monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
     monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(ValueError("bad workspace")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == 40001
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == 40001
+    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(RuntimeError("disk down")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == 50053
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == 50054
-    assert _payload(await data_analyze_workspace.import_data_analyze_workspace_skill("conv", SkillImportFromWorkspaceRequest(skill_dir_path="workspace/a"), SimpleNamespace()))["code"] == 50055
+    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED
+    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
+    assert _payload(await data_analyze_workspace.import_data_analyze_workspace_skill("conv", SkillImportFromWorkspaceRequest(skill_dir_path="workspace/a"), SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED
 
     @asynccontextmanager
     async def fake_session():

@@ -6,6 +6,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Request
 
+from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
@@ -36,7 +37,7 @@ async def get_datasources(request: Request, include_tables: bool = True):
         logger.error(f"获取数据源列表失败: {str(e)}", exc_info=True)
         return business_response(
             msg=f"获取失败: {str(e)}",
-            code=50005,
+            code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED,
             status="error"
         )
 
@@ -51,7 +52,7 @@ async def get_datasource_column_dict(datasource_id: str, table_name: str, column
         if column_dict is None:
             return business_response(
                 msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}",
-                code=40404,
+                code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
         return business_response(
@@ -69,7 +70,7 @@ async def get_datasource_column_dict(datasource_id: str, table_name: str, column
         logger.error("获取字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s", datasource_id, table_name, column_name, e, exc_info=True)
         return business_response(
             msg=f"获取失败: {str(e)}",
-            code=50006,
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
             status="error"
         )
 
@@ -84,7 +85,7 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
         if column_dicts is None:
             return business_response(
                 msg=f"数据源或表不存在: {datasource_id}/{table_name}",
-                code=40404,
+                code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
         return business_response(
@@ -101,7 +102,7 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
         logger.error("批量获取字段数据字典失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
         return business_response(
             msg=f"获取失败: {str(e)}",
-            code=50006,
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
             status="error"
         )
 
@@ -143,19 +144,19 @@ async def get_schema(
     except ValueError as e:
         return business_response(
             msg=str(e),
-            code=40001,
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error"
         )
     except ConnectionError as e:
         return business_response(
             msg=str(e),
-            code=50008,
+            code=ErrorCode.CHATDATA_QUERY_FAILED,
             status="error"
         )
     except Exception as e:
         logger.error(f"获取表结构失败: {str(e)}", exc_info=True)
         return business_response(
             msg=f"获取失败: {str(e)}",
-            code=50008,
+            code=ErrorCode.CHATDATA_QUERY_FAILED,
             status="error"
         )

@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
+from utils.error_codes import ErrorCode
 from utils.lang_util import conversation_router
 
 
@@ -181,17 +182,17 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     monkeypatch.setattr(conversation_router.conversation, "create", fake_create)
     created = payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))
     assert created["data"]["id"] == "conv_new"
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="missing"), request))["code"] == 40003
+    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="missing"), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
     conversation_router.register_agent_availability_checker(
         "agent_a",
         lambda: conversation_router.AgentAvailabilityResult(
             enabled=False,
             message="功能暂未开放",
-            code=40302,
+            code=ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED,
         ),
     )
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == 40302
+    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
     conversation_router._agent_availability_checkers.pop("agent_a", None)
 
     async def fake_list(_db_path, agent_id, user_id, limit, offset):
@@ -218,10 +219,10 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     assert listed_many["data"]["has_more"] is True
     listed_all = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
     assert listed_all["data"]["agent_count"] == 2
-    assert payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="missing", page=1, page_size=20))["code"] == 40003
-    assert payload(await conversation_router.list_conversations(request, agent_id="missing", agent_ids=None, page=1, page_size=20))["code"] == 40003
+    assert payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="missing", page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
+    assert payload(await conversation_router.list_conversations(request, agent_id="missing", agent_ids=None, page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
-    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": 40302})
+    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED})
     hidden_one = payload(await conversation_router.list_conversations(request, agent_id="agent_a", agent_ids=None, page=1, page_size=20))
     hidden_many = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="agent_a,agent_nograph", page=1, page_size=20))
     hidden_all = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
@@ -245,8 +246,8 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
         return None
 
     monkeypatch.setattr(conversation_router.conversation, "get_detail", no_detail)
-    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == 40404
-    assert payload(await conversation_router.get_conversation_detail("", request))["code"] == 40001
+    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.get_conversation_detail("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def delete_ok(*_args, **_kwargs):
         return True
@@ -258,7 +259,7 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
         return False
 
     monkeypatch.setattr(conversation_router.conversation, "delete", delete_missing)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == 40404
+    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def update_title_ok(*_args, **_kwargs):
         return True
@@ -266,13 +267,13 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     monkeypatch.setattr(conversation_router.conversation, "update_title", update_title_ok)
     updated = payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="  这是一个很长很长很长很长的标题  "), request))
     assert updated["data"]["title"] == "这是一个很长很长很长很长的标题"[:20]
-    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="   "), request))["code"] == 40002
+    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="   "), request))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
 
     async def update_title_missing(*_args, **_kwargs):
         return False
 
     monkeypatch.setattr(conversation_router.conversation, "update_title", update_title_missing)
-    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == 40404
+    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def generate_title_ok(*_args, **_kwargs):
         return "自动标题"
@@ -284,7 +285,7 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
         return ""
 
     monkeypatch.setattr(conversation_router.conversation, "generate_title", generate_title_missing)
-    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == 40404
+    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def favorite_on(*_args, **_kwargs):
         return True
@@ -302,13 +303,13 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
         return None
 
     monkeypatch.setattr(conversation_router.conversation, "toggle_favorite", favorite_missing)
-    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == 40404
+    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def no_config(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", no_config)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == 40404
+    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -356,15 +357,15 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
         conversation_router.CompletionRequest(agent_id="agent_a", query="hello"),
         request,
     ))
-    assert disabled_response["code"] == 40302
+    assert disabled_response["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
     assert calls[-1]["query"] == "hello"
     conversation_router._agent_availability_checkers.pop("agent_a", None)
 
-    assert payload(await conversation_router.completion("", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == 40001
-    assert payload(await conversation_router.completion("owned", conversation_router.CompletionRequest(agent_id="agent_a", query=""), request))["code"] == 40002
-    assert payload(await conversation_router.completion("other-owned", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == 40404
-    assert payload(await conversation_router.completion("unowned", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == 40404
-    assert payload(await conversation_router.completion("new", conversation_router.CompletionRequest(agent_id="missing", query="hello"), request))["code"] == 40003
+    assert payload(await conversation_router.completion("", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert payload(await conversation_router.completion("owned", conversation_router.CompletionRequest(agent_id="agent_a", query=""), request))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
+    assert payload(await conversation_router.completion("other-owned", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.completion("unowned", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.completion("new", conversation_router.CompletionRequest(agent_id="missing", query="hello"), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
 
 @pytest.mark.asyncio
@@ -387,9 +388,9 @@ async def test_resume_route_custom_and_generic(router_state, monkeypatch):
     custom = await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(action="edit", data={"sql": "select 1"}), request)
     assert custom["action"] == "edit"
 
-    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": 40302})
+    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED})
     disabled_resume = payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))
-    assert disabled_resume["code"] == 40302
+    assert disabled_resume["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
     conversation_router._agent_availability_checkers.pop("agent_a", None)
 
     conversation_router._resume_handlers.clear()
@@ -424,14 +425,14 @@ async def test_resume_route_custom_and_generic(router_state, monkeypatch):
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_no_graph_config)
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_no_graph_agent)
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == 40003
+    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
     async def get_no_agent(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_no_agent)
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == 40404
-    assert payload(await conversation_router.resume_conversation("", conversation_router.ResumeRequest(), request))["code"] == 40001
+    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.resume_conversation("", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
 
 @pytest.mark.asyncio
@@ -464,9 +465,9 @@ async def test_file_and_artifact_routes(router_state, monkeypatch):
         return no_files
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_no_files_config)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == 40004
-    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == 40004
-    assert payload(await conversation_router.list_files("conv", request))["code"] == 40004
+    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
+    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
+    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
 
@@ -478,12 +479,12 @@ async def test_file_and_artifact_routes(router_state, monkeypatch):
 
     monkeypatch.setattr(conversation_router.file_manager, "save_file", bad_save_file)
     monkeypatch.setattr(conversation_router.file_manager, "read_file", missing_read_file)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.exe")))["code"] == 40002
-    assert payload(await conversation_router.download_file("conv", "missing", request))["code"] == 40404
+    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.exe")))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
+    assert payload(await conversation_router.download_file("conv", "missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
-    assert payload(await conversation_router.upload_file("", request, file=SimpleNamespace(filename="a.txt")))["code"] == 40001
-    assert payload(await conversation_router.download_file("", "f1", request))["code"] == 40001
-    assert payload(await conversation_router.list_files("", request))["code"] == 40001
+    assert payload(await conversation_router.upload_file("", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert payload(await conversation_router.download_file("", "f1", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert payload(await conversation_router.list_files("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     import utils.lang_util.artifact_store as artifact_store
 
@@ -494,8 +495,8 @@ async def test_file_and_artifact_routes(router_state, monkeypatch):
     assert payload(await conversation_router.get_artifact("artifact_a", request))["data"]["artifact_id"] == "artifact_a"
 
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: None)
-    assert payload(await conversation_router.get_artifact("missing", request))["code"] == 40404
-    assert payload(await conversation_router.get_artifact("", request))["code"] == 40001
+    assert payload(await conversation_router.get_artifact("missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.get_artifact("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
 
 @pytest.mark.asyncio
@@ -506,8 +507,8 @@ async def test_routes_convert_authentication_and_unexpected_errors(router_state,
         raise AuthenticationError("login required", status_code=401)
 
     monkeypatch.setattr(conversation_router, "authenticate_request", raise_auth)
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == 40101
-    assert payload(await conversation_router.list_conversations(request))["code"] == 40101
+    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert payload(await conversation_router.list_conversations(request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: user)
@@ -519,7 +520,7 @@ async def test_routes_convert_authentication_and_unexpected_errors(router_state,
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
     monkeypatch.setattr(conversation_router.conversation, "get_detail", detail_raises)
-    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == 50003
+    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED
 
 
 @pytest.mark.asyncio
@@ -530,13 +531,13 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
         raise RuntimeError("create down")
 
     monkeypatch.setattr(conversation_router.conversation, "create", create_raises)
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == 50001
+    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED
 
     async def list_raises(*_args, **_kwargs):
         raise RuntimeError("list down")
 
     monkeypatch.setattr(conversation_router.conversation, "list_all", list_raises)
-    assert payload(await conversation_router.list_conversations(request))["code"] == 50002
+    assert payload(await conversation_router.list_conversations(request))["code"] == ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED
 
     async def list_internal_raises(*_args, **_kwargs):
         raise RuntimeError(
@@ -547,7 +548,7 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
 
     monkeypatch.setattr(conversation_router.conversation, "list_all", list_internal_raises)
     sanitized = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
-    assert sanitized["code"] == 50002
+    assert sanitized["code"] == ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED
     assert sanitized["msg"] == "后端服务异常，请稍后重试"
     assert "62.234.152.217" not in sanitized["msg"]
 
@@ -560,36 +561,36 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
         raise RuntimeError("delete down")
 
     monkeypatch.setattr(conversation_router.conversation, "delete", delete_raises)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == 50004
-    assert payload(await conversation_router.delete_conversation("", request))["code"] == 40001
+    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_CONVERSATION_DELETE_FAILED
+    assert payload(await conversation_router.delete_conversation("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def title_raises(*_args, **_kwargs):
         raise RuntimeError("title down")
 
     monkeypatch.setattr(conversation_router.conversation, "update_title", title_raises)
-    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == 50005
-    assert payload(await conversation_router.update_conversation_title("", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == 40001
+    assert payload(await conversation_router.update_conversation_title("conv", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED
+    assert payload(await conversation_router.update_conversation_title("", conversation_router.UpdateTitleRequest(title="标题"), request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def generate_raises(*_args, **_kwargs):
         raise RuntimeError("generate down")
 
     monkeypatch.setattr(conversation_router.conversation, "generate_title", generate_raises)
-    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == 50006
-    assert payload(await conversation_router.generate_conversation_title("", request))["code"] == 40001
+    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED
+    assert payload(await conversation_router.generate_conversation_title("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def favorite_raises(*_args, **_kwargs):
         raise RuntimeError("favorite down")
 
     monkeypatch.setattr(conversation_router.conversation, "toggle_favorite", favorite_raises)
-    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == 50007
-    assert payload(await conversation_router.toggle_conversation_favorite("", request))["code"] == 40001
+    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED
+    assert payload(await conversation_router.toggle_conversation_favorite("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def get_agent(*_args, **_kwargs):
         return "agent_a"
 
     conversation_router._completion_handlers["agent_a"] = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("sync boom"))
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
-    assert payload(await conversation_router.completion("conv", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == 50008
+    assert payload(await conversation_router.completion("conv", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED
 
     async def get_agent_for_resume(*_args, **_kwargs):
         return "agent_a"
@@ -599,7 +600,7 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_for_resume)
     conversation_router._resume_handlers["agent_a"] = resume_raises
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == 50012
+    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_RESUME_FAILED
 
 
 @pytest.mark.asyncio
@@ -610,9 +611,9 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
         return None
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == 40404
-    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == 40404
-    assert payload(await conversation_router.list_files("conv", request))["code"] == 40404
+    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
@@ -629,31 +630,31 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
         raise RuntimeError("read down")
 
     monkeypatch.setattr(conversation_router.file_manager, "save_file", save_raises)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == 50009
+    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_UPLOAD_FAILED
 
     monkeypatch.setattr(conversation_router.file_manager, "read_file", read_value_error)
-    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == 40002
+    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
     monkeypatch.setattr(conversation_router.file_manager, "read_file", read_raises)
-    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == 50010
+    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     monkeypatch.setattr(conversation_router.file_manager, "list_files", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("list files down")))
-    assert payload(await conversation_router.list_files("conv", request))["code"] == 50011
+    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_LIST_FAILED
 
     import utils.lang_util.artifact_store as artifact_store
 
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "", "data": {"ok": True}})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == 40404
+    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "conv", "data": None})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == 40404
+    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "conv", "data": {"ok": True}})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == 40404
+    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     def auth_fails(_request):
         raise AuthenticationError("login required", status_code=401)
 
     monkeypatch.setattr(conversation_router, "authenticate_request", auth_fails)
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == 40101
+    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 @pytest.mark.asyncio
@@ -665,15 +666,15 @@ async def test_router_conversation_routes_return_not_found_when_config_missing(r
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
 
-    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == 40404
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == 40404
+    assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.update_conversation_title(
         "conv",
         conversation_router.UpdateTitleRequest(title="标题"),
         request,
-    ))["code"] == 40404
-    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == 40404
-    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == 40404
+    ))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import skills as skills_routes
 from apps.chat_data_app.schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 
@@ -197,7 +198,7 @@ async def test_skill_list_routes_normalize_scope_and_handle_errors(skills_contex
     assert service.calls[-1][2]["scope"] == "favorites"
 
     error = payload(await skills_routes.list_skills(request, search="boom"))
-    assert error["code"] == 50032
+    assert error["code"] == ErrorCode.CHATDATA_SKILL_LIST_FAILED
 
 
 @pytest.mark.asyncio
@@ -207,28 +208,28 @@ async def test_skill_metadata_mutation_routes_success_and_error_branches(skills_
     update_payload = SkillUpdateRequest(skill_title="Updated", skill_desc="desc", skill_category="custom", visibility_type="private", content="body")
 
     assert payload(await skills_routes.create_user_skill(create_payload, request))["data"]["skill_id"] == "skill_new"
-    assert payload(await skills_routes.create_user_skill(SkillCreateRequest(skill_name="bad", skill_title="Bad"), request))["code"] == 40040
-    assert payload(await skills_routes.create_user_skill(SkillCreateRequest(skill_name="boom", skill_title="Boom"), request))["code"] == 50039
+    assert payload(await skills_routes.create_user_skill(SkillCreateRequest(skill_name="bad", skill_title="Bad"), request))["code"] == ErrorCode.CHATDATA_SKILL_CREATE_INVALID
+    assert payload(await skills_routes.create_user_skill(SkillCreateRequest(skill_name="boom", skill_title="Boom"), request))["code"] == ErrorCode.CHATDATA_SKILL_CREATE_FAILED
 
     assert payload(await skills_routes.update_user_skill("demo", update_payload, request))["data"]["skill_id"] == "demo"
-    assert payload(await skills_routes.update_user_skill("denied", update_payload, request))["code"] == 40341
-    assert payload(await skills_routes.update_user_skill("missing", update_payload, request))["code"] == 40044
-    assert payload(await skills_routes.update_user_skill("boom", update_payload, request))["code"] == 50044
+    assert payload(await skills_routes.update_user_skill("denied", update_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_UPDATE_FORBIDDEN
+    assert payload(await skills_routes.update_user_skill("missing", update_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_UPDATE_INVALID
+    assert payload(await skills_routes.update_user_skill("boom", update_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_UPDATE_FAILED
 
     assert payload(await skills_routes.delete_user_skill("demo", request))["data"]["deleted"] is True
-    assert payload(await skills_routes.delete_user_skill("denied", request))["code"] == 40352
-    assert payload(await skills_routes.delete_user_skill("missing", request))["code"] == 40052
-    assert payload(await skills_routes.delete_user_skill("boom", request))["code"] == 50052
+    assert payload(await skills_routes.delete_user_skill("denied", request))["code"] == ErrorCode.CHATDATA_SKILL_DELETE_FORBIDDEN
+    assert payload(await skills_routes.delete_user_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_DELETE_INVALID
+    assert payload(await skills_routes.delete_user_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_DELETE_FAILED
 
     assert payload(await skills_routes.copy_user_skill("demo", request))["data"]["skill_id"] == "demo_copy"
-    assert payload(await skills_routes.copy_user_skill("denied", request))["code"] == 40353
-    assert payload(await skills_routes.copy_user_skill("missing", request))["code"] == 40053
-    assert payload(await skills_routes.copy_user_skill("boom", request))["code"] == 50053
+    assert payload(await skills_routes.copy_user_skill("denied", request))["code"] == ErrorCode.CHATDATA_SKILL_COPY_FORBIDDEN
+    assert payload(await skills_routes.copy_user_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_COPY_INVALID
+    assert payload(await skills_routes.copy_user_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_COPY_FAILED
 
     assert payload(await skills_routes.publish_user_skill("demo", request))["data"]["status"] == "published"
-    assert payload(await skills_routes.publish_user_skill("denied", request))["code"] == 40340
-    assert payload(await skills_routes.publish_user_skill("missing", request))["code"] == 40041
-    assert payload(await skills_routes.publish_user_skill("boom", request))["code"] == 50040
+    assert payload(await skills_routes.publish_user_skill("denied", request))["code"] == ErrorCode.CHATDATA_SKILL_PUBLISH_FORBIDDEN
+    assert payload(await skills_routes.publish_user_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_PUBLISH_INVALID
+    assert payload(await skills_routes.publish_user_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_PUBLISH_FAILED
 
 
 @pytest.mark.asyncio
@@ -237,39 +238,39 @@ async def test_skill_version_and_file_routes_success_and_error_branches(skills_c
     file_payload = SkillFileUpsertRequest(dir_name="references", file_path="a.md", content="body")
 
     assert payload(await skills_routes.list_skill_versions("demo", request))["data"]["total"] == 1
-    assert payload(await skills_routes.list_skill_versions("denied", request))["code"] == 40345
-    assert payload(await skills_routes.list_skill_versions("missing", request))["code"] == 40045
-    assert payload(await skills_routes.list_skill_versions("boom", request))["code"] == 50045
+    assert payload(await skills_routes.list_skill_versions("denied", request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_LIST_FORBIDDEN
+    assert payload(await skills_routes.list_skill_versions("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_LIST_INVALID
+    assert payload(await skills_routes.list_skill_versions("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_LIST_FAILED
 
     assert payload(await skills_routes.get_skill_version("demo", 1, request))["data"]["version_no"] == 1
-    assert payload(await skills_routes.get_skill_version("denied", 1, request))["code"] == 40346
-    assert payload(await skills_routes.get_skill_version("missing", 1, request))["code"] == 40046
-    assert payload(await skills_routes.get_skill_version("boom", 1, request))["code"] == 50046
+    assert payload(await skills_routes.get_skill_version("denied", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FORBIDDEN
+    assert payload(await skills_routes.get_skill_version("missing", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_INVALID
+    assert payload(await skills_routes.get_skill_version("boom", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FAILED
 
     assert payload(await skills_routes.list_skill_version_files("demo", 1, request))["data"][0]["file_path"] == "a.md"
-    assert payload(await skills_routes.list_skill_version_files("denied", 1, request))["code"] == 40348
-    assert payload(await skills_routes.list_skill_version_files("missing", 1, request))["code"] == 40048
-    assert payload(await skills_routes.list_skill_version_files("boom", 1, request))["code"] == 50048
+    assert payload(await skills_routes.list_skill_version_files("denied", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_FILES_FORBIDDEN
+    assert payload(await skills_routes.list_skill_version_files("missing", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_FILES_INVALID
+    assert payload(await skills_routes.list_skill_version_files("boom", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_VERSION_FILES_FAILED
 
     assert payload(await skills_routes.read_skill_version_file("demo", 1, "references", "a.md", request))["data"]["content"] == "x"
-    assert payload(await skills_routes.read_skill_version_file("denied", 1, "references", "a.md", request))["code"] == 40349
-    assert payload(await skills_routes.read_skill_version_file("missing", 1, "references", "a.md", request))["code"] == 40049
-    assert payload(await skills_routes.read_skill_version_file("boom", 1, "references", "a.md", request))["code"] == 50049
+    assert payload(await skills_routes.read_skill_version_file("denied", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN
+    assert payload(await skills_routes.read_skill_version_file("missing", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID
+    assert payload(await skills_routes.read_skill_version_file("boom", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED
 
     assert payload(await skills_routes.save_skill_version_file("demo", 1, file_payload, request))["data"]["content"] == "body"
-    assert payload(await skills_routes.save_skill_version_file("denied", 1, file_payload, request))["code"] == 40350
-    assert payload(await skills_routes.save_skill_version_file("missing", 1, file_payload, request))["code"] == 40050
-    assert payload(await skills_routes.save_skill_version_file("boom", 1, file_payload, request))["code"] == 50050
+    assert payload(await skills_routes.save_skill_version_file("denied", 1, file_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_SAVE_FORBIDDEN
+    assert payload(await skills_routes.save_skill_version_file("missing", 1, file_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_SAVE_INVALID
+    assert payload(await skills_routes.save_skill_version_file("boom", 1, file_payload, request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED
 
     assert payload(await skills_routes.delete_skill_version_file("demo", 1, "references", "a.md", request))["data"]["deleted"] is True
-    assert payload(await skills_routes.delete_skill_version_file("denied", 1, "references", "a.md", request))["code"] == 40351
-    assert payload(await skills_routes.delete_skill_version_file("missing", 1, "references", "a.md", request))["code"] == 40051
-    assert payload(await skills_routes.delete_skill_version_file("boom", 1, "references", "a.md", request))["code"] == 50051
+    assert payload(await skills_routes.delete_skill_version_file("denied", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_DELETE_FORBIDDEN
+    assert payload(await skills_routes.delete_skill_version_file("missing", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_DELETE_INVALID
+    assert payload(await skills_routes.delete_skill_version_file("boom", 1, "references", "a.md", request))["code"] == ErrorCode.CHATDATA_SKILL_FILE_DELETE_FAILED
 
     assert payload(await skills_routes.rollback_skill_version("demo", 1, request))["data"]["skill_id"] == "demo"
-    assert payload(await skills_routes.rollback_skill_version("denied", 1, request))["code"] == 40347
-    assert payload(await skills_routes.rollback_skill_version("missing", 1, request))["code"] == 40047
-    assert payload(await skills_routes.rollback_skill_version("boom", 1, request))["code"] == 50047
+    assert payload(await skills_routes.rollback_skill_version("denied", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_ROLLBACK_FORBIDDEN
+    assert payload(await skills_routes.rollback_skill_version("missing", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_ROLLBACK_INVALID
+    assert payload(await skills_routes.rollback_skill_version("boom", 1, request))["code"] == ErrorCode.CHATDATA_SKILL_ROLLBACK_FAILED
 
 
 @pytest.mark.asyncio
@@ -277,17 +278,17 @@ async def test_skill_favorite_sync_reload_and_detail_routes(skills_context, monk
     service, user, request = skills_context
 
     assert payload(await skills_routes.favorite_skill("demo", request))["data"]["favorite"] is True
-    assert payload(await skills_routes.favorite_skill("missing", request))["code"] == 40042
-    assert payload(await skills_routes.favorite_skill("boom", request))["code"] == 50041
+    assert payload(await skills_routes.favorite_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_FAVORITE_INVALID
+    assert payload(await skills_routes.favorite_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_FAVORITE_FAILED
 
     assert payload(await skills_routes.unfavorite_skill("demo", request))["data"]["favorite"] is False
-    assert payload(await skills_routes.unfavorite_skill("missing", request))["code"] == 40043
-    assert payload(await skills_routes.unfavorite_skill("boom", request))["code"] == 50042
+    assert payload(await skills_routes.unfavorite_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID
+    assert payload(await skills_routes.unfavorite_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED
 
     assert payload(await skills_routes.sync_system_skills(request))["data"]["synced"] == 2
     service.calls[-1][2]["operator"] == "u1"
     monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="boom", username="boom"))
-    assert payload(await skills_routes.sync_system_skills(request))["code"] == 50043
+    assert payload(await skills_routes.sync_system_skills(request))["code"] == ErrorCode.CHATDATA_SKILL_SYNC_FAILED
 
     monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: user)
     assert payload(await skills_routes.reload_skills())["data"]["reloaded"] is True
@@ -295,8 +296,8 @@ async def test_skill_favorite_sync_reload_and_detail_routes(skills_context, monk
     detail = payload(await skills_routes.get_skill("demo", request))
     assert detail["data"]["name"] == "demo"
     assert service.calls[-1][2]["include_draft"] is True
-    assert payload(await skills_routes.get_skill("missing", request))["code"] == 40404
-    assert payload(await skills_routes.get_skill("boom", request))["code"] == 50033
+    assert payload(await skills_routes.get_skill("missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert payload(await skills_routes.get_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_DETAIL_FAILED
 
 
 @pytest.mark.asyncio

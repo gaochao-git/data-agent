@@ -17,8 +17,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
+from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE
 from utils.lang_util.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
 
@@ -622,11 +624,11 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
     assert [row.case_status for row in case_rows] == ["passed", "passed"]
     assert list_payload["data"]["page"] == 1
     assert list_payload["data"]["page_size"] == 100
-    assert list_all_payload["code"] == 40001
+    assert list_all_payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert list_payload["data"]["runs"][0]["tester_name"] == "测试人员"
     assert detail_payload["data"]["run"]["run_id"] == "run_1"
     assert len(detail_payload["data"]["cases"]) == 2
-    assert missing_payload["code"] == 40404
+    assert missing_payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_accuracy_routes_error_mapping(monkeypatch):
@@ -648,8 +650,8 @@ def test_accuracy_routes_error_mapping(monkeypatch):
     value_payload = json.loads(value_response.body.decode("utf-8"))
     runtime_payload = json.loads(runtime_response.body.decode("utf-8"))
 
-    assert value_payload["code"] == 40001
-    assert runtime_payload["code"] == 50056
+    assert value_payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert runtime_payload["code"] == ErrorCode.CHATDATA_EVALUATION_RUN_FAILED
 
 
 def test_run_accuracy_stream_returns_auth_error(monkeypatch):
@@ -759,12 +761,12 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
 
     assert normal_list["status"] == "success"
     assert admin_list["status"] == "success"
-    assert normal_public_list["code"] == 40301
-    assert admin_private_list["code"] == 40301
+    assert normal_public_list["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
+    assert admin_private_list["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
     assert normal_detail["data"]["run"]["run_id"] == "private_run"
     assert admin_detail["data"]["run"]["run_id"] == "public_run"
-    assert wrong_detail["code"] == 40301
-    assert missing_detail["code"] == 40404
+    assert wrong_detail["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
+    assert missing_detail["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
@@ -797,7 +799,7 @@ def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
 
     assert success_payload["msg"] == "评测完成"
     assert success_payload["data"]["summary"]["total"] == 3
-    assert auth_payload["code"] == 40301
+    assert auth_payload["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
     assert stream_response.media_type == "text/event-stream"
     assert stream_response.headers["Cache-Control"] == "no-cache"
 
@@ -928,7 +930,7 @@ def test_run_accuracy_evaluation_route_rejects_disabled_agent(monkeypatch):
         None,
     ))
 
-    assert json.loads(response.body.decode("utf-8"))["code"] == 40302
+    assert json.loads(response.body.decode("utf-8"))["code"] == DATA_ANALYZE_DISABLED_CODE
 
 
 def test_accuracy_sse_iter_handles_cancelled(monkeypatch):
@@ -1091,11 +1093,11 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
     assert get_payload["data"]["total"] == 1
     assert generate_payload["msg"] == "生成草稿成功"
     assert draft_payload["data"]["case"]["id"] == "draft_1"
-    assert _json_body(missing_generate_response)["code"] == 40404
-    assert _json_body(missing_draft_response)["code"] == 40404
-    assert _json_body(bad_save_response)["code"] == 40001
-    assert _json_body(bad_draft_response)["code"] == 40001
-    assert _json_body(boom_save_response)["code"] == 50058
+    assert _json_body(missing_generate_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _json_body(missing_draft_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _json_body(bad_save_response)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert _json_body(bad_draft_response)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    assert _json_body(boom_save_response)["code"] == ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED
 
 
 @pytest.mark.asyncio

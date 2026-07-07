@@ -8,6 +8,8 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
+from utils.error_codes import ErrorCode, ensure_defined_error_code, http_status_error_code
+
 SAFE_INTERNAL_ERROR_MESSAGE = "后端服务异常，请稍后重试"
 
 _INTERNAL_ERROR_MARKERS = (
@@ -34,7 +36,7 @@ def safe_user_error_message(msg) -> str:
     return text
 
 
-def business_response(data=None, msg: str = "操作成功", code: int = 2000, status: str = "success", http_status_code: int = 200):
+def business_response(data=None, msg: str = "操作成功", code: int = ErrorCode.SUCCESS, status: str = "success", http_status_code: int = 200):
     """
     统一业务响应 (FastAPI 版本)
 
@@ -58,10 +60,11 @@ def business_response(data=None, msg: str = "操作成功", code: int = 2000, st
         >>> return business_response(data={"user_id": 123})
 
         # 错误响应
-        >>> return business_response(msg="文件不存在", code=40001, status="error")
+        >>> return business_response(msg="文件不存在", code=ErrorCode.HTTP_NOT_FOUND, status="error")
     """
     if status not in ("success", "error"):
         raise ValueError(f"status 仅支持 success/error，当前值: {status}")
+    code = ensure_defined_error_code(code)
     if status == "error":
         msg = safe_user_error_message(msg)
 
@@ -87,7 +90,7 @@ async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPEx
         return await http_exception_handler(request, exc)
     return business_response(
         msg=str(exc.detail or "请求失败"),
-        code=exc.status_code,
+        code=http_status_error_code(exc.status_code),
         status="error",
         http_status_code=exc.status_code,
     )
@@ -97,4 +100,9 @@ async def chatdata_validation_exception_handler(request: Request, exc: RequestVa
     """统一 ChatData 参数校验失败响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
     if not is_chatdata_request(request):
         return await request_validation_exception_handler(request, exc)
-    return business_response(msg="请求参数不合法", code=422, status="error", http_status_code=422)
+    return business_response(
+        msg="请求参数不合法",
+        code=ErrorCode.HTTP_VALIDATION_ERROR,
+        status="error",
+        http_status_code=ErrorCode.HTTP_VALIDATION_ERROR,
+    )

@@ -1,3 +1,4 @@
+from utils.error_codes import ErrorCode
 from apps.chat_data_app import routes
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services.sql_executor import build_effective_sql, validate_sql
@@ -190,7 +191,7 @@ def test_compile_semantic_builder_sql_rejects_frontend_join_payload(client, fake
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40001
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "不允许包含前端表关系字段" in payload["msg"]
 
 
@@ -445,7 +446,7 @@ def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40001
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "匹配到多个语义指标" in payload["msg"]
 
 
@@ -539,7 +540,7 @@ def test_create_query_task_returns_datasource_not_found(client, auth_headers, fa
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40404
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert "数据源不存在" in payload["msg"]
 
 
@@ -558,7 +559,7 @@ def test_create_query_task_returns_sql_prepare_error(client, auth_headers, fake_
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40001
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "一次只能执行一条 SQL" in payload["msg"]
 
 
@@ -594,7 +595,7 @@ def test_get_query_task_returns_not_found(client, auth_headers, monkeypatch):
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40404
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert "任务不存在" in payload["msg"]
 
 
@@ -608,7 +609,7 @@ def test_get_query_task_requires_auth(client, monkeypatch):
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40101
+    assert payload["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):
@@ -640,7 +641,7 @@ def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40404
+    assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert "任务不存在" in payload["msg"]
 
 
@@ -796,7 +797,7 @@ def test_execute_sql_api_rejects_builder_without_semantic_config(client, auth_he
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40001
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "必须基于指标集" in payload["msg"]
     assert captured["created_tasks"] == []
     assert captured["executor_calls"] == []
@@ -818,7 +819,7 @@ def test_execute_sql_api_blocks_dangerous_sql_at_executor_boundary(client, auth_
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 50010
+    assert payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert "一次只能执行一条 SQL" in payload["msg"]
     assert captured["executor_calls"][0]["sql"] == "select 1; drop table orders"
     assert captured["task_updates"][0]["status"] == "running"
@@ -867,7 +868,7 @@ def test_execute_sql_returns_result_error_and_preserves_raw_message(client, auth
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 50010
+    assert payload["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert payload["msg"] == "Table 'demo.missing_table' doesn't exist"
     assert payload["data"]["error"] == "Table 'demo.missing_table' doesn't exist"
     assert captured["updates"][-1]["status"] == "failed"
@@ -894,6 +895,6 @@ def test_execute_sql_returns_prepare_error_without_creating_task(client, auth_he
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40001
+    assert payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert "SQL 注释移除后为空" in payload["msg"]
     assert captured["created"] is False

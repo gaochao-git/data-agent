@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
+from utils.error_codes import ErrorCode
 
 
 def test_update_datasource_meta_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
@@ -96,12 +97,12 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
         json={"text": "订单状态：1 表示有效"},
     )
 
-    assert get_response.status_code == 401
+    assert get_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
     assert get_response.json()["status"] == "error"
-    assert get_response.json()["code"] == 401
-    assert generate_response.status_code == 401
+    assert get_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+    assert generate_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
     assert generate_response.json()["status"] == "error"
-    assert generate_response.json()["code"] == 401
+    assert generate_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
 
 
 def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):

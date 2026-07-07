@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
+from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
@@ -31,7 +32,7 @@ async def list_skills(request: Request, search: Optional[str] = None, category: 
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
     except Exception as e:
         logger.error("获取技能列表失败: %s", e, exc_info=True)
-        return business_response(msg="获取技能列表失败，请稍后重试", code=50032, status="error")
+        return business_response(msg="获取技能列表失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_LIST_FAILED, status="error")
 
 
 @router.get("/skills/mine")
@@ -45,7 +46,7 @@ async def list_my_skills(request: Request, search: Optional[str] = None, categor
         raise
     except Exception as e:
         logger.error("获取我的技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取我的技能失败，请稍后重试", code=50037, status="error")
+        return business_response(msg="获取我的技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_MINE_LIST_FAILED, status="error")
 
 
 @router.get("/skills/favorites")
@@ -59,7 +60,7 @@ async def list_favorite_skills(request: Request, search: Optional[str] = None, c
         raise
     except Exception as e:
         logger.error("获取收藏技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取收藏技能失败，请稍后重试", code=50038, status="error")
+        return business_response(msg="获取收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FAVORITE_LIST_FAILED, status="error")
 
 
 @router.post("/skills")
@@ -72,10 +73,10 @@ async def create_user_skill(payload: SkillCreateRequest, request: Request):
     except HTTPException:
         raise
     except ValueError as e:
-        return business_response(msg=str(e), code=40040, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_CREATE_INVALID, status="error")
     except Exception as e:
         logger.error("创建用户技能失败: %s", e, exc_info=True)
-        return business_response(msg="创建用户技能失败，请稍后重试", code=50039, status="error")
+        return business_response(msg="创建用户技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_CREATE_FAILED, status="error")
 
 
 @router.put("/skills/{skill_id}")
@@ -88,12 +89,12 @@ async def update_user_skill(skill_id: str, payload: SkillUpdateRequest, request:
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40341, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_UPDATE_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40044, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_UPDATE_INVALID, status="error")
     except Exception as e:
         logger.error("更新用户技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="更新用户技能失败，请稍后重试", code=50044, status="error")
+        return business_response(msg="更新用户技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_UPDATE_FAILED, status="error")
 
 
 @router.delete("/skills/{skill_id}")
@@ -106,12 +107,12 @@ async def delete_user_skill(skill_id: str, request: Request):
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40352, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_DELETE_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40052, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_DELETE_INVALID, status="error")
     except Exception as e:
         logger.error("删除用户技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="删除用户技能失败，请稍后重试", code=50052, status="error")
+        return business_response(msg="删除用户技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_DELETE_FAILED, status="error")
 
 
 @router.post("/skills/{skill_id}/copy")
@@ -124,12 +125,12 @@ async def copy_user_skill(skill_id: str, request: Request):
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40353, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_COPY_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40053, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_COPY_INVALID, status="error")
     except Exception as e:
         logger.error("复制用户技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="复制用户技能失败，请稍后重试", code=50053, status="error")
+        return business_response(msg="复制用户技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_COPY_FAILED, status="error")
 
 
 @router.post("/skills/{skill_id}/publish")
@@ -142,12 +143,12 @@ async def publish_user_skill(skill_id: str, request: Request):
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40340, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_PUBLISH_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40041, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_PUBLISH_INVALID, status="error")
     except Exception as e:
         logger.error("发布用户技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="发布用户技能失败，请稍后重试", code=50040, status="error")
+        return business_response(msg="发布用户技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_PUBLISH_FAILED, status="error")
 
 
 @router.get("/skills/{skill_id}/versions")
@@ -160,12 +161,12 @@ async def list_skill_versions(skill_id: str, request: Request):
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40345, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_LIST_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40045, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_LIST_INVALID, status="error")
     except Exception as e:
         logger.error("获取技能版本列表失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="获取技能版本列表失败，请稍后重试", code=50045, status="error")
+        return business_response(msg="获取技能版本列表失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_VERSION_LIST_FAILED, status="error")
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}")
@@ -178,12 +179,12 @@ async def get_skill_version(skill_id: str, version_no: int, request: Request):
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40346, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40046, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_INVALID, status="error")
     except Exception as e:
         logger.error("获取技能版本详情失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="获取技能版本详情失败，请稍后重试", code=50046, status="error")
+        return business_response(msg="获取技能版本详情失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_VERSION_DETAIL_FAILED, status="error")
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files")
@@ -196,12 +197,12 @@ async def list_skill_version_files(skill_id: str, version_no: int, request: Requ
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40348, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_FILES_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40048, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_VERSION_FILES_INVALID, status="error")
     except Exception as e:
         logger.error("获取技能版本文件列表失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="获取技能版本文件列表失败，请稍后重试", code=50048, status="error")
+        return business_response(msg="获取技能版本文件列表失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_VERSION_FILES_FAILED, status="error")
 
 
 @router.get("/skills/{skill_id}/versions/{version_no}/files/content")
@@ -214,12 +215,12 @@ async def read_skill_version_file(skill_id: str, version_no: int, dir_name: str,
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40349, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40049, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
     except Exception as e:
         logger.error("读取技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="读取技能版本文件失败，请稍后重试", code=50049, status="error")
+        return business_response(msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error")
 
 
 @router.put("/skills/{skill_id}/versions/{version_no}/files")
@@ -232,12 +233,12 @@ async def save_skill_version_file(skill_id: str, version_no: int, payload: Skill
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40350, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40050, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_INVALID, status="error")
     except Exception as e:
         logger.error("保存技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="保存技能版本文件失败，请稍后重试", code=50050, status="error")
+        return business_response(msg="保存技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_SAVE_FAILED, status="error")
 
 
 @router.delete("/skills/{skill_id}/versions/{version_no}/files")
@@ -250,12 +251,12 @@ async def delete_skill_version_file(skill_id: str, version_no: int, dir_name: st
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40351, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_DELETE_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40051, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_DELETE_INVALID, status="error")
     except Exception as e:
         logger.error("删除技能版本文件失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="删除技能版本文件失败，请稍后重试", code=50051, status="error")
+        return business_response(msg="删除技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_DELETE_FAILED, status="error")
 
 
 @router.post("/skills/{skill_id}/versions/{version_no}/rollback")
@@ -268,12 +269,12 @@ async def rollback_skill_version(skill_id: str, version_no: int, request: Reques
     except HTTPException:
         raise
     except PermissionError as e:
-        return business_response(msg=str(e), code=40347, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_ROLLBACK_FORBIDDEN, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40047, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_ROLLBACK_INVALID, status="error")
     except Exception as e:
         logger.error("切换技能版本失败: skill_id=%s version_no=%s error=%s", skill_id, version_no, e, exc_info=True)
-        return business_response(msg="切换技能版本失败，请稍后重试", code=50047, status="error")
+        return business_response(msg="切换技能版本失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_ROLLBACK_FAILED, status="error")
 
 
 @router.post("/skills/{skill_id}/favorite")
@@ -285,10 +286,10 @@ async def favorite_skill(skill_id: str, request: Request):
     except HTTPException:
         raise
     except ValueError as e:
-        return business_response(msg=str(e), code=40042, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FAVORITE_INVALID, status="error")
     except Exception as e:
         logger.error("收藏技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="收藏技能失败，请稍后重试", code=50041, status="error")
+        return business_response(msg="收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FAVORITE_FAILED, status="error")
 
 
 @router.delete("/skills/{skill_id}/favorite")
@@ -300,10 +301,10 @@ async def unfavorite_skill(skill_id: str, request: Request):
     except HTTPException:
         raise
     except ValueError as e:
-        return business_response(msg=str(e), code=40043, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID, status="error")
     except Exception as e:
         logger.error("取消收藏技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
-        return business_response(msg="取消收藏技能失败，请稍后重试", code=50042, status="error")
+        return business_response(msg="取消收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED, status="error")
 
 
 @router.post("/skills/sync-system")
@@ -316,7 +317,7 @@ async def sync_system_skills(request: Request):
         return business_response(data=await skill_service.sync_builtin_skills_async(operator=operator, operator_name=operator_name), msg="同步成功")
     except Exception as e:
         logger.error("同步系统技能失败: %s", e, exc_info=True)
-        return business_response(msg="同步系统技能失败，请稍后重试", code=50043, status="error")
+        return business_response(msg="同步系统技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_SYNC_FAILED, status="error")
 
 
 @router.post("/skills/reload")
@@ -326,7 +327,7 @@ async def reload_skills():
         return business_response(data=await skill_service.reload_async(), msg="刷新成功")
     except Exception as e:
         logger.error("刷新技能缓存失败: %s", e, exc_info=True)
-        return business_response(msg="刷新技能缓存失败，请稍后重试", code=50034, status="error")
+        return business_response(msg="刷新技能缓存失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_RELOAD_FAILED, status="error")
 
 
 @router.get("/skills/{skill_name}")
@@ -337,8 +338,8 @@ async def get_skill(skill_name: str, request: Request):
         user_id = str(getattr(user, "user_id", "") or "").strip()
         skill = await skill_service.get_skill_async(skill_name, include_draft=True, user_id=user_id, user_names=_current_user_names(user))
         if not skill:
-            return business_response(msg=f"技能不存在: {skill_name}", code=40404, status="error")
+            return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=skill, msg="获取成功")
     except Exception as e:
         logger.error("获取技能详情失败: skill_name=%s error=%s", skill_name, e, exc_info=True)
-        return business_response(msg="获取技能详情失败，请稍后重试", code=50033, status="error")
+        return business_response(msg="获取技能详情失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_DETAIL_FAILED, status="error")

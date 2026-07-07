@@ -1,3 +1,4 @@
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.routers import evaluation as evaluation_routes
 
@@ -45,7 +46,7 @@ def test_delete_public_dashboard_denies_non_owner(client, auth_headers, fake_das
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40304
+    assert payload["code"] == ErrorCode.CHATDATA_DASHBOARD_PERMISSION_DENIED
     assert payload["msg"] == "无权限操作该看板"
 
 

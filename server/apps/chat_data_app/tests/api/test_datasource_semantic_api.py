@@ -1,3 +1,4 @@
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config as semantic_routes
 
 
@@ -9,7 +10,7 @@ def test_list_datasources_api_contract(client, fake_datasource_manager, patch_da
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "success"
-    assert payload["code"] == 2000
+    assert payload["code"] == ErrorCode.SUCCESS
     assert "datasources" in payload["data"]
     assert payload["data"]["datasources"][0]["id"] == "ds_a"
     assert payload["data"]["datasources"][0]["ds_tables"]
@@ -155,7 +156,7 @@ def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_he
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == 40304
+    assert payload["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
 
 
 def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_datasource_manager, monkeypatch):
@@ -188,7 +189,7 @@ def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, 
 
     assert denied_public.status_code == 200
     assert denied_public.json()["status"] == "error"
-    assert denied_public.json()["code"] == 40304
+    assert denied_public.json()["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
     assert allowed.status_code == 200
     assert allowed.json()["status"] == "success"
     assert allowed.json()["data"]["config_id"] == "cfg_a"

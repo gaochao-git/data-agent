@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import dashboard as dashboard_routes
 from apps.chat_data_app.schema import (
     DashboardCreateRequest,
@@ -145,7 +146,7 @@ def test_dashboard_not_found_error_paths(client, auth_headers, fake_dashboard_se
     for response in responses:
         payload = response.json()
         assert payload["status"] == "error"
-        assert payload["code"] == 40404
+        assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_generate_panel_name_prefers_provided_name_and_fallbacks(client, monkeypatch):
@@ -165,10 +166,10 @@ def test_create_dashboard_from_spec_validates_required_payload(client, auth_head
     no_cards = client.post("/api/chatdata/dashboards/from-spec", json={"datasource_id": "ds_a", "dashboard_spec": {"cards": []}}, headers=auth_headers)
     missing_semantic = client.post("/api/chatdata/dashboards/from-spec", json={"datasource_id": "ds_a", "dashboard_spec": {"cards": [{"title": "a"}]}}, headers=auth_headers)
 
-    assert missing_ds.json()["code"] == 40010
-    assert clarify.json()["code"] == 40013
-    assert no_cards.json()["code"] == 40011
-    assert missing_semantic.json()["code"] == 40014
+    assert missing_ds.json()["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+    assert clarify.json()["code"] == ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED
+    assert no_cards.json()["code"] == ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED
+    assert missing_semantic.json()["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED
 
 
 def _payload(response):
@@ -358,7 +359,7 @@ def test_execute_panel_success_and_failure(fake_dashboard_service, monkeypatch):
 
     assert success["status"] == "success"
     assert success["data"]["result"]["success"] is True
-    assert failure["code"] == 50029
+    assert failure["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
     assert any(update[1].get("status") == "failed" for update in runtime.updated_tasks)
 
 
@@ -739,7 +740,7 @@ def test_dashboard_route_exception_branches(monkeypatch):
         _payload(asyncio.run(dashboard_routes.update_layout("dash_a", LayoutUpdateRequest(layouts=[]), SimpleNamespace()))),
     ]
 
-    assert [item["code"] for item in responses] == [50020, 50021, 50022, 50023, 50024, 50036, 50037, 50025, 50026, 50027, 50028]
+    assert [item["code"] for item in responses] == [ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED, ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED, ErrorCode.CHATDATA_DASHBOARD_GET_FAILED, ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED, ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED, ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED, ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED, ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED, ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED, ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED, ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED]
 
 
 def test_panel_name_and_create_from_spec_error_branches(monkeypatch):
@@ -757,7 +758,7 @@ def test_panel_name_and_create_from_spec_error_branches(monkeypatch):
 
     monkeypatch.setattr(dashboard_routes, "_resolve_panel_name", fake_resolve_panel_name)
     name_error = _payload(asyncio.run(dashboard_routes.generate_panel_name(PanelNameGenerateRequest(sql="select 1", chart_type="line", name=""))))
-    assert name_error["code"] == 50031
+    assert name_error["code"] == ErrorCode.CHATDATA_DASHBOARD_LAYOUT_FAILED
 
     async def fake_create_no_panels(**_kwargs):
         return {"panels": [], "warnings": ["bad card"]}
@@ -767,7 +768,7 @@ def test_panel_name_and_create_from_spec_error_branches(monkeypatch):
         DashboardFromSpecRequest(datasource_id="ds_a", semantic_config_id="sem_1", dashboard_spec={"cards": [{"title": "卡片"}]}),
         SimpleNamespace(),
     )))
-    assert no_panels["code"] == 40012
+    assert no_panels["code"] == ErrorCode.CHATDATA_DASHBOARD_NO_VALID_CARD
 
     async def fake_create_raises(**_kwargs):
         raise RuntimeError("spec failed")
@@ -777,7 +778,7 @@ def test_panel_name_and_create_from_spec_error_branches(monkeypatch):
         DashboardFromSpecRequest(datasource_id="ds_a", dashboard_spec={"semantic_config_id": "sem_1", "cards": [{"title": "卡片"}]}),
         SimpleNamespace(),
     )))
-    assert create_error["code"] == 50035
+    assert create_error["code"] == ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED
 
 
 def test_execute_panel_value_and_generic_error_branches(fake_dashboard_service, monkeypatch):
@@ -801,14 +802,14 @@ def test_execute_panel_value_and_generic_error_branches(fake_dashboard_service, 
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_value_error)
     value_error = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
-    assert value_error["code"] == 40001
+    assert value_error["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def raise_generic_error(**_kwargs):
         raise Exception("未知错误")
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_generic_error)
     generic_error = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
-    assert generic_error["code"] == 50029
+    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
     assert any(update[1].get("status") == "failed" for update in runtime.updated_tasks)
 
 
@@ -963,7 +964,7 @@ def test_execute_panels_batch_accepts_list_missing_and_cancel(monkeypatch):
     response = asyncio.run(dashboard_routes.execute_panels_batch("dash_a", SimpleNamespace(), ["panel_a"]))
     chunks = asyncio.run(_collect_stream(response))
 
-    assert missing["code"] == 40404
+    assert missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert "已人工取消" in "".join(chunks)
 
 
@@ -1062,5 +1063,5 @@ def test_create_dashboard_query_task_error_and_list_request(fake_dashboard_servi
     generic_error = _payload(asyncio.run(dashboard_routes.create_dashboard_query_task("dash_a", SimpleNamespace(), None)))
 
     assert list_request["data"]["task_id"] == "task_1"
-    assert missing["code"] == 40404
-    assert generic_error["code"] == 50029
+    assert missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED

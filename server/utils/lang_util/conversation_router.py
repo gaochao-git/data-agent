@@ -7,11 +7,14 @@ import json
 import time
 import inspect
 from typing import Callable, Optional, Dict, Any, List, AsyncGenerator
+
 from fastapi import APIRouter, Query, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langgraph.types import Command
 from langchain_core.messages import AIMessage
+
+from utils.error_codes import ErrorCode, ensure_defined_error_code
 from utils.lang_util import conversation
 from utils import file_manager
 from utils.response import business_response
@@ -51,7 +54,7 @@ class AgentAvailabilityResult(BaseModel):
     """Agent 可用性检查结果。"""
     enabled: bool = True
     message: str = ""
-    code: int = 40302
+    code: int = ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
 
 
 # ============ Agent 配置注册 ============
@@ -137,7 +140,7 @@ def _normalize_agent_availability_result(result: bool | AgentAvailabilityResult 
         return AgentAvailabilityResult(
             enabled=bool(result.get("enabled", True)),
             message=str(result.get("message") or ""),
-            code=int(result.get("code") or 40302),
+            code=ensure_defined_error_code(result.get("code") or ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED),
         )
     return AgentAvailabilityResult(enabled=bool(True if result is None else result))
 
@@ -319,7 +322,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
 
         config = get_agent_config(request.agent_id)
         if not config:
-            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=40003, status="error")
+            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
         unavailable_response = _agent_unavailable_response(request.agent_id)
         if unavailable_response:
             return unavailable_response
@@ -327,10 +330,10 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         result = await conversation.create(config["db_path"], request.agent_id, user_id)
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"创建对话失败: {e}", exc_info=True)
-        return business_response(msg=f"创建对话失败: {str(e)}", code=50001, status="error")
+        return business_response(msg=f"创建对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
 
 
 @router.get("")
@@ -366,7 +369,7 @@ async def list_conversations(
             requested_agent_ids = [item.strip() for item in agent_ids.split(",") if item.strip()]
             unknown_agent_ids = [item for item in requested_agent_ids if not get_agent_config(item)]
             if unknown_agent_ids:
-                return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=40003, status="error")
+                return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
             enabled_agent_ids = [
                 item
                 for item in requested_agent_ids
@@ -383,7 +386,7 @@ async def list_conversations(
             # 指定 agent_id，使用该智能体的数据库
             config = get_agent_config(agent_id)
             if not config:
-                return business_response(msg=f"未知的 agent_id: {agent_id}", code=40003, status="error")
+                return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
             if get_agent_availability(agent_id).enabled:
                 rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
             else:
@@ -404,10 +407,10 @@ async def list_conversations(
             result = await conversation.list_all(enabled_agent_configs, user_id, page_size)
         return business_response(data=result, msg="获取对话列表成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"获取对话列表失败: {e}", exc_info=True)
-        return business_response(msg=f"获取对话列表失败: {str(e)}", code=50002, status="error")
+        return business_response(msg=f"获取对话列表失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error")
 
 
 @router.get("/{conversation_id}")
@@ -425,12 +428,12 @@ async def get_conversation_detail(conversation_id: str, req: Request):
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         result = await conversation.get_detail(
             config["db_path"],
@@ -440,14 +443,14 @@ async def get_conversation_detail(conversation_id: str, req: Request):
             user_id
         )
         if not result:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(data=result, msg="获取对话详情成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"获取对话详情失败: {e}", exc_info=True)
-        return business_response(msg=f"获取对话详情失败: {str(e)}", code=50003, status="error")
+        return business_response(msg=f"获取对话详情失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
 
 
 @router.delete("/{conversation_id}")
@@ -465,23 +468,23 @@ async def delete_conversation(conversation_id: str, req: Request):
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         success = await conversation.delete(config["db_path"], conversation_id, user_id)
         if not success:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(data={"id": conversation_id}, msg="删除成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"删除对话失败: {e}", exc_info=True)
-        return business_response(msg=f"删除对话失败: {str(e)}", code=50004, status="error")
+        return business_response(msg=f"删除对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DELETE_FAILED, status="error")
 
 
 @router.put("/{conversation_id}/title")
@@ -500,27 +503,27 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         title = request.title.strip()[:20]
         if not title:
-            return business_response(msg="标题不能为空", code=40002, status="error")
+            return business_response(msg="标题不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
 
         success = await conversation.update_title(config["db_path"], conversation_id, title, user_id)
         if not success:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(data={"id": conversation_id, "title": title}, msg="标题更新成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"更新标题失败: {e}", exc_info=True)
-        return business_response(msg=f"更新标题失败: {str(e)}", code=50005, status="error")
+        return business_response(msg=f"更新标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/title")
@@ -538,12 +541,12 @@ async def generate_conversation_title(conversation_id: str, req: Request):
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         title = await conversation.generate_title(
             config["db_path"],
@@ -553,14 +556,14 @@ async def generate_conversation_title(conversation_id: str, req: Request):
             user_id
         )
         if not title:
-            return business_response(msg="无法生成标题，对话不存在或无消息", code=40404, status="error")
+            return business_response(msg="无法生成标题，对话不存在或无消息", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(data={"id": conversation_id, "title": title}, msg="标题生成成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"生成标题失败: {e}", exc_info=True)
-        return business_response(msg=f"生成标题失败: {str(e)}", code=50006, status="error")
+        return business_response(msg=f"生成标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/favorite")
@@ -578,26 +581,26 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         is_favorited = await conversation.toggle_favorite(config["db_path"], conversation_id, user_id)
         if is_favorited is None:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(
             data={"id": conversation_id, "is_favorited": is_favorited},
             msg="收藏成功" if is_favorited else "取消收藏成功"
         )
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"切换收藏状态失败: {e}", exc_info=True)
-        return business_response(msg=f"切换收藏状态失败: {str(e)}", code=50007, status="error")
+        return business_response(msg=f"切换收藏状态失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/completion")
@@ -612,23 +615,23 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         if not request.query:
-            return business_response(msg="消息不能为空", code=40002, status="error")
+            return business_response(msg="消息不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
 
         user_id, username = _get_current_user_identity(req)
         existing_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
         if existing_agent_id and existing_agent_id != request.agent_id:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         if not existing_agent_id:
             unowned_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id)
             if unowned_agent_id:
-                return business_response(msg="对话不存在", code=40404, status="error")
+                return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
-            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=40003, status="error")
+            return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
         unavailable_response = _agent_unavailable_response(request.agent_id)
         if unavailable_response:
             return unavailable_response
@@ -652,10 +655,10 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
         return await handler(**kwargs)
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
-        return business_response(msg=f"对话失败: {str(e)}", code=50008, status="error")
+        return business_response(msg=f"对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/resume")
@@ -673,19 +676,19 @@ async def resume_conversation(conversation_id: str, request: ResumeRequest, req:
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
 
         # 通过 conversation_id 获取 agent 配置
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         # 获取 agent_id
         agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
         if not agent_id:
-            return business_response(msg="无法确定对话的 agent_id", code=40404, status="error")
+            return business_response(msg="无法确定对话的 agent_id", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         unavailable_response = _agent_unavailable_response(agent_id)
         if unavailable_response:
             return unavailable_response
@@ -703,7 +706,7 @@ async def resume_conversation(conversation_id: str, request: ResumeRequest, req:
         get_graph = config.get("get_graph")
         get_checkpointer = config.get("get_checkpointer")
         if not get_graph or not get_checkpointer:
-            return business_response(msg=f"agent {agent_id} 缺少 graph 或 checkpointer 配置", code=40003, status="error")
+            return business_response(msg=f"agent {agent_id} 缺少 graph 或 checkpointer 配置", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
 
         return StreamingResponse(
             _generic_resume_stream(
@@ -717,10 +720,10 @@ async def resume_conversation(conversation_id: str, request: ResumeRequest, req:
             headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
         )
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"恢复对话失败: {e}", exc_info=True)
-        return business_response(msg=f"恢复对话失败: {str(e)}", code=50012, status="error")
+        return business_response(msg=f"恢复对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_RESUME_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/files")
@@ -749,16 +752,16 @@ async def upload_file(
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         file_base_dir = config.get("file_base_dir")
         if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=40004, status="error")
+            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
 
         allowed_extensions = config.get("allowed_extensions")
 
@@ -771,12 +774,12 @@ async def upload_file(
 
         return business_response(data=result, msg="文件上传成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40002, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
-        return business_response(msg=f"文件上传失败: {str(e)}", code=50009, status="error")
+        return business_response(msg=f"文件上传失败: {str(e)}", code=ErrorCode.CHATDATA_UPLOAD_FAILED, status="error")
 
 
 @router.get("/{conversation_id}/files/{file_id}")
@@ -795,16 +798,16 @@ async def download_file(
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         file_base_dir = config.get("file_base_dir")
         if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=40004, status="error")
+            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
 
         return await file_manager.read_file(
             base_dir=file_base_dir,
@@ -813,14 +816,14 @@ async def download_file(
             preview=preview
         )
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=40002, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
     except FileNotFoundError as e:
-        return business_response(msg=str(e), code=40404, status="error")
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except Exception as e:
         logger.error(f"文件下载失败: {e}", exc_info=True)
-        return business_response(msg=f"文件下载失败: {str(e)}", code=50010, status="error")
+        return business_response(msg=f"文件下载失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.get("/{conversation_id}/files")
@@ -838,24 +841,24 @@ async def list_files(conversation_id: str, req: Request):
     """
     try:
         if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=40001, status="error")
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         user_id = _get_user_id(req)
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="对话不存在", code=40404, status="error")
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         file_base_dir = config.get("file_base_dir")
         if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=40004, status="error")
+            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
 
         files = file_manager.list_files(file_base_dir, conversation_id)
         return business_response(data=files, msg="获取文件列表成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"获取文件列表失败: {e}", exc_info=True)
-        return business_response(msg=f"获取文件列表失败: {str(e)}", code=50011, status="error")
+        return business_response(msg=f"获取文件列表失败: {str(e)}", code=ErrorCode.CHATDATA_FILE_LIST_FAILED, status="error")
 
 
 # ============ Artifact 接口 ============
@@ -878,26 +881,26 @@ async def get_artifact(artifact_id: str, req: Request):
     from utils.lang_util.artifact_store import load_artifact_meta_by_id
 
     if not artifact_id:
-        return business_response(msg="artifact_id 不能为空", code=40001, status="error")
+        return business_response(msg="artifact_id 不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
     try:
         user_id = _get_user_id(req)
         artifact = load_artifact_meta_by_id(artifact_id)
         if artifact is None:
-            return business_response(msg="Artifact 不存在", code=40404, status="error")
+            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         conversation_id = str(artifact.get("conversation_id") or "").strip()
         if not conversation_id:
-            return business_response(msg="Artifact 不存在", code=40404, status="error")
+            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         config = await get_agent_config_by_conversation(conversation_id, user_id)
         if not config:
-            return business_response(msg="Artifact 不存在", code=40404, status="error")
+            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         data = artifact.get("data")
         if data is None:
-            return business_response(msg="Artifact 不存在", code=40404, status="error")
+            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         return business_response(data=data, msg="获取成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=40101, status="error")
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
     except Exception as e:
         logger.error(f"获取 Artifact 失败: {e}", exc_info=True)
-        return business_response(msg=f"获取 Artifact 失败: {str(e)}", code=50013, status="error")
+        return business_response(msg=f"获取 Artifact 失败: {str(e)}", code=ErrorCode.CHATDATA_ARTIFACT_GET_FAILED, status="error")

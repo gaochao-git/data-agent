@@ -18,6 +18,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from utils.error_codes import ErrorCode
 from apps.chat_data_app import routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
 from apps.chat_data_app.services import dashboard_runtime, query_runtime
@@ -345,7 +346,7 @@ def test_get_query_history_filters_by_executed_time_range(route_db):
     ))
     invalid_body = _payload(invalid_response)
     assert invalid_body["status"] == "error"
-    assert invalid_body["code"] == 40001
+    assert invalid_body["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
 
 def test_query_history_accepts_url_encoded_datetime():
@@ -599,7 +600,7 @@ def test_get_query_history_result_success_and_not_found(route_db):
     missing_response = asyncio.run(routes.get_query_history_result("missing", _make_request()))
     missing_body = _payload(missing_response)
     assert missing_body["status"] == "error"
-    assert missing_body["code"] == 40404
+    assert missing_body["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_get_query_history_result_fetches_remote_http_result(route_db, monkeypatch):
@@ -664,8 +665,8 @@ def test_query_history_routes_return_error_when_session_fails(monkeypatch):
     history = asyncio.run(routes.get_query_history(_make_request(), datasource_id="ds1"))
     detail = asyncio.run(routes.get_query_history_result("ex1", _make_request()))
 
-    assert _payload(history)["code"] == 50016
-    assert _payload(detail)["code"] == 50016
+    assert _payload(history)["code"] == ErrorCode.CHATDATA_QUERY_HISTORY_FAILED
+    assert _payload(detail)["code"] == ErrorCode.CHATDATA_QUERY_HISTORY_FAILED
 
 
 def test_query_favorite_builder_validation_and_delete(route_db):
@@ -676,7 +677,7 @@ def test_query_favorite_builder_validation_and_delete(route_db):
         query_text="select 1",
     )
     missing_response = asyncio.run(routes.create_query_favorite(missing_builder, _make_request()))
-    assert _payload(missing_response)["code"] == 40012
+    assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG
 
     create_payload = QueryFavoriteCreateRequest(
         datasource_id="ds1",
@@ -692,7 +693,7 @@ def test_query_favorite_builder_validation_and_delete(route_db):
 
     edit_raw_payload = QueryFavoriteUpdateRequest(query_text="select amount from orders")
     edit_raw_response = asyncio.run(routes.update_query_favorite(created["id"], edit_raw_payload, _make_request()))
-    assert _payload(edit_raw_response)["code"] == 40013
+    assert _payload(edit_raw_response)["code"] == ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED
 
     rename_payload = QueryFavoriteUpdateRequest(favorite_title="可视化收藏2", semantic_config_id="sc_builder")
     rename_response = asyncio.run(routes.update_query_favorite(created["id"], rename_payload, _make_request()))
@@ -704,10 +705,10 @@ def test_query_favorite_builder_validation_and_delete(route_db):
     assert _payload(delete_response)["status"] == "success"
 
     update_deleted_response = asyncio.run(routes.update_query_favorite(created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()))
-    assert _payload(update_deleted_response)["code"] == 40412
+    assert _payload(update_deleted_response)["code"] == ErrorCode.CHATDATA_FAVORITE_NOT_FOUND
 
     delete_deleted_response = asyncio.run(routes.delete_query_favorite(created["id"], _make_request()))
-    assert _payload(delete_deleted_response)["code"] == 40412
+    assert _payload(delete_deleted_response)["code"] == ErrorCode.CHATDATA_FAVORITE_NOT_FOUND
 
 
 def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
@@ -1400,7 +1401,7 @@ def test_create_query_task_endpoint_branches(monkeypatch):
         datasource_id="missing",
         sql="select 1",
     )))
-    assert _payload(missing_response)["code"] == 40404
+    assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
     invalid_sql_response = asyncio.run(routes.create_query_task(_make_request(), QueryTaskCreateRequest(
@@ -1408,4 +1409,4 @@ def test_create_query_task_endpoint_branches(monkeypatch):
         datasource_id="ds1",
         sql="select 1; select 2",
     )))
-    assert _payload(invalid_sql_response)["code"] == 40001
+    assert _payload(invalid_sql_response)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
