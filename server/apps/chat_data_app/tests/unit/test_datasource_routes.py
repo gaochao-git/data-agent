@@ -3552,7 +3552,7 @@ def test_query_favorite_exception_branches(monkeypatch):
         favorite_title="SQL",
         query_text="select 1",
     ), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED
-    assert _payload(asyncio.run(routes.update_query_favorite(1, routes.QueryFavoriteUpdateRequest(favorite_title="SQL2"), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED
+    assert _payload(asyncio.run(routes.update_query_favorite(1, routes.QueryFavoriteUpdateRequest(favorite_title="SQL2"), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED
     assert _payload(asyncio.run(routes.delete_query_favorite(1, SimpleNamespace())))["code"] == ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED
 
 

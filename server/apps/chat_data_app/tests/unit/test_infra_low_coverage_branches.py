@@ -61,6 +61,19 @@ def test_production_business_response_codes_are_centralized():
     assert violations == []
 
 
+def test_error_code_values_are_unique():
+    seen = {}
+    duplicates = []
+    for name, item in ErrorCode.__members__.items():
+        value = int(item.value)
+        previous = seen.get(value)
+        if previous:
+            duplicates.append(f"{value}: {previous}, {name}")
+        else:
+            seen[value] = name
+    assert duplicates == []
+
+
 def test_authenticate_request_success_and_error_branches(monkeypatch):
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "")
     with pytest.raises(auth.AuthenticationError, match="service token"):
