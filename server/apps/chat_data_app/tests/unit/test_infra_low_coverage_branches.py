@@ -1146,6 +1146,7 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
     user = SimpleNamespace(user_id="u1", username="用户1")
+    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
     monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: user)
     monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", lambda conversation_id, user_id: asyncio.sleep(0, result=conversation_id == "conv_ok"))
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path / conversation_id)})
@@ -1179,6 +1180,7 @@ async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_data_analyze_workspace_exception_branches(monkeypatch):
     original_can_access = data_analyze_workspace._can_access_data_analyze_conversation
+    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
     monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
     monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(ValueError("bad workspace")))
