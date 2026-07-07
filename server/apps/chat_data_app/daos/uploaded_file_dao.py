@@ -1,0 +1,74 @@
+"""上传文件数据访问层。"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Callable, List, Optional
+
+from sqlalchemy import delete as sa_delete, select, update as sa_update
+
+from utils.database import get_session as default_get_session
+from utils.models import UploadedFile
+
+
+class UploadedFileDao:
+    """封装上传文件表读写。"""
+
+    def __init__(self, session_context: Optional[Callable] = None):
+        self._session_context = session_context or default_get_session
+
+    async def create_file(
+        self,
+        *,
+        file_id: str,
+        thread_id: str,
+        original_filename: str,
+        file_type: str,
+        file_size: int,
+        storage_dir: str,
+        now: datetime,
+    ) -> UploadedFile:
+        async with self._session_context() as session:
+            uploaded_file = UploadedFile(
+                file_id=file_id,
+                thread_id=thread_id,
+                original_filename=original_filename,
+                file_type=file_type,
+                file_size=file_size,
+                storage_dir=storage_dir,
+                parse_status="pending",
+                create_time=now,
+            )
+            session.add(uploaded_file)
+            await session.flush()
+            return uploaded_file
+
+    async def get_file(self, file_id: str) -> Optional[UploadedFile]:
+        async with self._session_context() as session:
+            result = await session.execute(select(UploadedFile).where(UploadedFile.file_id == file_id))
+            return result.scalar_one_or_none()
+
+    async def delete_file(self, file_id: str) -> None:
+        async with self._session_context() as session:
+            await session.execute(sa_delete(UploadedFile).where(UploadedFile.file_id == file_id))
+
+    async def update_parse_status(self, *, file_id: str, status: str, parse_filename: Optional[str] = None) -> None:
+        values = {"parse_status": status, "update_time": datetime.now()}
+        if parse_filename is not None:
+            values["parse_filename"] = parse_filename
+        async with self._session_context() as session:
+            await session.execute(
+                sa_update(UploadedFile)
+                .where(UploadedFile.file_id == file_id)
+                .values(**values)
+            )
+
+    async def list_files_by_thread(self, thread_id: str, *, ascending: bool = False) -> List[UploadedFile]:
+        order_by = UploadedFile.create_time.asc() if ascending else UploadedFile.create_time.desc()
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(UploadedFile)
+                .where(UploadedFile.thread_id == thread_id)
+                .order_by(order_by)
+            )
+            return list(result.scalars().all())

@@ -12,7 +12,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
-from sqlalchemy import select
 
 from auth import AuthenticationError
 from .schema import (
@@ -28,13 +27,19 @@ from .services.sql_executor import fetch_http_query_task_result, stop_http_query
 from .services import dashboard_runtime, query_runtime
 from .services.query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 from .daos.query_history_dao import QueryHistoryDao
+from .daos.query_favorite_dao import QueryFavoriteDao
+from .services.query_favorite_service import (
+    QueryFavoriteNotFoundError,
+    QueryFavoriteOperationNotAllowedError,
+    QueryFavoriteService,
+    QueryFavoriteValidationError,
+)
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
 from .agent import get_all_tables_async, get_tables_create_format
 from .agent.sql_assist_graph import get_sql_assist_graph
 from utils.database import get_session
 from utils import conversation
 from utils.models import (
-    SqlQueryFavorite,
     ChatDataQueryTask,
     ChatDataQueryExecution,
 )
@@ -62,6 +67,7 @@ CANCEL_TARGET_WAIT_SECONDS = 3
 CANCEL_TARGET_POLL_INTERVAL_SECONDS = 0.1
 _query_task_background_tasks: set[asyncio.Task] = set()
 query_history_service = QueryHistoryService(QueryHistoryDao(session_context=lambda: get_session()))
+query_favorite_service = QueryFavoriteService(QueryFavoriteDao(session_context=lambda: get_session()))
 
 
 # 代理标识
@@ -152,16 +158,13 @@ async def get_query_favorites(
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
-        async with get_session() as db:
-            stmt = select(SqlQueryFavorite).filter_by(datasource_id=datasource_id, delete_flag=0)
-            stmt = stmt.filter_by(user_id=user_id)
-            if query_type:
-                stmt = stmt.filter(SqlQueryFavorite.query_type == query_type)
-            stmt = stmt.order_by(SqlQueryFavorite.update_time.desc(), SqlQueryFavorite.create_time.desc()).limit(limit)
-            result = await db.execute(stmt)
-            favorites = result.scalars().all()
-            results = [q.to_dict() for q in favorites]
-            return business_response(data={"queries": results, "total": len(results)}, msg="获取成功")
+        data = await query_favorite_service.list_favorites(
+            datasource_id=datasource_id,
+            user_id=user_id,
+            query_type=query_type,
+            limit=limit,
+        )
+        return business_response(data=data, msg="获取成功")
     except Exception as e:
         logger.error("获取收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="获取收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_LIST_FAILED, status="error")
@@ -306,34 +309,10 @@ async def create_query_favorite(payload: QueryFavoriteCreateRequest, request: Re
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(current_user.username or "")
-        if payload.query_type == "builder" and payload.builder_config is None:
-            return business_response(msg="builder 类型收藏必须包含 builder_config", code=ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG, status="error")
-
-        builder_config_json = None
-        if payload.builder_config is not None:
-            builder_config_json = json.dumps(payload.builder_config, ensure_ascii=False)
-
-        now = datetime.now()
-        async with get_session() as db:
-            item = SqlQueryFavorite(
-                datasource_id=payload.datasource_id,
-                user_id=user_id,
-                semantic_config_id=payload.semantic_config_id,
-                query_type=payload.query_type,
-                favorite_title=payload.favorite_title.strip(),
-                query_text=payload.query_text,
-                builder_config=builder_config_json,
-                delete_flag=0,
-                create_time=now,
-                update_time=now,
-                create_by=user_id,
-                create_by_name=username,
-                update_by=user_id,
-                update_by_name=username,
-            )
-            db.add(item)
-            await db.flush()
-            return business_response(data=item.to_dict(), msg="收藏成功")
+        data = await query_favorite_service.create_favorite(payload, user_id=user_id, username=username)
+        return business_response(data=data, msg="收藏成功")
+    except QueryFavoriteValidationError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG, status="error")
     except Exception as e:
         logger.error("创建收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="创建收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED, status="error")
@@ -346,34 +325,17 @@ async def update_query_favorite(favorite_id: int, payload: QueryFavoriteUpdateRe
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(current_user.username or "")
-        async with get_session() as db:
-            stmt = select(SqlQueryFavorite).filter_by(id=favorite_id, user_id=user_id, delete_flag=0)
-            result = await db.execute(stmt)
-            item = result.scalar_one_or_none()
-            if item is None:
-                return business_response(msg="收藏不存在", code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
-
-            if payload.favorite_title is not None:
-                item.favorite_title = payload.favorite_title.strip()
-
-            if item.query_type == "builder":
-                # builder 收藏原始配置不可编辑
-                if payload.query_text is not None or payload.builder_config is not None:
-                    return business_response(msg="builder 收藏不支持编辑原始内容", code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
-            else:
-                if payload.query_text is not None:
-                    item.query_text = payload.query_text
-                if payload.builder_config is not None:
-                    item.builder_config = json.dumps(payload.builder_config, ensure_ascii=False)
-
-            if payload.semantic_config_id is not None:
-                item.semantic_config_id = payload.semantic_config_id
-
-            item.update_time = datetime.now()
-            item.update_by = user_id
-            item.update_by_name = username
-            await db.flush()
-            return business_response(data=item.to_dict(), msg="更新成功")
+        data = await query_favorite_service.update_favorite(
+            favorite_id,
+            payload,
+            user_id=user_id,
+            username=username,
+        )
+        return business_response(data=data, msg="更新成功")
+    except QueryFavoriteNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
+    except QueryFavoriteOperationNotAllowedError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
     except Exception as e:
         logger.error("更新收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="更新收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED, status="error")
@@ -386,18 +348,10 @@ async def delete_query_favorite(favorite_id: int, request: Request):
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
         username = str(current_user.username or "")
-        async with get_session() as db:
-            stmt = select(SqlQueryFavorite).filter_by(id=favorite_id, user_id=user_id, delete_flag=0)
-            result = await db.execute(stmt)
-            item = result.scalar_one_or_none()
-            if item is None:
-                return business_response(msg="收藏不存在", code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
-            item.delete_flag = 1
-            item.update_time = datetime.now()
-            item.update_by = user_id
-            item.update_by_name = username
-            await db.flush()
-            return business_response(data={"id": favorite_id}, msg="删除成功")
+        data = await query_favorite_service.delete_favorite(favorite_id=favorite_id, user_id=user_id, username=username)
+        return business_response(data=data, msg="删除成功")
+    except QueryFavoriteNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
     except Exception as e:
         logger.error("删除收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="删除收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED, status="error")

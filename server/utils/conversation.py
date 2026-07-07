@@ -11,16 +11,17 @@ from datetime import datetime
 import re
 from typing import Optional, List, Dict, Any, Callable
 
-from sqlalchemy import select, update as sa_update
 from langchain_core.prompts import ChatPromptTemplate
 
 from utils.logger import get_logger
+from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from .checkpoint import get_checkpointer
 from .database import get_session
 from .models import UserThread
 
 logger = get_logger(__name__)
+conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
 # ============ 内部函数 ============
@@ -308,28 +309,18 @@ async def get_or_create_conversation(
     Returns:
         会话ID
     """
-    async with get_session() as session:
-        # 检查是否已存在
-        result = await session.execute(
-            select(UserThread).where(UserThread.thread_id == conversation_id)
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            if user_id and existing.user_id != user_id:
-                raise PermissionError("无权访问该对话")
-            return conversation_id
+    existing = await conversation_dao.get_thread_by_id_any_status(conversation_id)
+    if existing:
+        if user_id and existing.user_id != user_id:
+            raise PermissionError("无权访问该对话")
+        return conversation_id
 
-        # 不存在则创建
-        now = datetime.now()
-        thread = UserThread(
-            user_id=user_id,
-            thread_id=conversation_id,
-            agent_id=agent_id,
-            create_time=now,
-            update_time=now,
-            create_by=user_id,
-        )
-        session.add(thread)
+    await conversation_dao.create_thread(
+        user_id=user_id,
+        thread_id=conversation_id,
+        agent_id=agent_id,
+        now=datetime.now(),
+    )
 
     logger.info(f"创建新对话: {conversation_id}, agent: {agent_id}")
     return conversation_id
@@ -350,16 +341,7 @@ async def create(db_path: str, agent_id: str, user_id: str = "system") -> Dict[s
     thread_id = str(uuid.uuid4())
     now = datetime.now()
 
-    async with get_session() as session:
-        thread = UserThread(
-            user_id=user_id,
-            thread_id=thread_id,
-            agent_id=agent_id,
-            create_time=now,
-            update_time=now,
-            create_by=user_id,
-        )
-        session.add(thread)
+    await conversation_dao.create_thread(user_id=user_id, thread_id=thread_id, agent_id=agent_id, now=now)
 
     logger.info(f"创建新对话: {thread_id}, agent: {agent_id}")
     return {"id": thread_id, "create_time": now.strftime('%Y-%m-%d %H:%M:%S')}
@@ -379,17 +361,7 @@ async def list(db_path: str, agent_id: str, user_id: str = None, limit: int = 50
     Returns:
         会话列表
     """
-    async with get_session() as session:
-        query = select(UserThread).where(
-            UserThread.agent_id == agent_id,
-            UserThread.delete_flag == 0  # 只查询未删除的
-        )
-        if user_id:
-            query = query.where(UserThread.user_id == user_id)
-        query = query.order_by(UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
-
-        result = await session.execute(query)
-        threads = result.scalars().all()
+    threads = await conversation_dao.list_threads(agent_id=agent_id, user_id=user_id, limit=limit, offset=offset)
 
     return [_format_thread(t) for t in threads]
 
@@ -399,17 +371,7 @@ async def list_by_agent_ids(agent_ids: List[str], user_id: str = None, limit: in
     if not agent_ids:
         return []
 
-    async with get_session() as session:
-        query = select(UserThread).where(
-            UserThread.agent_id.in_(agent_ids),
-            UserThread.delete_flag == 0
-        )
-        if user_id:
-            query = query.where(UserThread.user_id == user_id)
-        query = query.order_by(UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
-
-        result = await session.execute(query)
-        threads = result.scalars().all()
+    threads = await conversation_dao.list_threads_by_agent_ids(agent_ids=agent_ids, user_id=user_id, limit=limit, offset=offset)
 
     return [_format_thread(t) for t in threads]
 
@@ -453,39 +415,14 @@ async def sync_thread_to_db(
 ) -> None:
     """异步同步会话到数据库"""
     try:
-        now = datetime.now()
-        async with get_session() as session:
-            if is_new:
-                # 检查是否已存在
-                result = await session.execute(
-                    select(UserThread).where(UserThread.thread_id == thread_id)
-                )
-                if not result.scalar_one_or_none():
-                    thread = UserThread(
-                        user_id=user_id or "system",
-                        thread_id=thread_id,
-                        thread_title=title or "新会话",
-                        agent_id=agent_id,
-                        delete_flag=0,
-                        create_time=now,
-                        update_time=now,
-                        create_by=user_id or "system",
-                    )
-                    session.add(thread)
-            else:
-                # 更新会话
-                if title:
-                    await session.execute(
-                        sa_update(UserThread)
-                        .where(UserThread.thread_id == thread_id)
-                        .values(thread_title=title, update_time=now, update_by=user_id)
-                    )
-                else:
-                    await session.execute(
-                        sa_update(UserThread)
-                        .where(UserThread.thread_id == thread_id)
-                        .values(update_time=now, update_by=user_id)
-                    )
+        await conversation_dao.sync_thread(
+            user_id=user_id,
+            thread_id=thread_id,
+            agent_id=agent_id,
+            title=title,
+            is_new=is_new,
+            now=datetime.now(),
+        )
     except Exception as e:
         logger.warning(f"同步会话到 user_threads 失败: {e}")
 
@@ -556,19 +493,11 @@ async def get_detail(
         {"id": "...", "title": "...", "messages": [...], "is_favorited": bool, "pending_tool": {...} | null} 或 None
     """
     # 从数据库获取会话元信息
-    async with get_session() as session:
-        conditions = [
-            UserThread.thread_id == conversation_id,
-            UserThread.delete_flag == 0,  # 只查询未删除的
-        ]
-        if user_id:
-            conditions.append(UserThread.user_id == user_id)
-        result = await session.execute(select(UserThread).where(*conditions))
-        thread = result.scalar_one_or_none()
-        if not thread:
-            return None
-        title = thread.thread_title
-        is_favorited = bool(thread.is_favorited) if thread.is_favorited is not None else False
+    thread = await conversation_dao.get_thread(conversation_id, user_id)
+    if not thread:
+        return None
+    title = thread.thread_title
+    is_favorited = bool(thread.is_favorited) if thread.is_favorited is not None else False
 
     # 从 checkpoint 获取消息和中断状态
     messages = []
@@ -618,27 +547,9 @@ async def delete(db_path: str, conversation_id: str, user_id: Optional[str] = No
     Returns:
         是否成功
     """
-    async with get_session() as session:
-        # 检查会话是否存在且未删除
-        conditions = [
-            UserThread.thread_id == conversation_id,
-            UserThread.delete_flag == 0,
-        ]
-        if user_id:
-            conditions.append(UserThread.user_id == user_id)
-        result = await session.execute(select(UserThread).where(*conditions))
-        if not result.scalar_one_or_none():
-            return False
-
-        # 逻辑删除：设置 delete_flag = 1
-        update_conditions = [UserThread.thread_id == conversation_id]
-        if user_id:
-            update_conditions.append(UserThread.user_id == user_id)
-        await session.execute(
-            sa_update(UserThread)
-            .where(*update_conditions)
-            .values(delete_flag=1, update_time=datetime.now(), update_by=user_id or "")
-        )
+    deleted = await conversation_dao.soft_delete(conversation_id=conversation_id, user_id=user_id)
+    if not deleted:
+        return False
 
     logger.info(f"逻辑删除对话: {conversation_id}")
     return True
@@ -656,26 +567,9 @@ async def update_title(db_path: str, conversation_id: str, title: str, user_id: 
     Returns:
         是否成功
     """
-    async with get_session() as session:
-        # 检查会话是否存在且未删除
-        conditions = [
-            UserThread.thread_id == conversation_id,
-            UserThread.delete_flag == 0,
-        ]
-        if user_id:
-            conditions.append(UserThread.user_id == user_id)
-        result = await session.execute(select(UserThread).where(*conditions))
-        if not result.scalar_one_or_none():
-            return False
-
-        update_conditions = [UserThread.thread_id == conversation_id]
-        if user_id:
-            update_conditions.append(UserThread.user_id == user_id)
-        await session.execute(
-            sa_update(UserThread)
-            .where(*update_conditions)
-            .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
-        )
+    updated = await conversation_dao.update_title(conversation_id=conversation_id, title=title, user_id=user_id)
+    if not updated:
+        return False
 
     logger.info(f"更新对话标题: {conversation_id} -> {title}")
     return True
@@ -701,20 +595,12 @@ async def generate_title(
         生成的标题，失败返回None
     """
     if get_graph is None:
-        async with get_session() as session:
-            conditions = [
-                UserThread.thread_id == conversation_id,
-                UserThread.delete_flag == 0,
-            ]
-            if user_id:
-                conditions.append(UserThread.user_id == user_id)
-            result = await session.execute(select(UserThread).where(*conditions))
-            thread = result.scalar_one_or_none()
-            if not thread:
-                return None
-            title = str(thread.thread_title or "").strip()
-            if title and title != "未命名会话":
-                return title
+        thread = await conversation_dao.get_thread(conversation_id, user_id)
+        if not thread:
+            return None
+        title = str(thread.thread_title or "").strip()
+        if title and title != "未命名会话":
+            return title
 
         title = "智能分析会话"
         await update_title(db_path, conversation_id, title, user_id)
@@ -775,35 +661,12 @@ async def toggle_favorite(db_path: str, conversation_id: str, user_id: Optional[
     Returns:
         新的收藏状态（True=已收藏，False=未收藏），会话不存在返回None
     """
-    async with get_session() as session:
-        # 检查会话是否存在且未删除
-        conditions = [
-            UserThread.thread_id == conversation_id,
-            UserThread.delete_flag == 0,
-        ]
-        if user_id:
-            conditions.append(UserThread.user_id == user_id)
-        result = await session.execute(select(UserThread).where(*conditions))
-        thread = result.scalar_one_or_none()
-        if not thread:
-            return None
+    new_favorited = await conversation_dao.toggle_favorite(conversation_id=conversation_id, user_id=user_id)
+    if new_favorited is None:
+        return None
 
-        # 切换收藏状态
-        current_favorited = thread.is_favorited if thread.is_favorited is not None else 0
-        new_favorited = 0 if current_favorited else 1
-
-        # 更新收藏状态
-        update_conditions = [UserThread.thread_id == conversation_id]
-        if user_id:
-            update_conditions.append(UserThread.user_id == user_id)
-        await session.execute(
-            sa_update(UserThread)
-            .where(*update_conditions)
-            .values(is_favorited=new_favorited)
-        )
-
-    logger.info(f"切换收藏状态: {conversation_id} -> {bool(new_favorited)}")
-    return bool(new_favorited)
+    logger.info(f"切换收藏状态: {conversation_id} -> {new_favorited}")
+    return new_favorited
 
 
 async def get_agent_id(db_path: str, conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
@@ -817,13 +680,4 @@ async def get_agent_id(db_path: str, conversation_id: str, user_id: Optional[str
     Returns:
         agent_id，会话不存在返回None
     """
-    async with get_session() as session:
-        conditions = [
-            UserThread.thread_id == conversation_id,
-            UserThread.delete_flag == 0,  # 只查询未删除的
-        ]
-        if user_id:
-            conditions.append(UserThread.user_id == user_id)
-        result = await session.execute(select(UserThread.agent_id).where(*conditions))
-        row = result.scalar_one_or_none()
-        return row
+    return await conversation_dao.get_agent_id(conversation_id=conversation_id, user_id=user_id)

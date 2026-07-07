@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import select
 
+from ..daos.conversation_dao import ConversationDao
 from utils.error_codes import ErrorCode
 from utils.database import get_session
-from utils.models import UserThread
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
@@ -19,6 +18,7 @@ from .common import DATA_ANALYZE_AGENT_ID, _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()
+conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 @router.get("/data-analyze/conversations/{conversation_id}/workspace-files")
 async def list_data_analyze_workspace_files(conversation_id: str, request: Request):
@@ -97,13 +97,8 @@ async def _can_access_data_analyze_conversation(conversation_id: str, user_id: s
     """校验当前用户是否可访问智能分析会话。"""
     if not str(conversation_id or "").strip() or not str(user_id or "").strip():
         return False
-    async with get_session() as db:
-        result = await db.execute(
-            select(UserThread.id).where(
-                UserThread.thread_id == conversation_id,
-                UserThread.user_id == user_id,
-                UserThread.agent_id == DATA_ANALYZE_AGENT_ID,
-                UserThread.delete_flag == 0,
-            )
-        )
-        return result.scalar_one_or_none() is not None
+    return await conversation_dao.exists_user_agent_thread(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        agent_id=DATA_ANALYZE_AGENT_ID,
+    )
