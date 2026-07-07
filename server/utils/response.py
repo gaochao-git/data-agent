@@ -34,7 +34,7 @@ def safe_user_error_message(msg) -> str:
     return text
 
 
-def business_response(data=None, msg: str = "操作成功", code: int = 2000, status: str = "success"):
+def business_response(data=None, msg: str = "操作成功", code: int = 2000, status: str = "success", http_status_code: int = 200):
     """
     统一业务响应 (FastAPI 版本)
 
@@ -43,6 +43,7 @@ def business_response(data=None, msg: str = "操作成功", code: int = 2000, st
         msg: 消息描述（默认 "操作成功"）
         code: 业务状态码（默认 2000）
         status: 状态（支持 "success" / "error"）
+        http_status_code: HTTP 状态码（默认 200）
 
     响应格式：
         {
@@ -72,24 +73,12 @@ def business_response(data=None, msg: str = "操作成功", code: int = 2000, st
     if data is not None:
         response["data"] = data
 
-    return JSONResponse(response)
+    return JSONResponse(response, status_code=http_status_code)
 
 
 def is_chatdata_request(request: Request) -> bool:
     """判断是否是 ChatData 业务接口。"""
     return request.url.path.startswith("/api/chatdata")
-
-
-def http_exception_business_code(status_code: int) -> int:
-    """把 HTTP 状态码映射到现有业务错误码口径。"""
-    code_map = {
-        400: 40001,
-        401: 40101,
-        403: 40301,
-        404: 40404,
-        422: 40001,
-    }
-    return code_map.get(status_code, status_code * 100 + 1)
 
 
 async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -98,8 +87,9 @@ async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPEx
         return await http_exception_handler(request, exc)
     return business_response(
         msg=str(exc.detail or "请求失败"),
-        code=http_exception_business_code(exc.status_code),
+        code=exc.status_code,
         status="error",
+        http_status_code=exc.status_code,
     )
 
 
@@ -107,4 +97,4 @@ async def chatdata_validation_exception_handler(request: Request, exc: RequestVa
     """统一 ChatData 参数校验失败响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
     if not is_chatdata_request(request):
         return await request_validation_exception_handler(request, exc)
-    return business_response(msg="请求参数不合法", code=40001, status="error")
+    return business_response(msg="请求参数不合法", code=422, status="error", http_status_code=422)

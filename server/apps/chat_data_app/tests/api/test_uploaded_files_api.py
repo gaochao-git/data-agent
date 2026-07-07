@@ -39,12 +39,12 @@ def test_uploaded_file_error_branches_use_business_response(client, monkeypatch)
     info_response = client.get("/api/chatdata/uploaded-files/missing")
     delete_response = client.delete("/api/chatdata/uploaded-files/missing")
 
-    assert info_response.status_code == 200
+    assert info_response.status_code == 404
     assert info_response.json()["status"] == "error"
-    assert info_response.json()["code"] == 40404
-    assert delete_response.status_code == 200
+    assert info_response.json()["code"] == 404
+    assert delete_response.status_code == 404
     assert delete_response.json()["status"] == "error"
-    assert delete_response.json()["code"] == 40404
+    assert delete_response.json()["code"] == 404
 
 
 def test_chatdata_http_and_validation_errors_use_business_response(client):
@@ -54,12 +54,12 @@ def test_chatdata_http_and_validation_errors_use_business_response(client):
         data={"thread_id": "thread_1"},
     )
 
-    assert missing_response.status_code == 200
+    assert missing_response.status_code == 404
     assert missing_response.json()["status"] == "error"
-    assert missing_response.json()["code"] == 40404
-    assert validation_response.status_code == 200
+    assert missing_response.json()["code"] == 404
+    assert validation_response.status_code == 422
     assert validation_response.json()["status"] == "error"
-    assert validation_response.json()["code"] == 40001
+    assert validation_response.json()["code"] == 422
 
 
 def test_uploaded_file_download_success_keeps_binary_response(client, monkeypatch):

@@ -47,13 +47,13 @@ async def upload_file_api(
     """
     # 验证文件
     if not file.filename:
-        return business_response(msg="文件名不能为空", code=40001, status="error")
+        return business_response(msg="文件名不能为空", code=400, status="error", http_status_code=400)
 
     # 限制文件大小 (50MB)
     MAX_SIZE = 50 * 1024 * 1024
     content = await file.read()
     if len(content) > MAX_SIZE:
-        return business_response(msg="文件大小不能超过50MB", code=40001, status="error")
+        return business_response(msg="文件大小不能超过50MB", code=400, status="error", http_status_code=400)
 
     # 重置文件指针
     await file.seek(0)
@@ -63,7 +63,7 @@ async def upload_file_api(
         return business_response(data=result, msg="文件上传成功")
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
-        return business_response(msg="文件上传失败，请稍后重试", code=50009, status="error")
+        return business_response(msg="文件上传失败，请稍后重试", code=500, status="error", http_status_code=500)
 
 
 @router.get("/thread/{thread_id}")
@@ -97,7 +97,7 @@ async def get_file_info_api(file_id: str):
     """
     info = await get_file_info(file_id)
     if not info:
-        return business_response(msg="文件不存在", code=40404, status="error")
+        return business_response(msg="文件不存在", code=404, status="error", http_status_code=404)
 
     return business_response(data=info, msg="获取成功")
 
@@ -109,7 +109,7 @@ async def delete_file_api(file_id: str):
     """
     success = await delete_file(file_id)
     if not success:
-        return business_response(msg="文件不存在", code=40404, status="error")
+        return business_response(msg="文件不存在", code=404, status="error", http_status_code=404)
 
     return business_response(data={"file_id": file_id}, msg="删除成功")
 
@@ -121,11 +121,11 @@ async def get_file_content_api(file_id: str):
     """
     info = await get_file_info(file_id)
     if not info:
-        return business_response(msg="文件不存在", code=40404, status="error")
+        return business_response(msg="文件不存在", code=404, status="error", http_status_code=404)
 
     content = await get_file_content(file_id)
     if content is None:
-        return business_response(msg="文件内容不存在", code=40404, status="error")
+        return business_response(msg="文件内容不存在", code=404, status="error", http_status_code=404)
 
     # 设置Content-Type
     file_type = info["file_type"]
