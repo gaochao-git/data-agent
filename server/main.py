@@ -72,11 +72,4 @@ if __name__ == "__main__":
     reload_enabled = _env_flag("FASTAPI_RELOAD", False)
     target_app = "main:app" if reload_enabled else app
     logger.info("[startup] host=0.0.0.0 port=%s reload=%s", port, reload_enabled)
-    uvicorn.run(
-        target_app,
-        host="0.0.0.0",
-        port=port,
-        reload=reload_enabled,
-        access_log=False,
-        log_level="warning",
-    )
+    uvicorn.run(target_app,host="0.0.0.0",port=port,reload=reload_enabled,access_log=False,log_level="warning")
