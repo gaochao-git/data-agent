@@ -2,10 +2,11 @@
 文件上传API路由
 """
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, UploadFile, File, Form
+from fastapi.responses import Response
 
 from utils.logger import get_logger
+from utils.response import business_response
 from .service import (
     upload_file,
     get_file_info,
@@ -32,32 +33,46 @@ async def upload_file_api(
 
     Returns:
         {
-            "file_id": "xxx",
-            "status": "parsing",
-            "original_filename": "xxx.pdf",
-            "file_type": "pdf",
-            "file_size": 12345
+            "status": "success",
+            "msg": "文件上传成功",
+            "code": 2000,
+            "data": {
+                "file_id": "xxx",
+                "status": "parsing",
+                "original_filename": "xxx.pdf",
+                "file_type": "pdf",
+                "file_size": 12345
+            }
         }
     """
     # 验证文件
     if not file.filename:
-        raise HTTPException(status_code=400, detail="文件名不能为空")
+        return business_response(msg="文件名不能为空", code=40001, status="error")
 
     # 限制文件大小 (50MB)
     MAX_SIZE = 50 * 1024 * 1024
     content = await file.read()
     if len(content) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="文件大小不能超过50MB")
+        return business_response(msg="文件大小不能超过50MB", code=40001, status="error")
 
     # 重置文件指针
     await file.seek(0)
 
     try:
         result = await upload_file(file, thread_id)
-        return JSONResponse(result)
+        return business_response(data=result, msg="文件上传成功")
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return business_response(msg="文件上传失败，请稍后重试", code=50009, status="error")
+
+
+@router.get("/thread/{thread_id}")
+async def list_thread_files_api(thread_id: str):
+    """
+    获取会话下的所有文件
+    """
+    files = await list_files_by_thread(thread_id)
+    return business_response(data={"files": files}, msg="获取成功")
 
 
 @router.get("/{file_id}")
@@ -67,19 +82,24 @@ async def get_file_info_api(file_id: str):
 
     Returns:
         {
-            "file_id": "xxx",
-            "status": "completed",
-            "original_filename": "xxx.pdf",
-            "file_type": "pdf",
-            "file_size": 12345,
-            ...
+            "status": "success",
+            "msg": "获取成功",
+            "code": 2000,
+            "data": {
+                "file_id": "xxx",
+                "status": "completed",
+                "original_filename": "xxx.pdf",
+                "file_type": "pdf",
+                "file_size": 12345,
+                ...
+            }
         }
     """
     info = await get_file_info(file_id)
     if not info:
-        raise HTTPException(status_code=404, detail="文件不存在")
+        return business_response(msg="文件不存在", code=40404, status="error")
 
-    return JSONResponse(info)
+    return business_response(data=info, msg="获取成功")
 
 
 @router.delete("/{file_id}")
@@ -89,9 +109,9 @@ async def delete_file_api(file_id: str):
     """
     success = await delete_file(file_id)
     if not success:
-        raise HTTPException(status_code=404, detail="文件不存在")
+        return business_response(msg="文件不存在", code=40404, status="error")
 
-    return JSONResponse({"message": "删除成功"})
+    return business_response(data={"file_id": file_id}, msg="删除成功")
 
 
 @router.get("/{file_id}/content")
@@ -101,11 +121,11 @@ async def get_file_content_api(file_id: str):
     """
     info = await get_file_info(file_id)
     if not info:
-        raise HTTPException(status_code=404, detail="文件不存在")
+        return business_response(msg="文件不存在", code=40404, status="error")
 
     content = await get_file_content(file_id)
     if content is None:
-        raise HTTPException(status_code=404, detail="文件内容不存在")
+        return business_response(msg="文件内容不存在", code=40404, status="error")
 
     # 设置Content-Type
     file_type = info["file_type"]
@@ -118,15 +138,6 @@ async def get_file_content_api(file_id: str):
             "Content-Disposition": f'attachment; filename="{info["original_filename"]}"'
         }
     )
-
-
-@router.get("/thread/{thread_id}")
-async def list_thread_files_api(thread_id: str):
-    """
-    获取会话下的所有文件
-    """
-    files = await list_files_by_thread(thread_id)
-    return JSONResponse({"files": files})
 
 
 def _get_content_type(file_type: str) -> str:

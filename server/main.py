@@ -4,7 +4,9 @@ from pathlib import Path
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from utils.lang_util.common_util import load_runtime_env
 
@@ -17,6 +19,7 @@ print(
 
 from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger
+from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
 from utils.lang_util.checkpoint import setup_checkpointer  # noqa: E402
@@ -32,6 +35,7 @@ except ImportError:
     pass  # macOS 等平台无法安装 pysqlite3-binary，使用系统自带的 sqlite3
 
 logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,6 +59,8 @@ def _env_flag(key: str, default: bool = True) -> bool:
 
 
 app = FastAPI(title="data-agent", lifespan=lifespan)
+app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)
+app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

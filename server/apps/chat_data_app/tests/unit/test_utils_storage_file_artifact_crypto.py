@@ -1,8 +1,6 @@
 import asyncio
 import base64
-import importlib
 import os
-import runpy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -226,10 +224,9 @@ def test_crypto_key_validation_encrypt_decrypt_and_errors(monkeypatch):
 
 
 def test_crypto_command_line_usage(monkeypatch, capsys):
-    module = importlib.import_module("utils.crypto")
     monkeypatch.setattr("sys.argv", ["crypto.py"])
     with pytest.raises(SystemExit) as exc:
-        exec(Path(module.__file__).read_text(encoding="utf-8"), {"__name__": "__main__", "__file__": module.__file__})
+        crypto.main()
     assert exc.value.code == 1
     assert "用法:" in capsys.readouterr().out
 
@@ -238,17 +235,17 @@ def test_crypto_command_line_encrypt_decrypt_and_error(monkeypatch, capsys):
     monkeypatch.setenv("ENCRYPT_KEY", "00112233445566778899aabbccddeeff")
 
     monkeypatch.setattr("sys.argv", ["crypto.py", "encrypt", "secret"])
-    runpy.run_module("utils.crypto", run_name="__main__")
+    crypto.main()
     encrypted = capsys.readouterr().out.strip()
     assert ":" in encrypted
 
     monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", encrypted])
-    runpy.run_module("utils.crypto", run_name="__main__")
+    crypto.main()
     assert capsys.readouterr().out.strip() == "secret"
 
     monkeypatch.setattr("sys.argv", ["crypto.py", "decrypt", "bad-format"])
     with pytest.raises(SystemExit) as exc:
-        runpy.run_module("utils.crypto", run_name="__main__")
+        crypto.main()
     assert exc.value.code == 1
     assert "错误:" in capsys.readouterr().out
 

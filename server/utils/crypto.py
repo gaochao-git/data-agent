@@ -7,6 +7,7 @@
 
 import os
 import base64
+import sys
 from typing import Optional
 
 from gmssl.sm4 import CryptSM4, SM4_ENCRYPT, SM4_DECRYPT
@@ -123,10 +124,10 @@ def decrypt_env_value(name: str, *, required: bool = False) -> str:
 
 # ============ 命令行工具 ============
 
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 3 or sys.argv[1].lower() not in ("encrypt", "decrypt"):
+def main(argv: Optional[list[str]] = None) -> None:
+    """命令行入口。"""
+    args = list(sys.argv if argv is None else argv)
+    if len(args) < 3 or args[1].lower() not in ("encrypt", "decrypt"):
         print("用法:")
         print("  加密: python -m utils.crypto encrypt <密码>")
         print("  解密: python -m utils.crypto decrypt <密文>")
@@ -134,11 +135,15 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        cmd = sys.argv[1].lower()
+        cmd = args[1].lower()
         if cmd == "encrypt":
-            print(encrypt_password(sys.argv[2]))
+            print(encrypt_password(args[2]))
         else:
-            print(decrypt_password(sys.argv[2]))
+            print(decrypt_password(args[2]))
     except ValueError as e:
         print(f"错误: {e}")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -3,6 +3,10 @@
 提供标准的 API 响应格式，便于前后端统一处理
 """
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
 
 SAFE_INTERNAL_ERROR_MESSAGE = "后端服务异常，请稍后重试"
 
@@ -69,3 +73,38 @@ def business_response(data=None, msg: str = "操作成功", code: int = 2000, st
         response["data"] = data
 
     return JSONResponse(response)
+
+
+def is_chatdata_request(request: Request) -> bool:
+    """判断是否是 ChatData 业务接口。"""
+    return request.url.path.startswith("/api/chatdata")
+
+
+def http_exception_business_code(status_code: int) -> int:
+    """把 HTTP 状态码映射到现有业务错误码口径。"""
+    code_map = {
+        400: 40001,
+        401: 40101,
+        403: 40301,
+        404: 40404,
+        422: 40001,
+    }
+    return code_map.get(status_code, status_code * 100 + 1)
+
+
+async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """统一 ChatData HTTPException 响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
+    if not is_chatdata_request(request):
+        return await http_exception_handler(request, exc)
+    return business_response(
+        msg=str(exc.detail or "请求失败"),
+        code=http_exception_business_code(exc.status_code),
+        status="error",
+    )
+
+
+async def chatdata_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """统一 ChatData 参数校验失败响应格式，非 ChatData 路径走 FastAPI 默认处理。"""
+    if not is_chatdata_request(request):
+        return await request_validation_exception_handler(request, exc)
+    return business_response(msg="请求参数不合法", code=40001, status="error")

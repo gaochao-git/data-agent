@@ -96,8 +96,12 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
         json={"text": "订单状态：1 表示有效"},
     )
 
-    assert get_response.status_code == 401
-    assert generate_response.status_code == 401
+    assert get_response.status_code == 200
+    assert get_response.json()["status"] == "error"
+    assert get_response.json()["code"] == 40101
+    assert generate_response.status_code == 200
+    assert generate_response.json()["status"] == "error"
+    assert generate_response.json()["code"] == 40101
 
 
 def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
