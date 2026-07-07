@@ -1,4 +1,4 @@
-from utils.file_service import routes as uploaded_file_routes
+from apps.chat_data_app.routers import uploaded_files as uploaded_file_routes
 from utils.error_codes import ErrorCode
 
 

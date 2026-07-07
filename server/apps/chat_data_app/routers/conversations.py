@@ -15,7 +15,7 @@ from langgraph.types import Command
 from langchain_core.messages import AIMessage
 
 from utils.error_codes import ErrorCode, ensure_defined_error_code
-from utils.lang_util import conversation
+from utils import conversation
 from utils import file_manager
 from utils.response import business_response
 from utils.logger import get_logger
@@ -84,7 +84,7 @@ def register_agent(
     global _default_db_path
 
     # 使用公共 checkpointer
-    from utils.lang_util.checkpoint import DB_PATH, get_checkpointer
+    from utils.checkpoint import DB_PATH, get_checkpointer
 
     _agent_configs[agent_id] = {
         "db_path": DB_PATH,  # 保留用于兼容，实际已不使用
@@ -300,7 +300,7 @@ def _get_current_user_identity(request: Request) -> tuple[str, str]:
 
 # ============ 路由 ============
 
-router = APIRouter(prefix="/api/chatdata/conversations", tags=["conversations"])
+router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
 @router.post("", status_code=201)
@@ -878,7 +878,7 @@ async def get_artifact(artifact_id: str, req: Request):
         "data": { ... }  // Artifact 数据内容
     }
     """
-    from utils.lang_util.artifact_store import load_artifact_meta_by_id
+    from utils.artifact_store import load_artifact_meta_by_id
 
     if not artifact_id:
         return business_response(msg="artifact_id 不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")

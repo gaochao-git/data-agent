@@ -8,7 +8,7 @@ from datetime import datetime, time as datetime_time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
-from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask
+from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
 
 from . import query_runtime

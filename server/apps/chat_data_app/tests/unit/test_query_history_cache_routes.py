@@ -22,7 +22,7 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app import routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
 from apps.chat_data_app.services import dashboard_runtime, query_runtime
-from utils.lang_util.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
+from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
 
 
 @pytest.fixture()

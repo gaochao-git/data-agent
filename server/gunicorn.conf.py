@@ -8,7 +8,7 @@ _SERVER_DIR = Path(__file__).resolve().parent
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-from utils.lang_util.common_util import load_runtime_env
+from utils.common_util import load_runtime_env
 
 
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)

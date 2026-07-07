@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from utils.crypto import decrypt_password
-from utils.lang_util.llm import get_llm
+from utils.llm import get_llm
 
 
 DEFAULT_CHAT_DATA_MAX_TOKENS = 20000

@@ -15,7 +15,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.services import dashboard_service as dashboard_service_module
 from apps.chat_data_app.services.dashboard_service import DashboardService
-from utils.lang_util.models import Base
+from utils.models import Base
 
 
 @pytest.fixture()

@@ -7,8 +7,8 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, func, or_, select
 
-from utils.lang_util.database import get_session as default_get_session
-from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask
+from utils.database import get_session as default_get_session
+from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 
 
 class QueryHistoryDao:

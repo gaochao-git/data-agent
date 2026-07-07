@@ -6,12 +6,12 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, func, or_, select, update
 
-from utils.lang_util.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
+from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
 
 def get_session():
     """运行时获取业务库会话，避免无数据库环境导入技能模块失败。"""
-    from utils.lang_util.database import get_session as session_context
+    from utils.database import get_session as session_context
     return session_context()
 
 

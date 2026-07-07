@@ -7,8 +7,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from utils.lang_util import conversation as conversation_module
-from utils.lang_util.models import Base
+from utils import conversation as conversation_module
+from utils.models import Base
 
 
 @pytest.fixture()

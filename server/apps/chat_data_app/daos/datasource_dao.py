@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-from utils.lang_util.database import get_session
-from utils.lang_util.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel, SemanticConfig
+from utils.database import get_session
+from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel, SemanticConfig
 from utils.logger import get_logger
 from .datasource_dao_helpers import (
     _batch_items,

@@ -16,8 +16,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy import select
 
-from utils.lang_util.database import get_session
-from utils.lang_util.models import ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache
+from utils.database import get_session
+from utils.models import ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache
 from utils.logger import get_logger
 
 from ..schema import ExecuteSqlRequest, QueryTaskCreateRequest

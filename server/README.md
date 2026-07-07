@@ -5,8 +5,8 @@
 当前后端只挂载智能问数相关模块：
 
 - `apps/chat_data_app`
-- `utils/lang_util/conversation_router.py`
-- `utils/file_service`
+- `apps/chat_data_app/routers/`
+- `utils/` 提供底层能力，不直接挂载 HTTP 路由
 
 ## 目录概览
 
@@ -16,8 +16,7 @@ server/
 ├── requirements.txt                # Python 依赖
 ├── conf/                           # 机房环境配置、示例和 IP 映射
 ├── apps/chat_data_app/             # 智能问数核心模块
-├── utils/lang_util/                # 会话、LangGraph、artifact、LLM 公共能力
-├── utils/file_service/             # 文件上传/解析基础服务
+├── utils/                          # 日志、响应、数据库、LLM、会话、artifact、文件基础服务
 └── middleware/                     # API 日志等中间件
 ```
 
@@ -100,11 +99,11 @@ kill -9 $(lsof -ti :5001)
 
 智能问数：
 
-- `/agents/api/chatdata/*`
-- `/agents/api/chatdata/conversations/*`
+- `/api/chatdata/*`
+- `/api/chatdata/conversations/*`
 - `/api/chatdata/uploaded-files/*`
 
-具体接口以 `apps/chat_data_app/routes.py`、`apps/chat_data_app/routers/` 和 `utils/lang_util/conversation_router.py` 为准。
+具体接口以 `apps/chat_data_app/routes.py` 和 `apps/chat_data_app/routers/` 为准。
 
 ## 测试
 

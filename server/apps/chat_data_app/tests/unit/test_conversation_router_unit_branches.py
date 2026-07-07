@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
-from utils.lang_util import conversation_router
+from apps.chat_data_app.routers import conversations as conversation_router
 
 
 def payload(response):
@@ -486,7 +486,7 @@ async def test_file_and_artifact_routes(router_state, monkeypatch):
     assert payload(await conversation_router.download_file("", "f1", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert payload(await conversation_router.list_files("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
-    import utils.lang_util.artifact_store as artifact_store
+    import utils.artifact_store as artifact_store
 
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda artifact_id: {
         "conversation_id": "conv",
@@ -640,7 +640,7 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
     monkeypatch.setattr(conversation_router.file_manager, "list_files", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("list files down")))
     assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_LIST_FAILED
 
-    import utils.lang_util.artifact_store as artifact_store
+    import utils.artifact_store as artifact_store
 
     monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "", "data": {"ok": True}})
     assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND

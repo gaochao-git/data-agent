@@ -22,8 +22,8 @@ from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
 from utils import response as response_module
 from utils import logger as logger_module
-from utils.lang_util import checkpoint, common_util, database, llm
-from utils.lang_util.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
+from utils import checkpoint, common_util, database, llm
+from utils.db_failover import DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 
 def _payload(response):
@@ -426,7 +426,7 @@ def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
 
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "sqlite")
     monkeypatch.setitem(sys.modules, "aiosqlite", SimpleNamespace(connect=lambda _path: FakeConn()))
-    monkeypatch.setattr("utils.lang_util.database.init_database", lambda: asyncio.sleep(0, result=events.append(("init", None))))
+    monkeypatch.setattr("utils.database.init_database", lambda: asyncio.sleep(0, result=events.append(("init", None))))
     asyncio.run(checkpoint.setup_checkpointer())
     assert events == [("execute", "PRAGMA journal_mode=WAL"), ("commit", None), ("init", None)]
 

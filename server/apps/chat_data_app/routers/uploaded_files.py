@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
-from .service import (
+from utils.uploaded_file_service import (
     upload_file,
     get_file_info,
     delete_file,
@@ -18,7 +18,7 @@ from .service import (
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/chatdata/uploaded-files", tags=["uploaded-files"])
+router = APIRouter(prefix="/uploaded-files", tags=["uploaded-files"])
 
 
 @router.post("/upload")

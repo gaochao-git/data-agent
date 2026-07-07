@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from utils.error_codes import ErrorCode
-from utils.lang_util.database import get_session
-from utils.lang_util.models import UserThread
+from utils.database import get_session
+from utils.models import UserThread
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest

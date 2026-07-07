@@ -31,9 +31,9 @@ from .daos.query_history_dao import QueryHistoryDao
 from .services.semantic_builder_compiler import compile_semantic_builder_sql
 from .agent import get_all_tables_async, get_tables_create_format
 from .agent.sql_assist_graph import get_sql_assist_graph
-from utils.lang_util.database import get_session
-from utils.lang_util import conversation
-from utils.lang_util.models import (
+from utils.database import get_session
+from utils import conversation
+from utils.models import (
     SqlQueryFavorite,
     ChatDataQueryTask,
     ChatDataQueryExecution,
@@ -43,6 +43,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 from .routers.common import _get_current_user
 from .routers.config import router as config_router
+from .routers.conversations import router as conversations_router
 from .routers.datasource_admin import router as datasource_admin_router
 from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
@@ -50,6 +51,7 @@ from .routers.data_analyze_workspace import router as data_analyze_workspace_rou
 from .routers.skills import router as skills_router
 from .routers.dashboard import router as dashboard_router
 from .routers.semantic_config import router as semantic_config_router
+from .routers.uploaded_files import router as uploaded_files_router
 import time
 
 logger = get_logger(__name__)
@@ -70,6 +72,7 @@ router = APIRouter(
     prefix="/api/chatdata",
     tags=["ChatData NL2SQL"]
 )
+router.include_router(conversations_router)
 router.include_router(config_router)
 router.include_router(evaluation_router)
 router.include_router(data_analyze_workspace_router)
@@ -78,6 +81,7 @@ router.include_router(dashboard_router)
 router.include_router(semantic_config_router)
 router.include_router(datasource_public_router)
 router.include_router(datasource_admin_router)
+router.include_router(uploaded_files_router)
 
 
 def _normalize_query_history_source_filter(source: Optional[str]) -> Optional[List[str]]:

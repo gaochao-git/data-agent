@@ -18,13 +18,13 @@ from typing import Optional
 from sqlalchemy import select, update as sa_update
 
 from utils.logger import get_logger
-from utils.lang_util.database import get_session
-from utils.lang_util.models import UploadedFile
+from utils.database import get_session
+from utils.models import UploadedFile
 
 logger = get_logger(__name__)
 
 # 上传文件根目录
-UPLOADS_ROOT = Path(__file__).resolve().parent.parent.parent / "uploads"
+UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
 
 # 支持的图片类型
 IMAGE_TYPES = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}

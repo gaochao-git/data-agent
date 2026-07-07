@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from utils.lang_util.database import get_session as default_get_session
-from utils.lang_util.models import ChatDataEvalCase, ChatDataEvalRun, ChatDataEvalRunCase
+from utils.database import get_session as default_get_session
+from utils.models import ChatDataEvalCase, ChatDataEvalRun, ChatDataEvalRunCase
 
 from ..daos.evaluation_dao import EvaluationDao
 

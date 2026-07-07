@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.agent import state
 from apps.chat_data_app.agent.tools import common
-from utils.lang_util import conversation
+from utils import conversation
 
 
 def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):

@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from typing import Optional
 
-from utils.lang_util.common_util import get_active_idc, get_local_ip
+from utils.common_util import get_active_idc, get_local_ip
 
 
 DEFAULT_BACKUP_COUNT = 30  # 保留30天

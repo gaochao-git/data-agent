@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from utils.lang_util.common_util import load_runtime_env
+from utils.common_util import load_runtime_env
 
 _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
@@ -21,9 +21,7 @@ from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
-from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
-from utils.lang_util.checkpoint import setup_checkpointer  # noqa: E402
-from utils.file_service import file_router  # noqa: E402
+from utils.checkpoint import setup_checkpointer  # noqa: E402
 
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
 # 用 pysqlite3 替换 sqlite3，解决 deterministic=True 在旧 SQLite 上报错的问题
@@ -40,7 +38,7 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    from utils.lang_util.database import close_database
+    from utils.database import close_database
 
     await setup_checkpointer()
     yield
@@ -69,8 +67,6 @@ app.add_middleware(
 )
 app.add_middleware(APIAccessLogMiddleware)
 app.include_router(chat_data_router)
-app.include_router(conversation_router)
-app.include_router(file_router)
 
 
 if __name__ == "__main__":

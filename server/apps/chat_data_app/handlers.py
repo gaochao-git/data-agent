@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from utils.logger import get_logger
-from utils.lang_util import conversation
+from utils import conversation
 from .agent import (
     get_chat_data_graph,
     get_checkpointer,

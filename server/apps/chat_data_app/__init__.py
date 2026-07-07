@@ -23,7 +23,7 @@ def _init_app() -> None:
         from .agent.sql_assist_graph import get_sql_assist_graph
         from .handlers import data_analyze_completion_handler, sql_completion_handler
         from .services.feature_gate import get_data_analyze_availability
-        from utils.lang_util.conversation_router import (
+        from .routers.conversations import (
             register_agent,
             register_agent_availability_checker,
             register_completion_handler,

@@ -13,7 +13,7 @@ from .state import ChatDataAgentState
 from .chat_data_graph import get_chat_data_graph
 from .nodes import agent_node, create_agent_node
 from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE, TABLE_SELECTOR_PROMPT
-from utils.lang_util.checkpoint import get_checkpointer, DB_PATH
+from utils.checkpoint import get_checkpointer, DB_PATH
 from .tools import (
     get_all_tables_async,
     get_tables_name_comment,

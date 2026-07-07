@@ -21,7 +21,7 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE
-from utils.lang_util.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
+from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
 
 @pytest.fixture()

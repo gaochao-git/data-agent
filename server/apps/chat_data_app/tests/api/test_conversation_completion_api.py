@@ -10,7 +10,7 @@ from apps.chat_data_app import routes
 from apps.chat_data_app.agent import nodes
 from apps.chat_data_app.services import semantic_builder_compiler, semantic_tools
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
-from utils.lang_util import conversation_router
+from apps.chat_data_app.routers import conversations as conversation_router
 
 
 class FakeMessageChunk:
@@ -280,20 +280,22 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     ]
     tool_args = {
         "semantic_config_id": "cfg_a",
-        "metrics": ["出金总额", "销售额"],
-        "dimensions": ["订单状态"],
-        "filters": [],
-        "having": [{
-            "left": {"type": "metric", "name": "出金总额"},
-            "operator": ">",
-            "right": {
-                "type": "binary",
-                "operator": "*",
-                "left": {"type": "metric", "name": "销售额"},
-                "right": {"type": "literal", "value": 10},
-            },
-        }],
-        "order_by": [],
+        "dsl": {
+            "metrics": ["出金总额", "销售额"],
+            "dimensions": ["订单状态"],
+            "filters": [],
+            "having": [{
+                "left": {"type": "metric", "name": "出金总额"},
+                "operator": ">",
+                "right": {
+                    "type": "binary",
+                    "operator": "*",
+                    "left": {"type": "metric", "name": "销售额"},
+                    "right": {"type": "literal", "value": 10},
+                },
+            }],
+            "order_by": [],
+        },
     }
     fake_llm = ToolCallingLLM(tool_args)
 

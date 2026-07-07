@@ -15,7 +15,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.services import hive_sync, mysql_sync, query_metadata
 from apps.chat_data_app.services.hive_sync import HiveSyncService
 from apps.chat_data_app.services.mysql_sync import MySQLSyncService
-from utils.lang_util.models import ChatDataQueryTask, SqlQueryHistory
+from utils.models import ChatDataQueryTask, SqlQueryHistory
 
 
 def test_hive_identifier_validation_and_socket_timeout():

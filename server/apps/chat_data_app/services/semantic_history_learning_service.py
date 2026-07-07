@@ -9,8 +9,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from langchain_core.messages import HumanMessage
 
-from utils.lang_util import conversation
-from utils.lang_util.checkpoint import get_checkpointer
+from utils import conversation
+from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 
 from ..agent import get_chat_data_graph

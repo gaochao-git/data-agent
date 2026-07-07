@@ -24,8 +24,6 @@ from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
-from utils.file_service import file_router  # noqa: E402
-from utils.lang_util.conversation_router import router as conversation_router  # noqa: E402
 from utils.crypto import decrypt_env_value  # noqa: E402
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
@@ -39,8 +37,6 @@ app = FastAPI(title="ChatData API Contract Test")
 app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)
 app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)
 app.include_router(chat_data_router)
-app.include_router(conversation_router)
-app.include_router(file_router)
 
 
 @pytest.fixture()

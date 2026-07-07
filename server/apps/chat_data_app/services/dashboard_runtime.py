@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
-from utils.lang_util.database import get_session
-from utils.lang_util.models import ChatDataQueryExecution
+from utils.database import get_session
+from utils.models import ChatDataQueryExecution
 from utils.logger import get_logger
 
 from ..agent.tools import execute_sql_direct as execute_sql_direct_runner

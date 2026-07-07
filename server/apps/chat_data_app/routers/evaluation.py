@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
-from utils.lang_util.database import get_session
+from utils.database import get_session
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt

@@ -14,13 +14,13 @@ from fastapi import UploadFile
 from sqlalchemy import select, delete as sa_delete, update as sa_update
 
 from utils.logger import get_logger
-from utils.lang_util.database import get_session
-from utils.lang_util.models import UploadedFile
+from utils.database import get_session
+from utils.models import UploadedFile
 
 logger = get_logger(__name__)
 
 # 上传文件根目录
-UPLOADS_ROOT = Path(__file__).resolve().parent.parent.parent / "uploads"
+UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
 
 
 def _get_storage_dir(thread_id: str, file_id: str) -> str:

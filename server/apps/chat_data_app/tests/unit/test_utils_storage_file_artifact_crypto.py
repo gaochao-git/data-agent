@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from utils import crypto, file_manager, storage_paths
-from utils.lang_util import artifact_store
+from utils import artifact_store
 
 
 def test_storage_paths_scope_and_path_helpers(tmp_path):

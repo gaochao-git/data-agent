@@ -11,8 +11,8 @@ from typing import List, Dict, Any, Optional
 
 from sqlalchemy import or_, select, update
 
-from utils.lang_util.database import get_session
-from utils.lang_util.models import ChatDataDashboard, ChatDataDashboardPanel
+from utils.database import get_session
+from utils.models import ChatDataDashboard, ChatDataDashboardPanel
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

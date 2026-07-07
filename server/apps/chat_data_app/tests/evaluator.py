@@ -46,7 +46,7 @@ class NL2SQLEvaluator:
             LLM 评估结果：{"is_correct": bool, "confidence": float, "reason": str}
         """
         from langchain_core.messages import HumanMessage
-        from utils.lang_util.llm import get_llm
+        from utils.llm import get_llm
 
         prompt = f"""你是一个 SQL 专家，需要评估生成的 SQL 是否能正确回答用户的问题。
 

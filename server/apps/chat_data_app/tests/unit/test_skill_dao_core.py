@@ -16,7 +16,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.daos import skill_dao
 from apps.chat_data_app.daos.skill_dao import SkillDao
-from utils.lang_util.models import Base, ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
+from utils.models import Base, ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
 
 @pytest.fixture()

@@ -5,7 +5,7 @@ from typing_extensions import TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from utils.lang_util.artifact_store import save_artifact, ArtifactType
+from utils.artifact_store import save_artifact, ArtifactType
 
 
 def save_query_result(data: dict, conversation_id: str | None = None) -> str:
