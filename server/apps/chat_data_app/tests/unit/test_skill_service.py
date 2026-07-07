@@ -19,6 +19,11 @@ from apps.chat_data_app.services import skill_service as skill_service_module
 from apps.chat_data_app.services.skill_service import SkillService, skill_service
 
 
+@pytest.fixture(autouse=True)
+def _patch_user_skill_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+
+
 def test_parse_metadata_supports_nested_skill_metadata(tmp_path):
     skill_dir = tmp_path / "demo-skill"
     skill_dir.mkdir()
@@ -189,7 +194,8 @@ def test_skill_service_accepts_hyphenated_letters_skill_name():
     })
 
 
-def test_skill_service_helper_branches_copy_and_frontmatter(tmp_path):
+def test_skill_service_helper_branches_copy_and_frontmatter(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     source = tmp_path / "source"
     version = tmp_path / "version"
     (source / "references" / "nested").mkdir(parents=True)
@@ -213,7 +219,8 @@ def test_skill_service_helper_branches_copy_and_frontmatter(tmp_path):
     assert skill_service_module._alpha_suffix(27) == "aa"
 
 
-def test_skill_service_helper_rejects_invalid_source_dir(tmp_path):
+def test_skill_service_helper_rejects_invalid_source_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     source = tmp_path / "source"
     source.mkdir()
     (source / "references").write_text("not-dir", encoding="utf-8")
@@ -774,7 +781,8 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
     assert dao.seen == ["sales-analysis-copy", "sales-analysis-copy-a"]
 
 
-def test_skill_service_file_path_validation_and_listing(tmp_path):
+def test_skill_service_file_path_validation_and_listing(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     service = skill_service_module.SkillService()
     version_dir = tmp_path / "skill" / "versions" / "v1"
     (version_dir / "references" / "nested").mkdir(parents=True)
@@ -806,6 +814,45 @@ def test_skill_service_file_path_validation_and_listing(tmp_path):
 
     with pytest.raises(ValueError, match="技能版本目录无效"):
         service._resolve_file_under_version_dir(Path(""), "references", "guide")
+
+
+def test_skill_service_rejects_paths_outside_user_skill_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path / "skills")
+    service = skill_service_module.SkillService()
+
+    outside_version = tmp_path / "outside" / "versions" / "v1"
+    outside_version.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="越界"):
+        service._resolve_user_file_under_version_dir(outside_version, "references", "guide")
+    with pytest.raises(ValueError, match="越界"):
+        skill_service_module._copy_version_dir(outside_version, tmp_path / "skills" / "demo-skill" / "versions" / "v2")
+
+
+def test_skill_service_rejects_symlink_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path / "skills")
+    source = tmp_path / "source"
+    source_references = source / "references"
+    source_references.mkdir(parents=True)
+    secret = tmp_path / "secret.md"
+    secret.write_text("secret", encoding="utf-8")
+    (source_references / "link.md").symlink_to(secret)
+
+    target = tmp_path / "skills" / "demo-skill" / "versions" / "v1"
+    with pytest.raises(ValueError, match="软链接"):
+        skill_service_module._safe_copy_skill_dir(source, target)
+
+
+def test_skill_service_rejects_symlink_fixed_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path / "skills")
+    version_dir = tmp_path / "skills" / "demo-skill" / "versions" / "v1"
+    external_references = tmp_path / "external-references"
+    external_references.mkdir(parents=True)
+    version_dir.mkdir(parents=True)
+    (version_dir / "references").symlink_to(external_references, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="软链接"):
+        skill_service_module._ensure_skill_dirs(version_dir)
 
 
 def test_sync_builtin_skills_async_updates_existing_and_creates_new(tmp_path, monkeypatch):
@@ -1097,7 +1144,8 @@ def test_import_user_skill_from_directory_async_rejects_invalid_inputs(tmp_path,
 
 def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
-    draft_dir = tmp_path / "source" / "versions" / "v2"
+    user_skill_root = tmp_path / "user"
+    draft_dir = user_skill_root / "source" / "versions" / "v2"
     draft_dir.mkdir(parents=True)
     (draft_dir / "SKILL.md").write_text(
         "---\nname: source-skill\ntitle: 草稿技能\nmetadata:\n  category: custom\n---\n\n# 草稿内容\n",
@@ -1130,7 +1178,7 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
             created["version"] = version
 
         async def get_version_async(self, skill_id, version_no):
-            return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(tmp_path / "user" / "source-skill-copy" / "versions" / "v1")}
+            return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(user_skill_root / "source-skill-copy" / "versions" / "v1")}
 
     async def fake_get_skill(skill_id, include_draft=False, user_id=""):
         return {"skill_id": skill_id, "name": "source-skill-copy", "draft_version_no": 1}
@@ -1139,7 +1187,7 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
         monkeypatch.setattr(service, "_dao", FakeStore())
         monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
         monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "new-id"})())
-        monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path / "user")
+        monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", user_skill_root)
         result = await service.copy_user_skill_async("source-id", user_id="u1")
         assert result["name"] == "source-skill-copy"
         assert created["skill"]["skill_title"] == "源技能 副本"
@@ -1218,6 +1266,7 @@ def test_version_dir_resolution_async_system_builtin_and_permission_errors(tmp_p
 
 
 def test_archive_user_skill_async_renames_root_and_releases_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
     service = skill_service_module.SkillService()
     root_dir = tmp_path / "demo-skill"
     version_dir = root_dir / "versions" / "v1"
@@ -1248,6 +1297,7 @@ def test_archive_user_skill_async_renames_root_and_releases_name(tmp_path, monke
 
 def test_skill_service_additional_helper_branches(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
 
     target_dir = tmp_path / "target"
     skill_service_module._copy_version_dir(tmp_path / "missing-source", target_dir)
@@ -1683,6 +1733,7 @@ def test_editable_version_dir_and_draft_creation_async_edge_branches(tmp_path, m
 
 def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
+    monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
 
     class EmptyStore:
         async def get_skill_async(self, name, user_id=""):

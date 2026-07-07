@@ -28,6 +28,45 @@ VALID_SKILL_SCOPES = {"query", "analyze", "all"}
 QUERY_SKILL_CATEGORIES = {"", "custom", "query_routing", "business_query"}
 
 
+def _user_skill_root() -> Path:
+    """返回用户技能物理根目录。"""
+    return USER_SKILL_ROOT.expanduser().resolve()
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _resolve_user_skill_path(path: Path, field_name: str = "技能路径") -> Path:
+    """解析并确保用户技能路径没有越过用户技能根目录。"""
+    root = _user_skill_root()
+    resolved = Path(path).expanduser().resolve()
+    if not _is_relative_to(resolved, root):
+        raise ValueError(f"{field_name}越界")
+    return resolved
+
+
+def _resolve_user_skill_root_dir(skill_name: str) -> Path:
+    """根据技能标识计算用户技能根目录，不从外部入参接收目录。"""
+    return _resolve_user_skill_path(_user_skill_root() / str(skill_name or "").strip(), "技能根目录")
+
+
+def _resolve_user_skill_root_value(path_value: Any, fallback_name: str) -> Path:
+    """解析数据库中的用户技能根目录，缺省时按技能标识计算。"""
+    raw = str(path_value or "").strip()
+    if raw:
+        return _resolve_user_skill_path(Path(raw), "技能根目录")
+    return _resolve_user_skill_root_dir(fallback_name)
+
+
+def _resolve_user_skill_version_dir(path_value: Any, field_name: str = "技能版本目录") -> Path:
+    """解析数据库中的用户技能版本目录，并限制在用户技能根目录下。"""
+    raw = str(path_value or "").strip()
+    if not raw:
+        raise ValueError("技能版本目录无效")
+    return _resolve_user_skill_path(Path(raw), field_name)
+
+
 def resolve_skill_name(name: str) -> str:
     """解析技能别名，兼容前端残留标题或旧技能名。"""
     normalized = str(name or "").strip()
@@ -75,16 +114,18 @@ def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
     references = [
         str(item.relative_to(references_root).with_suffix(""))
         for item in references_root.rglob("*.md")
-    ] if references_root.exists() else []
+        if not item.is_symlink()
+    ] if references_root.exists() and not references_root.is_symlink() else []
     scripts = [
         str(item.relative_to(scripts_root))
         for item in scripts_root.rglob("*.py")
-    ] if scripts_root.exists() else []
+        if not item.is_symlink()
+    ] if scripts_root.exists() and not scripts_root.is_symlink() else []
     assets = [
         str(item.relative_to(assets_root))
         for item in assets_root.rglob("*")
-        if item.is_file()
-    ] if assets_root.exists() else []
+        if item.is_file() and not item.is_symlink()
+    ] if assets_root.exists() and not assets_root.is_symlink() else []
     return {
         "references": sorted(references),
         "scripts": sorted(scripts),
@@ -97,7 +138,10 @@ def _ensure_skill_dirs(version_dir: Path) -> None:
     if str(version_dir).strip() in {"", "."}:
         raise ValueError("技能版本目录无效")
     for dir_name in SKILL_FIXED_DIRS:
-        (version_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        target_dir = version_dir / dir_name
+        if target_dir.is_symlink():
+            raise ValueError("技能目录不允许包含软链接")
+        target_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -108,14 +152,17 @@ def _strip_frontmatter(text: str) -> str:
 
 def _safe_copy_skill_dir(source_dir: Path, version_dir: Path) -> None:
     """复制技能固定目录文件到用户技能版本目录。"""
+    target_version_dir = _resolve_user_skill_version_dir(version_dir)
     for dir_name in SKILL_FIXED_DIRS:
         source_subdir = source_dir / dir_name
         if not source_subdir.exists():
             continue
-        if not source_subdir.is_dir():
+        if source_subdir.is_symlink() or not source_subdir.is_dir():
             raise ValueError(f"{dir_name} 必须是目录")
-        target_subdir = version_dir / dir_name
+        target_subdir = target_version_dir / dir_name
         for item in sorted(source_subdir.rglob("*")):
+            if item.is_symlink():
+                raise ValueError("技能目录不允许包含软链接")
             if not item.is_file():
                 continue
             relative_path = item.relative_to(source_subdir)
@@ -126,14 +173,26 @@ def _safe_copy_skill_dir(source_dir: Path, version_dir: Path) -> None:
             shutil.copy2(item, target)
 
 
+def _reject_symlink_tree(root: Path) -> None:
+    """拒绝复制包含软链接的技能版本目录。"""
+    if root.is_symlink():
+        raise ValueError("技能目录不允许包含软链接")
+    for item in root.rglob("*"):
+        if item.is_symlink():
+            raise ValueError("技能目录不允许包含软链接")
+
+
 def _copy_version_dir(source_dir: Path, target_dir: Path) -> None:
     """复制技能版本目录作为新草稿基础。"""
-    if target_dir.exists():
-        raise FileExistsError(f"技能版本目录已存在: {target_dir}")
+    target = _resolve_user_skill_version_dir(target_dir)
+    if target.exists():
+        raise FileExistsError(f"技能版本目录已存在: {target}")
     if source_dir.exists():
-        shutil.copytree(source_dir, target_dir)
+        source = _resolve_user_skill_version_dir(source_dir, "来源技能版本目录")
+        _reject_symlink_tree(source)
+        shutil.copytree(source, target, symlinks=False, ignore_dangling_symlinks=False)
     else:
-        _ensure_skill_dirs(target_dir)
+        _ensure_skill_dirs(target)
 
 
 def _alpha_suffix(index: int) -> str:
@@ -453,7 +512,7 @@ class SkillService:
             raise ValueError(f"技能标识已存在: {skill_name}")
         skill_id = uuid.uuid4().hex
         version_no = 1
-        skill_root_dir = USER_SKILL_ROOT / skill_name
+        skill_root_dir = _resolve_user_skill_root_dir(skill_name)
         version_dir = skill_root_dir / "versions" / f"v{version_no}"
         skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
         parsed = await asyncio.to_thread(parse_metadata, skill_md_path)
@@ -496,6 +555,8 @@ class SkillService:
         if not await asyncio.to_thread(resolved_source.is_dir):
             raise ValueError("技能目录不存在")
         skill_md_path = resolved_source / "SKILL.md"
+        if await asyncio.to_thread(skill_md_path.is_symlink):
+            raise ValueError("技能目录不允许包含软链接")
         if not await asyncio.to_thread(skill_md_path.is_file):
             raise ValueError("技能目录缺少 SKILL.md")
         parsed = await asyncio.to_thread(parse_metadata, skill_md_path)
@@ -526,7 +587,7 @@ class SkillService:
         if source_skill.get("skill_source") == "system":
             raise PermissionError("系统技能不支持复制")
         source_version = await self._get_copy_source_version_async(source_skill, user_id)
-        source_dir = Path(str(source_version.get("skill_version_dir") or ""))
+        source_dir = _resolve_user_skill_version_dir(source_version.get("skill_version_dir"), "来源技能版本目录")
         skill_md_path = source_dir / "SKILL.md"
         if not await asyncio.to_thread(skill_md_path.is_file):
             raise ValueError("技能版本目录无效")
@@ -568,7 +629,7 @@ class SkillService:
         parsed: Dict[str, Any] = {}
         if "content" in payload:
             draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
-            version_dir = Path(str(draft.get("skill_version_dir") or ""))
+            version_dir = _resolve_user_skill_version_dir(draft.get("skill_version_dir"))
             skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
             parsed = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
         visibility_type = str(payload.get("visibility_type") or skill.get("visibility_type") or "private").strip()
@@ -621,7 +682,7 @@ class SkillService:
         version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         if not version:
             raise ValueError("技能版本不存在")
-        version_dir = Path(str(version.get("skill_version_dir") or ""))
+        version_dir = _resolve_user_skill_version_dir(version.get("skill_version_dir"))
         await asyncio.to_thread(_ensure_skill_dirs, version_dir)
         skill_md = version_dir / "SKILL.md"
         content = await asyncio.to_thread(skill_md.read_text, encoding="utf-8", errors="replace") if skill_md.exists() else ""
@@ -663,7 +724,7 @@ class SkillService:
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权管理该技能文件")
         draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
-        target = self._resolve_file_under_version_dir(Path(str(draft.get("skill_version_dir") or "")), dir_name, file_path)
+        target = self._resolve_user_file_under_version_dir(draft.get("skill_version_dir"), dir_name, file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(target.write_text, str(content or ""), encoding="utf-8")
         clear_metadata_cache()
@@ -687,7 +748,7 @@ class SkillService:
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权管理该技能文件")
         draft = await self._ensure_user_skill_draft_version_async(skill, user_id, operator_name=operator_name)
-        target = self._resolve_file_under_version_dir(Path(str(draft.get("skill_version_dir") or "")), dir_name, file_path)
+        target = self._resolve_user_file_under_version_dir(draft.get("skill_version_dir"), dir_name, file_path)
         if target.exists() and target.is_file():
             target.unlink()
         clear_metadata_cache()
@@ -816,7 +877,7 @@ class SkillService:
             )
         if include_draft and not version:
             version = await self.dao.get_latest_published_version_async(str(row.get("skill_id") or ""))
-        version_dir = Path(str((version or {}).get("skill_version_dir") or ""))
+        version_dir = _resolve_user_skill_version_dir((version or {}).get("skill_version_dir"))
         skill_md = version_dir / "SKILL.md"
         return skill_md if skill_md.exists() else None
 
@@ -835,10 +896,7 @@ class SkillService:
         version = await self.dao.get_version_async(str(skill.get("skill_id")), int(skill_version_no or 0))
         if not version:
             raise ValueError("技能版本不存在")
-        version_dir = Path(str(version.get("skill_version_dir") or ""))
-        if not version_dir:
-            raise ValueError("技能版本目录无效")
-        return version_dir
+        return _resolve_user_skill_version_dir(version.get("skill_version_dir"))
 
     async def _ensure_user_skill_draft_version_async(self, skill: Dict[str, Any], user_id: str, operator_name: str = "") -> Dict[str, Any]:
         """异步复用已有草稿；没有草稿时基于当前发布版本复制出新草稿。"""
@@ -847,7 +905,7 @@ class SkillService:
         if draft:
             return draft
         version_no = await self.dao.next_version_no_async(skill_id)
-        skill_root_dir = Path(str(skill.get("skill_root_dir") or USER_SKILL_ROOT / str(skill.get("skill_name") or skill_id)))
+        skill_root_dir = _resolve_user_skill_root_value(skill.get("skill_root_dir"), str(skill.get("skill_name") or skill_id))
         version_dir = skill_root_dir / "versions" / f"v{version_no}"
         source_version = None
         current_version_no = int(skill.get("current_skill_version_no") or 0)
@@ -857,7 +915,8 @@ class SkillService:
             source_version = await self.dao.get_latest_published_version_async(skill_id)
         source_dir_value = str((source_version or {}).get("skill_version_dir") or "").strip()
         if source_dir_value:
-            await asyncio.to_thread(_copy_version_dir, Path(source_dir_value), version_dir)
+            source_dir = _resolve_user_skill_version_dir(source_dir_value, "来源技能版本目录")
+            await asyncio.to_thread(_copy_version_dir, source_dir, version_dir)
         else:
             await asyncio.to_thread(_ensure_skill_dirs, version_dir)
         await self.dao.insert_version_async({
@@ -949,21 +1008,33 @@ class SkillService:
         version_dir = await self._get_readable_version_dir_async(skill_id, skill_version_no, user_id)
         return self._resolve_file_under_version_dir(version_dir, dir_name, file_path)
 
+    def _resolve_user_file_under_version_dir(self, version_dir: Any, dir_name: str, file_path: str) -> Path:
+        """解析用户技能版本目录下的文件，先校验版本目录归属。"""
+        safe_version_dir = _resolve_user_skill_version_dir(version_dir)
+        return self._resolve_file_under_version_dir(safe_version_dir, dir_name, file_path)
+
     def _resolve_file_under_version_dir(self, version_dir: Path, dir_name: str, file_path: str) -> Path:
         """解析并校验技能版本固定目录下的相对文件路径。"""
+        raw_version_dir = str(version_dir or "").strip()
+        if raw_version_dir in {"", "."}:
+            raise ValueError("技能版本目录无效")
+        safe_version_dir = Path(version_dir).expanduser().resolve()
         normalized_dir = str(dir_name or "").strip()
         if normalized_dir not in SKILL_FIXED_DIRS:
             raise ValueError("只支持 references、assets、scripts 目录")
         normalized_file = str(file_path or "").strip().replace("\\", "/")
         if not normalized_file or normalized_file.startswith("/") or ".." in Path(normalized_file).parts:
             raise ValueError("文件路径无效")
-        _ensure_skill_dirs(version_dir)
-        base_dir = (version_dir / normalized_dir).resolve()
-        target = (base_dir / normalized_file).resolve()
-        if normalized_dir == "references" and not target.suffix:
-            target = target.with_suffix(".md")
+        _ensure_skill_dirs(safe_version_dir)
+        base_dir = (safe_version_dir / normalized_dir).resolve()
+        target_input = base_dir / normalized_file
+        if normalized_dir == "references" and not target_input.suffix:
+            target_input = target_input.with_suffix(".md")
+        target = target_input.resolve()
         if base_dir != target and base_dir not in target.parents:
             raise ValueError("文件路径越界")
+        if target.is_symlink():
+            raise ValueError("文件路径无效")
         return target
 
     async def delete_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> None:
@@ -979,24 +1050,30 @@ class SkillService:
         """异步归档用户技能记录和目录，释放技能名。"""
         original_name = str(skill.get("skill_name") or skill.get("skill_id") or "skill").strip()
         archive_name = f"{original_name}--deleted-{uuid.uuid4().hex[:8]}"
-        root_dir = Path(str(skill.get("skill_root_dir") or USER_SKILL_ROOT / original_name))
+        root_dir = _resolve_user_skill_root_value(skill.get("skill_root_dir"), original_name)
         archive_root_dir = root_dir.parent / archive_name
+        archive_root_dir = _resolve_user_skill_path(archive_root_dir, "技能归档目录")
         if root_dir.exists() and root_dir != archive_root_dir:
             await asyncio.to_thread(root_dir.rename, archive_root_dir)
         versions = await self.dao.list_versions_async(str(skill.get("skill_id")))
         for version in versions:
             version_no = int(version.get("skill_version_no") or 0)
-            version_dir = Path(str(version.get("skill_version_dir") or ""))
+            try:
+                version_dir = _resolve_user_skill_version_dir(version.get("skill_version_dir"))
+            except ValueError:
+                logger.warning("技能版本目录越界，归档时重置为归档目录: skill_id=%s version_no=%s", skill.get("skill_id"), version_no)
+                version_dir = root_dir / "versions" / f"v{version_no}"
             try:
                 archived_version_dir = archive_root_dir / version_dir.relative_to(root_dir)
             except ValueError:
                 archived_version_dir = archive_root_dir / "versions" / f"v{version_no}"
+            archived_version_dir = _resolve_user_skill_path(archived_version_dir, "技能归档版本目录")
             await self.dao.update_version_dir_async(str(skill.get("skill_id")), version_no, str(archived_version_dir), update_by=user_id, update_by_name=operator_name)
         await self.dao.delete_skill_async(str(skill.get("skill_id")), archive_name, str(archive_root_dir), update_by=user_id, update_by_name=operator_name)
 
     def cleanup_user_skill_dir(self, skill_id: str) -> None:
         """测试辅助：清理用户技能目录。"""
-        target = USER_SKILL_ROOT / skill_id
+        target = _resolve_user_skill_path(_user_skill_root() / skill_id, "技能清理目录")
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
 
