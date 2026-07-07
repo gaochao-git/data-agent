@@ -34,8 +34,7 @@ data-agent/
 ### 后端
 
 ```bash
-cd server
-python main.py
+python server/main.py
 ```
 
 默认端口为 `5001`，可通过 `PORT` 环境变量修改。

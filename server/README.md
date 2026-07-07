@@ -24,23 +24,50 @@ server/
 ## 本地运行
 
 ```bash
-cd server
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
+pip install -r server/requirements.txt
+python server/main.py
 ```
 
 默认端口为 `5001`。如果端口被占用：
 
 ```bash
-PORT=5002 python main.py
+PORT=5002 python server/main.py
 ```
 
-也可以使用 uvicorn：
+也可以使用 uvicorn 单进程运行：
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 5001
+uvicorn main:app --app-dir server --host 0.0.0.0 --port 5001
+```
+
+## 生产运行
+
+生产环境推荐使用 Gunicorn 管理多进程，UvicornWorker 负责运行 FastAPI ASGI 应用：
+
+```bash
+gunicorn main:app -c server/gunicorn.conf.py
+```
+
+常用生产参数通过环境变量控制：
+
+- `PORT`：监听端口，默认 `5001`
+- `GUNICORN_WORKERS`：worker 数量，默认 `4`
+- `GUNICORN_TIMEOUT`：worker 超时时间，默认 `900` 秒，适配智能体、SQL 和沙箱长请求
+- `GUNICORN_GRACEFUL_TIMEOUT`：优雅退出等待时间，默认 `30` 秒
+- `GUNICORN_KEEPALIVE`：keepalive 时间，默认 `5` 秒
+
+开发热更新仍使用 `python main.py` 和 `FASTAPI_RELOAD=true`；不要在热更新模式下使用多 worker。
+
+停止服务：
+
+```bash
+# 优雅停止
+kill -TERM $(lsof -ti :5001)
+
+# 长任务卡住、需要立即停止时强制结束
+kill -9 $(lsof -ti :5001)
 ```
 
 ## 关键配置
@@ -57,6 +84,7 @@ uvicorn main:app --host 0.0.0.0 --port 5001
 常用配置包括：
 
 - `PORT`：后端服务端口
+- `GUNICORN_WORKERS` / `GUNICORN_TIMEOUT`：生产 Gunicorn 多进程和长请求超时配置
 - `ALLOWED_ORIGINS`：CORS 允许来源
 - `LOG_LEVEL` / `LOG_DIR` / `LOG_APP_NAME`：日志配置，默认按应用名分为应用日志、访问日志和告警日志；日志 IDC 使用启动时识别出的环境名
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
