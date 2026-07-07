@@ -60,12 +60,13 @@ def get_context_edit_config() -> dict:
 def get_chat_data_runtime_config() -> dict:
     """读取智能问数前端运行时配置。"""
     from .llm_config import get_chat_data_model_options
+    from .feature_gate import is_data_analyze_enabled
 
     model_options = get_chat_data_model_options()
     default_model = model_options.get("default_model")
     return {
         "models": model_options["models"],
-        "data_analyze_enabled": read_bool_env("CHAT_DATA_ANALYZE_ENABLED", False),
+        "data_analyze_enabled": is_data_analyze_enabled(),
         "default_row_limit": DEFAULT_ROW_LIMIT,
         "query_cache_enabled": QUERY_CACHE_ENABLED,
         "context_window": get_context_window(default_model),

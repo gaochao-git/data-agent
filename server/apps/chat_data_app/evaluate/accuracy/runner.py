@@ -316,8 +316,10 @@ async def consume_internal_completion(
 ) -> tuple[list[ToolTrace], str]:
     """内部调用智能问数 handler，避免评测通过 URL 反调自身。"""
     from apps.chat_data_app.handlers import data_analyze_completion_handler, sql_completion_handler
+    from apps.chat_data_app.services.feature_gate import ensure_agent_available_for_internal_run
 
     if agent_id == "chat_data_data_analyze":
+        ensure_agent_available_for_internal_run(agent_id)
         response = await data_analyze_completion_handler(conversation_id, query, options=options, user_id=user_id)
     elif agent_id == "chat_data":
         response = await sql_completion_handler(conversation_id, query, options=options, user_id=user_id)

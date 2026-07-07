@@ -36,6 +36,7 @@ from ..services.evaluation_service import (
     scene_case_set_id,
     validate_eval_case_ids,
 )
+from ..services.feature_gate import ensure_agent_available, feature_disabled_error_code
 from ..services.llm_config import get_chat_data_llm
 from .common import _can_mutate_semantic_config, _get_current_user, _semantic_config_prompt_payload
 
@@ -420,8 +421,9 @@ async def _build_accuracy_runner_args(payload: AccuracyEvaluationRunRequest, cur
 
     if not payload.datasource_id or not payload.semantic_config_id:
         raise ValueError("评测需要指定数据源和指标集")
+    ensure_agent_available(payload.agent_id)
     return AccuracyRunConfig(
-        agent_id="chat_data",
+        agent_id=payload.agent_id,
         query_mode=payload.query_mode,
         model_id=payload.model_id,
         datasource_id=payload.datasource_id,
@@ -584,10 +586,13 @@ async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, 
     try:
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
+        ensure_agent_available(payload.agent_id)
         report = await _run_accuracy_evaluation_payload(payload, request, current_user)
         return business_response(data=report, msg="评测完成")
     except HTTPException as e:
-        code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
+        code = feature_disabled_error_code(e)
+        if code is None:
+            code = SEMANTIC_CONFIG_NOT_FOUND_CODE if e.status_code == 404 else e.status_code * 100 + 1
         return business_response(msg=str(e.detail), code=code, status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=40001, status="error")
@@ -605,6 +610,7 @@ async def _run_accuracy_evaluation_stream_route(payload: AccuracyEvaluationRunRe
     try:
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
+        ensure_agent_available(payload.agent_id)
     except (HTTPException, ValueError) as e:
         message = str(getattr(e, "detail", None) or e)
         return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")

@@ -3,9 +3,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apps.chat_data_app.routers import data_analyze_workspace as workspace_routes
+from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE, DATA_ANALYZE_DISABLED_MESSAGE
+from utils.response import business_response
 
 
 def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
     async def can_access(_conversation_id, _user_id):
         return True
 
@@ -40,6 +44,8 @@ def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, t
 
 
 def test_data_analyze_workspace_rejects_inaccessible_conversation(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
     async def can_access(_conversation_id, _user_id):
         return False
 
@@ -52,6 +58,8 @@ def test_data_analyze_workspace_rejects_inaccessible_conversation(client, auth_h
 
 
 def test_data_analyze_workspace_file_error_mapping(client, auth_headers, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
     async def can_access(_conversation_id, _user_id):
         return True
 
@@ -108,6 +116,8 @@ def test_data_analyze_workspace_file_error_mapping(client, auth_headers, monkeyp
 
 
 def test_data_analyze_workspace_import_skill_route(client, auth_headers, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
     workspace_dir = tmp_path / "workspace"
     outputs_dir = tmp_path / "outputs"
     workspace_dir.mkdir()
@@ -145,6 +155,8 @@ def test_data_analyze_workspace_import_skill_route(client, auth_headers, monkeyp
 
 
 def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
 
@@ -189,6 +201,39 @@ def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monke
     assert value_error_response.json()["code"] == 40055
     assert runtime_error_response.json()["code"] == 50055
     assert inaccessible_response.json()["code"] == 40404
+
+
+def test_data_analyze_workspace_rejects_when_feature_disabled(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        workspace_routes,
+        "get_data_analyze_unavailable_response",
+        lambda: business_response(
+            msg=DATA_ANALYZE_DISABLED_MESSAGE,
+            code=DATA_ANALYZE_DISABLED_CODE,
+            status="error",
+        ),
+    )
+
+    async def can_access(_conversation_id, _user_id):
+        raise AssertionError("disabled feature should be rejected before conversation access check")
+
+    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+
+    list_response = client.get("/api/chatdata/data-analyze/conversations/conv_a/workspace-files", headers=auth_headers)
+    read_response = client.get(
+        "/api/chatdata/data-analyze/conversations/conv_a/workspace-files/content",
+        params={"path": "/outputs/chart.json"},
+        headers=auth_headers,
+    )
+    import_response = client.post(
+        "/api/chatdata/data-analyze/conversations/conv_a/workspace-skills/import",
+        json={"skill_dir_path": "workspace/generated-skill"},
+        headers=auth_headers,
+    )
+
+    assert list_response.json()["code"] == 40302
+    assert read_response.json()["code"] == 40302
+    assert import_response.json()["code"] == 40302
 
 
 def test_can_access_data_analyze_conversation_queries_user_thread(monkeypatch):

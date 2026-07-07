@@ -47,11 +47,19 @@ class ResumeRequest(BaseModel):
     data: Optional[Dict[str, Any]] = None  # 修改后的数据（action=edit 时使用）
 
 
+class AgentAvailabilityResult(BaseModel):
+    """Agent 可用性检查结果。"""
+    enabled: bool = True
+    message: str = ""
+    code: int = 40302
+
+
 # ============ Agent 配置注册 ============
 
 _agent_configs: Dict[str, Dict[str, Any]] = {}
 _completion_handlers: Dict[str, Callable] = {}
 _resume_handlers: Dict[str, Callable] = {}  # resume 处理器（Human-in-the-Loop）
+_agent_availability_checkers: Dict[str, Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]] = {}
 _default_db_path: Optional[str] = None  # 默认数据库路径（用于通过 conversation_id 查询 agent_id）
 
 
@@ -113,6 +121,45 @@ def register_resume_handler(agent_id: str, handler: Callable):
     """
     _resume_handlers[agent_id] = handler
     logger.info(f"注册 resume 处理器: {agent_id}")
+
+
+def register_agent_availability_checker(agent_id: str, checker: Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]):
+    """注册 agent 可用性检查器。"""
+    _agent_availability_checkers[agent_id] = checker
+    logger.info(f"注册 agent 可用性检查器: {agent_id}")
+
+
+def _normalize_agent_availability_result(result: bool | AgentAvailabilityResult | Dict[str, Any] | None) -> AgentAvailabilityResult:
+    """统一 agent 可用性检查结果。"""
+    if isinstance(result, AgentAvailabilityResult):
+        return result
+    if isinstance(result, dict):
+        return AgentAvailabilityResult(
+            enabled=bool(result.get("enabled", True)),
+            message=str(result.get("message") or ""),
+            code=int(result.get("code") or 40302),
+        )
+    return AgentAvailabilityResult(enabled=bool(True if result is None else result))
+
+
+def get_agent_availability(agent_id: str) -> AgentAvailabilityResult:
+    """读取 agent 可用性，未注册检查器时默认可用。"""
+    checker = _agent_availability_checkers.get(agent_id)
+    if not checker:
+        return AgentAvailabilityResult(enabled=True)
+    return _normalize_agent_availability_result(checker())
+
+
+def _agent_unavailable_response(agent_id: str):
+    """构造 agent 不可用响应。"""
+    availability = get_agent_availability(agent_id)
+    if availability.enabled:
+        return None
+    return business_response(
+        msg=availability.message or "功能暂未开放",
+        code=availability.code,
+        status="error",
+    )
 
 
 async def _generic_resume_stream(
@@ -273,6 +320,9 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         config = get_agent_config(request.agent_id)
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=40003, status="error")
+        unavailable_response = _agent_unavailable_response(request.agent_id)
+        if unavailable_response:
+            return unavailable_response
 
         result = await conversation.create(config["db_path"], request.agent_id, user_id)
         return business_response(data=result, msg="创建对话成功")
@@ -317,7 +367,12 @@ async def list_conversations(
             unknown_agent_ids = [item for item in requested_agent_ids if not get_agent_config(item)]
             if unknown_agent_ids:
                 return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=40003, status="error")
-            rows = await conversation.list_by_agent_ids(requested_agent_ids, user_id, page_size + 1, offset)
+            enabled_agent_ids = [
+                item
+                for item in requested_agent_ids
+                if get_agent_availability(item).enabled
+            ]
+            rows = await conversation.list_by_agent_ids(enabled_agent_ids, user_id, page_size + 1, offset) if enabled_agent_ids else []
             result = {
                 "conversations": rows[:page_size],
                 "page": page,
@@ -329,7 +384,10 @@ async def list_conversations(
             config = get_agent_config(agent_id)
             if not config:
                 return business_response(msg=f"未知的 agent_id: {agent_id}", code=40003, status="error")
-            rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
+            if get_agent_availability(agent_id).enabled:
+                rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
+            else:
+                rows = []
             result = {
                 "conversations": rows[:page_size],
                 "page": page,
@@ -338,7 +396,12 @@ async def list_conversations(
             }
         else:
             # 不指定 agent_id，查询所有智能体的会话
-            result = await conversation.list_all(_agent_configs, user_id, page_size)
+            enabled_agent_configs = {
+                item_agent_id: config
+                for item_agent_id, config in _agent_configs.items()
+                if get_agent_availability(item_agent_id).enabled
+            }
+            result = await conversation.list_all(enabled_agent_configs, user_id, page_size)
         return business_response(data=result, msg="获取对话列表成功")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=40101, status="error")
@@ -566,6 +629,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=40003, status="error")
+        unavailable_response = _agent_unavailable_response(request.agent_id)
+        if unavailable_response:
+            return unavailable_response
 
         # 调用对应的 completion 处理器
         # 使用 inspect 检查 handler 支持哪些参数
@@ -620,6 +686,9 @@ async def resume_conversation(conversation_id: str, request: ResumeRequest, req:
         agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
         if not agent_id:
             return business_response(msg="无法确定对话的 agent_id", code=40404, status="error")
+        unavailable_response = _agent_unavailable_response(agent_id)
+        if unavailable_response:
+            return unavailable_response
 
         # 优先使用自定义的 resume handler（如果有特殊逻辑）
         handler = _resume_handlers.get(agent_id)

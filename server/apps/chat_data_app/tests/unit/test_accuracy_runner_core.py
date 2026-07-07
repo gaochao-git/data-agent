@@ -267,6 +267,10 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
 
     monkeypatch.setattr(handlers, "sql_completion_handler", fake_sql_handler)
     monkeypatch.setattr(handlers, "data_analyze_completion_handler", fake_sql_handler)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.feature_gate.ensure_agent_available_for_internal_run",
+        lambda _agent_id: None,
+    )
 
     traces, error = await runner.consume_internal_completion(
         conversation_id="conv_1",
@@ -288,6 +292,19 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
     )
     assert analyze_traces[0].name == "dsl2sql_tool"
     assert analyze_error == ""
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.feature_gate.ensure_agent_available_for_internal_run",
+        lambda _agent_id: (_ for _ in ()).throw(ValueError("智能分析功能暂未开放")),
+    )
+    with pytest.raises(ValueError, match="智能分析功能暂未开放"):
+        await runner.consume_internal_completion(
+            conversation_id="conv_1",
+            agent_id="chat_data_data_analyze",
+            query="查订单",
+            options={"datasource_id": "ds_a"},
+            user_id="tester",
+        )
 
     with pytest.raises(ValueError, match="不支持的评测 Agent"):
         await runner.consume_internal_completion(

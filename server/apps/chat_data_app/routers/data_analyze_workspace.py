@@ -11,6 +11,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
 from ..services.data_analyze_workspace import ensure_data_analyze_workspace, resolve_workspace_path
+from ..services.feature_gate import get_data_analyze_unavailable_response
 from ..services.skill_service import skill_service
 from ..services.workspace_execution import list_workspace_files_from_sandbox, read_workspace_file_from_sandbox
 from .common import DATA_ANALYZE_AGENT_ID, _get_current_user
@@ -22,6 +23,9 @@ router = APIRouter()
 async def list_data_analyze_workspace_files(conversation_id: str, request: Request):
     """获取智能分析会话工作区文件列表。"""
     try:
+        unavailable_response = get_data_analyze_unavailable_response()
+        if unavailable_response:
+            return unavailable_response
         current_user = _get_current_user(request)
         if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=40404, status="error")
@@ -40,6 +44,9 @@ async def list_data_analyze_workspace_files(conversation_id: str, request: Reque
 async def read_data_analyze_workspace_file(conversation_id: str, path: str, request: Request):
     """读取智能分析会话工作区文本文件。"""
     try:
+        unavailable_response = get_data_analyze_unavailable_response()
+        if unavailable_response:
+            return unavailable_response
         current_user = _get_current_user(request)
         if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=40404, status="error")
@@ -60,6 +67,9 @@ async def read_data_analyze_workspace_file(conversation_id: str, path: str, requ
 async def import_data_analyze_workspace_skill(conversation_id: str, payload: SkillImportFromWorkspaceRequest, request: Request):
     """把智能分析工作区生成的技能目录导入为用户技能草稿。"""
     try:
+        unavailable_response = get_data_analyze_unavailable_response()
+        if unavailable_response:
+            return unavailable_response
         current_user = _get_current_user(request)
         if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=40404, status="error")
@@ -96,4 +106,3 @@ async def _can_access_data_analyze_conversation(conversation_id: str, user_id: s
             )
         )
         return result.scalar_one_or_none() is not None
-
