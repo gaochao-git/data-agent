@@ -70,6 +70,10 @@ type GroupDatasourceSource = {
 
 // 设置默认
 const settingDefaultId = ref<string | null>(null)
+// 删除确认状态
+const confirmingDeleteDatasourceId = ref<string | null>(null)
+// 删除状态
+const deletingDatasourceId = ref<string | null>(null)
 // 重命名
 const renamingDatasourceId = ref<string | null>(null)
 
@@ -820,6 +824,8 @@ const handleCheckSemanticHealth = async (ds: DataSource) => {
 
 // 删除数据源
 const handleDelete = async (ds: DataSource) => {
+  if (confirmingDeleteDatasourceId.value || deletingDatasourceId.value) return
+  confirmingDeleteDatasourceId.value = ds.id
   try {
     await ElMessageBox.confirm(`确定要删除数据源"${ds.group_name}"吗？`, '确认删除', {
       confirmButtonText: '删除',
@@ -828,18 +834,23 @@ const handleDelete = async (ds: DataSource) => {
     })
   } catch {
     return
+  } finally {
+    confirmingDeleteDatasourceId.value = null
   }
 
+  deletingDatasourceId.value = ds.id
   try {
     const res = await deleteAdminDatasource(ds.id)
     if (res.status === 'success') {
       ElMessage.success('删除成功')
-      fetchDatasources()
+      await fetchDatasources()
     } else {
       ElMessage.error(res.msg || '删除失败')
     }
   } catch {
     ElMessage.error('删除失败')
+  } finally {
+    deletingDatasourceId.value = null
   }
 }
 
@@ -1409,12 +1420,13 @@ defineExpose({
               <!-- 删除 -->
               <button
                 v-if="ds.id !== 'default'"
+                :disabled="!!confirmingDeleteDatasourceId || !!deletingDatasourceId"
                 class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                title="删除数据源"
+                :title="deletingDatasourceId === ds.id ? '删除中...' : '删除数据源'"
                 @click.stop="handleDelete(ds)"
               >
-                <i class="fa-solid fa-trash text-xs"></i>
-                <span>删除</span>
+                <i :class="['fa-solid text-xs', deletingDatasourceId === ds.id ? 'fa-spinner fa-spin' : 'fa-trash']"></i>
+                <span>{{ deletingDatasourceId === ds.id ? '删除中' : '删除' }}</span>
               </button>
             </div>
           </div>
