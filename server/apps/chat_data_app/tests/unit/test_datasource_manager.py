@@ -87,6 +87,14 @@ class _FakeStore:
     async def get_datasource_async(self, datasource_id: str):
         return self.get_datasource(datasource_id)
 
+    async def get_datasource_meta_async(self, datasource_id: str):
+        datasource = self.get_datasource(datasource_id)
+        if not datasource:
+            return None
+        result = dict(datasource)
+        result["ds_tables"] = []
+        return result
+
     def get_datasource_by_group_name(self, name: str):
         for item in self.datasources.values():
             if item["group_name"] == name:
@@ -1152,8 +1160,35 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         return {"id": kwargs["datasource_id"], "name": kwargs["group_name"]}
 
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.datetime", _FixedDatetime)
+    class FakeDao:
+        def __init__(self):
+            self.updated_kwargs = None
+
+        async def get_datasource_meta_async(self, datasource_id: str):
+            if datasource_id != "ds_a":
+                return None
+            if not self.updated_kwargs:
+                return current
+            result = dict(current)
+            result.update({
+                "group_name": self.updated_kwargs["group_name"],
+                "ds_description": self.updated_kwargs["group_desc"],
+                "query_context": self.updated_kwargs["query_context"],
+                "recommended_questions": self.updated_kwargs["recommended_questions"],
+                "source_type": self.updated_kwargs["source_type"],
+                "template_source": self.updated_kwargs["template_source"],
+                "member_sources_text": self.updated_kwargs["member_sources_text"],
+                "ds_tables": [],
+            })
+            return result
+
+        async def update_datasource_group_async(self, **kwargs):
+            self.updated_kwargs = kwargs
+
+    fake_dao = FakeDao()
     manager._save_datasource_async = fake_save
     manager.get_datasource_async = lambda datasource_id: asyncio.sleep(0, result=current if datasource_id == "ds_a" else None)
+    manager.datasource_dao = fake_dao
 
     created = asyncio.run(manager.create_datasource_group_from_sources_async(
         group_name="新组",
@@ -1161,7 +1196,6 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         source_type="mysql",
         template_source_config={"org_name": "机构A", "org_code": "ORG_A", "host": "127.0.0.1", "port": 3306, "database": "demo"},
         member_source_configs=[{"org_name": "机构B", "org_code": "ORG_B", "host": "127.0.0.2", "port": 3306, "database": "demo"}],
-        tables=[{"table_name": "orders"}],
         recommended_questions=["新推荐问题"],
         create_by="u1",
     ))
@@ -1178,10 +1212,12 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
     assert created["id"].startswith("ds_20260602101112_345678")
     assert saved_calls[0]["member_source_configs"][0]["org_code"] == "ORG_A"
     assert saved_calls[0]["recommended_questions"] == ["新推荐问题"]
-    assert updated["name"] == "更新组"
-    assert len(saved_calls[1]["member_source_configs"]) == 2
-    assert saved_calls[1]["mapped_modules"] == ["执法检查"]
-    assert saved_calls[1]["recommended_questions"] == ["旧推荐问题"]
+    assert updated["group_name"] == "更新组"
+    assert updated["ds_tables"] == []
+    assert fake_dao.updated_kwargs["group_id"] == "ds_a"
+    assert fake_dao.updated_kwargs["recommended_questions"] == ["旧推荐问题"]
+    assert len(fake_dao.updated_kwargs["member_sources_text"].splitlines()) == 2
+    assert "mapped_modules" not in fake_dao.updated_kwargs
     assert asyncio.run(manager.update_datasource_group_from_sources_async("missing", "x", "", "mysql", {})) is None
 
 
@@ -1469,8 +1505,28 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
         "update_by": "old",
         "semantic_configs": [],
     }
+    async def fake_get_datasource_meta(datasource_id: str):
+        if datasource_id != "ds_a":
+            return None
+        if not store.updated_groups:
+            return current
+        updated_kwargs = store.updated_groups[-1][1]
+        result = dict(current)
+        result.update({
+            "group_name": updated_kwargs.get("group_name", current["group_name"]),
+            "ds_description": updated_kwargs.get("group_desc", current.get("ds_description", "")),
+            "query_context": updated_kwargs.get("query_context", current.get("query_context", "")),
+            "recommended_questions": updated_kwargs.get("recommended_questions", current.get("recommended_questions", [])),
+            "source_type": updated_kwargs.get("source_type", current["source_type"]),
+            "template_source": updated_kwargs.get("template_source", current["template_source"]),
+            "member_sources_text": updated_kwargs.get("member_sources_text", ""),
+            "ds_tables": [],
+        })
+        return result
+
     manager.get_datasource_async = lambda datasource_id: asyncio.sleep(0, result=current if datasource_id == "ds_a" else None)
     manager._save_datasource_async = lambda **kwargs: saved_calls.append(kwargs) or asyncio.sleep(0, result={"id": kwargs["datasource_id"], "name": kwargs["group_name"]})
+    manager.datasource_dao.get_datasource_meta_async = fake_get_datasource_meta
 
     async def run_checks():
         assert await manager.update_datasource_group_from_sources_async("missing", "x", "", "mysql", {}) is None
@@ -1483,9 +1539,11 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
             member_source_configs=None,
             update_by="u2",
         )
-        assert updated_group["name"] == "新组"
-        assert len(saved_calls[-1]["member_source_configs"]) == 2
-        assert saved_calls[-1]["update_by"] == "u2"
+        assert updated_group["group_name"] == "新组"
+        assert updated_group["ds_tables"] == []
+        assert store.updated_groups[-1][0] == "ds_a"
+        assert len(store.updated_groups[-1][1]["member_sources_text"].splitlines()) == 2
+        assert store.updated_groups[-1][1]["update_by"] == "u2"
 
         assert await manager.update_datasource_async("missing") is None
         updated_ds = await manager.update_datasource_async(

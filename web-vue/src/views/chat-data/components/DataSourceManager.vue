@@ -22,6 +22,7 @@ import {
   updateAdminDatasourceColumnDict,
   generateAdminDatasourceColumnDict,
   getAdminDatasourceSemanticHealth,
+  syncAdminDatasourceMetadata,
 } from '../api'
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
 import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
@@ -44,10 +45,13 @@ const creatingGroup = ref(false)
 const editingGroupId = ref<string | null>(null)
 const isEditingGroup = computed(() => !!editingGroupId.value)
 const loadingGroupTables = ref(false)
+const syncingGroupMetadata = ref(false)
 const groupDbTables = ref<string[]>([])
 const selectedGroupTables = ref<Set<string>>(new Set())
 const groupTableSearchKeyword = ref('')
 const groupTableSnapshotKey = ref('')
+const savedGroupTemplateSnapshotKey = ref('')
+const savedGroupConfigSnapshotKey = ref('')
 const groupSourceTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const groupSourceScrollTop = ref(0)
 const groupForm = ref({
@@ -740,18 +744,79 @@ const parseTemplateSourceForSnapshot = () => {
 
 const buildGroupSourceSnapshotKey = () => parseTemplateSourceForSnapshot()
 
+const buildGroupConfigSnapshotKey = () => JSON.stringify({
+  group_name: groupForm.value.group_name.trim(),
+  group_desc: groupForm.value.group_desc.trim(),
+  query_context: groupForm.value.query_context.trim(),
+  recommended_questions_text: groupForm.value.recommended_questions_text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join('\n'),
+  source_type: groupForm.value.source_type,
+  datasource_sources_text: groupForm.value.datasource_sources_text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join('\n'),
+})
+
 const hasGroupTemplateSourceChanged = computed(() => {
   if (!showGroupModal.value || !groupTableSnapshotKey.value) return false
   const currentTemplateSnapshotKey = buildGroupSourceSnapshotKey()
   if (!currentTemplateSnapshotKey) return false
   return currentTemplateSnapshotKey !== groupTableSnapshotKey.value
 })
+const hasUnsavedGroupConfig = computed(() =>
+  Boolean(
+    isEditingGroup.value &&
+    savedGroupConfigSnapshotKey.value &&
+    buildGroupConfigSnapshotKey() !== savedGroupConfigSnapshotKey.value
+  )
+)
+const canSyncGroupMetadata = computed(() =>
+  Boolean(
+    isEditingGroup.value &&
+    selectedGroupTables.value.size > 0 &&
+    groupTableSnapshotKey.value &&
+    savedGroupTemplateSnapshotKey.value &&
+    groupTableSnapshotKey.value === savedGroupTemplateSnapshotKey.value &&
+    !hasUnsavedGroupConfig.value &&
+    !hasGroupTemplateSourceChanged.value
+  )
+)
+const canSaveGroupConfig = computed(() => !isEditingGroup.value || hasUnsavedGroupConfig.value)
 
 const resetGroupTableSelector = () => {
   groupDbTables.value = []
   selectedGroupTables.value = new Set()
   groupTableSearchKeyword.value = ''
   groupTableSnapshotKey.value = ''
+  savedGroupTemplateSnapshotKey.value = ''
+}
+
+const emitDatasourcesChange = () => {
+  emit('datasources-change', datasources.value)
+}
+
+const replaceDatasourceInList = (updatedDatasource?: DataSource | null, keepCurrentTables = false) => {
+  if (!updatedDatasource?.id) return
+  const currentIndex = datasources.value.findIndex(ds => ds.id === updatedDatasource.id)
+  const currentDatasource = currentIndex >= 0 ? datasources.value[currentIndex] : null
+  const nextDatasource = {
+    ...(currentDatasource || {}),
+    ...updatedDatasource,
+    ds_tables: keepCurrentTables && currentDatasource?.ds_tables
+      ? currentDatasource.ds_tables
+      : (updatedDatasource.ds_tables || currentDatasource?.ds_tables || []),
+  } as DataSource
+
+  if (!nextDatasource.group_name?.trim()) return
+  const nextDatasources = [...datasources.value]
+  if (currentIndex >= 0) nextDatasources.splice(currentIndex, 1, nextDatasource)
+  else nextDatasources.unshift(nextDatasource)
+  datasources.value = nextDatasources
+  emitDatasourcesChange()
 }
 
 // 加载数据源
@@ -766,7 +831,7 @@ const fetchDatasources = async () => {
       columnDictStatusMap.value = {}
       columnDictStatusLoadedKeys.value = new Set()
       columnDictStatusLoadingKeys.value = new Set()
-      emit('datasources-change', datasources.value)
+      emitDatasourcesChange()
     }
   } catch (err) {
     console.error('获取数据源失败:', err)
@@ -881,6 +946,7 @@ const handleEditDatasource = (ds: DataSource) => {
 
 const openGroupModal = () => {
   editingGroupId.value = null
+  savedGroupConfigSnapshotKey.value = ''
   groupForm.value = {
     group_name: '',
     group_desc: '',
@@ -891,6 +957,12 @@ const openGroupModal = () => {
   }
   resetGroupTableSelector()
   showGroupModal.value = true
+}
+
+const closeGroupModal = () => {
+  showGroupModal.value = false
+  editingGroupId.value = null
+  savedGroupConfigSnapshotKey.value = ''
 }
 
 const formatGroupSourceLine = (item: Partial<GroupDatasourceSource>) => {
@@ -920,6 +992,8 @@ const openEditGroupModal = (ds: DataSource) => {
   selectedGroupTables.value = new Set(groupDbTables.value)
   groupTableSearchKeyword.value = ''
   groupTableSnapshotKey.value = buildGroupSourceSnapshotKey()
+  savedGroupTemplateSnapshotKey.value = groupTableSnapshotKey.value
+  savedGroupConfigSnapshotKey.value = buildGroupConfigSnapshotKey()
   showGroupModal.value = true
 }
 
@@ -1022,6 +1096,14 @@ const parseMemberSources = () => {
 }
 
 const fetchGroupDbTables = async () => {
+  if (!isEditingGroup.value) {
+    ElMessage.warning('请先保存配置后再拉取表信息')
+    return
+  }
+  if (hasUnsavedGroupConfig.value) {
+    ElMessage.warning('配置已变更，请先保存配置后再拉取表信息')
+    return
+  }
   let datasourceSources: GroupDatasourceSource[] = []
   try {
     datasourceSources = parseMemberSources()
@@ -1067,6 +1149,7 @@ const fetchGroupDbTables = async () => {
       groupDbTables.value = tables
       selectedGroupTables.value = new Set(tables)
       groupTableSnapshotKey.value = buildGroupSourceSnapshotKey()
+      savedGroupTemplateSnapshotKey.value = groupTableSnapshotKey.value
       ElMessage.success(`获取成功，共 ${tables.length} 个表`)
     } else {
       ElMessage.error(res.msg || '获取表列表失败')
@@ -1094,6 +1177,16 @@ const deselectAllGroupTables = () => {
   filteredGroupTables.value.forEach(table => nextSelected.delete(table))
   selectedGroupTables.value = nextSelected
 }
+
+const buildGroupConfigPayload = (templateSource: GroupDatasourceSource, memberSources: GroupDatasourceSource[], recommendedQuestions: string[]) => ({
+  group_name: groupForm.value.group_name.trim(),
+  group_desc: groupForm.value.group_desc.trim(),
+  query_context: groupForm.value.query_context.trim(),
+  recommended_questions: recommendedQuestions,
+  source_type: groupForm.value.source_type,
+  template_source: templateSource,
+  member_sources: memberSources,
+})
 
 const handleCreateDatasourceGroup = async () => {
   const groupName = groupForm.value.group_name.trim()
@@ -1127,13 +1220,10 @@ const handleCreateDatasourceGroup = async () => {
     ElMessage.error('模板数据源格式错误，请先按固定格式修正第一行')
     return
   }
-  if (groupDbTables.value.length === 0) {
-    ElMessage.error('请先拉取模板表结构')
-    return
-  }
   if (groupDbTables.value.length > 0 && groupTableSnapshotKey.value && groupTableSnapshotKey.value !== currentTemplateSnapshotKey) {
-    ElMessage.warning('模板数据源已变化，当前仍使用上次拉取的表结构；如需更新可手动拉取表信息')
+    ElMessage.warning('模板数据源已变化，保存配置后请重新拉取表信息并同步元数据')
   }
+  const shouldResetTableSelectorAfterSave = !editingGroupId.value || groupTableSnapshotKey.value !== currentTemplateSnapshotKey
 
   const [templateSource, ...memberSources] = datasourceSources
   if (!templateSource) {
@@ -1143,24 +1233,23 @@ const handleCreateDatasourceGroup = async () => {
 
   creatingGroup.value = true
   try {
-    const payload = {
-      group_name: groupName,
-      group_desc: groupForm.value.group_desc.trim(),
-      query_context: groupForm.value.query_context.trim(),
-      recommended_questions: recommendedQuestions,
-      source_type: groupForm.value.source_type,
-      template_source: templateSource,
-      template_table_names: groupDbTables.value.length > 0 ? Array.from(selectedGroupTables.value) : undefined,
-      member_sources: memberSources,
-    }
+    const payload = buildGroupConfigPayload(templateSource, memberSources, recommendedQuestions)
     const res = editingGroupId.value
       ? await updateAdminDatasourceGroup(editingGroupId.value, payload)
       : await createAdminDatasourceGroup(payload)
     if (res.status === 'success') {
-      ElMessage.success(editingGroupId.value ? '数据源组更新成功' : '数据源组创建成功')
-      showGroupModal.value = false
-      editingGroupId.value = null
-      await fetchDatasources()
+      const wasEditing = Boolean(editingGroupId.value)
+      ElMessage.success(wasEditing ? '配置已保存' : '数据源组创建成功')
+      replaceDatasourceInList(res.data, true)
+      if (res.data?.id) {
+        editingGroupId.value = res.data.id
+      }
+      savedGroupConfigSnapshotKey.value = buildGroupConfigSnapshotKey()
+      if (shouldResetTableSelectorAfterSave) {
+        resetGroupTableSelector()
+      } else {
+        savedGroupTemplateSnapshotKey.value = currentTemplateSnapshotKey
+      }
     } else {
       ElMessage.error(res.msg || (editingGroupId.value ? '数据源组更新失败' : '数据源组创建失败'))
     }
@@ -1168,6 +1257,54 @@ const handleCreateDatasourceGroup = async () => {
     ElMessage.error(editingGroupId.value ? '数据源组更新失败' : '数据源组创建失败')
   } finally {
     creatingGroup.value = false
+  }
+}
+
+const handleSyncGroupMetadata = async () => {
+  if (!editingGroupId.value) return
+  let datasourceSources: GroupDatasourceSource[] = []
+  try {
+    datasourceSources = parseMemberSources()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '数据源格式错误')
+    return
+  }
+  const templateSource = datasourceSources[0]
+  if (!templateSource) {
+    ElMessage.error('请至少输入一个数据源，第一行作为模板数据源')
+    return
+  }
+  if (selectedGroupTables.value.size === 0) {
+    ElMessage.error('请至少选择一张表')
+    return
+  }
+  if (hasUnsavedGroupConfig.value) {
+    ElMessage.warning('配置已变更，请先保存配置后再同步元数据')
+    return
+  }
+  if (hasGroupTemplateSourceChanged.value) {
+    ElMessage.warning('模板数据源已变化，请先保存配置后重新拉取表信息')
+    return
+  }
+  if (!canSyncGroupMetadata.value) {
+    ElMessage.warning('当前表信息不是基于已保存模板源，请先保存配置后重新拉取表信息')
+    return
+  }
+  syncingGroupMetadata.value = true
+  try {
+    const res = await syncAdminDatasourceMetadata(editingGroupId.value, {
+      template_table_names: Array.from(selectedGroupTables.value),
+    })
+    if (res.status === 'success') {
+      ElMessage.success(res.msg || '元数据同步成功')
+      replaceDatasourceInList(res.data?.datasource)
+    } else {
+      ElMessage.error(res.msg || '元数据同步失败')
+    }
+  } catch {
+    ElMessage.error('元数据同步失败')
+  } finally {
+    syncingGroupMetadata.value = false
   }
 }
 
@@ -1554,137 +1691,160 @@ defineExpose({
     </div>
 
     <!-- 数据源组弹窗 -->
-    <el-dialog v-model="showGroupModal" width="min(920px, 92vw)" :close-on-click-modal="!creatingGroup" :show-close="false">
+    <el-dialog v-model="showGroupModal" width="min(920px, 92vw)" :close-on-click-modal="!creatingGroup && !syncingGroupMetadata" :show-close="false">
       <template #header>
-        <div class="flex items-center gap-2">
-          <i class="fa-solid fa-layer-group text-blue-600"></i>
-          <h3 class="text-lg font-semibold text-slate-900 m-0">{{ isEditingGroup ? '修改数据源组' : '新建数据源组' }}</h3>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-blue-600"></i>
+            <h3 class="text-lg font-semibold text-slate-900 m-0">{{ isEditingGroup ? '修改数据源组' : '新建数据源组' }}</h3>
+          </div>
+          <button
+            type="button"
+            :disabled="creatingGroup || syncingGroupMetadata"
+            class="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="closeGroupModal"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
       </template>
-      <div class="space-y-4">
-        <div class="space-y-2.5">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex min-w-0 items-center gap-2">
-              <label class="w-24 shrink-0 text-sm text-slate-600">组名称<span class="text-red-500">*</span></label>
-              <input v-model="groupForm.group_name" type="text" maxlength="128" placeholder="请输入数据源组名称" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+      <div class="max-h-[74vh] space-y-4 overflow-y-auto pr-1">
+        <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-gear text-sm text-blue-600"></i>
+              <span class="text-sm font-semibold text-slate-800">基础配置</span>
+              <span v-if="isEditingGroup && hasUnsavedGroupConfig" class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">有未保存变更</span>
             </div>
-            <div class="flex min-w-0 items-center gap-2">
-              <label class="w-24 shrink-0 text-sm text-slate-600">描述</label>
-              <input v-model="groupForm.group_desc" type="text" maxlength="128" placeholder="可选" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            <button :disabled="creatingGroup || !canSaveGroupConfig" class="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" @click="handleCreateDatasourceGroup">
+              <i v-if="creatingGroup" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-floppy-disk"></i>
+              <span>{{ creatingGroup ? (isEditingGroup ? '保存中...' : '创建中...') : (isEditingGroup ? '保存配置' : '创建数据源组') }}</span>
+            </button>
+          </div>
+          <div class="space-y-2.5">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex min-w-0 items-center gap-2">
+                <label class="w-24 shrink-0 text-sm text-slate-600">组名称<span class="text-red-500">*</span></label>
+                <input v-model="groupForm.group_name" type="text" maxlength="128" placeholder="请输入数据源组名称" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
+              <div class="flex min-w-0 items-center gap-2">
+                <label class="w-24 shrink-0 text-sm text-slate-600">描述</label>
+                <input v-model="groupForm.group_desc" type="text" maxlength="128" placeholder="可选" class="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+              </div>
             </div>
-          </div>
-          <div class="flex min-w-0 items-start gap-2">
-            <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">智能问数说明</label>
-            <textarea
-              v-model="groupForm.query_context"
-              maxlength="20000"
-              rows="4"
-              placeholder="可维护当前数据源组的查询规则、口径说明、正反例等，会注入智能问数上下文"
-              class="min-w-0 flex-1 resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            ></textarea>
-          </div>
-          <div class="flex min-w-0 items-start gap-2">
-            <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">推荐问题</label>
-            <div class="min-w-0 flex-1">
+            <div class="flex min-w-0 items-start gap-2">
+              <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">智能问数说明</label>
+              <textarea
+                v-model="groupForm.query_context"
+                maxlength="20000"
+                rows="4"
+                placeholder="可维护当前数据源组的查询规则、口径说明、正反例等，会注入智能问数上下文"
+                class="min-w-0 flex-1 resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              ></textarea>
+            </div>
+            <div class="flex min-w-0 items-start gap-2">
+              <label class="w-24 shrink-0 pt-2 text-sm text-slate-600">推荐问题</label>
               <textarea
                 v-model="groupForm.recommended_questions_text"
                 rows="4"
                 placeholder="每行一个推荐问题，单条不超过 50 个字"
-                class="min-w-0 w-full resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                class="min-w-0 flex-1 resize-y rounded border border-slate-300 px-2.5 py-2 text-sm leading-5 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               ></textarea>
             </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <label class="w-24 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>
             <div class="flex items-center gap-2">
-              <button
-                type="button"
-                :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'mysql' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
-                @click="handleGroupSourceTypeChange('mysql')"
-              >MySQL</button>
-              <button
-                type="button"
-                :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'hive' ? 'border-amber-500 bg-amber-50 text-amber-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
-                @click="handleGroupSourceTypeChange('hive')"
-              >Hive</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div class="mb-2 flex items-center gap-2">
-            <i class="fa-solid fa-link text-sm text-blue-600"></i>
-            <span class="text-sm font-medium text-slate-700">组内数据源</span>
-            <span class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ memberSourceLineCount }}</span>
-          </div>
-          <div class="flex h-44 overflow-hidden rounded border border-slate-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
-            <div class="overflow-hidden select-none border-r border-slate-200 bg-slate-50 px-2 py-2 text-right text-xs leading-6 text-slate-400">
-              <div :style="{ transform: `translateY(-${groupSourceScrollTop}px)` }">
-                <div v-for="lineNumber in groupSourceLineNumbers" :key="lineNumber" class="h-6 min-w-6">
-                  {{ lineNumber }}
-                </div>
+              <label class="w-24 shrink-0 text-sm text-slate-600">数据源类型<span class="text-red-500">*</span></label>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'mysql' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
+                  @click="handleGroupSourceTypeChange('mysql')"
+                >MySQL</button>
+                <button
+                  type="button"
+                  :class="['rounded border px-3 py-1.5 text-sm transition-colors', groupForm.source_type === 'hive' ? 'border-amber-500 bg-amber-50 text-amber-600' : 'border-slate-300 text-slate-600 hover:bg-slate-50']"
+                  @click="handleGroupSourceTypeChange('hive')"
+                >Hive</button>
               </div>
             </div>
-            <textarea
-              ref="groupSourceTextareaRef"
-              v-model="groupForm.datasource_sources_text"
-              :placeholder="groupSourcePlaceholder"
-              wrap="off"
-              spellcheck="false"
-              class="h-full w-full overflow-x-auto overflow-y-auto whitespace-pre border-0 px-3 py-2 text-sm leading-6 font-mono resize-none focus:outline-none focus:ring-0"
-              @scroll="handleGroupSourceScroll"
-            ></textarea>
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <i class="fa-solid fa-table-list text-sm text-blue-600"></i>
-              <span class="text-sm font-medium text-slate-700">模板表结构</span>
-              <span v-if="groupDbTables.length > 0" class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ groupSelectionSummaryText }}</span>
+            <div>
+              <div class="mb-2 flex items-center gap-2">
+                <i class="fa-solid fa-link text-sm text-blue-600"></i>
+                <span class="text-sm font-medium text-slate-700">组内数据源</span>
+                <span class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ memberSourceLineCount }}</span>
+              </div>
+              <div class="flex h-44 overflow-hidden rounded border border-slate-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
+                <div class="overflow-hidden select-none border-r border-slate-200 bg-slate-50 px-2 py-2 text-right text-xs leading-6 text-slate-400">
+                  <div :style="{ transform: `translateY(-${groupSourceScrollTop}px)` }">
+                    <div v-for="lineNumber in groupSourceLineNumbers" :key="lineNumber" class="h-6 min-w-6">
+                      {{ lineNumber }}
+                    </div>
+                  </div>
+                </div>
+                <textarea
+                  ref="groupSourceTextareaRef"
+                  v-model="groupForm.datasource_sources_text"
+                  :placeholder="groupSourcePlaceholder"
+                  wrap="off"
+                  spellcheck="false"
+                  class="h-full w-full overflow-x-auto overflow-y-auto whitespace-pre border-0 px-3 py-2 text-sm leading-6 font-mono resize-none focus:outline-none focus:ring-0"
+                  @scroll="handleGroupSourceScroll"
+                ></textarea>
+              </div>
             </div>
-            <button :disabled="loadingGroupTables" class="flex items-center gap-2 rounded bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" @click="fetchGroupDbTables">
-              <i :class="['fa-solid', loadingGroupTables ? 'fa-spinner fa-spin' : 'fa-arrows-rotate']"></i>
-              <span>{{ loadingGroupTables ? '拉取中...' : '拉取表信息' }}</span>
-            </button>
+          </div>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div class="flex min-w-0 items-center gap-2">
+              <i class="fa-solid fa-table-list text-sm text-blue-600"></i>
+              <span class="text-sm font-semibold text-slate-800">元数据同步</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button :disabled="!isEditingGroup || hasUnsavedGroupConfig || loadingGroupTables || syncingGroupMetadata" class="flex items-center gap-2 rounded bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" @click="fetchGroupDbTables">
+                <i :class="['fa-solid', loadingGroupTables ? 'fa-spinner fa-spin' : 'fa-arrows-rotate']"></i>
+                <span>{{ loadingGroupTables ? '拉取中...' : '拉取表信息' }}</span>
+              </button>
+              <button v-if="isEditingGroup" :disabled="loadingGroupTables || syncingGroupMetadata || !canSyncGroupMetadata" class="flex items-center gap-2 rounded bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50" @click="handleSyncGroupMetadata">
+                <i :class="['fa-solid', syncingGroupMetadata ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-down']"></i>
+                <span>{{ syncingGroupMetadata ? '同步中...' : '同步元数据' }}</span>
+              </button>
+            </div>
           </div>
 
-          <div v-if="hasGroupTemplateSourceChanged && groupDbTables.length > 0" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
-            第一行模板数据源已变化，当前仍使用上次拉取的表结构；如需更新，请手动点击“拉取表信息”。
+          <div v-if="!isEditingGroup" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+            请先创建数据源组，创建成功后再拉取表信息并同步元数据。
+          </div>
+          <div v-else-if="hasUnsavedGroupConfig" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            配置已变更，请先在基础配置区域点击“保存配置”，再拉取表信息或同步元数据。
           </div>
 
-          <div v-if="groupDbTables.length > 0" class="mt-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div v-if="hasGroupTemplateSourceChanged && groupDbTables.length > 0" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            第一行模板数据源已变化，当前仍使用上次拉取的表信息；如需同步新模板源元数据，请先保存配置后重新拉取表信息。
+          </div>
+
+          <div v-if="groupDbTables.length > 0" class="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
             <div class="mb-2 flex items-center gap-2">
               <span class="text-sm font-medium text-slate-700">选择表</span>
               <span class="rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{{ groupSelectionSummaryText }}</span>
               <div class="relative flex-1">
                 <i class="fa-solid fa-search absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
-                <input v-model="groupTableSearchKeyword" type="text" placeholder="搜索表名..." class="w-full rounded border border-slate-200 bg-slate-50 py-1 pl-6 pr-2 text-xs focus:border-blue-500 focus:bg-white focus:outline-none" />
+                <input v-model="groupTableSearchKeyword" type="text" placeholder="搜索表名..." class="w-full rounded border border-slate-200 bg-white py-1 pl-6 pr-2 text-xs focus:border-blue-500 focus:outline-none" />
               </div>
-              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-blue-600" @click="selectAllGroupTables">{{ groupSelectAllButtonText }}</button>
-              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-blue-600" @click="deselectAllGroupTables">{{ groupDeselectAllButtonText }}</button>
+              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-white hover:text-blue-600" @click="selectAllGroupTables">{{ groupSelectAllButtonText }}</button>
+              <button class="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-white hover:text-blue-600" @click="deselectAllGroupTables">{{ groupDeselectAllButtonText }}</button>
             </div>
-            <div class="max-h-44 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50">
-              <label v-for="table in filteredGroupTables" :key="table" class="flex cursor-pointer items-center gap-2 px-3 py-1 transition-colors hover:bg-white">
+            <div class="max-h-44 overflow-y-auto rounded border border-slate-100 bg-white">
+              <label v-for="table in filteredGroupTables" :key="table" class="flex cursor-pointer items-center gap-2 px-3 py-1 transition-colors hover:bg-slate-50">
                 <input type="checkbox" :checked="selectedGroupTables.has(table)" class="h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500" @change="toggleGroupTableSelection(table)" />
                 <span class="truncate text-xs text-slate-600">{{ table }}</span>
               </label>
             </div>
           </div>
-        </div>
-
-        <div class="flex justify-between">
-          <button :disabled="creatingGroup" class="rounded px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" @click="showGroupModal = false">
-            取消
-          </button>
-          <button :disabled="creatingGroup || (groupDbTables.length > 0 && selectedGroupTables.size === 0)" class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" @click="handleCreateDatasourceGroup">
-            <i v-if="creatingGroup" class="fa-solid fa-spinner fa-spin"></i>
-            <i v-else class="fa-solid fa-plus"></i>
-            <span>{{ creatingGroup ? (isEditingGroup ? '更新中...' : '创建中...') : (isEditingGroup ? '保存数据源组' : '创建数据源组') }}</span>
-          </button>
-        </div>
+        </section>
       </div>
+
     </el-dialog>
 
     <!-- 指标集校验结果 -->

@@ -318,7 +318,6 @@ class DatasourceGroupCreateRequest(BaseModel):
     recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
-    template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
 
     @field_validator("recommended_questions", mode="before")
@@ -335,13 +334,17 @@ class DatasourceGroupUpdateRequest(BaseModel):
     recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
-    template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
 
     @field_validator("recommended_questions", mode="before")
     @classmethod
     def validate_recommended_questions(cls, value: Any) -> List[str]:
         return _normalize_recommended_questions(value)
+
+
+class DatasourceGroupMetadataSyncRequest(BaseModel):
+    """数据源组模板元数据同步请求"""
+    template_table_names: List[str] = Field(default_factory=list, description="需要同步的模板表名列表")
 
 
 # ============ 语义层配置模型 ============

@@ -232,6 +232,19 @@ def _merge_member_source_lines(
     return _dedupe_member_source_configs(merged_configs, source_type, default_query_executor_type)
 
 
+def _build_member_sources_text(
+    source_type: str,
+    member_source_configs: List[Dict[str, Any]],
+    query_executor_type: str,
+) -> str:
+    lines: List[str] = []
+    for item in _dedupe_member_source_configs(member_source_configs, source_type, query_executor_type):
+        member_line = _build_member_source_text_line(source_type, item, query_executor_type)
+        if member_line:
+            lines.append(member_line)
+    return "\n".join(lines)
+
+
 def _get_template_member_source_config(datasource: dict) -> Dict[str, Any]:
     """提取当前模板成员配置，避免仅刷新表结构时破坏模板成员名称。"""
     template_member_id = str(datasource.get("template_datasource_id") or "").strip()
@@ -515,6 +528,14 @@ class DataSourceManager:
         self._enrich_semantic_runtime_fields(datasource)
         return datasource
 
+    async def get_datasource_meta_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+        """异步获取数据源轻量元信息，不加载表结构和语义配置。"""
+        return await self.datasource_dao.get_datasource_meta_async(datasource_id)
+
+    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+        """异步根据数据源组名称获取轻量元信息，不加载表结构和语义配置。"""
+        return await self.datasource_dao.get_datasource_meta_by_group_name_async(group_name)
+
     def _build_execution_datasource_targets(self, datasource: dict, member_datasource_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """根据数据源配置构造可执行成员数据源。"""
         member_sources = list(datasource.get("member_sources") or [])
@@ -742,7 +763,6 @@ class DataSourceManager:
         source_type: str,
         template_source_config: Dict[str, Any],
         member_source_configs: Optional[List[Dict[str, Any]]] = None,
-        tables: Optional[List[Dict[str, Any]]] = None,
         query_context: str = "",
         recommended_questions: Optional[List[str]] = None,
         create_by: str = "",
@@ -769,7 +789,7 @@ class DataSourceManager:
             query_executor_type=query_executor_type,
             template_source=template_source,
             member_source_configs=member_source_configs_merged,
-            tables=tables or [],
+            tables=_UNSET,
             mapped_modules=[],
             is_default=False,
             recommended_questions=recommended_questions or [],
@@ -789,14 +809,13 @@ class DataSourceManager:
         source_type: str,
         template_source_config: Dict[str, Any],
         member_source_configs: Optional[List[Dict[str, Any]]] = None,
-        tables: Optional[List[Dict[str, Any]]] = None,
         query_context: str = "",
         recommended_questions: Optional[List[str]] = None,
         update_by: str = "",
         update_by_name: str = "",
     ) -> Optional[Dict[str, Any]]:
         """异步按模板源和成员连接信息更新数据源组。"""
-        current = await self.get_datasource_async(datasource_id)
+        current = await self.get_datasource_meta_async(datasource_id)
         if not current:
             return None
 
@@ -809,26 +828,44 @@ class DataSourceManager:
             query_executor_type,
             member_source_configs,
         )
-        updated = await self._save_datasource_async(
-            datasource_id=datasource_id,
+        member_sources_text = _build_member_sources_text(source_type, member_source_configs_merged, query_executor_type)
+        await self.datasource_dao.update_datasource_group_async(
+            group_id=datasource_id,
             group_name=group_name,
-            group_desc=group_desc,
-            query_context=query_context,
-            source_type=source_type,
-            query_executor_type=query_executor_type,
-            template_source=template_source,
-            member_source_configs=member_source_configs_merged,
-            tables=tables if tables is not None else current.get("ds_tables", []),
-            mapped_modules=current.get("mapped_modules", []),
-            is_default=current.get("is_default", False),
+            group_desc=group_desc or "",
+            query_context=query_context or "",
             recommended_questions=recommended_questions if recommended_questions is not None else current.get("recommended_questions", []),
+            source_type=source_type or "",
+            template_source=template_source,
+            member_sources_text=member_sources_text,
+            update_by=update_by or current.get("update_by") or "",
+            update_by_name=update_by_name or current.get("update_by_name") or "",
+        )
+        logger.info("更新数据源组: %s - %s, members=%s", datasource_id, group_name, len(member_source_configs_merged))
+        return await self.datasource_dao.get_datasource_meta_async(datasource_id)
+
+    async def sync_datasource_tables_async(
+        self,
+        datasource_id: str,
+        tables: List[Dict[str, Any]],
+        update_by: str = "",
+        update_by_name: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """异步同步数据源组表结构缓存。"""
+        current = await self.get_datasource_async(datasource_id)
+        if not current:
+            return None
+
+        await self.datasource_dao.replace_datasource_tables_async(
+            group_id=current.get("group_id") or datasource_id,
+            tables=tables or [],
             create_by=current.get("create_by") or "",
             create_by_name=current.get("create_by_name") or "",
             update_by=update_by or current.get("update_by") or "",
             update_by_name=update_by_name or current.get("update_by_name") or "",
         )
-        logger.info("更新数据源组: %s - %s, members=%s", datasource_id, group_name, len(member_source_configs_merged))
-        return updated
+        logger.info("同步数据源组表结构: %s, tables=%s", datasource_id, len(tables or []))
+        return await self._load_datasource_async(datasource_id)
 
     async def update_datasource_async(
         self,

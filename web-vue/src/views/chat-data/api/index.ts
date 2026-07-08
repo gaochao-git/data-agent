@@ -71,7 +71,6 @@ type DatasourceGroupPayload = {
     port?: number
     database: string
   }
-  template_table_names?: string[]
   member_sources?: Array<{
     org_name: string
     org_code: string
@@ -81,6 +80,7 @@ type DatasourceGroupPayload = {
     database: string
   }>
 }
+type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 // ============ 技能 API ============
 
@@ -721,6 +721,18 @@ export function updateAdminDatasourceGroup(datasourceId: string, data: Datasourc
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/group-config`,
     method: 'put',
+    data
+  })
+}
+
+/** 同步数据源组模板元数据 */
+export function syncAdminDatasourceMetadata(
+  datasourceId: string,
+  data: DatasourceGroupMetadataSyncPayload
+): Promise<ApiResponse<{ datasource: DataSource; table_count: number }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/metadata-sync`,
+    method: 'post',
     data
   })
 }

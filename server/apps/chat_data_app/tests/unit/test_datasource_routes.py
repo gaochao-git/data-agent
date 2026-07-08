@@ -46,6 +46,7 @@ from apps.chat_data_app.routers.datasource_admin import (
     update_datasource_table_business_desc,
     update_datasource_table_groups,
     update_mapped_modules,
+    sync_datasource_group_metadata,
     _parse_column_dict_generate_response,
 )
 from apps.chat_data_app.routers.datasource_public import (
@@ -57,6 +58,7 @@ from apps.chat_data_app.schema import (
     DashboardFromSpecRequest,
     DbConnectionRequest,
     DatasourceGroupCreateRequest,
+    DatasourceGroupMetadataSyncRequest,
     DatasourceGroupUpdateRequest,
     DatasourceColumnDictGenerateRequest,
     DatasourceColumnDictUpdateRequest,
@@ -202,6 +204,18 @@ class _FakeDatasourceManager:
     async def get_datasource_by_group_name_async(self, name: str):
         return self.get_datasource_by_group_name(name)
 
+    async def get_datasource_meta_by_group_name_async(self, name: str):
+        return self.get_datasource_by_group_name(name)
+
+    async def get_datasource_meta_async(self, datasource_id: str):
+        datasource = self.get_datasource(datasource_id)
+        if not datasource:
+            return None
+        result = copy.deepcopy(datasource)
+        result["ds_tables"] = []
+        result["semantic_configs"] = []
+        return result
+
     def get_table_groups(self, datasource_id: str):
         return copy.deepcopy(self.table_groups.get(datasource_id, []))
 
@@ -303,7 +317,6 @@ class _FakeDatasourceManager:
         source_type: str,
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
-        tables: list[dict] | None = None,
         query_context: str = "",
         recommended_questions: list[str] | None = None,
         update_by: str = "",
@@ -319,7 +332,6 @@ class _FakeDatasourceManager:
         item["source_type"] = source_type
         item["query_executor_type"] = template_source_config.get("query_executor_type") or "direct"
         item["source_config"] = dict(template_source_config)
-        item["ds_tables"] = list(tables or [])
         item["update_by"] = update_by
         item["member_sources"] = [
             {"member_datasource_id": "phy_template", "source_type": source_type, **template_source_config},
@@ -330,6 +342,21 @@ class _FakeDatasourceManager:
         ]
         return copy.deepcopy(item)
 
+    async def sync_datasource_tables_async(
+        self,
+        datasource_id: str,
+        tables: list[dict],
+        update_by: str = "",
+        update_by_name: str = "",
+    ):
+        item = self.datasources.get(datasource_id)
+        if not item:
+            return None
+        item["ds_tables"] = list(tables or [])
+        item["update_by"] = update_by
+        item["update_by_name"] = update_by_name
+        return copy.deepcopy(item)
+
     async def update_datasource_group_from_sources_async(
         self,
         datasource_id: str,
@@ -338,7 +365,6 @@ class _FakeDatasourceManager:
         source_type: str,
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
-        tables: list[dict] | None = None,
         query_context: str = "",
         recommended_questions: list[str] | None = None,
         update_by: str = "",
@@ -351,7 +377,6 @@ class _FakeDatasourceManager:
             source_type,
             template_source_config,
             member_source_configs=member_source_configs,
-            tables=tables,
             query_context=query_context,
             recommended_questions=recommended_questions,
             update_by=update_by,
@@ -433,7 +458,6 @@ class _FakeDatasourceManager:
         source_type: str,
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
-        tables: list[dict] | None = None,
         query_context: str = "",
         recommended_questions: list[str] | None = None,
         create_by: str = "",
@@ -451,7 +475,7 @@ class _FakeDatasourceManager:
             "source_type": source_type,
             "query_executor_type": template_source_config.get("query_executor_type") or "direct",
             "source_config": dict(template_source_config),
-            "ds_tables": list(tables or []),
+            "ds_tables": [],
             "mapped_modules": [],
             "is_default": False,
             "create_by": create_by,
@@ -468,7 +492,6 @@ class _FakeDatasourceManager:
         source_type: str,
         template_source_config: dict,
         member_source_configs: list[dict] | None = None,
-        tables: list[dict] | None = None,
         query_context: str = "",
         recommended_questions: list[str] | None = None,
         create_by: str = "",
@@ -480,7 +503,6 @@ class _FakeDatasourceManager:
             source_type,
             template_source_config,
             member_source_configs=member_source_configs,
-            tables=tables,
             query_context=query_context,
             recommended_questions=recommended_questions,
             create_by=create_by,
@@ -3381,35 +3403,12 @@ def test_create_and_update_datasource_group_validation_branches(monkeypatch):
             return None
 
     _mock_datasource_manager(monkeypatch, MissingUpdateManager())
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
     missing_update = asyncio.run(datasource_admin_routes.update_datasource_group_config("ds_a", DatasourceGroupUpdateRequest(
         group_name="新名称",
         source_type="mysql",
         template_source=template,
     ), SimpleNamespace()))
     assert _payload(missing_update)["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
-    async def raise_value(*_args, **_kwargs):
-        raise ValueError("bad group source")
-
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_value)
-    value_update = asyncio.run(datasource_admin_routes.update_datasource_group_config("ds_a", DatasourceGroupUpdateRequest(
-        group_name="新名称2",
-        source_type="mysql",
-        template_source=template,
-    ), SimpleNamespace()))
-    assert _payload(value_update)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    async def raise_runtime(*_args, **_kwargs):
-        raise RuntimeError("update group crashed")
-
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_runtime)
-    runtime_update = asyncio.run(datasource_admin_routes.update_datasource_group_config("ds_a", DatasourceGroupUpdateRequest(
-        group_name="新名称3",
-        source_type="mysql",
-        template_source=template,
-    ), SimpleNamespace()))
-    assert _payload(runtime_update)["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
 
 def test_datasource_group_recommended_questions_validation():
@@ -3894,7 +3893,7 @@ def test_create_datasource_group_from_template_source(monkeypatch):
     assert data["data"]["update_by"] == "creator_1"
 
 
-def test_create_datasource_group_dedupes_selected_tables_and_handles_errors(monkeypatch):
+def test_create_datasource_group_saves_config_without_loading_tables(monkeypatch):
     class RecordingManager(_FakeDatasourceManager):
         def __init__(self):
             super().__init__()
@@ -3902,17 +3901,16 @@ def test_create_datasource_group_dedupes_selected_tables_and_handles_errors(monk
 
         async def create_datasource_group_from_sources_async(self, **kwargs):
             self.created_kwargs = kwargs
-            return {"id": "ds_new", "group_name": kwargs["group_name"], "tables": kwargs["tables"]}
+            return {"id": "ds_new", "group_name": kwargs["group_name"], "ds_tables": []}
 
     manager = RecordingManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1", username="创建人1")
     _mock_datasource_manager(monkeypatch, manager)
 
-    async def fake_load_tables(source_type, template_source, table_names, **_kwargs):
-        assert table_names == ["orders", "users"]
-        return [{"table_name": name} for name in table_names]
+    async def fail_load_tables(*_args, **_kwargs):
+        raise AssertionError("创建数据源组不应拉取表结构")
 
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", fake_load_tables)
+    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", fail_load_tables)
 
     payload = DatasourceGroupCreateRequest(
         group_name="去重组",
@@ -3924,45 +3922,10 @@ def test_create_datasource_group_dedupes_selected_tables_and_handles_errors(monk
             "host": "127.0.0.1",
             "database": "db_template",
         },
-        template_table_names=[" orders ", "orders", "", "users"],
     )
     ok = asyncio.run(create_datasource_group(payload, SimpleNamespace()))
-    assert _payload(ok)["data"]["tables"] == [{"table_name": "orders"}, {"table_name": "users"}]
+    assert _payload(ok)["data"]["ds_tables"] == []
     assert manager.created_kwargs["member_source_configs"] == []
-
-    async def raise_value(*_args, **_kwargs):
-        raise ValueError("bad source")
-
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_value)
-    value_resp = asyncio.run(create_datasource_group(DatasourceGroupCreateRequest(
-        group_name="异常组1",
-        source_type="mysql",
-        template_source={
-            "org_name": "template_a",
-            "org_code": "ORG_TEMPLATE",
-            "query_executor_type": "direct",
-            "host": "127.0.0.1",
-            "database": "db_template",
-        },
-    ), SimpleNamespace()))
-    assert _payload(value_resp)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    async def raise_runtime(*_args, **_kwargs):
-        raise RuntimeError("sync failed")
-
-    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_runtime)
-    runtime_resp = asyncio.run(create_datasource_group(DatasourceGroupCreateRequest(
-        group_name="异常组2",
-        source_type="mysql",
-        template_source={
-            "org_name": "template_a",
-            "org_code": "ORG_TEMPLATE",
-            "query_executor_type": "direct",
-            "host": "127.0.0.1",
-            "database": "db_template",
-        },
-    ), SimpleNamespace()))
-    assert _payload(runtime_resp)["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
 
 def test_update_datasource_group_config_updates_group_members(monkeypatch):
@@ -3988,7 +3951,6 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
             "port": 3306,
             "database": "db_template_new",
         },
-        template_table_names=["orders"],
         member_sources=[
             {
                 "org_name": "member_new",
@@ -4009,6 +3971,59 @@ def test_update_datasource_group_config_updates_group_members(monkeypatch):
     assert data["data"]["recommended_questions"] == ["查看更新后的核心指标"]
     assert len(data["data"]["member_sources"]) == 2
     assert data["data"]["update_by"] == "updater_1"
+
+
+def test_sync_datasource_group_metadata_updates_cached_tables(monkeypatch):
+    manager = _FakeDatasourceManager()
+    _mock_authenticated_user(monkeypatch, user_id="updater_1", username="维护人1")
+    _mock_datasource_manager(monkeypatch, manager)
+
+    async def fake_load_tables(source_type, template_source, table_names, **kwargs):
+        assert source_type == "mysql"
+        assert template_source["database"] == "db_a"
+        assert table_names == ["orders", "users"]
+        assert kwargs["user_id"] == "updater_1"
+        return [{"table_name": name, "columns": [{"name": "id"}]} for name in table_names]
+
+    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", fake_load_tables)
+    payload = DatasourceGroupMetadataSyncRequest(
+        template_table_names=[" orders ", "orders", "", "users"],
+    )
+    resp = asyncio.run(sync_datasource_group_metadata("ds_a", payload, SimpleNamespace()))
+    data = _payload(resp)
+    assert data["status"] == "success"
+    assert data["data"]["table_count"] == 2
+    assert data["data"]["datasource"]["ds_tables"][0]["table_name"] == "orders"
+    assert data["data"]["datasource"]["update_by"] == "updater_1"
+
+    empty_resp = asyncio.run(sync_datasource_group_metadata("ds_a", DatasourceGroupMetadataSyncRequest(
+        template_table_names=[],
+    ), SimpleNamespace()))
+    assert _payload(empty_resp)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
+    class MissingSyncManager(_FakeDatasourceManager):
+        async def sync_datasource_tables_async(self, *args, **kwargs):
+            return None
+
+    _mock_datasource_manager(monkeypatch, MissingSyncManager())
+    missing_resp = asyncio.run(sync_datasource_group_metadata("ds_a", payload, SimpleNamespace()))
+    assert _payload(missing_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+    _mock_datasource_manager(monkeypatch, manager)
+
+    async def raise_value(*_args, **_kwargs):
+        raise ValueError("bad metadata source")
+
+    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_value)
+    value_resp = asyncio.run(sync_datasource_group_metadata("ds_a", payload, SimpleNamespace()))
+    assert _payload(value_resp)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
+    async def raise_runtime(*_args, **_kwargs):
+        raise RuntimeError("metadata sync crashed")
+
+    monkeypatch.setattr(datasource_admin_routes, "_load_tables_from_source", raise_runtime)
+    runtime_resp = asyncio.run(sync_datasource_group_metadata("ds_a", payload, SimpleNamespace()))
+    assert _payload(runtime_resp)["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
 
 def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch):
