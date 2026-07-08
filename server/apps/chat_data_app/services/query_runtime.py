@@ -274,6 +274,8 @@ async def fetch_http_remote_ref_cache_result(cached_result: Dict[str, Any], user
         "data": remote_result.get("data") or [],
         "total_count": int(remote_result.get("total_count") or 0),
         "execution_time_ms": remote_result.get("execution_time_ms"),
+        "started_time": remote_result.get("started_time"),
+        "finished_time": remote_result.get("finished_time"),
         "remote_task_id": remote_task_id,
         "error": None,
         "cache_hit": True,
@@ -444,7 +446,8 @@ async def update_query_execution_from_result(execution_id: str, result: Dict[str
     """按 SQL 执行结果更新执行明细。"""
     success = bool((result or {}).get("success"))
     status = "succeeded" if success else "failed"
-    finished_time = datetime.now()
+    started_time = _parse_datetime_value((result or {}).get("started_time"))
+    finished_time = _parse_datetime_value((result or {}).get("finished_time")) or datetime.now()
     result_payload = None
     if store_result_payload:
         result_payload = {
@@ -465,6 +468,7 @@ async def update_query_execution_from_result(execution_id: str, result: Dict[str
         result_row_count=int((result or {}).get("total_count") or 0),
         result_payload=result_payload,
         error_message=None if success else str((result or {}).get("error") or "SQL 执行失败"),
+        started_time=started_time,
         finished_time=finished_time,
     )
 
@@ -675,6 +679,8 @@ async def execute_sql_for_member(
         "data": result.get("data") or [],
         "total_count": int(result.get("total_count") or 0),
         "execution_time_ms": result.get("execution_time_ms"),
+        "started_time": result.get("started_time"),
+        "finished_time": result.get("finished_time"),
         "remote_task_id": result.get("remote_task_id"),
         "db_connection_id": result.get("db_connection_id"),
         "error": result.get("error"),

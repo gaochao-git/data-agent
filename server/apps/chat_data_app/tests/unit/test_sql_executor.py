@@ -52,6 +52,25 @@ def test_http_payload_extractors_and_normalizers():
         "row_count": 1,
         "column_count": 1,
     }
+    assert sql_executor._http_response_summary({
+        "code": 20000,
+        "data": {
+            "status": "succeeded",
+            "cost": 1780,
+            "startTime": "2026-07-07 16:58:47",
+            "result": {"rows": [[1]], "columns": ["a"]},
+        },
+    }) == {
+        "code": 20000,
+        "status": "succeeded",
+        "cost": 1780,
+        "startTime": "2026-07-07 16:58:47",
+    }
+    assert sql_executor._http_response_summary({"code": 20000, "data": {"status": "succeeded", "cost": 0}}) == {
+        "code": 20000,
+        "status": "succeeded",
+        "cost": 0,
+    }
     assert sql_executor._extract_remote_data({"data": []}) == {}
     assert sql_executor._extract_remote_data(["bad"]) == {}
     assert sql_executor._extract_task_id({"data": {"task_id": "task_1"}}) == "task_1"
@@ -743,6 +762,52 @@ def test_fetch_http_query_task_result_status_variants(monkeypatch):
     assert cancelled["error"] == "已取消"
     assert failed["status"] == "failed"
     assert failed["error"] == "执行失败"
+
+
+def test_fetch_http_query_task_result_uses_remote_cost_and_start_time(monkeypatch):
+    async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
+        return {
+            "code": 20000,
+            "data": {
+                "status": "succeeded",
+                "cost": 1780,
+                "startTime": "2026-07-07 16:58:47",
+                "result": {
+                    "columns": ["a"],
+                    "rows": [[1]],
+                    "row_count": 1,
+                },
+            },
+        }
+
+    monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
+
+    result = asyncio.run(sql_executor.fetch_http_query_task_result("task_with_time"))
+
+    assert result["success"] is True
+    assert result["execution_time_ms"] == 1780
+    assert result["started_time"] == "2026-07-07 16:58:47"
+    assert result["finished_time"] == "2026-07-07 16:58:48"
+
+
+def test_fetch_http_query_task_result_without_remote_start_time_keeps_only_cost(monkeypatch):
+    async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
+        return {
+            "code": 20000,
+            "data": {
+                "status": "succeeded",
+                "cost": 1780,
+                "result": {"columns": ["a"], "rows": [[1]], "row_count": 1},
+            },
+        }
+
+    monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
+
+    result = asyncio.run(sql_executor.fetch_http_query_task_result("task_without_start_time"))
+
+    assert result["execution_time_ms"] == 1780
+    assert result["started_time"] is None
+    assert result["finished_time"] is None
 
 
 def test_fetch_http_query_task_result_without_user_params(monkeypatch):

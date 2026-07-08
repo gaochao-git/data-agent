@@ -1039,6 +1039,20 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
     assert not_stored_model.sql_status == "succeeded"
     assert json.loads(not_stored_model.result_payload)["cache_hit"] is True
 
+    asyncio.run(routes._update_query_execution_from_result("exec_1", {
+        "success": True,
+        "columns": ["id"],
+        "data": [{"id": 3}],
+        "total_count": 1,
+        "execution_time_ms": 1780,
+        "started_time": "2026-07-07 16:58:47",
+        "finished_time": "2026-07-07 16:58:48",
+    }))
+    remote_time_model = asyncio.run(routes._get_query_execution_model("exec_1"))
+    assert remote_time_model.execution_time_ms == 1780
+    assert remote_time_model.started_time == datetime(2026, 7, 7, 16, 58, 47)
+    assert remote_time_model.finished_time == datetime(2026, 7, 7, 16, 58, 48)
+
     asyncio.run(routes._update_query_execution("exec_2", sql_status="cancelled", error_message="已人工取消"))
     asyncio.run(routes._update_query_execution_from_result("exec_2", {"success": False, "error": "不应覆盖"}))
     cancelled_model = asyncio.run(routes._get_query_execution_model("exec_2"))

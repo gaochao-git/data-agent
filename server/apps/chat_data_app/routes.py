@@ -665,6 +665,8 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
                 "data": [],
                 "total_count": 0,
                 "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
+                "started_time": remote_result.get("started_time") or local_cancelled_execution.get("started_time"),
+                "finished_time": remote_result.get("finished_time") or local_cancelled_execution.get("finished_time"),
                 "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
             })
             continue
@@ -678,6 +680,8 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
             "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_execution),
+            "started_time": remote_result.get("started_time") or ((local_execution or {}).get("started_time") if local_execution else None),
+            "finished_time": remote_result.get("finished_time") or ((local_execution or {}).get("finished_time") if local_execution else None),
             "error": remote_result.get("error"),
         })
 

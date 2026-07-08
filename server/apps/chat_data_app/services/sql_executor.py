@@ -7,7 +7,7 @@ SQL 执行器模块
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple, Optional, Callable
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import asyncio
 import inspect
 import re
@@ -61,6 +61,14 @@ def _http_payload_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def _first_not_none(*values: Any) -> Any:
+    """返回第一个非 None 值，保留 0、空字符串等合法原值。"""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _http_response_summary(payload: Any) -> Dict[str, Any]:
     """生成 HTTP 日志用的响应摘要，避免打印查询结果明细。"""
     if not isinstance(payload, dict):
@@ -76,9 +84,13 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
     tables = result.get("tables")
     summary = {
         "code": payload.get("code"),
-        "msg": payload.get("msg") or payload.get("message"),
-        "status": result.get("status") or payload.get("status"),
-        "task_id": result.get("task_id") or result.get("taskId") or payload.get("task_id") or payload.get("taskId"),
+        "msg": _first_not_none(payload.get("msg"), payload.get("message")),
+        "status": _first_not_none(result.get("status"), payload.get("status")),
+        "task_id": _first_not_none(result.get("task_id"), result.get("taskId"), payload.get("task_id"), payload.get("taskId")),
+        "cost": _first_not_none(result.get("cost"), payload.get("cost")),
+        "startTime": _first_not_none(result.get("startTime"), payload.get("startTime")),
+        "execution_time_ms": _first_not_none(result.get("execution_time_ms"), payload.get("execution_time_ms")),
+        "duration_ms": _first_not_none(result.get("duration_ms"), payload.get("duration_ms")),
     }
     if isinstance(rows, list):
         summary["row_count"] = len(rows)
@@ -224,6 +236,62 @@ def _extract_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if any(key in container for key in ("columns", "data", "rows", "records", "total_count", "row_count")):
             return container
     return {}
+
+
+def _normalize_http_execution_time_ms(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Optional[int]:
+    """提取远端执行耗时，优先使用业务 status 接口 cost 字段。"""
+    sources = (_extract_remote_data(payload), payload, result_payload)
+    for key in ("cost", "execution_time_ms", "duration_ms"):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            value = source.get(key)
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                return max(0, int(float(value)))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _parse_http_start_time(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Optional[datetime]:
+    """解析远端开始时间，业务接口格式为 yyyy-MM-dd HH:mm:ss。"""
+    for source in (result_payload, _extract_remote_data(payload), payload):
+        if not isinstance(source, dict):
+            continue
+        raw_value = source.get("startTime") or source.get("started_time") or source.get("start_time")
+        if isinstance(raw_value, datetime):
+            return raw_value
+        text = str(raw_value or "").strip()
+        if not text:
+            continue
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(text[:19], fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            continue
+    return None
+
+
+def _build_http_execution_times(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """按远端 cost/startTime 生成内部统一执行时间字段。"""
+    execution_time_ms = _normalize_http_execution_time_ms(payload, result_payload)
+    started_time = _parse_http_start_time(payload, result_payload)
+    finished_time = None
+    if started_time is None or execution_time_ms is None:
+        started_time = None
+    else:
+        finished_time = started_time + timedelta(milliseconds=execution_time_ms)
+    return {
+        "execution_time_ms": execution_time_ms,
+        "started_time": started_time.strftime("%Y-%m-%d %H:%M:%S") if started_time else None,
+        "finished_time": finished_time.strftime("%Y-%m-%d %H:%M:%S") if finished_time else None,
+    }
 
 
 def _normalize_http_columns(raw_columns: Any, rows: list[dict[str, Any]]) -> list[str]:
@@ -778,15 +846,13 @@ class HiveHttpExecutor(SQLExecutor):
             total_count = result_payload.get("row_count")
         if total_count is None:
             total_count = len(data)
-        execution_time_ms = result_payload.get("execution_time_ms")
-        if execution_time_ms is None:
-            execution_time_ms = result_payload.get("duration_ms")
+        execution_times = _build_http_execution_times(payload, result_payload)
         return {
             "success": True,
             "columns": columns,
             "data": data,
             "total_count": int(total_count or 0),
-            "execution_time_ms": execution_time_ms,
+            **execution_times,
         }
 
     async def _notify_remote_task_created(
@@ -875,6 +941,7 @@ class HiveHttpExecutor(SQLExecutor):
                         "columns": [],
                         "data": [],
                         "total_count": 0,
+                        **_build_http_execution_times(status_payload, {}),
                     }
                 normalized_status = _extract_remote_status(status_payload)
                 if normalized_status == "succeeded":
@@ -883,10 +950,24 @@ class HiveHttpExecutor(SQLExecutor):
                     result["source_type"] = self.source_type
                     return result
                 if normalized_status == "cancelled":
-                    return {"success": False, "error": _extract_remote_message(status_payload, "查询已取消"), "columns": [], "data": [], "total_count": 0}
+                    return {
+                        "success": False,
+                        "error": _extract_remote_message(status_payload, "查询已取消"),
+                        "columns": [],
+                        "data": [],
+                        "total_count": 0,
+                        **_build_http_execution_times(status_payload, {}),
+                    }
                 if normalized_status == "failed":
                     error_message = _extract_remote_message(status_payload, "HTTP 查询失败")
-                    return {"success": False, "error": str(error_message), "columns": [], "data": [], "total_count": 0}
+                    return {
+                        "success": False,
+                        "error": str(error_message),
+                        "columns": [],
+                        "data": [],
+                        "total_count": 0,
+                        **_build_http_execution_times(status_payload, {}),
+                    }
                 await asyncio.sleep(max(0.2, DEFAULT_HTTP_POLL_INTERVAL_MS / 1000))
         except asyncio.TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
@@ -927,6 +1008,7 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
                 "columns": [],
                 "data": [],
                 "total_count": 0,
+                **_build_http_execution_times(payload, {}),
             }
         return {
             "status": normalized_status or "failed",
@@ -935,6 +1017,7 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
             "columns": [],
             "data": [],
             "total_count": 0,
+            **_build_http_execution_times(payload, {}),
         }
 
     normalized_status = _extract_remote_status(payload)
@@ -947,6 +1030,8 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
             "data": result.get("data") or [],
             "total_count": int(result.get("total_count") or 0),
             "execution_time_ms": result.get("execution_time_ms"),
+            "started_time": result.get("started_time"),
+            "finished_time": result.get("finished_time"),
             "error": None,
         }
     if normalized_status in {"failed", "cancelled"}:
@@ -957,6 +1042,7 @@ async def fetch_http_query_task_result(remote_task_id: str, source_type: str = "
             "columns": [],
             "data": [],
             "total_count": 0,
+            **_build_http_execution_times(payload, {}),
         }
     return {
         "status": normalized_status,

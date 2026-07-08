@@ -390,6 +390,8 @@ export interface MemberQueryResult {
   data: Record<string, unknown>[]
   total_count: number
   execution_time_ms?: number
+  started_time?: string | null
+  finished_time?: string | null
   error?: string
   cache_hit?: boolean
   cache_age_seconds?: number | null
