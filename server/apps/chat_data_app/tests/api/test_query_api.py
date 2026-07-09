@@ -460,7 +460,7 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr(routes, "_create_query_task", fake_create_query_task)
+    monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
     monkeypatch.setattr(routes, "_schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
@@ -500,8 +500,8 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
         return body
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
-    monkeypatch.setattr(routes, "_create_query_task", fake_create_query_task)
+    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
+    monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
     monkeypatch.setattr(routes, "_schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
@@ -549,7 +549,7 @@ def test_create_query_task_returns_sql_prepare_error(client, auth_headers, fake_
         raise ValueError("一次只能执行一条 SQL，请拆分后分别执行")
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
+    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -570,7 +570,7 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
     async def fake_get_query_executions(task_id):
         return []
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
 
     response = client.get("/api/chatdata/query-tasks/task_a", headers=auth_headers)
@@ -589,7 +589,7 @@ def test_get_query_task_returns_not_found(client, auth_headers, monkeypatch):
     async def fake_get_query_task(task_id):
         return None
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
 
     response = client.get("/api/chatdata/query-tasks/missing_task", headers=auth_headers)
 
@@ -603,7 +603,7 @@ def test_get_query_task_requires_auth(client, monkeypatch):
     async def fake_get_query_task(_task_id):
         raise AssertionError("未认证时不应查询任务")
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
 
     response = client.get("/api/chatdata/query-tasks/task_a")
 
@@ -634,7 +634,7 @@ def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):
     async def fake_get_query_executions(task_id):
         return []
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
 
     response = client.get("/api/chatdata/query-tasks/task_b", headers=auth_headers)
@@ -682,7 +682,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
             },
         }
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
     monkeypatch.setattr(routes, "_build_live_remote_sql_result", fake_build_live_remote_sql_result)
 
@@ -718,7 +718,7 @@ def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monke
     async def fake_prepare_sql_request_for_execution(body):
         return body
 
-    monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
+    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
     async def fake_create_query_executions_for_task(task_id, body, operator_name=None):
         return {}
@@ -854,7 +854,7 @@ def test_execute_sql_returns_result_error_and_preserves_raw_message(client, auth
     async def fake_build_execute_sql_result_data(body, query_task_id=None, execution_map=None, username=None):
         return result_data
 
-    monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
+    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_query_executions_for_task)
     monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
@@ -884,7 +884,7 @@ def test_execute_sql_returns_prepare_error_without_creating_task(client, auth_he
         captured["created"] = True
         return {}
 
-    monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
+    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
 
     response = client.post(

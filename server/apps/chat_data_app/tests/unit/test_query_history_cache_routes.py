@@ -864,9 +864,9 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
     assert created["query_type"] == "sql"
     assert created["status"] == "pending"
     assert created["request_payload"] == {"sql": "select 1", "user_id": "u1"}
-    assert asyncio.run(routes._get_query_task("missing")) is None
-    assert asyncio.run(routes._get_query_task("task_generated"))["status"] == "pending"
-    assert asyncio.run(routes._is_query_task_cancelled("task_generated")) is False
+    assert asyncio.run(query_runtime.get_query_task("missing")) is None
+    assert asyncio.run(query_runtime.get_query_task("task_generated"))["status"] == "pending"
+    assert asyncio.run(query_runtime.is_query_task_cancelled("task_generated")) is False
     assert QueryHistoryService.task_user_id({"request_payload": "{\"user_id\": \"u1\"}"}) == "u1"
     assert QueryHistoryService.task_user_id({"request_payload": "{bad json"}) == ""
 
@@ -1300,10 +1300,10 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
     calls = []
     updates = []
 
-    assert routes._build_cancel_task_status([]) == "cancelled"
-    assert routes._build_cancel_task_status([{"status": "cancelled"}]) == "cancelled"
-    assert routes._build_cancel_task_status([{"status": "kill_failed"}]) == "failed"
-    assert routes._build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}]) == "partial_success"
+    assert QueryHistoryService.build_cancel_task_status([]) == "cancelled"
+    assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}]) == "cancelled"
+    assert QueryHistoryService.build_cancel_task_status([{"status": "kill_failed"}]) == "failed"
+    assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}]) == "partial_success"
     assert routes._build_cancelled_execution_map([
         {"member_datasource_id": "m1", "sql_status": "cancelled"},
         {"member_datasource_id": "m2", "sql_status": "succeeded"},
@@ -1347,7 +1347,7 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
         updates.append((task_id, kwargs))
         return None
 
-    monkeypatch.setattr(routes, "_get_query_task", fake_get_task)
+    monkeypatch.setattr(query_runtime, "get_query_task", fake_get_task)
     monkeypatch.setattr(routes, "_run_sql_query_task", fake_run_sql)
     monkeypatch.setattr(dashboard_runtime, "run_dashboard_panel_task", fake_run_panel)
     monkeypatch.setattr(dashboard_runtime, "run_dashboard_batch_task", fake_run_batch)
@@ -1383,7 +1383,7 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
         query_type="builder",
     )
     with pytest.raises(ValueError, match="必须基于指标集"):
-        asyncio.run(routes._prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
 
     sql_request = QueryTaskCreateRequest(
         task_type="sql",
@@ -1391,7 +1391,7 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
         sql="select 1; drop table orders",
         query_type="sql",
     )
-    prepared = asyncio.run(routes._prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
+    prepared = asyncio.run(query_runtime.prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
     assert prepared is sql_request
     assert prepared.sql == "select 1; drop table orders"
 

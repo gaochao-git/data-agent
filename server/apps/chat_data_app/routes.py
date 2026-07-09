@@ -40,7 +40,6 @@ from .agent.sql_assist_graph import get_sql_assist_graph
 from utils.database import get_session
 from utils import conversation
 from utils.models import (
-    ChatDataQueryTask,
     ChatDataQueryExecution,
 )
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
@@ -85,15 +84,6 @@ router.include_router(uploaded_files_router)
 
 
 # ============ 内部工具函数 ============
-
-async def _build_remote_history_result_payload(execution: ChatDataQueryExecution, task: Optional[ChatDataQueryTask] = None) -> Optional[Dict[str, Any]]:
-    """按远端任务 ID 实时读取历史查询结果。"""
-    return await query_history_service.build_remote_history_result_payload(
-        execution,
-        task,
-        fetch_remote_result=fetch_http_query_task_result,
-    )
-
 
 async def _execute_sql_for_member(
     execution_target: Dict[str, Any],
@@ -330,11 +320,6 @@ async def _resolve_execution_target(execution: ChatDataQueryExecution) -> Option
     return targets[0] if targets else None
 
 
-def _copy_execution_identity(source: ChatDataQueryExecution, target: ChatDataQueryExecution) -> None:
-    """复制执行记录中的可停止标识。"""
-    QueryHistoryService.copy_execution_identity(source, target)
-
-
 async def _wait_for_cancel_target(execution: ChatDataQueryExecution) -> ChatDataQueryExecution:
     """短暂等待执行记录写入远端任务ID或数据库连接ID。"""
     if execution.remote_task_id or execution.db_connection_id or str(execution.sql_status or "").strip().lower() != "running":
@@ -345,7 +330,7 @@ async def _wait_for_cancel_target(execution: ChatDataQueryExecution) -> ChatData
         latest = await query_history_service.get_execution_model(execution.execution_id)
         if latest is None:
             return execution
-        _copy_execution_identity(execution, latest)
+        QueryHistoryService.copy_execution_identity(execution, latest)
         if execution.remote_task_id or execution.db_connection_id or str(execution.sql_status or "").strip().lower() != "running":
             return execution
     return execution
@@ -412,11 +397,6 @@ async def _cancel_query_execution(execution: ChatDataQueryExecution, *, cleanup_
     }
 
 
-def _build_cancel_task_status(execution_results: List[Dict[str, Any]]) -> str:
-    """根据执行停止结果汇总任务状态。"""
-    return QueryHistoryService.build_cancel_task_status(execution_results)
-
-
 async def _cancel_running_query_history(
     *,
     datasource_id: Optional[str] = None,
@@ -452,26 +432,6 @@ async def _create_task_record(
     )
 
 
-async def _create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
-    """创建 SQL 异步查询任务。"""
-    return await query_runtime.create_query_task(payload)
-
-
-async def _prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None):
-    """保留 SQL 原文；安全校验统一在执行器边界完成。"""
-    return await query_runtime.prepare_sql_request_for_execution(request, datasource)
-
-
-async def _get_query_task(task_id: str) -> Optional[Dict[str, Any]]:
-    """读取异步查询任务。"""
-    return await query_runtime.get_query_task(task_id)
-
-
-async def _is_query_task_cancelled(task_id: str) -> bool:
-    """判断异步查询任务是否已取消。"""
-    return await query_runtime.is_query_task_cancelled(task_id)
-
-
 async def _update_query_task(
     task_id: str,
     *,
@@ -503,7 +463,7 @@ async def _run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
 
 async def _run_query_task(task_id: str) -> None:
     """后台执行查询任务。"""
-    task = await _get_query_task(task_id)
+    task = await query_runtime.get_query_task(task_id)
     if not task:
         logger.warning("异步查询任务不存在: %s", task_id)
         return
@@ -550,7 +510,7 @@ dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime
     execute_sql_for_member=lambda **kwargs: _execute_sql_for_member(**kwargs),
     create_task_record=lambda **kwargs: _create_task_record(**kwargs),
     update_query_task=lambda *args, **kwargs: _update_query_task(*args, **kwargs),
-    is_query_task_cancelled=lambda task_id: _is_query_task_cancelled(task_id),
+    is_query_task_cancelled=lambda task_id: query_runtime.is_query_task_cancelled(task_id),
     schedule_query_task=lambda task_id: _schedule_query_task(task_id),
     query_task_poll_interval_ms=QUERY_TASK_POLL_INTERVAL_MS,
 ))
@@ -883,8 +843,8 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
                 code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
-        body = await _prepare_sql_request_for_execution(body, datasource)
-        task_info = await _create_query_task(body)
+        body = await query_runtime.prepare_sql_request_for_execution(body, datasource)
+        task_info = await query_runtime.create_query_task(body)
         _schedule_query_task(task_info["task_id"])
         return business_response(
             data={
@@ -922,7 +882,7 @@ async def get_query_task(task_id: str, request: Request):
     try:
         current_user = _get_current_user(request)
         current_user_id = str(current_user.user_id)
-        task_data = await _get_query_task(task_id)
+        task_data = await query_runtime.get_query_task(task_id)
         if not task_data:
             return business_response(
                 msg=f"任务不存在: {task_id}",
@@ -988,7 +948,7 @@ async def cancel_query_task(task_id: str, request: Request):
     try:
         current_user = _get_current_user(request)
         current_user_id = str(current_user.user_id)
-        task_data = await _get_query_task(task_id)
+        task_data = await query_runtime.get_query_task(task_id)
         if not task_data:
             return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         executions = await query_history_service.get_execution_models(task_id)
@@ -1019,7 +979,7 @@ async def cancel_query_task(task_id: str, request: Request):
             _cancel_query_execution(item, cleanup_without_target=cleanup_without_target, operator_name=operator_name)
             for item in (cancellable_executions or executions)
         ])
-        cancel_status = _build_cancel_task_status(execution_results)
+        cancel_status = QueryHistoryService.build_cancel_task_status(execution_results)
         if task_status not in QUERY_TASK_FINAL_STATUSES:
             await _update_query_task(
                 task_id,
@@ -1049,7 +1009,7 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
     try:
         current_user = _get_current_user(request)
         body = body.model_copy(update={"user_id": current_user.user_id})
-        body = await _prepare_sql_request_for_execution(body)
+        body = await query_runtime.prepare_sql_request_for_execution(body)
         logger.info(
             "execute-sql request: datasource_id=%s",
             body.datasource_id,
