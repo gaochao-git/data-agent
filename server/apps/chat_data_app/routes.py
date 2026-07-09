@@ -1,7 +1,8 @@
 """ChatData API 路由聚合入口。"""
 
 from fastapi import APIRouter
-
+from utils.database import get_session
+from utils.logger import get_logger
 from .services.datasource_manager import get_datasource_manager
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
 from .services.query_history_service import QueryHistoryService
@@ -9,8 +10,6 @@ from .services.query_task_service import QueryTaskService
 from .daos.query_history_dao import QueryHistoryDao
 from .daos.query_favorite_dao import QueryFavoriteDao
 from .services.query_favorite_service import QueryFavoriteService
-from utils.database import get_session
-from utils.logger import get_logger
 from .routers.dependencies import _get_current_user
 from .routers.config import router as config_router
 from .routers.conversations import router as conversations_router
