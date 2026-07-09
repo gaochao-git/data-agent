@@ -22,18 +22,9 @@ from .routers.skills import router as skills_router
 from .routers.dashboard import router as dashboard_router
 from .routers.semantic_config import router as semantic_config_router
 from .routers.uploaded_files import router as uploaded_files_router
-from .routers.query_favorites import (
-    configure_query_favorite_router,
-    router as query_favorites_router,
-)
-from .routers.query_history import (
-    configure_query_history_router,
-    router as query_history_router,
-)
-from .routers.query_execution import (
-    configure_query_execution_router,
-    router as query_execution_router,
-)
+from .routers.query_favorites import (configure_query_favorite_router,router as query_favorites_router)
+from .routers.query_history import (configure_query_history_router,router as query_history_router)
+from .routers.query_execution import (configure_query_execution_router,router as query_execution_router)
 
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"
