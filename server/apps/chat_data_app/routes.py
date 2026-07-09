@@ -4,7 +4,6 @@ ChatData API 路由定义
 提供 ChatData 查询与配置管理相关接口
 """
 
-import asyncio
 import json
 import re
 from typing import Optional, Dict, List, Any
@@ -24,8 +23,13 @@ from .schema import (
 )
 from .services.datasource_manager import get_datasource_manager
 from .services.sql_executor import fetch_http_query_task_result, stop_http_query_task, kill_mysql_query
-from .services import dashboard_runtime, query_runtime
-from .services.query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
+from .services import query_runtime
+from .services.query_history_service import QueryHistoryService
+from .services.query_task_service import (
+    QueryTaskNotFoundError,
+    QueryTaskPermissionDeniedError,
+    QueryTaskService,
+)
 from .daos.query_history_dao import QueryHistoryDao
 from .daos.query_favorite_dao import QueryFavoriteDao
 from .services.query_favorite_service import (
@@ -39,9 +43,6 @@ from .agent import get_all_tables_async, get_tables_create_format
 from .agent.sql_assist_graph import get_sql_assist_graph
 from utils.database import get_session
 from utils import conversation
-from utils.models import (
-    ChatDataQueryExecution,
-)
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
@@ -56,17 +57,20 @@ from .routers.skills import router as skills_router
 from .routers.dashboard import router as dashboard_router
 from .routers.semantic_config import router as semantic_config_router
 from .routers.uploaded_files import router as uploaded_files_router
-import time
 
 logger = get_logger(__name__)
 AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
-QUERY_TASK_POLL_INTERVAL_MS = 1500
-CANCEL_TARGET_WAIT_SECONDS = 3
-CANCEL_TARGET_POLL_INTERVAL_SECONDS = 0.1
-_query_task_background_tasks: set[asyncio.Task] = set()
 query_history_service = QueryHistoryService(QueryHistoryDao(session_context=lambda: get_session()))
+query_task_service = QueryTaskService(
+    query_history_service=query_history_service,
+    datasource_manager_factory=lambda: get_datasource_manager(),
+    fetch_http_query_task_result=lambda *args, **kwargs: fetch_http_query_task_result(*args, **kwargs),
+    stop_http_query_task=lambda *args, **kwargs: stop_http_query_task(*args, **kwargs),
+    kill_mysql_query=lambda *args, **kwargs: kill_mysql_query(*args, **kwargs),
+)
+query_task_service.configure_dashboard_runtime()
 query_favorite_service = QueryFavoriteService(QueryFavoriteDao(session_context=lambda: get_session()))
 
 # 创建路由器
@@ -81,439 +85,6 @@ router.include_router(semantic_config_router)
 router.include_router(datasource_public_router)
 router.include_router(datasource_admin_router)
 router.include_router(uploaded_files_router)
-
-
-# ============ 内部工具函数 ============
-
-async def _execute_sql_for_member(
-    execution_target: Dict[str, Any],
-    sql: str,
-    limit: int,
-    timeout: Optional[int],
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-    query_task_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    skip_query_cache: bool = False,
-    datasource_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """执行单个成员数据源 SQL。"""
-    return await query_runtime.execute_sql_for_member(
-        execution_target=execution_target,
-        sql=sql,
-        limit=limit,
-        timeout=timeout,
-        user_id=user_id,
-        username=username,
-        query_task_id=query_task_id,
-        execution_id=execution_id,
-        skip_query_cache=skip_query_cache,
-        datasource_id=datasource_id,
-    )
-
-
-async def _update_query_execution(
-    execution_id: str,
-    *,
-    sql_status: Optional[str] = None,
-    remote_task_id: Optional[str] = None,
-    db_connection_id: Optional[str] = None,
-    execution_time_ms: Optional[int] = None,
-    result_row_count: Optional[int] = None,
-    result_payload: Any = None,
-    error_message: Optional[str] = None,
-    started_time: Optional[datetime] = None,
-    finished_time: Optional[datetime] = None,
-) -> None:
-    """更新 SQL 执行明细。"""
-    await query_runtime.update_query_execution(
-        execution_id,
-        sql_status=sql_status,
-        remote_task_id=remote_task_id,
-        db_connection_id=db_connection_id,
-        execution_time_ms=execution_time_ms,
-        result_row_count=result_row_count,
-        result_payload=result_payload,
-        error_message=error_message,
-        started_time=started_time,
-        finished_time=finished_time,
-    )
-
-
-def _build_cancelled_execution_map(executions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """按成员数据源整理本地已取消的执行记录。"""
-    cancelled_map: Dict[str, Dict[str, Any]] = {}
-    for execution in executions:
-        status = str((execution or {}).get("sql_status") or "").strip().lower()
-        member_datasource_id = str((execution or {}).get("member_datasource_id") or "").strip()
-        if member_datasource_id and status in {"cancelled", "kill_failed"}:
-            cancelled_map[member_datasource_id] = execution
-    return cancelled_map
-
-
-def _build_execution_map_by_member(executions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """按成员数据源整理本地执行记录。"""
-    execution_map: Dict[str, Dict[str, Any]] = {}
-    for execution in executions:
-        member_datasource_id = str((execution or {}).get("member_datasource_id") or "").strip()
-        if member_datasource_id:
-            execution_map[member_datasource_id] = execution
-    return execution_map
-
-
-def _resolve_member_execution_time_ms(remote_result: Dict[str, Any], local_execution: Optional[Dict[str, Any]]) -> Optional[int]:
-    """解析成员远端结果耗时，远端缺失时使用本地执行记录兜底。"""
-    if not local_execution:
-        return query_runtime.resolve_execution_time_ms((remote_result or {}).get("execution_time_ms"))
-    return query_runtime.resolve_execution_time_ms(
-        (remote_result or {}).get("execution_time_ms") if (remote_result or {}).get("execution_time_ms") is not None else local_execution.get("execution_time_ms"),
-        local_execution.get("started_time"),
-        local_execution.get("finished_time"),
-    )
-
-
-async def _build_live_remote_sql_result(response_data: Dict[str, Any], executions: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
-    """基于远端 HTTP 任务实时拉取 SQL 结果。"""
-    remote_tasks = list(response_data.get("remote_tasks") or [])
-    if not remote_tasks:
-        return None
-    local_execution_map = _build_execution_map_by_member(executions or [])
-    cancelled_execution_map = _build_cancelled_execution_map(executions or [])
-    request_payload = response_data.get("request_payload") or {}
-    remote_user_id = str((request_payload or {}).get("user_id") or "").strip()
-    remote_username = str((request_payload or {}).get("operator_name") or "").strip()
-
-    remote_member_results = await asyncio.gather(*[
-        fetch_http_query_task_result(
-            str(remote_task.get("remote_task_id") or ""),
-            str(remote_task.get("source_type") or "hive"),
-            user_id=remote_user_id,
-            username=remote_username,
-        )
-        for remote_task in remote_tasks
-    ])
-
-    remote_results: List[Dict[str, Any]] = []
-    for remote_task, remote_result in zip(remote_tasks, remote_member_results):
-        member_datasource_id = str(remote_task.get("member_datasource_id") or "").strip()
-        local_execution = local_execution_map.get(member_datasource_id)
-        local_cancelled_execution = cancelled_execution_map.get(member_datasource_id)
-        if local_cancelled_execution:
-            local_status = str(local_cancelled_execution.get("sql_status") or "cancelled").strip().lower()
-            remote_results.append({
-                "member_datasource_id": remote_task.get("member_datasource_id"),
-                "member_name": remote_task.get("member_name"),
-                "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "success": False,
-                "status": local_status,
-                "columns": [],
-                "data": [],
-                "total_count": 0,
-                "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_cancelled_execution),
-                "started_time": remote_result.get("started_time") or local_cancelled_execution.get("started_time"),
-                "finished_time": remote_result.get("finished_time") or local_cancelled_execution.get("finished_time"),
-                "error": local_cancelled_execution.get("error_message") or ("已人工取消" if local_status == "cancelled" else "停止执行失败"),
-            })
-            continue
-        remote_results.append({
-            "member_datasource_id": remote_task.get("member_datasource_id"),
-            "member_name": remote_task.get("member_name"),
-            "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-            "success": bool(remote_result.get("success")),
-            "status": remote_result.get("status"),
-            "columns": remote_result.get("columns") or [],
-            "data": remote_result.get("data") or [],
-            "total_count": int(remote_result.get("total_count") or 0),
-            "execution_time_ms": _resolve_member_execution_time_ms(remote_result, local_execution),
-            "started_time": remote_result.get("started_time") or ((local_execution or {}).get("started_time") if local_execution else None),
-            "finished_time": remote_result.get("finished_time") or ((local_execution or {}).get("finished_time") if local_execution else None),
-            "error": remote_result.get("error"),
-        })
-
-    local_result_payload = response_data.get("result_payload")
-    local_results = []
-    if isinstance(local_result_payload, dict):
-        local_results = list(local_result_payload.get("results") or [])
-    remote_member_ids = {
-        str(item.get("member_datasource_id") or "").strip()
-        for item in remote_tasks
-        if str(item.get("member_datasource_id") or "").strip()
-    }
-    direct_results = [
-        item for item in local_results
-        if str((item or {}).get("member_datasource_id") or "").strip() not in remote_member_ids
-    ]
-    merged_results = direct_results + remote_results
-
-    statuses = {str(item.get("status") or "").strip().lower() for item in remote_results}
-    if "pending" in statuses or "running" in statuses:
-        task_status = "running"
-        progress_text = "SQL 执行中"
-    elif statuses and statuses <= {"cancelled"}:
-        task_status = "cancelled"
-        progress_text = "已停止"
-    elif any(item.get("success") for item in merged_results):
-        task_status = "succeeded"
-        progress_text = "执行完成"
-    else:
-        task_status = "failed"
-        progress_text = "执行失败"
-
-    primary_result = next((item for item in merged_results if item.get("success")), merged_results[0] if merged_results else {})
-    successful_results = [item for item in merged_results if item.get("success")]
-    if task_status == "running":
-        error_message = None
-    elif successful_results:
-        error_message = None
-    else:
-        error_messages = [
-            str(item.get("error") or "").strip()
-            for item in merged_results
-            if str(item.get("error") or "").strip()
-        ]
-        error_message = "；".join(error_messages) if error_messages else "所有执行对象均执行失败"
-
-    result_success = bool(successful_results) and task_status != "running"
-    return {
-        "status": task_status,
-        "progress_text": progress_text,
-        "error_message": error_message,
-        "result_payload": {
-            "success": result_success,
-            "sql": primary_result.get("sql") or ((response_data.get("request_payload") or {}).get("sql") or ""),
-            "columns": primary_result.get("columns") or [],
-            "data": primary_result.get("data") or [],
-            "total_count": int(primary_result.get("total_count") or 0),
-            "execution_time_ms": primary_result.get("execution_time_ms"),
-            "member_datasource_id": primary_result.get("member_datasource_id"),
-            "member_name": primary_result.get("member_name"),
-            "error": error_message,
-            "results": merged_results,
-        },
-    }
-
-
-def _is_query_task_owned_by_user(task_data: Dict[str, Any], executions: List[Dict[str, Any]], user_id: str) -> bool:
-    """判断查询任务是否归属于当前用户。"""
-    normalized_user_id = str(user_id or "").strip()
-    if not normalized_user_id:
-        return False
-    owner_ids = {
-        str(item.get("user_id") or item.get("create_by") or item.get("update_by") or "").strip()
-        for item in executions or []
-        if str(item.get("user_id") or item.get("create_by") or item.get("update_by") or "").strip()
-    }
-    task_user_id = QueryHistoryService.task_user_id(task_data)
-    if task_user_id:
-        owner_ids.add(task_user_id)
-    return not owner_ids or normalized_user_id in owner_ids
-
-
-async def _resolve_execution_target(execution: ChatDataQueryExecution) -> Optional[Dict[str, Any]]:
-    """根据执行记录解析实际成员数据源配置。"""
-    ds_manager = get_datasource_manager()
-    member_ids = [execution.member_datasource_id] if execution.member_datasource_id else None
-    targets = await ds_manager.get_execution_datasources_async(
-        execution.datasource_id,
-        member_ids,
-    )
-    return targets[0] if targets else None
-
-
-async def _wait_for_cancel_target(execution: ChatDataQueryExecution) -> ChatDataQueryExecution:
-    """短暂等待执行记录写入远端任务ID或数据库连接ID。"""
-    if execution.remote_task_id or execution.db_connection_id or str(execution.sql_status or "").strip().lower() != "running":
-        return execution
-    deadline = time.monotonic() + CANCEL_TARGET_WAIT_SECONDS
-    while time.monotonic() < deadline:
-        await asyncio.sleep(CANCEL_TARGET_POLL_INTERVAL_SECONDS)
-        latest = await query_history_service.get_execution_model(execution.execution_id)
-        if latest is None:
-            return execution
-        QueryHistoryService.copy_execution_identity(execution, latest)
-        if execution.remote_task_id or execution.db_connection_id or str(execution.sql_status or "").strip().lower() != "running":
-            return execution
-    return execution
-
-
-async def _cancel_query_execution(execution: ChatDataQueryExecution, *, cleanup_without_target: bool = False, operator_name: Optional[str] = None) -> Dict[str, Any]:
-    """停止一条 SQL 执行记录对应的远端任务或直连查询。"""
-    current_status = str(execution.sql_status or "").strip().lower()
-    if current_status not in {"pending", "running"}:
-        return {
-            "execution_id": execution.execution_id,
-            "status": current_status,
-            "success": True,
-            "message": "无需停止",
-        }
-    target = None
-    stop_result: Dict[str, Any]
-    execution = await _wait_for_cancel_target(execution)
-    current_status = str(execution.sql_status or "").strip().lower()
-    if current_status not in {"pending", "running"}:
-        return {
-            "execution_id": execution.execution_id,
-            "status": current_status,
-            "success": True,
-            "message": "无需停止",
-        }
-    if execution.remote_task_id:
-        try:
-            target = await _resolve_execution_target(execution)
-        except Exception as err:
-            logger.warning("解析 HTTP 停止数据源失败: execution_id=%s error=%s", execution.execution_id, err)
-        source_type = str((target or {}).get("source_type") or "hive").strip().lower() or "hive"
-        stop_result = await stop_http_query_task(
-            execution.remote_task_id,
-            source_type,
-            user_id=str(execution.user_id or "").strip(),
-            username=str(operator_name or "").strip(),
-        )
-    elif execution.db_connection_id:
-        try:
-            target = await _resolve_execution_target(execution)
-        except Exception as err:
-            logger.error("解析 MySQL 停止数据源失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True)
-            stop_result = {"success": False, "error": "解析执行数据源失败"}
-        else:
-            stop_result = await kill_mysql_query(target or {}, execution.db_connection_id)
-    elif current_status == "pending" or cleanup_without_target:
-        stop_result = {"success": True, "error": None}
-    else:
-        stop_result = {"success": False, "error": "缺少可停止的远端任务ID或数据库连接ID"}
-
-    success = bool(stop_result.get("success"))
-    await _update_query_execution(
-        execution.execution_id,
-        sql_status=("cancelled" if success else "kill_failed"),
-        error_message=("已人工取消" if success else str(stop_result.get("error") or "停止执行失败")),
-        finished_time=datetime.now(),
-    )
-    return {
-        "execution_id": execution.execution_id,
-        "status": "cancelled" if success else "kill_failed",
-        "success": success,
-        "message": None if success else str(stop_result.get("error") or "停止执行失败"),
-    }
-
-
-async def _cancel_running_query_history(
-    *,
-    datasource_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """批量停止执行中的 SQL，并同步更新关联任务状态。"""
-    return await query_history_service.cancel_running_query_history(
-        datasource_id=datasource_id,
-        user_id=user_id,
-        operator_name=operator_name,
-        cancel_execution=_cancel_query_execution,
-        update_execution=_update_query_execution,
-        update_task=_update_query_task,
-    )
-
-
-async def _create_task_record(
-    *,
-    task_type: str,
-    datasource_id: str,
-    query_type: str,
-    request_payload: Dict[str, Any],
-    progress_text: str = "任务已创建，等待执行",
-) -> Dict[str, Any]:
-    """创建异步任务记录。"""
-    return await query_runtime.create_task_record(
-        task_type=task_type,
-        datasource_id=datasource_id,
-        query_type=query_type,
-        request_payload=request_payload,
-        progress_text=progress_text,
-    )
-
-
-async def _update_query_task(
-    task_id: str,
-    *,
-    status: Optional[str] = None,
-    progress_text: Optional[str] = None,
-    result_payload: Any = None,
-    error_message: Optional[str] = None,
-    started_time: Optional[datetime] = None,
-    finished_time: Optional[datetime] = None,
-) -> Optional[Dict[str, Any]]:
-    """更新异步查询任务。"""
-    return await query_runtime.update_query_task(
-        task_id,
-        status=status,
-        progress_text=progress_text,
-        result_payload=result_payload,
-        error_message=error_message,
-        started_time=started_time,
-        finished_time=finished_time,
-    )
-
-
-async def _run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
-    """后台执行 SQL 查询任务。"""
-    await query_runtime.run_sql_query_task(task_id, task)
-
-
-
-
-async def _run_query_task(task_id: str) -> None:
-    """后台执行查询任务。"""
-    task = await query_runtime.get_query_task(task_id)
-    if not task:
-        logger.warning("异步查询任务不存在: %s", task_id)
-        return
-    try:
-        if task.get("task_type") == "sql":
-            await _run_sql_query_task(task_id, task)
-            return
-        if task.get("task_type") == "dashboard_panel":
-            await dashboard_runtime.run_dashboard_panel_task(task_id, task)
-            return
-        if task.get("task_type") == "dashboard_batch":
-            await dashboard_runtime.run_dashboard_batch_task(task_id, task)
-            return
-        raise ValueError(f"不支持的任务类型: {task.get('task_type')}")
-    except ValueError as e:
-        logger.error("异步查询任务失败: %s", e)
-        await _update_query_task(
-            task_id,
-            status="failed",
-            progress_text="执行失败",
-            error_message=str(e),
-            finished_time=datetime.now(),
-        )
-    except Exception as e:
-        logger.error("异步查询任务异常: %s", e, exc_info=True)
-        await _update_query_task(
-            task_id,
-            status="failed",
-            progress_text="执行失败",
-            error_message="执行失败，请稍后重试或联系管理员",
-            finished_time=datetime.now(),
-        )
-
-
-def _schedule_query_task(task_id: str) -> None:
-    """提交后台异步查询任务。"""
-    background_task = asyncio.create_task(_run_query_task(task_id))
-    _query_task_background_tasks.add(background_task)
-    background_task.add_done_callback(_query_task_background_tasks.discard)
-
-
-dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
-    get_datasource_manager=lambda: get_datasource_manager(),
-    execute_sql_for_member=lambda **kwargs: _execute_sql_for_member(**kwargs),
-    create_task_record=lambda **kwargs: _create_task_record(**kwargs),
-    update_query_task=lambda *args, **kwargs: _update_query_task(*args, **kwargs),
-    is_query_task_cancelled=lambda task_id: query_runtime.is_query_task_cancelled(task_id),
-    schedule_query_task=lambda task_id: _schedule_query_task(task_id),
-    query_task_poll_interval_ms=QUERY_TASK_POLL_INTERVAL_MS,
-))
 
 
 # ============ 路由接口 ============
@@ -621,7 +192,7 @@ async def cancel_my_running_query_history(
     """停止当前用户所有执行中的 SQL。"""
     try:
         current_user = _get_current_user(request)
-        result = await _cancel_running_query_history(
+        result = await query_task_service.cancel_running_query_history(
             datasource_id=datasource_id,
             user_id=str(current_user.user_id),
             operator_name=str(getattr(current_user, "username", "") or "").strip(),
@@ -642,7 +213,7 @@ async def cancel_admin_running_query_history(
     """停止全局所有执行中的 SQL。"""
     try:
         current_user = _get_current_user(request)
-        result = await _cancel_running_query_history(
+        result = await query_task_service.cancel_running_query_history(
             datasource_id=datasource_id,
             operator_name=str(getattr(current_user, "username", "") or "").strip(),
         )
@@ -830,35 +401,25 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
     """创建异步查询任务并返回任务 ID。"""
     try:
         current_user = _get_current_user(request)
-        body = body.model_copy(update={"user_id": current_user.user_id, "operator_name": current_user.username})
-        logger.info(
-            "query-tasks create: datasource_id=%s",
-            body.datasource_id,
+        task_info = await query_task_service.create_query_task_for_user(
+            body,
+            user_id=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
         )
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(body.datasource_id)
-        if not datasource:
-            return business_response(
-                msg=f"数据源不存在: {body.datasource_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
-            )
-        body = await query_runtime.prepare_sql_request_for_execution(body, datasource)
-        task_info = await query_runtime.create_query_task(body)
-        _schedule_query_task(task_info["task_id"])
         return business_response(
-            data={
-                "task_id": task_info["task_id"],
-                "task_type": task_info["task_type"],
-                "status": task_info["status"],
-                "poll_interval_ms": QUERY_TASK_POLL_INTERVAL_MS,
-            },
+            data=task_info,
             msg="任务已创建"
         )
     except AuthenticationError as e:
         return business_response(
             msg=e.message,
             code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
+            status="error"
+        )
+    except QueryTaskNotFoundError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_NOT_FOUND,
             status="error"
         )
     except ValueError as e:
@@ -881,48 +442,9 @@ async def get_query_task(task_id: str, request: Request):
     """查询异步任务状态与结果。"""
     try:
         current_user = _get_current_user(request)
-        current_user_id = str(current_user.user_id)
-        task_data = await query_runtime.get_query_task(task_id)
-        if not task_data:
-            return business_response(
-                msg=f"任务不存在: {task_id}",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error"
-            )
-        response_data = query_runtime.build_query_task_response_data(task_data)
-        executions = await query_runtime.get_query_executions(response_data["task_id"])
-        if not _is_query_task_owned_by_user(task_data, executions, current_user_id):
-            return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if response_data["task_type"] == "sql" and response_data["remote_tasks"]:
-            live_remote_payload = await _build_live_remote_sql_result(response_data, executions)
-            if live_remote_payload:
-                response_data = {
-                    **response_data,
-                    "status": live_remote_payload["status"],
-                    "progress_text": live_remote_payload["progress_text"],
-                    "error_message": live_remote_payload["error_message"],
-                    "result_payload": live_remote_payload["result_payload"],
-                }
-        result_payload = response_data["result_payload"]
-        task_type = response_data["task_type"]
+        data = await query_task_service.get_query_task_for_user(task_id, user_id=str(current_user.user_id))
         return business_response(
-            data={
-                "task_id": response_data["task_id"],
-                "task_type": task_type,
-                "datasource_id": response_data["datasource_id"],
-                "query_type": response_data["query_type"],
-                "status": response_data["status"],
-                "progress_text": response_data["progress_text"],
-                "remote_tasks": response_data["remote_tasks"],
-                "executions": executions,
-                "result": (result_payload if task_type != "sql" else None),
-                "results": ((result_payload or {}).get("results") if task_type == "sql" and isinstance(result_payload, dict) else None),
-                "error_message": response_data["error_message"],
-                "started_time": response_data["started_time"],
-                "finished_time": response_data["finished_time"],
-                "create_time": response_data["create_time"],
-                "update_time": response_data["update_time"],
-            },
+            data=data,
             msg="查询成功"
         )
     except AuthenticationError as e:
@@ -931,6 +453,8 @@ async def get_query_task(task_id: str, request: Request):
             code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
             status="error"
         )
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except HTTPException as e:
         return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except Exception as e:
@@ -947,55 +471,25 @@ async def cancel_query_task(task_id: str, request: Request):
     """停止异步查询任务及其 SQL 执行。"""
     try:
         current_user = _get_current_user(request)
-        current_user_id = str(current_user.user_id)
-        task_data = await query_runtime.get_query_task(task_id)
-        if not task_data:
-            return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        executions = await query_history_service.get_execution_models(task_id)
-        owner_ids = {str(item.user_id or "").strip() for item in executions if str(item.user_id or "").strip()}
-        if not owner_ids:
-            task_user_id = QueryHistoryService.task_user_id(task_data)
-            if task_user_id:
-                owner_ids.add(task_user_id)
-        if owner_ids and current_user_id not in owner_ids:
-            return business_response(msg="无权停止该查询任务", code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
-        operator_name = QueryHistoryService.task_operator_name(task_data) or str(getattr(current_user, "username", "") or "").strip()
-        cancellable_executions = [
-            item for item in executions
-            if str(item.sql_status or "").strip().lower() in {"pending", "running"}
-        ]
-        task_status = str(task_data.get("status") or "").strip().lower()
-        if task_status in QUERY_TASK_FINAL_STATUSES and not cancellable_executions:
-            return business_response(
-                data={
-                    "task_id": task_id,
-                    "status": task_data.get("status"),
-                    "executions": [item.to_dict() for item in executions],
-                },
-                msg="任务已结束"
-            )
-        cleanup_without_target = task_status in QUERY_TASK_FINAL_STATUSES
-        execution_results = await asyncio.gather(*[
-            _cancel_query_execution(item, cleanup_without_target=cleanup_without_target, operator_name=operator_name)
-            for item in (cancellable_executions or executions)
-        ])
-        cancel_status = QueryHistoryService.build_cancel_task_status(execution_results)
-        if task_status not in QUERY_TASK_FINAL_STATUSES:
-            await _update_query_task(
-                task_id,
-                status=cancel_status,
-                progress_text=("已停止" if cancel_status == "cancelled" else "部分停止失败"),
-                error_message=(None if cancel_status == "cancelled" else "部分 SQL 停止失败"),
-                finished_time=datetime.now(),
-            )
-        return business_response(
-            data={
-                "task_id": task_id,
-                "status": cancel_status,
-                "executions": execution_results,
-            },
-            msg="停止请求已提交"
+        result = await query_task_service.cancel_query_task_for_user(
+            task_id,
+            user_id=str(current_user.user_id),
+            operator_name=str(getattr(current_user, "username", "") or "").strip(),
         )
+        return business_response(
+            data=result.data,
+            msg=result.message
+        )
+    except AuthenticationError as e:
+        return business_response(
+            msg=e.message,
+            code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
+            status="error"
+        )
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except QueryTaskPermissionDeniedError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
     except HTTPException as e:
         return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except Exception as e:

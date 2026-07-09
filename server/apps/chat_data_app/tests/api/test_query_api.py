@@ -461,7 +461,7 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
-    monkeypatch.setattr(routes, "_schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
+    monkeypatch.setattr(routes.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -502,7 +502,7 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
     monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
-    monkeypatch.setattr(routes, "_schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
+    monkeypatch.setattr(routes.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -684,7 +684,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
-    monkeypatch.setattr(routes, "_build_live_remote_sql_result", fake_build_live_remote_sql_result)
+    monkeypatch.setattr(routes.query_task_service, "build_live_remote_sql_result", fake_build_live_remote_sql_result)
 
     response = client.get("/api/chatdata/query-tasks/task_remote", headers=auth_headers)
 
