@@ -1,7 +1,12 @@
 """
-日志管理模块
-提供统一的日志配置和管理功能
-支持控制台输出和文件记录，自动日志轮转
+日志管理模块，提供统一的日志配置和管理功能，支持控制台输出和文件记录，自动日志轮转
+日志规范：
+  请求日志文件名：{app_name}_acc.log
+  <log_time>|<trace_id>|[parentId]|<request_type>|<app_name>|[idc]|<ip>|<start_time>|<cost_time>|<error_code>|[ext1]|[ext2]
+  报警日志文件名：{app_name}_alam.log
+  <log_time>|<trace_id>|<alarm_id>|<request_type>|<app_name>|idc|<ip>|<error_code>|<error_msg>|[ext1]|[ext2]
+  应用日志文件名：{app_name}_app.log
+  <log_time>|<log_level>|<thread_id>|<trace_id>|[idc]|<ip>|<filename>|<module>|<lineno>|<msg，能够打印错误堆栈>|[ext1]|[ext2]
 """
 
 import logging
