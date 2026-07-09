@@ -39,7 +39,8 @@ from ..services.evaluation_service import (
 )
 from ..services.feature_gate import ensure_agent_available, feature_disabled_error_code
 from ..services.llm_config import get_chat_data_llm
-from .common import _can_mutate_semantic_config, _get_current_user, _semantic_config_prompt_payload
+from .dependencies import _get_current_user
+from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload
 
 logger = get_logger(__name__)
 router = APIRouter()

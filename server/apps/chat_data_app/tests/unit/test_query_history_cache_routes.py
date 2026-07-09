@@ -20,6 +20,9 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from utils.error_codes import ErrorCode
 from apps.chat_data_app import routes
+from apps.chat_data_app.routers import query_favorites as query_favorites_routes
+from apps.chat_data_app.routers import query_execution as query_execution_routes
+from apps.chat_data_app.routers import query_history as query_history_routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
 from apps.chat_data_app.services import dashboard_runtime, query_runtime
 from apps.chat_data_app.services.query_history_service import QueryHistoryService
@@ -245,7 +248,7 @@ async def _seed_http_query_history(session_factory):
 def test_get_query_history_filters_builder_and_normalizes_page(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(routes.get_query_history(
+    response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         page=-2,
@@ -263,7 +266,7 @@ def test_get_query_history_filters_builder_and_normalizes_page(route_db):
 def test_get_query_history_exposes_dashboard_panel_execution_plan(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(routes.get_query_history(
+    response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         source="dashboard",
@@ -291,7 +294,7 @@ def test_get_query_history_exposes_dashboard_panel_execution_plan(route_db):
 def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    sql_response = asyncio.run(routes.get_query_history(
+    sql_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         source="sql",
@@ -302,7 +305,7 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     assert sql_body["data"]["queries"][0]["execution_id"] == "ex_sql"
     assert sql_body["data"]["queries"][0]["source"] == "SQL编辑器"
 
-    cancelled_response = asyncio.run(routes.get_query_history(
+    cancelled_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         source="agent",
@@ -315,7 +318,7 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     assert cancelled_body["data"]["queries"][0]["source"] == "智能问数"
     assert cancelled_body["data"]["queries"][0]["success_flag"] == 0
 
-    all_response = asyncio.run(routes.get_query_history(
+    all_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         source=None,
@@ -328,7 +331,7 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
 def test_get_query_history_filters_by_executed_time_range(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(routes.get_query_history(
+    response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         start_time="2026-06-02 09:59:30",
@@ -340,7 +343,7 @@ def test_get_query_history_filters_by_executed_time_range(route_db):
     assert body["data"]["total"] == 1
     assert body["data"]["queries"][0]["execution_id"] == "ex_builder"
 
-    invalid_response = asyncio.run(routes.get_query_history(
+    invalid_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
         datasource_id="ds1",
         start_time="bad-time",
@@ -359,7 +362,7 @@ def test_query_history_accepts_url_encoded_datetime():
 def test_get_admin_query_history_filters_globally(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(routes.get_admin_query_history(
+    response = asyncio.run(query_history_routes.get_admin_query_history(
         _make_request(),
         datasource_id="ds1",
         user_id="u2",
@@ -380,7 +383,7 @@ def test_get_admin_query_history_filters_globally(route_db):
     assert item["source"] == "SQL编辑器"
     assert "result_payload" not in item
 
-    username_response = asyncio.run(routes.get_admin_query_history(
+    username_response = asyncio.run(query_history_routes.get_admin_query_history(
         _make_request(),
         datasource_id="ds1",
         username="可视化",
@@ -391,7 +394,7 @@ def test_get_admin_query_history_filters_globally(route_db):
     assert username_body["data"]["total"] == 1
     assert username_body["data"]["queries"][0]["execution_id"] == "ex_builder"
 
-    time_response = asyncio.run(routes.get_admin_query_history(
+    time_response = asyncio.run(query_history_routes.get_admin_query_history(
         _make_request(),
         datasource_id="ds1",
         start_time="2026-06-02 09:59:30",
@@ -509,7 +512,7 @@ async def _seed_running_query_history(session_factory):
 def test_cancel_my_running_query_history_only_current_user(route_db):
     asyncio.run(_seed_running_query_history(route_db))
 
-    response = asyncio.run(routes.cancel_my_running_query_history(_make_request()))
+    response = asyncio.run(query_history_routes.cancel_my_running_query_history(_make_request()))
     body = _payload(response)
 
     assert body["status"] == "success"
@@ -536,7 +539,7 @@ def test_cancel_my_running_query_history_only_current_user(route_db):
 def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
     asyncio.run(_seed_running_query_history(route_db))
 
-    response = asyncio.run(routes.cancel_admin_running_query_history(_make_request(), datasource_id="ds1"))
+    response = asyncio.run(query_history_routes.cancel_admin_running_query_history(_make_request(), datasource_id="ds1"))
     body = _payload(response)
 
     assert body["status"] == "success"
@@ -569,7 +572,7 @@ def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route
 
     monkeypatch.setattr(routes.query_task_service, "cancel_query_execution", fake_cancel)
 
-    response = asyncio.run(routes.cancel_my_running_query_history(_make_request()))
+    response = asyncio.run(query_history_routes.cancel_my_running_query_history(_make_request()))
     body = _payload(response)
 
     assert body["status"] == "success"
@@ -591,14 +594,14 @@ def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route
 def test_get_query_history_result_success_and_not_found(route_db):
     asyncio.run(_seed_query_history(route_db))
 
-    response = asyncio.run(routes.get_query_history_result("ex_builder", _make_request()))
+    response = asyncio.run(query_history_routes.get_query_history_result("ex_builder", _make_request()))
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["execution_id"] == "ex_builder"
     assert body["data"]["query"].startswith("select city")
     assert body["data"]["result_payload"]["columns"] == ["city"]
 
-    missing_response = asyncio.run(routes.get_query_history_result("missing", _make_request()))
+    missing_response = asyncio.run(query_history_routes.get_query_history_result("missing", _make_request()))
     missing_body = _payload(missing_response)
     assert missing_body["status"] == "error"
     assert missing_body["code"] == ErrorCode.CHATDATA_NOT_FOUND
@@ -626,7 +629,7 @@ def test_get_query_history_result_fetches_remote_http_result(route_db, monkeypat
 
     monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
 
-    response = asyncio.run(routes.get_query_history_result("ex_http", _make_request()))
+    response = asyncio.run(query_history_routes.get_query_history_result("ex_http", _make_request()))
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["columns"] == ["id"]
@@ -647,7 +650,7 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
 
     monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
 
-    response = asyncio.run(routes.get_query_history_result("ex_http", _make_request()))
+    response = asyncio.run(query_history_routes.get_query_history_result("ex_http", _make_request()))
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["success"] is False
@@ -663,8 +666,8 @@ def test_query_history_routes_return_error_when_session_fails(monkeypatch):
     monkeypatch.setattr(routes, "get_session", broken_session)
     monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
 
-    history = asyncio.run(routes.get_query_history(_make_request(), datasource_id="ds1"))
-    detail = asyncio.run(routes.get_query_history_result("ex1", _make_request()))
+    history = asyncio.run(query_history_routes.get_query_history(_make_request(), datasource_id="ds1"))
+    detail = asyncio.run(query_history_routes.get_query_history_result("ex1", _make_request()))
 
     assert _payload(history)["code"] == ErrorCode.CHATDATA_QUERY_HISTORY_FAILED
     assert _payload(detail)["code"] == ErrorCode.CHATDATA_QUERY_HISTORY_FAILED
@@ -677,7 +680,7 @@ def test_query_favorite_builder_validation_and_delete(route_db):
         favorite_title="可视化收藏",
         query_text="select 1",
     )
-    missing_response = asyncio.run(routes.create_query_favorite(missing_builder, _make_request()))
+    missing_response = asyncio.run(query_favorites_routes.create_query_favorite(missing_builder, _make_request()))
     assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG
 
     create_payload = QueryFavoriteCreateRequest(
@@ -687,28 +690,28 @@ def test_query_favorite_builder_validation_and_delete(route_db):
         query_text="select city from orders",
         builder_config={"dimensions": [{"name": "城市"}]},
     )
-    create_response = asyncio.run(routes.create_query_favorite(create_payload, _make_request()))
+    create_response = asyncio.run(query_favorites_routes.create_query_favorite(create_payload, _make_request()))
     created = _payload(create_response)["data"]
     assert created["user_id"] == "u1"
     assert created["builder_config"]["dimensions"][0]["name"] == "城市"
 
     edit_raw_payload = QueryFavoriteUpdateRequest(query_text="select amount from orders")
-    edit_raw_response = asyncio.run(routes.update_query_favorite(created["id"], edit_raw_payload, _make_request()))
+    edit_raw_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], edit_raw_payload, _make_request()))
     assert _payload(edit_raw_response)["code"] == ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED
 
     rename_payload = QueryFavoriteUpdateRequest(favorite_title="可视化收藏2", semantic_config_id="sc_builder")
-    rename_response = asyncio.run(routes.update_query_favorite(created["id"], rename_payload, _make_request()))
+    rename_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], rename_payload, _make_request()))
     renamed = _payload(rename_response)["data"]
     assert renamed["favorite_title"] == "可视化收藏2"
     assert renamed["semantic_config_id"] == "sc_builder"
 
-    delete_response = asyncio.run(routes.delete_query_favorite(created["id"], _make_request()))
+    delete_response = asyncio.run(query_favorites_routes.delete_query_favorite(created["id"], _make_request()))
     assert _payload(delete_response)["status"] == "success"
 
-    update_deleted_response = asyncio.run(routes.update_query_favorite(created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()))
+    update_deleted_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], QueryFavoriteUpdateRequest(favorite_title="新标题"), _make_request()))
     assert _payload(update_deleted_response)["code"] == ErrorCode.CHATDATA_FAVORITE_NOT_FOUND
 
-    delete_deleted_response = asyncio.run(routes.delete_query_favorite(created["id"], _make_request()))
+    delete_deleted_response = asyncio.run(query_favorites_routes.delete_query_favorite(created["id"], _make_request()))
     assert _payload(delete_deleted_response)["code"] == ErrorCode.CHATDATA_FAVORITE_NOT_FOUND
 
 
@@ -720,7 +723,7 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
         favorite_title="SQL收藏",
         query_text="select 1",
     )
-    create_response = asyncio.run(routes.create_query_favorite(create_payload, _make_request()))
+    create_response = asyncio.run(query_favorites_routes.create_query_favorite(create_payload, _make_request()))
     created = _payload(create_response)["data"]
 
     update_payload = QueryFavoriteUpdateRequest(
@@ -729,7 +732,7 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
         semantic_config_id="sc2",
         builder_config={"sql": "select 2"},
     )
-    update_response = asyncio.run(routes.update_query_favorite(created["id"], update_payload, _make_request()))
+    update_response = asyncio.run(query_favorites_routes.update_query_favorite(created["id"], update_payload, _make_request()))
     updated = _payload(update_response)["data"]
 
     assert updated["favorite_title"] == "SQL收藏2"
@@ -737,7 +740,7 @@ def test_query_favorite_sql_can_update_query_and_builder_config(route_db):
     assert updated["semantic_config_id"] == "sc2"
     assert updated["builder_config"] == {"sql": "select 2"}
 
-    list_response = asyncio.run(routes.get_query_favorites(_make_request(), datasource_id="ds1", query_type=None, limit=20))
+    list_response = asyncio.run(query_favorites_routes.get_query_favorites(_make_request(), datasource_id="ds1", query_type=None, limit=20))
     listed = _payload(list_response)
     assert listed["status"] == "success"
     assert listed["data"]["total"] >= 1
@@ -1406,7 +1409,7 @@ def test_create_query_task_endpoint_branches(monkeypatch):
 
     monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager(None))
-    missing_response = asyncio.run(routes.create_query_task(_make_request(), QueryTaskCreateRequest(
+    missing_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
         task_type="sql",
         datasource_id="missing",
         sql="select 1",
@@ -1414,7 +1417,7 @@ def test_create_query_task_endpoint_branches(monkeypatch):
     assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
-    invalid_sql_response = asyncio.run(routes.create_query_task(_make_request(), QueryTaskCreateRequest(
+    invalid_sql_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
         task_type="sql",
         datasource_id="ds1",
         sql="select 1; select 2",

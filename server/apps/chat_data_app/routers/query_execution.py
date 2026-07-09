@@ -1,0 +1,289 @@
+"""SQL 查询执行相关路由。"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from typing import Any, Callable
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage
+
+from auth import AuthenticationError
+from utils import conversation
+from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.logger import get_logger
+from utils.response import business_response
+from .. import agent as agent_module
+from ..agent import get_all_tables_async, get_tables_create_format
+from ..agent.sql_assist_graph import get_sql_assist_graph
+from ..schema import (
+    CompileSemanticBuilderSqlRequest,
+    ExecuteSqlRequest,
+    QueryTaskCreateRequest,
+    QuickSqlRequest,
+)
+from ..services import query_runtime
+from ..services.datasource_manager import get_datasource_manager
+from ..services.query_task_service import (
+    QueryTaskNotFoundError,
+    QueryTaskPermissionDeniedError,
+    QueryTaskService,
+)
+from ..services.semantic_builder_compiler import compile_semantic_builder_sql
+from .dependencies import _get_current_user
+
+logger = get_logger(__name__)
+router = APIRouter()
+
+_query_task_service: QueryTaskService | None = None
+_current_user_getter: Callable[[Request], Any] = _get_current_user
+_sql_assist_agent_id = "chat_data_sql_assist"
+
+
+def configure_query_execution_router(
+    *,
+    query_task_service: QueryTaskService,
+    current_user_getter: Callable[[Request], Any] | None = None,
+    sql_assist_agent_id: str = "chat_data_sql_assist",
+) -> None:
+    """注入 SQL 查询执行路由依赖。"""
+    global _query_task_service, _current_user_getter, _sql_assist_agent_id
+    _query_task_service = query_task_service
+    _sql_assist_agent_id = sql_assist_agent_id
+    if current_user_getter is not None:
+        _current_user_getter = current_user_getter
+
+
+def _task_service() -> QueryTaskService:
+    if _query_task_service is None:
+        raise RuntimeError("query task service 未初始化")
+    return _query_task_service
+
+
+def _sse_event(data: dict[str, Any]) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _sse_error(message: str) -> str:
+    return _sse_event({"type": "error", "message": message})
+
+
+def _current_user_id(request: Request | None) -> str:
+    if request is None:
+        return "system"
+    current_user = _current_user_getter(request)
+    return getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system"
+
+
+async def _load_quick_sql_context(payload: QuickSqlRequest) -> tuple[str | None, str | None, str | None]:
+    datasource = await get_datasource_manager().get_datasource_async(payload.datasource_id)
+    if not datasource:
+        return None, None, "数据源不存在"
+
+    tables = await get_all_tables_async(payload.datasource_id)
+    if not tables:
+        return None, None, "数据源暂无表结构信息"
+
+    table_names = [table.get("table_name") for table in tables]
+    return str(datasource["source_type"]), get_tables_create_format(tables, table_names), None
+
+
+async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Request | None) -> str | None:
+    if not payload.conversation_id:
+        return "缺少 SQL 辅助会话ID"
+
+    current_user_id = _current_user_id(request)
+    existing_agent_id = await conversation.get_agent_id("", payload.conversation_id, current_user_id)
+    if existing_agent_id and existing_agent_id != _sql_assist_agent_id:
+        return "对话不存在"
+
+    if not existing_agent_id:
+        unowned_agent_id = await conversation.get_agent_id("", payload.conversation_id)
+        if unowned_agent_id:
+            return "对话不存在"
+
+    await conversation.get_or_create_conversation("", _sql_assist_agent_id, payload.conversation_id, current_user_id)
+    return None
+
+
+def _quick_sql_initial_state(payload: QuickSqlRequest, tables_ddl_info: str) -> dict[str, Any]:
+    return {
+        "messages": [
+            HumanMessage(
+                content=payload.query,
+                additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+            )
+        ],
+        "tables_ddl_info": tables_ddl_info,
+    }
+
+
+def _extract_sql_from_content(content: str) -> str:
+    sql_match = re.search(r"```sql\s*(.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
+    return sql_match.group(1).strip() if sql_match else content.strip()
+
+
+async def _stream_sql_assist_chunks(
+    payload: QuickSqlRequest,
+    *,
+    source_type: str,
+    tables_ddl_info: str,
+):
+    config = {"configurable": {"thread_id": payload.conversation_id, "checkpoint_ns": ""}}
+    async with agent_module.get_checkpointer() as checkpointer:
+        graph = get_sql_assist_graph(checkpointer, sql_dialect=source_type)
+        async for chunk, metadata in graph.astream(
+            _quick_sql_initial_state(payload, tables_ddl_info),
+            config=config,
+            stream_mode="messages",
+        ):
+            if metadata.get("langgraph_node") == "sql_assist" and getattr(chunk, "content", None):
+                yield chunk.content
+
+
+async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request | None):
+    try:
+        logger.info("收到快速SQL生成请求: %s...", payload.query[:100])
+        source_type, tables_ddl_info, context_error = await _load_quick_sql_context(payload)
+        if context_error:
+            yield _sse_error(context_error)
+            return
+
+        conversation_error = await _ensure_sql_assist_conversation(payload, request)
+        if conversation_error:
+            yield _sse_error(conversation_error)
+            return
+
+        full_content = ""
+        async for content in _stream_sql_assist_chunks(payload, source_type=source_type or "", tables_ddl_info=tables_ddl_info or ""):
+            full_content += content
+            yield _sse_event({"type": "chunk", "content": content})
+
+        sql = _extract_sql_from_content(full_content)
+        logger.info("生成的 SQL: %s...", sql[:200])
+        yield _sse_event({"type": "complete", "sql": sql})
+    except Exception as e:
+        logger.error("快速SQL生成失败: %s", e, exc_info=True)
+        yield _sse_error(str(e))
+
+
+@router.post("/nl2sql")
+async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
+    """快速 SQL 生成接口（流式输出，用于 SQL 编辑器的 AI 辅助）。"""
+    return StreamingResponse(_generate_quick_sql_stream(payload, request), media_type="text/event-stream")
+
+
+@router.post("/query-tasks")
+async def create_query_task(request: Request, body: QueryTaskCreateRequest):
+    """创建异步查询任务并返回任务 ID。"""
+    try:
+        current_user = _current_user_getter(request)
+        task_info = await _task_service().create_query_task_for_user(
+            body,
+            user_id=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        return business_response(data=task_info, msg="任务已创建")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error("创建异步查询任务失败: %s", e, exc_info=True)
+        return business_response(msg="创建异步查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.get("/query-tasks/{task_id}")
+async def get_query_task(task_id: str, request: Request):
+    """查询异步任务状态与结果。"""
+    try:
+        current_user = _current_user_getter(request)
+        data = await _task_service().get_query_task_for_user(task_id, user_id=str(current_user.user_id))
+        return business_response(data=data, msg="查询成功")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except Exception as e:
+        logger.error("查询异步任务失败: %s", e, exc_info=True)
+        return business_response(msg="查询异步任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/query-tasks/{task_id}/cancel")
+async def cancel_query_task(task_id: str, request: Request):
+    """停止异步查询任务及其 SQL 执行。"""
+    try:
+        current_user = _current_user_getter(request)
+        result = await _task_service().cancel_query_task_for_user(
+            task_id,
+            user_id=str(current_user.user_id),
+            operator_name=str(getattr(current_user, "username", "") or "").strip(),
+        )
+        return business_response(data=result.data, msg=result.message)
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except QueryTaskPermissionDeniedError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except Exception as e:
+        logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
+        return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/execute-sql")
+async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
+    """直接执行 SQL（用于 SQL 编辑器模式）。"""
+    try:
+        current_user = _current_user_getter(request)
+        body = body.model_copy(update={"user_id": current_user.user_id})
+        body = await query_runtime.prepare_sql_request_for_execution(body)
+        logger.info("execute-sql request: datasource_id=%s", body.datasource_id)
+        result_data = await query_runtime.execute_sql_request_with_task(
+            body,
+            query_type=body.query_type or "sql",
+            operator_name=current_user.username,
+        )
+        if not result_data.get("success"):
+            return business_response(
+                data=result_data,
+                msg=result_data.get("error") or "SQL 执行失败，请稍后重试或联系管理员",
+                code=ErrorCode.CHATDATA_SERVICE_ERROR,
+                status="error",
+            )
+        return business_response(data=result_data, msg="执行完成")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error("执行 SQL 失败: %s", e, exc_info=True)
+        return business_response(msg="SQL 执行失败，请稍后重试或联系管理员", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/compile-semantic-builder-sql")
+async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderSqlRequest):
+    """编译语义可视化 DSL 为 SQL（仅预览，不执行）。"""
+    try:
+        result = await compile_semantic_builder_sql(
+            datasource_id=request.datasource_id,
+            semantic_config_id=request.semantic_config_id,
+            semantic_builder_config=request.semantic_builder_config,
+        )
+        return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
+    except LookupError as err:
+        return business_response(msg=str(err), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except ValueError as err:
+        return business_response(msg=str(err), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as err:
+        logger.error("Semantic Builder DSL 编译失败: %s", err, exc_info=True)
+        return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")

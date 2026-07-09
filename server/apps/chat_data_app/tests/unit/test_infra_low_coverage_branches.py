@@ -16,7 +16,8 @@ import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.routers import common, data_analyze_workspace
+from apps.chat_data_app.routers import data_analyze_workspace, dependencies
+from apps.chat_data_app.services import semantic_common
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
@@ -1074,14 +1075,14 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
 
-    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
-    with pytest.raises(common.HTTPException, match="Missing user_id"):
-        common._get_current_user(SimpleNamespace(headers={}))
+    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    with pytest.raises(dependencies.HTTPException, match="Missing user_id"):
+        dependencies._get_current_user(SimpleNamespace(headers={}))
 
-    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
-    assert common._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
+    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    assert dependencies._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
 
-    assert common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
+    assert semantic_common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
 
     for field, value, message in [
         ("org_name", " ", "org_name"),

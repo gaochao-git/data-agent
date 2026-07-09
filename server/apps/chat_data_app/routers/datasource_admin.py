@@ -31,7 +31,7 @@ from ..services.hive_meta_http import get_hive_meta_tables_async
 from ..services.hive_sync import HiveSyncService
 from ..services.llm_config import get_chat_data_llm
 from ..services.mysql_sync import MySQLSyncService
-from .common import _get_current_user
+from .dependencies import _get_current_user
 from .datasource_helpers import (
     DATASOURCE_SYNC_TIMEOUT_SECONDS,
     _build_datasource_schema_health,

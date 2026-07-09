@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from starlette.requests import Request
 
-from apps.chat_data_app.routes import (
+from apps.chat_data_app.routers.query_favorites import (
     create_query_favorite,
     delete_query_favorite,
     get_query_favorites,

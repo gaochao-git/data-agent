@@ -58,16 +58,16 @@ from ..services.semantic_history_learning_service import (
     _sample_map_by_execution_id,
     _semantic_scope_tables,
 )
-from ..services.sql_parser import extract_physical_tables
-from .common import (
+from ..services.semantic_common import (
     AGENT_ID,
     DATA_ANALYZE_AGENT_ID,
     _build_table_columns_map,
     _can_mutate_semantic_config,
-    _get_current_user,
     _is_private_semantic_config_owner,
     _is_public_semantic_config,
 )
+from ..services.sql_parser import extract_physical_tables
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()

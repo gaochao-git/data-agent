@@ -15,7 +15,8 @@ from ..services.hive_meta_http import get_hive_meta_schema_async
 from ..services.hive_sync import HiveSyncService
 from ..services.mysql_sync import MySQLSyncService
 from ..services.runtime_config import read_positive_int_env
-from .common import _build_table_columns_map, _optional_current_user
+from .dependencies import _optional_current_user
+from ..services.semantic_common import _build_table_columns_map
 
 logger = get_logger(__name__)
 

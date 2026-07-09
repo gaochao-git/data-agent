@@ -14,7 +14,8 @@ from ..services.data_analyze_workspace import ensure_data_analyze_workspace, res
 from ..services.feature_gate import get_data_analyze_unavailable_response
 from ..services.skill_service import skill_service
 from ..services.workspace_execution import list_workspace_files_from_sandbox, read_workspace_file_from_sandbox
-from .common import DATA_ANALYZE_AGENT_ID, _get_current_user
+from .dependencies import _get_current_user
+from ..services.semantic_common import DATA_ANALYZE_AGENT_ID
 
 logger = get_logger(__name__)
 router = APIRouter()
