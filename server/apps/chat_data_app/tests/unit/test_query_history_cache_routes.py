@@ -19,12 +19,11 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from utils.error_codes import ErrorCode
-from apps.chat_data_app import routes
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import query_history as query_history_routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services import dashboard_runtime, query_runtime
+from apps.chat_data_app.services import dashboard_runtime, query_providers, query_runtime
 from apps.chat_data_app.services.query_history_service import QueryHistoryService
 from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
 
@@ -50,9 +49,11 @@ def route_db(monkeypatch):
                 await session.rollback()
                 raise
 
-    monkeypatch.setattr(routes, "get_session", fake_get_session)
+    monkeypatch.setattr(query_providers, "get_session", fake_get_session)
     monkeypatch.setattr(query_runtime, "get_session", fake_get_session)
-    monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(query_favorites_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
     yield session_factory
     asyncio.run(engine.dispose())
 
@@ -563,14 +564,14 @@ def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
 
 def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route_db, monkeypatch):
     asyncio.run(_seed_running_query_history(route_db))
-    original_cancel = routes.query_task_service.cancel_query_execution
+    original_cancel = query_providers.query_task_service.cancel_query_execution
 
     async def fake_cancel(execution, **kwargs):
         if execution.execution_id == "ex_u1_ds1_pending":
             raise RuntimeError("remote stop failed")
         return await original_cancel(execution, **kwargs)
 
-    monkeypatch.setattr(routes.query_task_service, "cancel_query_execution", fake_cancel)
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", fake_cancel)
 
     response = asyncio.run(query_history_routes.cancel_my_running_query_history(_make_request()))
     body = _payload(response)
@@ -627,9 +628,11 @@ def test_get_query_history_result_fetches_remote_http_result(route_db, monkeypat
             "execution_time_ms": 15,
         }
 
-    monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
-
-    response = asyncio.run(query_history_routes.get_query_history_result("ex_http", _make_request()))
+    response = asyncio.run(query_history_routes.get_query_history_result(
+        "ex_http",
+        _make_request(),
+        remote_result_fetcher=fake_fetch,
+    ))
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["columns"] == ["id"]
@@ -648,9 +651,11 @@ def test_get_query_history_result_remote_http_unavailable(route_db, monkeypatch)
     async def fake_fetch(*_args, **_kwargs):
         return {"status": "failed", "success": False, "error": "结果文件已清理"}
 
-    monkeypatch.setattr(routes, "fetch_http_query_task_result", fake_fetch)
-
-    response = asyncio.run(query_history_routes.get_query_history_result("ex_http", _make_request()))
+    response = asyncio.run(query_history_routes.get_query_history_result(
+        "ex_http",
+        _make_request(),
+        remote_result_fetcher=fake_fetch,
+    ))
     body = _payload(response)
     assert body["status"] == "success"
     assert body["data"]["result_payload"]["success"] is False
@@ -663,8 +668,8 @@ def test_query_history_routes_return_error_when_session_fails(monkeypatch):
         raise RuntimeError("db down")
         yield
 
-    monkeypatch.setattr(routes, "get_session", broken_session)
-    monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(query_providers, "get_session", broken_session)
+    monkeypatch.setattr(query_history_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
 
     history = asyncio.run(query_history_routes.get_query_history(_make_request(), datasource_id="ds1"))
     detail = asyncio.run(query_history_routes.get_query_history_result("ex1", _make_request()))
@@ -855,7 +860,7 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
 
     monkeypatch.setattr(query_runtime.uuid, "uuid4", lambda: FixedUuid())
 
-    created = asyncio.run(routes.query_task_service.create_task_record(
+    created = asyncio.run(query_providers.query_task_service.create_task_record(
         task_type="sql",
         datasource_id="ds1",
         query_type="",
@@ -875,7 +880,7 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
 
     started_time = datetime(2026, 6, 2, 11, 0, 0)
     finished_time = datetime(2026, 6, 2, 11, 0, 5)
-    updated = asyncio.run(routes.query_task_service.update_query_task(
+    updated = asyncio.run(query_providers.query_task_service.update_query_task(
         "task_generated",
         status="running",
         progress_text="SQL 执行中",
@@ -889,7 +894,7 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
     assert updated["progress_text"] == "SQL 执行中"
     assert updated["result_payload"] == {"rows": [1]}
     assert updated["started_time"] == started_time.isoformat()
-    assert asyncio.run(routes.query_task_service.update_query_task("missing", status="running")) is None
+    assert asyncio.run(query_providers.query_task_service.update_query_task("missing", status="running")) is None
 
     remote_task = asyncio.run(query_runtime.append_query_task_remote_task(
         "task_generated",
@@ -955,7 +960,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
             self.hex = value
 
     uuid_values = iter([FixedUuid("exec_1"), FixedUuid("exec_2")])
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: FakeDatasourceManager())
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: FakeDatasourceManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: FakeDatasourceManager())
     monkeypatch.setattr(query_runtime.uuid, "uuid4", lambda: next(uuid_values))
 
@@ -989,8 +994,8 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
     assert asyncio.run(query_runtime.get_query_execution_status("")) == ""
     assert asyncio.run(query_runtime.get_query_execution_status("exec_1")) == "pending"
     assert asyncio.run(query_runtime.get_query_executions("")) == []
-    assert asyncio.run(routes.query_history_service.get_execution_models("")) == []
-    assert asyncio.run(routes.query_history_service.get_execution_model("")) is None
+    assert asyncio.run(query_providers.query_history_service.get_execution_models("")) == []
+    assert asyncio.run(query_providers.query_history_service.get_execution_model("")) is None
 
     executions = asyncio.run(query_runtime.get_query_executions("task_1"))
     assert [item["execution_id"] for item in executions] == ["exec_1", "exec_2"]
@@ -999,7 +1004,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
 
     started_time = datetime(2026, 6, 2, 12, 0, 0)
     finished_time = datetime(2026, 6, 2, 12, 0, 3)
-    asyncio.run(routes.query_task_service.update_query_execution(
+    asyncio.run(query_providers.query_task_service.update_query_execution(
         "exec_1",
         sql_status="running",
         remote_task_id="remote_1",
@@ -1011,7 +1016,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
         started_time=started_time,
         finished_time=finished_time,
     ))
-    updated_model = asyncio.run(routes.query_history_service.get_execution_model("exec_1"))
+    updated_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert updated_model.sql_status == "running"
     assert updated_model.remote_task_id == "remote_1"
     assert updated_model.db_connection_id == "conn_1"
@@ -1027,7 +1032,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
         "cache_age_seconds": 3,
         "cache_expires_in_seconds": 57,
     }))
-    succeeded_model = asyncio.run(routes.query_history_service.get_execution_model("exec_1"))
+    succeeded_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert succeeded_model.sql_status == "succeeded"
     assert succeeded_model.result_row_count == 1
     assert json.loads(succeeded_model.result_payload)["cache_hit"] is True
@@ -1039,7 +1044,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
         "total_count": 1,
         "execution_time_ms": 13,
     }, store_result_payload=False))
-    not_stored_model = asyncio.run(routes.query_history_service.get_execution_model("exec_1"))
+    not_stored_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert not_stored_model.sql_status == "succeeded"
     assert json.loads(not_stored_model.result_payload)["cache_hit"] is True
 
@@ -1052,18 +1057,18 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
         "started_time": "2026-07-07 16:58:47",
         "finished_time": "2026-07-07 16:58:48",
     }))
-    remote_time_model = asyncio.run(routes.query_history_service.get_execution_model("exec_1"))
+    remote_time_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_1"))
     assert remote_time_model.execution_time_ms == 1780
     assert remote_time_model.started_time == datetime(2026, 7, 7, 16, 58, 47)
     assert remote_time_model.finished_time == datetime(2026, 7, 7, 16, 58, 48)
 
-    asyncio.run(routes.query_task_service.update_query_execution("exec_2", sql_status="cancelled", error_message="已人工取消"))
+    asyncio.run(query_providers.query_task_service.update_query_execution("exec_2", sql_status="cancelled", error_message="已人工取消"))
     asyncio.run(query_runtime.update_query_execution_from_result("exec_2", {"success": False, "error": "不应覆盖"}))
-    cancelled_model = asyncio.run(routes.query_history_service.get_execution_model("exec_2"))
+    cancelled_model = asyncio.run(query_providers.query_history_service.get_execution_model("exec_2"))
     assert cancelled_model.sql_status == "cancelled"
     assert cancelled_model.error_message == "已人工取消"
-    asyncio.run(routes.query_task_service.update_query_execution("", sql_status="running"))
-    asyncio.run(routes.query_task_service.update_query_execution("missing", sql_status="running"))
+    asyncio.run(query_providers.query_task_service.update_query_execution("", sql_status="running"))
+    asyncio.run(query_providers.query_task_service.update_query_execution("missing", sql_status="running"))
 
 
 def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
@@ -1112,14 +1117,14 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
         result_updates.append((execution_id, result, kwargs))
     monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", False)
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", fake_limiter)
-    monkeypatch.setattr(routes.query_task_service, "update_query_execution", fake_update_execution)
+    monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "append_query_task_remote_task", fake_append_remote)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", fake_update_from_result)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
 
-    result = asyncio.run(routes.query_task_service.execute_sql_for_member(
+    result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
         {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
         "select 1",
         10,
@@ -1146,7 +1151,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     assert result_updates[-1][2] == {"store_result_payload": True}
     assert closed == ["callback"]
 
-    http_result = asyncio.run(routes.query_task_service.execute_sql_for_member(
+    http_result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
         {"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "mysql", "query_executor_type": "http"},
         "select 1",
         10,
@@ -1162,7 +1167,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
     assert result_updates[-1][2] == {"store_result_payload": False}
 
     monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="cancelled"))
-    cancelled = asyncio.run(routes.query_task_service.execute_sql_for_member(
+    cancelled = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
         {"member_datasource_id": "m1", "member_name": "成员1", "source_type": "mysql"},
         "select 1",
         10,
@@ -1174,7 +1179,7 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
 
     monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FailingExecutor())
-    failed = asyncio.run(routes.query_task_service.execute_sql_for_member(
+    failed = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
         {"member_datasource_id": "m2", "member_name": "成员2", "source_type": "mysql"},
         "select 1",
         10,
@@ -1245,7 +1250,7 @@ def test_execute_sql_for_member_uses_http_remote_ref_cache(monkeypatch):
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", fake_update_from_result)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
 
-    result = asyncio.run(routes.query_task_service.execute_sql_for_member(
+    result = asyncio.run(query_providers.query_task_service.execute_sql_for_member(
         {"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "hive", "query_executor_type": "http"},
         "select 1",
         10,
@@ -1279,7 +1284,7 @@ def test_build_execute_sql_result_data_edge_cases(monkeypatch):
         async def get_datasource_async(self, _datasource_id):
             return None
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: MissingDatasourceManager())
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: MissingDatasourceManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: MissingDatasourceManager())
     with pytest.raises(ValueError, match="数据源不存在"):
         asyncio.run(query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="missing")))
@@ -1291,7 +1296,7 @@ def test_build_execute_sql_result_data_edge_cases(monkeypatch):
         async def get_execution_datasources_async(self, _datasource_id, _member_ids=None):
             return []
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: EmptyTargetManager())
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: EmptyTargetManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: EmptyTargetManager())
     result = asyncio.run(query_runtime.build_execute_sql_result_data(ExecuteSqlRequest(sql="select 1", datasource_id="ds1")))
     assert result["success"] is False
@@ -1307,7 +1312,7 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
     assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}]) == "cancelled"
     assert QueryHistoryService.build_cancel_task_status([{"status": "kill_failed"}]) == "failed"
     assert QueryHistoryService.build_cancel_task_status([{"status": "cancelled"}, {"status": "kill_failed"}]) == "partial_success"
-    assert routes.query_task_service.build_cancelled_execution_map([
+    assert query_providers.query_task_service.build_cancelled_execution_map([
         {"member_datasource_id": "m1", "sql_status": "cancelled"},
         {"member_datasource_id": "m2", "sql_status": "succeeded"},
         {"member_datasource_id": "m3", "sql_status": "kill_failed"},
@@ -1351,17 +1356,17 @@ def test_query_task_dispatch_and_status_helpers(monkeypatch):
         return None
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_task)
-    monkeypatch.setattr(routes.query_task_service, "run_sql_query_task", fake_run_sql)
+    monkeypatch.setattr(query_providers.query_task_service, "run_sql_query_task", fake_run_sql)
     monkeypatch.setattr(dashboard_runtime, "run_dashboard_panel_task", fake_run_panel)
     monkeypatch.setattr(dashboard_runtime, "run_dashboard_batch_task", fake_run_batch)
-    monkeypatch.setattr(routes.query_task_service, "update_query_task", fake_update_task)
+    monkeypatch.setattr(query_providers.query_task_service, "update_query_task", fake_update_task)
 
-    asyncio.run(routes.query_task_service.run_query_task("missing"))
-    asyncio.run(routes.query_task_service.run_query_task("sql"))
-    asyncio.run(routes.query_task_service.run_query_task("panel"))
-    asyncio.run(routes.query_task_service.run_query_task("batch"))
-    asyncio.run(routes.query_task_service.run_query_task("unsupported"))
-    asyncio.run(routes.query_task_service.run_query_task("crash"))
+    asyncio.run(query_providers.query_task_service.run_query_task("missing"))
+    asyncio.run(query_providers.query_task_service.run_query_task("sql"))
+    asyncio.run(query_providers.query_task_service.run_query_task("panel"))
+    asyncio.run(query_providers.query_task_service.run_query_task("batch"))
+    asyncio.run(query_providers.query_task_service.run_query_task("unsupported"))
+    asyncio.run(query_providers.query_task_service.run_query_task("crash"))
 
     assert [item[0] for item in calls] == ["sql", "panel", "batch", "panel"]
     assert updates[0][0] == "unsupported"
@@ -1407,8 +1412,8 @@ def test_create_query_task_endpoint_branches(monkeypatch):
         async def get_datasource_async(self, _datasource_id):
             return self.datasource
 
-    monkeypatch.setattr(routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager(None))
+    monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager(None))
     missing_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
         task_type="sql",
         datasource_id="missing",
@@ -1416,7 +1421,7 @@ def test_create_query_task_endpoint_branches(monkeypatch):
     )))
     assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
     invalid_sql_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
         task_type="sql",
         datasource_id="ds1",

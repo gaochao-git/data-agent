@@ -24,6 +24,7 @@ from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
+from apps.chat_data_app.services import query_providers  # noqa: E402
 from utils.crypto import decrypt_env_value  # noqa: E402
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
@@ -57,9 +58,9 @@ def client():
 @pytest.fixture()
 def patch_datasource_manager(monkeypatch):
     def _patch(manager):
-        monkeypatch.setattr(chat_data_routes, "get_datasource_manager", lambda: manager)
         monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
         monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+        monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
 
     return _patch
 

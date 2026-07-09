@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Any, Callable
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
@@ -32,35 +32,13 @@ from ..services.query_task_service import (
     QueryTaskPermissionDeniedError,
     QueryTaskService,
 )
+from ..services.query_providers import get_query_task_service
 from ..services.semantic_builder_compiler import compile_semantic_builder_sql
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()
-
-_query_task_service: QueryTaskService | None = None
-_current_user_getter: Callable[[Request], Any] = _get_current_user
-_sql_assist_agent_id = "chat_data_sql_assist"
-
-
-def configure_query_execution_router(
-    *,
-    query_task_service: QueryTaskService,
-    current_user_getter: Callable[[Request], Any] | None = None,
-    sql_assist_agent_id: str = "chat_data_sql_assist",
-) -> None:
-    """注入 SQL 查询执行路由依赖。"""
-    global _query_task_service, _current_user_getter, _sql_assist_agent_id
-    _query_task_service = query_task_service
-    _sql_assist_agent_id = sql_assist_agent_id
-    if current_user_getter is not None:
-        _current_user_getter = current_user_getter
-
-
-def _task_service() -> QueryTaskService:
-    if _query_task_service is None:
-        raise RuntimeError("query task service 未初始化")
-    return _query_task_service
+SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 
 def _sse_event(data: dict[str, Any]) -> str:
@@ -71,10 +49,14 @@ def _sse_error(message: str) -> str:
     return _sse_event({"type": "error", "message": message})
 
 
+def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
+    return current_user if current_user is not None else _get_current_user(request)
+
+
 def _current_user_id(request: Request | None) -> str:
     if request is None:
         return "system"
-    current_user = _current_user_getter(request)
+    current_user = _get_current_user(request)
     return getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system"
 
 
@@ -97,7 +79,7 @@ async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Req
 
     current_user_id = _current_user_id(request)
     existing_agent_id = await conversation.get_agent_id("", payload.conversation_id, current_user_id)
-    if existing_agent_id and existing_agent_id != _sql_assist_agent_id:
+    if existing_agent_id and existing_agent_id != SQL_ASSIST_AGENT_ID:
         return "对话不存在"
 
     if not existing_agent_id:
@@ -105,7 +87,7 @@ async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Req
         if unowned_agent_id:
             return "对话不存在"
 
-    await conversation.get_or_create_conversation("", _sql_assist_agent_id, payload.conversation_id, current_user_id)
+    await conversation.get_or_create_conversation("", SQL_ASSIST_AGENT_ID, payload.conversation_id, current_user_id)
     return None
 
 
@@ -177,11 +159,15 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
 
 
 @router.post("/query-tasks")
-async def create_query_task(request: Request, body: QueryTaskCreateRequest):
+async def create_query_task(
+    request: Request,
+    body: QueryTaskCreateRequest,
+    task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
+):
     """创建异步查询任务并返回任务 ID。"""
     try:
-        current_user = _current_user_getter(request)
-        task_info = await _task_service().create_query_task_for_user(
+        current_user = _resolve_current_user(request, None)
+        task_info = await (task_service or get_query_task_service()).create_query_task_for_user(
             body,
             user_id=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -189,6 +175,8 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
         return business_response(data=task_info, msg="任务已创建")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except QueryTaskNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as e:
@@ -199,11 +187,15 @@ async def create_query_task(request: Request, body: QueryTaskCreateRequest):
 
 
 @router.get("/query-tasks/{task_id}")
-async def get_query_task(task_id: str, request: Request):
+async def get_query_task(
+    task_id: str,
+    request: Request,
+    task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
+):
     """查询异步任务状态与结果。"""
     try:
-        current_user = _current_user_getter(request)
-        data = await _task_service().get_query_task_for_user(task_id, user_id=str(current_user.user_id))
+        current_user = _resolve_current_user(request, None)
+        data = await (task_service or get_query_task_service()).get_query_task_for_user(task_id, user_id=str(current_user.user_id))
         return business_response(data=data, msg="查询成功")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
@@ -217,11 +209,15 @@ async def get_query_task(task_id: str, request: Request):
 
 
 @router.post("/query-tasks/{task_id}/cancel")
-async def cancel_query_task(task_id: str, request: Request):
+async def cancel_query_task(
+    task_id: str,
+    request: Request,
+    task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
+):
     """停止异步查询任务及其 SQL 执行。"""
     try:
-        current_user = _current_user_getter(request)
-        result = await _task_service().cancel_query_task_for_user(
+        current_user = _resolve_current_user(request, None)
+        result = await (task_service or get_query_task_service()).cancel_query_task_for_user(
             task_id,
             user_id=str(current_user.user_id),
             operator_name=str(getattr(current_user, "username", "") or "").strip(),
@@ -241,10 +237,13 @@ async def cancel_query_task(task_id: str, request: Request):
 
 
 @router.post("/execute-sql")
-async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
+async def execute_sql_direct(
+    request: Request,
+    body: ExecuteSqlRequest,
+):
     """直接执行 SQL（用于 SQL 编辑器模式）。"""
     try:
-        current_user = _current_user_getter(request)
+        current_user = _resolve_current_user(request, None)
         body = body.model_copy(update={"user_id": current_user.user_id})
         body = await query_runtime.prepare_sql_request_for_execution(body)
         logger.info("execute-sql request: datasource_id=%s", body.datasource_id)
@@ -263,6 +262,8 @@ async def execute_sql_direct(request: Request, body: ExecuteSqlRequest):
         return business_response(data=result_data, msg="执行完成")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:

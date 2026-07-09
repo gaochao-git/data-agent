@@ -1,6 +1,5 @@
 from utils.error_codes import ErrorCode
-from apps.chat_data_app import routes
-from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services import query_providers, query_runtime
 from apps.chat_data_app.services.sql_executor import build_effective_sql, validate_sql
 
 
@@ -145,7 +144,7 @@ def _add_semantic_join_fixture(fake_datasource_manager):
 
 def test_compile_semantic_builder_sql_derives_join_from_backend_config(client, fake_datasource_manager, monkeypatch):
     _add_semantic_join_fixture(fake_datasource_manager)
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -173,7 +172,7 @@ def test_compile_semantic_builder_sql_derives_join_from_backend_config(client, f
 
 
 def test_compile_semantic_builder_sql_rejects_frontend_join_payload(client, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -204,7 +203,7 @@ def test_compile_semantic_builder_sql_uses_semantic_metric_name_for_ambiguous_co
     config["dimensions"] = [
         {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -239,7 +238,7 @@ def test_compile_semantic_builder_sql_does_not_reuse_selected_metric_for_named_h
     config["dimensions"] = [
         {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -302,7 +301,7 @@ def test_compile_semantic_builder_sql_keeps_metric_expression_for_having_and_ord
             "relationship_type": "many_to_one",
         }
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -356,7 +355,7 @@ def test_compile_semantic_builder_sql_accepts_structured_metric_having(client, f
             "relationship_type": "one_to_many",
         }
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -400,7 +399,7 @@ def test_compile_semantic_builder_sql_normalizes_time_filter_to_range(client, fa
         {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
         {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -430,7 +429,7 @@ def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_
         {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"},
         {"name": "支付额", "expression": "SUM(orders.amount)", "table": "orders"},
     ]
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
@@ -458,10 +457,10 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
         captured["body"] = body
         return sample_query_task
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
-    monkeypatch.setattr(routes.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
+    monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -499,10 +498,10 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
     async def fake_prepare_sql_request_for_execution(body, datasource=None):
         return body
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
     monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
-    monkeypatch.setattr(routes.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
+    monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -530,7 +529,7 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
 
 
 def test_create_query_task_returns_datasource_not_found(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/query-tasks",
@@ -548,7 +547,7 @@ def test_create_query_task_returns_sql_prepare_error(client, auth_headers, fake_
     async def fake_prepare_sql_request_for_execution(body, datasource=None):
         raise ValueError("一次只能执行一条 SQL，请拆分后分别执行")
 
-    monkeypatch.setattr(routes, "get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
 
     response = client.post(
@@ -684,7 +683,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
-    monkeypatch.setattr(routes.query_task_service, "build_live_remote_sql_result", fake_build_live_remote_sql_result)
+    monkeypatch.setattr(query_providers.query_task_service, "build_live_remote_sql_result", fake_build_live_remote_sql_result)
 
     response = client.get("/api/chatdata/query-tasks/task_remote", headers=auth_headers)
 
