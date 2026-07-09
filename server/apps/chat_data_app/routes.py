@@ -7,7 +7,7 @@ ChatData API 路由定义
 import asyncio
 import json
 import re
-from typing import Optional, Dict, List, Set, Any, Tuple
+from typing import Optional, Dict, List, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -82,46 +82,6 @@ router.include_router(semantic_config_router)
 router.include_router(datasource_public_router)
 router.include_router(datasource_admin_router)
 router.include_router(uploaded_files_router)
-
-
-def _normalize_query_history_source_filter(source: Optional[str]) -> Optional[List[str]]:
-    """规整查询历史来源筛选参数。"""
-    return QueryHistoryService.normalize_source_filter(source)
-
-
-def _normalize_query_history_status_filter(status: Optional[str]) -> Optional[str]:
-    """规整查询历史执行状态筛选参数。"""
-    return QueryHistoryService.normalize_status_filter(status)
-
-
-def _clean_optional_text(value: Optional[str]) -> str:
-    """规整可选文本筛选条件。"""
-    return QueryHistoryService.clean_optional_text(value)
-
-
-def _get_query_history_source(query_type: Optional[str]) -> str:
-    """将查询类型映射为前端展示来源。"""
-    return QueryHistoryService.get_history_source(query_type)
-
-
-def _build_query_history_payload(item: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> Dict[str, Any]:
-    """构造查询历史列表展示数据，不包含大结果集。"""
-    return QueryHistoryService.build_history_payload(item, task)
-
-
-def _is_http_query_execution(execution: ChatDataQueryExecution) -> bool:
-    """判断执行明细是否为 HTTP 远端查询。"""
-    return QueryHistoryService.is_http_query_execution(execution)
-
-
-def _is_http_execution_target(execution_target: Dict[str, Any]) -> bool:
-    """判断执行目标是否走 HTTP 查询。"""
-    return str((execution_target or {}).get("query_executor_type") or "").strip().lower() == "http"
-
-
-def _resolve_remote_history_source_type(execution: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> str:
-    """从任务远端映射里解析历史 HTTP 查询的数据源类型。"""
-    return QueryHistoryService.resolve_remote_history_source_type(execution, task)
 
 
 async def _build_remote_history_result_payload(execution: ChatDataQueryExecution, task: Optional[ChatDataQueryTask] = None) -> Optional[Dict[str, Any]]:
@@ -472,45 +432,6 @@ async def _execute_sql_for_member(
     )
 
 
-def _normalize_sql_cache_text(sql: str) -> str:
-    """归一化 SQL 缓存键文本。"""
-    return query_runtime.normalize_sql_cache_text(sql)
-
-
-def _build_sql_result_cache_identity(execution_target: Dict[str, Any], effective_sql: str, datasource_id: Optional[str] = None) -> Dict[str, Any]:
-    """构造 SQL 结果缓存身份字段。"""
-    return query_runtime.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
-
-
-def _is_sql_result_cache_enabled(skip_query_cache: bool) -> bool:
-    """判断本次 SQL 执行是否允许使用结果缓存。"""
-    return query_runtime.is_sql_result_cache_enabled(skip_query_cache)
-
-
-async def _get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """读取未过期的 SQL 查询结果缓存。"""
-    return await query_runtime.get_sql_result_cache(cache_identity)
-
-
-async def _save_sql_result_cache(cache_identity: Dict[str, Any], result: Dict[str, Any], operator_id: Optional[str] = None, operator_name: Optional[str] = None) -> None:
-    """保存成功的 SQL 查询结果缓存。"""
-    await query_runtime.save_sql_result_cache(cache_identity, result, operator_id=operator_id, operator_name=operator_name)
-
-
-
-
-def _get_execution_id_by_member(execution_map: Dict[str, str], execution_target: Dict[str, Any]) -> Optional[str]:
-    """根据成员数据源获取执行记录ID。"""
-    return query_runtime.get_execution_id_by_member(execution_map, execution_target)
-
-
-async def _create_query_executions_for_task(task_id: str, request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Dict[str, str]:
-    """为任务预创建每个成员数据源的 SQL 执行记录。"""
-    return await query_runtime.create_query_executions_for_task(task_id, request, operator_name=operator_name)
-
-
-
-
 async def _update_query_execution(
     execution_id: str,
     *,
@@ -537,56 +458,6 @@ async def _update_query_execution(
         started_time=started_time,
         finished_time=finished_time,
     )
-
-
-async def _update_query_execution_from_result(execution_id: str, result: Dict[str, Any], store_result_payload: bool = True) -> None:
-    """按 SQL 执行结果更新执行明细。"""
-    await query_runtime.update_query_execution_from_result(execution_id, result, store_result_payload=store_result_payload)
-
-
-async def _build_execute_sql_result_data(
-    request: ExecuteSqlRequest,
-    query_task_id: Optional[str] = None,
-    execution_map: Optional[Dict[str, str]] = None,
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
-    """执行 SQL 并返回统一结果数据。"""
-    return await query_runtime.build_execute_sql_result_data(
-        request,
-        query_task_id=query_task_id,
-        execution_map=execution_map,
-        username=username,
-    )
-
-
-def _build_query_task_runtime_data(task: ChatDataQueryTask) -> Dict[str, Any]:
-    """将任务模型转换为可脱离 session 使用的字典。"""
-    return query_runtime.build_query_task_runtime_data(task)
-
-
-def _load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
-    """解析远端任务映射列表。"""
-    return query_runtime.load_remote_tasks(raw_payload)
-
-
-async def _are_all_sql_execution_targets_http(request: ExecuteSqlRequest) -> bool:
-    """判断 SQL 任务选中的执行对象是否全部为 HTTP 执行。"""
-    return await query_runtime.are_all_sql_execution_targets_http(request)
-
-
-async def _get_http_execution_member_ids(request: ExecuteSqlRequest) -> Set[str]:
-    """读取本次 SQL 任务中走 HTTP 的成员数据源 ID。"""
-    return await query_runtime.get_http_execution_member_ids(request)
-
-
-async def _build_persistent_query_task_result_for_request(request: ExecuteSqlRequest, result_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """按执行配置构建任务落库结果，HTTP 结果不落库。"""
-    return await query_runtime.build_persistent_query_task_result_for_request(request, result_data)
-
-
-def _build_persistent_query_task_result_payload(result_data: Dict[str, Any], http_member_ids: Set[str]) -> Optional[Dict[str, Any]]:
-    """构建可落库的任务结果，过滤 HTTP 返回数据。"""
-    return query_runtime.build_persistent_query_task_result_payload(result_data, http_member_ids)
 
 
 def _build_cancelled_execution_map(executions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -742,31 +613,6 @@ async def _build_live_remote_sql_result(response_data: Dict[str, Any], execution
     }
 
 
-def _build_query_task_response_data(task_data: Dict[str, Any]) -> Dict[str, Any]:
-    """将任务运行态字典转换为接口返回结构。"""
-    return query_runtime.build_query_task_response_data(task_data)
-
-
-async def _get_query_executions(task_id: str) -> List[Dict[str, Any]]:
-    """读取任务下的 SQL 执行明细。"""
-    return await query_runtime.get_query_executions(task_id)
-
-
-async def _get_query_execution_models(task_id: str) -> List[ChatDataQueryExecution]:
-    """读取任务下的 SQL 执行模型。"""
-    return await query_history_service.get_execution_models(task_id)
-
-
-async def _get_query_execution_model(execution_id: str) -> Optional[ChatDataQueryExecution]:
-    """按执行ID读取 SQL 执行模型。"""
-    return await query_history_service.get_execution_model(execution_id)
-
-
-def _get_task_user_id(task_data: Dict[str, Any]) -> str:
-    """从任务请求负载中解析发起用户ID。"""
-    return QueryHistoryService.task_user_id(task_data)
-
-
 def _is_query_task_owned_by_user(task_data: Dict[str, Any], executions: List[Dict[str, Any]], user_id: str) -> bool:
     """判断查询任务是否归属于当前用户。"""
     normalized_user_id = str(user_id or "").strip()
@@ -777,15 +623,10 @@ def _is_query_task_owned_by_user(task_data: Dict[str, Any], executions: List[Dic
         for item in executions or []
         if str(item.get("user_id") or item.get("create_by") or item.get("update_by") or "").strip()
     }
-    task_user_id = _get_task_user_id(task_data)
+    task_user_id = QueryHistoryService.task_user_id(task_data)
     if task_user_id:
         owner_ids.add(task_user_id)
     return not owner_ids or normalized_user_id in owner_ids
-
-
-def _get_task_operator_name(task_data: Dict[str, Any]) -> str:
-    """从任务请求负载中解析发起用户名。"""
-    return QueryHistoryService.task_operator_name(task_data)
 
 
 async def _resolve_execution_target(execution: ChatDataQueryExecution) -> Optional[Dict[str, Any]]:
@@ -811,7 +652,7 @@ async def _wait_for_cancel_target(execution: ChatDataQueryExecution) -> ChatData
     deadline = time.monotonic() + CANCEL_TARGET_WAIT_SECONDS
     while time.monotonic() < deadline:
         await asyncio.sleep(CANCEL_TARGET_POLL_INTERVAL_SECONDS)
-        latest = await _get_query_execution_model(execution.execution_id)
+        latest = await query_history_service.get_execution_model(execution.execution_id)
         if latest is None:
             return execution
         _copy_execution_identity(execution, latest)
@@ -886,47 +727,6 @@ def _build_cancel_task_status(execution_results: List[Dict[str, Any]]) -> str:
     return QueryHistoryService.build_cancel_task_status(execution_results)
 
 
-async def _list_running_query_executions(
-    *,
-    datasource_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-) -> List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]]:
-    """读取待批量停止的 SQL 执行记录。"""
-    return await query_history_service.dao.list_running_executions(
-        running_statuses={"pending", "running"},
-        datasource_id=_clean_optional_text(datasource_id),
-        user_id=_clean_optional_text(user_id),
-    )
-
-
-def _group_cancel_results_by_task(rows: List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]], execution_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """按任务归并停止结果。"""
-    return QueryHistoryService.group_cancel_results_by_task(rows, execution_results)
-
-
-def _get_execution_cancel_operator_name(
-    execution: ChatDataQueryExecution,
-    task: Optional[ChatDataQueryTask],
-    fallback: Optional[str],
-) -> str:
-    """解析停止远端任务时使用的用户名称。"""
-    return QueryHistoryService.execution_cancel_operator_name(execution, task, fallback)
-
-
-async def _cancel_query_execution_for_batch(
-    execution: ChatDataQueryExecution,
-    *,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """批量停止场景下保护单条异常，避免一条失败中断整批。"""
-    return await query_history_service.cancel_query_execution_for_batch(
-        execution,
-        cancel_execution=_cancel_query_execution,
-        update_execution=_update_query_execution,
-        operator_name=operator_name,
-    )
-
-
 async def _cancel_running_query_history(
     *,
     datasource_id: Optional[str] = None,
@@ -972,20 +772,6 @@ async def _prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryT
     return await query_runtime.prepare_sql_request_for_execution(request, datasource)
 
 
-async def _create_task_for_execute_request(
-    request: ExecuteSqlRequest,
-    *,
-    query_type: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """为直接执行或智能体执行创建任务主记录。"""
-    return await query_runtime.create_task_for_execute_request(
-        request,
-        query_type=query_type,
-        operator_name=operator_name,
-    )
-
-
 async def _get_query_task(task_id: str) -> Optional[Dict[str, Any]]:
     """读取异步查询任务。"""
     return await query_runtime.get_query_task(task_id)
@@ -994,16 +780,6 @@ async def _get_query_task(task_id: str) -> Optional[Dict[str, Any]]:
 async def _is_query_task_cancelled(task_id: str) -> bool:
     """判断异步查询任务是否已取消。"""
     return await query_runtime.is_query_task_cancelled(task_id)
-
-
-async def _get_query_execution_status(execution_id: str) -> str:
-    """读取 SQL 执行明细当前状态。"""
-    return await query_runtime.get_query_execution_status(execution_id)
-
-
-async def _append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """向异步任务中追加远端 HTTP 任务映射。"""
-    return await query_runtime.append_query_task_remote_task(task_id, remote_task)
 
 
 async def _update_query_task(
@@ -1154,8 +930,8 @@ async def get_query_task(task_id: str, request: Request):
                 code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error"
             )
-        response_data = _build_query_task_response_data(task_data)
-        executions = await _get_query_executions(response_data["task_id"])
+        response_data = query_runtime.build_query_task_response_data(task_data)
+        executions = await query_runtime.get_query_executions(response_data["task_id"])
         if not _is_query_task_owned_by_user(task_data, executions, current_user_id):
             return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         if response_data["task_type"] == "sql" and response_data["remote_tasks"]:
@@ -1216,15 +992,15 @@ async def cancel_query_task(task_id: str, request: Request):
         task_data = await _get_query_task(task_id)
         if not task_data:
             return business_response(msg=f"任务不存在: {task_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        executions = await _get_query_execution_models(task_id)
+        executions = await query_history_service.get_execution_models(task_id)
         owner_ids = {str(item.user_id or "").strip() for item in executions if str(item.user_id or "").strip()}
         if not owner_ids:
-            task_user_id = _get_task_user_id(task_data)
+            task_user_id = QueryHistoryService.task_user_id(task_data)
             if task_user_id:
                 owner_ids.add(task_user_id)
         if owner_ids and current_user_id not in owner_ids:
             return business_response(msg="无权停止该查询任务", code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
-        operator_name = _get_task_operator_name(task_data) or str(getattr(current_user, "username", "") or "").strip()
+        operator_name = QueryHistoryService.task_operator_name(task_data) or str(getattr(current_user, "username", "") or "").strip()
         cancellable_executions = [
             item for item in executions
             if str(item.sql_status or "").strip().lower() in {"pending", "running"}

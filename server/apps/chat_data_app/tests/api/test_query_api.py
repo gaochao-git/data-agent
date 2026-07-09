@@ -571,7 +571,7 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
         return []
 
     monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
-    monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
+    monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
 
     response = client.get("/api/chatdata/query-tasks/task_a", headers=auth_headers)
 
@@ -635,7 +635,7 @@ def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):
         return []
 
     monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
-    monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
+    monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
 
     response = client.get("/api/chatdata/query-tasks/task_b", headers=auth_headers)
 
@@ -683,7 +683,7 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
         }
 
     monkeypatch.setattr(routes, "_get_query_task", fake_get_query_task)
-    monkeypatch.setattr(routes, "_get_query_executions", fake_get_query_executions)
+    monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
     monkeypatch.setattr(routes, "_build_live_remote_sql_result", fake_build_live_remote_sql_result)
 
     response = client.get("/api/chatdata/query-tasks/task_remote", headers=auth_headers)
@@ -885,7 +885,7 @@ def test_execute_sql_returns_prepare_error_without_creating_task(client, auth_he
         return {}
 
     monkeypatch.setattr(routes, "_prepare_sql_request_for_execution", fake_prepare_sql_request_for_execution)
-    monkeypatch.setattr(routes, "_create_task_for_execute_request", fake_create_task_for_execute_request)
+    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
 
     response = client.post(
         "/api/chatdata/execute-sql",
