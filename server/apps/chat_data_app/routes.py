@@ -60,6 +60,7 @@ from .routers.uploaded_files import router as uploaded_files_router
 import time
 
 logger = get_logger(__name__)
+AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
 QUERY_TASK_POLL_INTERVAL_MS = 1500
@@ -69,15 +70,8 @@ _query_task_background_tasks: set[asyncio.Task] = set()
 query_history_service = QueryHistoryService(QueryHistoryDao(session_context=lambda: get_session()))
 query_favorite_service = QueryFavoriteService(QueryFavoriteDao(session_context=lambda: get_session()))
 
-
-# 代理标识
-AGENT_ID = "chat_data"
-
 # 创建路由器
-router = APIRouter(
-    prefix="/api/chatdata",
-    tags=["ChatData NL2SQL"]
-)
+router = APIRouter(prefix="/api/chatdata",tags=["ChatData NL2SQL"])
 router.include_router(conversations_router)
 router.include_router(config_router)
 router.include_router(evaluation_router)
