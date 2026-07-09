@@ -923,6 +923,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
+    captured = {}
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["source_type"] = "hive"
     _mock_datasource_manager(monkeypatch, manager)
@@ -932,7 +933,11 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     monkeypatch.setattr(routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
     monkeypatch.setattr(routes.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
-    monkeypatch.setattr(routes, "get_sql_assist_graph", lambda *_args, **_kwargs: FakeGraph())
+    def fake_get_sql_assist_graph(*_args, **kwargs):
+        captured["sql_dialect"] = kwargs.get("sql_dialect")
+        return FakeGraph()
+
+    monkeypatch.setattr(routes, "get_sql_assist_graph", fake_get_sql_assist_graph)
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
 
     from apps.chat_data_app import agent as agent_module
@@ -952,6 +957,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     assert "SELECT 1" in text
     assert '"type": "complete"' in text
     assert '"sql": "SELECT 1"' in text
+    assert captured["sql_dialect"] == "hive"
 
 
 def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch):
@@ -3169,8 +3175,6 @@ def test_remote_history_payload_handles_missing_id_failure_and_task_operator(mon
 
 
 def test_datasource_helper_branches_and_schema_health(monkeypatch):
-    assert routes._get_sql_dialect_label("hive") == "Hive SQL"
-    assert routes._get_sql_dialect_label("mysql") == "MySQL"
     assert datasource_helper_routes._get_datasource_meta_source_config({
         "source_config": {"namespace": "n", "orgCode": "old", "orgName": "old", "host": "h"},
         "template_datasource_id": "m2",

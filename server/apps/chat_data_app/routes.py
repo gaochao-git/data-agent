@@ -95,14 +95,6 @@ async def _build_remote_history_result_payload(execution: ChatDataQueryExecution
     )
 
 
-def _get_sql_dialect_label(source_type: Optional[str]) -> str:
-    """将数据源类型映射为提示词使用的 SQL 方言标签。"""
-    normalized_type = str(source_type or "").strip().lower()
-    if normalized_type == "hive":
-        return "Hive SQL"
-    return "MySQL"
-
-
 async def _execute_sql_for_member(
     execution_target: Dict[str, Any],
     sql: str,
@@ -796,7 +788,10 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
             logger.info(f"收到快速SQL生成请求: {payload.query[:100]}...")
             ds_manager = get_datasource_manager()
             datasource = await ds_manager.get_datasource_async(payload.datasource_id)
-            sql_dialect = _get_sql_dialect_label((datasource or {}).get("source_type"))
+            if not datasource:
+                yield f"data: {json.dumps({'type': 'error', 'message': '数据源不存在'}, ensure_ascii=False)}\n\n"
+                return
+            source_type = datasource["source_type"]
 
             # 获取表结构
             tables = await get_all_tables_async(payload.datasource_id)
@@ -838,7 +833,7 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
             async with get_checkpointer() as checkpointer:
                 graph = get_sql_assist_graph(
                     checkpointer,
-                    sql_dialect=sql_dialect,
+                    sql_dialect=source_type,
                 )
                 async for chunk, metadata in graph.astream(initial_state, config=config, stream_mode="messages"):
                     if metadata.get("langgraph_node") != "sql_assist":
@@ -1110,4 +1105,3 @@ async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderS
     except Exception as err:
         logger.error(f"Semantic Builder DSL 编译失败: {err}", exc_info=True)
         return business_response(msg="Semantic Builder DSL 编译失败，请检查配置", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
