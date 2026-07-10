@@ -172,9 +172,11 @@ chat_data_app/
 │   ├── datasource_manager.py          # 数据源管理
 │   ├── mysql_sync.py                  # MySQL 元数据同步
 │   └── hive_sync.py                   # Hive 元数据同步
+├── evaluate/
+│   └── accuracy/                      # 页面/API 准确率评测执行器
 ├── tests/
-│   ├── dsl2sql_tests/                 # DSL转SQL测试
-│   └── nl2dsl_tests/                  # NL转DSL测试
+│   ├── unit/                          # 默认单元测试
+│   └── api/                           # 开发阶段手动执行的 API 契约测试
 └── handlers.py                        # SSE 流式响应
 ```
 
