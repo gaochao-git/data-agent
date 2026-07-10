@@ -99,10 +99,10 @@ def test_build_seed_case_candidates_covers_detail_aggregation_time_filter_and_jo
             {"name": "订单数", "table": "orders", "expression": "COUNT(order_id)"},
         ],
         "dimensions": [
-            {"name": "订单状态", "table": "orders", "column": "status", "type": "categorical", "allowed_values": ["paid"]},
-            {"name": "下单时间", "table": "orders", "column": "created_at", "type": "time"},
-            {"name": "商品分类", "table": "products", "column": "category", "type": "categorical", "allowed_values": ["数码"]},
-            {"name": "用户ID", "table": "users", "column": "user_id", "type": "categorical"},
+            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": ["paid"]},
+            {"name": "下单时间", "table": "orders", "column": "created_at", "logical_type": "datetime"},
+            {"name": "商品分类", "table": "products", "column": "category", "logical_type": "text", "allowed_values": ["数码"]},
+            {"name": "用户ID", "table": "users", "column": "user_id", "logical_type": "text"},
         ],
         "relationships": [{"left_table": "orders", "right_table": "products"}],
     }
@@ -123,8 +123,8 @@ def test_build_seed_case_candidates_detail_table_uses_dimensions_only():
     config = {
         "metrics": [],
         "dimensions": [
-            {"name": "订单ID", "table": "orders", "column": "order_id", "type": "categorical"},
-            {"name": "订单状态", "table": "orders", "column": "status", "type": "categorical", "allowed_values": ["paid"]},
+            {"name": "订单ID", "table": "orders", "column": "order_id", "logical_type": "text"},
+            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": ["paid"]},
         ],
         "relationships": [],
     }
@@ -143,8 +143,8 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
         {
             "metrics": [],
             "dimensions": [
-                {"name": "", "table": "orders", "column": "status", "type": "categorical", "allowed_values": ["paid"]},
-                {"name": "空值维度", "table": "orders", "column": "city", "type": "categorical", "allowed_values": []},
+                {"name": "", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": ["paid"]},
+                {"name": "空值维度", "table": "orders", "column": "city", "logical_type": "text", "allowed_values": []},
             ],
             "relationships": [],
         },
@@ -159,10 +159,10 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
             for i in range(1, 8)
         ],
         "dimensions": [
-            {"name": "", "table": "orders", "column": "ignored", "type": "categorical", "allowed_values": ["x"]},
-            {"name": "跨表维度", "table": "dim_table", "column": "name", "type": "categorical", "allowed_values": ["A"]},
-            {"name": "无枚举维度", "table": "orders", "column": "city", "type": "categorical", "allowed_values": []},
-            {"name": "空枚举值维度", "table": "orders", "column": "status", "type": "categorical", "allowed_values": [""]},
+            {"name": "", "table": "orders", "column": "ignored", "logical_type": "text", "allowed_values": ["x"]},
+            {"name": "跨表维度", "table": "dim_table", "column": "name", "logical_type": "text", "allowed_values": ["A"]},
+            {"name": "无枚举维度", "table": "orders", "column": "city", "logical_type": "text", "allowed_values": []},
+            {"name": "空枚举值维度", "table": "orders", "column": "status", "logical_type": "text", "allowed_values": [""]},
         ],
         "relationships": [{"left_table": "orders", "right_table": "dim_table"}],
     }
@@ -181,7 +181,7 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
         "cfg_empty_detail",
         {
             "metrics": [],
-            "dimensions": [{"name": "", "table": "orders", "column": "id", "type": "categorical"}],
+            "dimensions": [{"name": "", "table": "orders", "column": "id", "logical_type": "text"}],
             "relationships": [],
         },
         "订单明细",
@@ -191,8 +191,8 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
     skip_blank_dimension_config = {
         "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         "dimensions": [
-            {"name": "", "table": "orders", "column": "city", "type": "categorical", "allowed_values": ["杭州"]},
-            {"name": "", "table": "orders", "column": "dt", "type": "time"},
+            {"name": "", "table": "orders", "column": "city", "logical_type": "text", "allowed_values": ["杭州"]},
+            {"name": "", "table": "orders", "column": "dt", "logical_type": "datetime"},
         ],
         "relationships": [],
     }
@@ -205,7 +205,7 @@ def test_build_seed_case_candidates_skip_and_limit_edges():
             for i in range(1, 12)
         ],
         "dimensions": [
-            {"name": f"维度{i}", "table": f"dim{i}", "column": "name", "type": "categorical", "allowed_values": ["A"]}
+            {"name": f"维度{i}", "table": f"dim{i}", "column": "name", "logical_type": "text", "allowed_values": ["A"]}
             for i in range(1, 12)
         ],
         "relationships": [{"left_table": "fact", "right_table": "dim1"}],

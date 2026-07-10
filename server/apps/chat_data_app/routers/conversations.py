@@ -96,8 +96,6 @@ def register_agent(
     # 设置默认数据库路径（用于通过 conversation_id 查询 agent_id）
     if _default_db_path is None:
         _default_db_path = DB_PATH
-    logger.info(f"注册 agent 配置: {agent_id}")
-
 
 def register_completion_handler(agent_id: str, handler: Callable):
     """
@@ -108,7 +106,6 @@ def register_completion_handler(agent_id: str, handler: Callable):
         handler: 处理函数，签名为 async def handler(conversation_id, query, options) -> StreamingResponse
     """
     _completion_handlers[agent_id] = handler
-    logger.info(f"注册 completion 处理器: {agent_id}")
 
 
 def register_resume_handler(agent_id: str, handler: Callable):
@@ -123,13 +120,10 @@ def register_resume_handler(agent_id: str, handler: Callable):
         handler: 处理函数，签名为 async def handler(conversation_id, action, data) -> StreamingResponse
     """
     _resume_handlers[agent_id] = handler
-    logger.info(f"注册 resume 处理器: {agent_id}")
-
 
 def register_agent_availability_checker(agent_id: str, checker: Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]):
     """注册 agent 可用性检查器。"""
     _agent_availability_checkers[agent_id] = checker
-    logger.info(f"注册 agent 可用性检查器: {agent_id}")
 
 
 def _normalize_agent_availability_result(result: bool | AgentAvailabilityResult | Dict[str, Any] | None) -> AgentAvailabilityResult:

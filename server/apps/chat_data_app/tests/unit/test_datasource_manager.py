@@ -378,7 +378,9 @@ def test_runtime_semantic_config_merges_column_dict_without_persisting():
     runtime_config = asyncio.run(manager.get_runtime_semantic_config_async("ds_a", "sc_a"))
 
     assert normal_config["dimensions"][0].get("allowed_values") is None
-    assert runtime_config["dimensions"][0]["allowed_values"] == ["1", "0"]
+    assert runtime_config["dimensions"][0]["allowed_values"] == ["有效", "无效"]
+    assert runtime_config["dimensions"][0]["mapping"] == {"有效": "1", "无效": "0"}
+    assert runtime_config["dimensions"][0]["logical_type"] == "enum"
     assert "枚举值：1=有效；0=无效" in runtime_config["dimensions"][0]["metadata_supplement"]
     assert "同义词：订单状态" not in runtime_config["dimensions"][0]["metadata_supplement"]
     assert runtime_config["metrics"][0]["metadata_supplement"] == "统计实付金额\n单位：元"
@@ -417,7 +419,9 @@ def test_runtime_semantic_configs_merge_column_dicts_for_selector_context():
 
     configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
 
-    assert configs[0]["dimensions"][0]["allowed_values"] == ["1", "0"]
+    assert configs[0]["dimensions"][0]["allowed_values"] == ["有效", "无效"]
+    assert configs[0]["dimensions"][0]["mapping"] == {"有效": "1", "无效": "0"}
+    assert configs[0]["dimensions"][0]["logical_type"] == "enum"
     assert configs[0]["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效；0=无效\n存储格式：tinyint"
     assert configs[0]["metrics"][0]["metadata_supplement"] == "单位：元"
     assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
@@ -441,8 +445,9 @@ def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():
 
     configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
 
-    assert configs == fake_store.semantic_configs["group_ds_a"]
+    assert configs[0]["dimensions"][0]["logical_type"] == "text"
     assert "allowed_values" not in configs[0]["dimensions"][0]
+    assert "logical_type" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
 
 
 def test_runtime_semantic_configs_empty_and_missing_group_fallbacks():
@@ -569,18 +574,18 @@ def test_datasource_manager_runtime_column_dict_fallbacks():
 
     manager.datasource_dao = NoGroupStore()
     config = {"id": "sc_a", "metrics": [], "dimensions": []}
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) is config
+    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) == config
 
     class NoColumnDictMethodStore:
         async def get_datasource_async(self, datasource_id: str):
             return {"group_id": "group_a"}
 
     manager.datasource_dao = NoColumnDictMethodStore()
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) is config
+    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) == config
 
     manager = _build_manager(_FakeStore())
     assert asyncio.run(manager.get_runtime_semantic_config_async("ds_a", "missing")) is None
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", {"id": "sc_a", "group_id": "group_ds_a"})) == {"id": "sc_a", "group_id": "group_ds_a"}
+    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", {"id": "sc_a", "group_id": "group_ds_a"})) == {"id": "sc_a", "group_id": "group_ds_a", "dimensions": []}
 
 
 def test_has_datasource_delegates_to_store():

@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Any
 
 from utils.logger import get_logger
 from .semantic_builder_sql_compiler import compile_builder_sql
+from .semantic_common import ensure_dimension_logical_type
 from .semantic_filter_normalization import normalize_time_filter_leaf
 from .semantic_formatter import format_params_for_display
 from .semantic_input_validator import InputValidator
@@ -34,15 +35,18 @@ class SemanticSQLGenerator:
         Args:
             semantic_config: 语义配置，包含 metrics, dimensions, relationships
         """
+        normalized_config = dict(semantic_config or {})
+        normalized_config["dimensions"] = [ensure_dimension_logical_type(item) for item in normalized_config.get("dimensions") or []]
+
         # 构建映射
-        metrics_map = {m['name']: m for m in semantic_config.get('metrics', [])}
-        dimensions_map = {d['name']: d for d in semantic_config.get('dimensions', [])}
+        metrics_map = {m['name']: m for m in normalized_config.get('metrics', [])}
+        dimensions_map = {d['name']: d for d in normalized_config.get('dimensions', [])}
         self.metrics_map = metrics_map
         self.dimensions_map = dimensions_map
 
         self.validator = InputValidator(metrics_map, dimensions_map)
 
-        self.semantic_config = semantic_config
+        self.semantic_config = normalized_config
 
         # 构建表和字段的存在性校验映射
         self._build_table_column_map()

@@ -64,7 +64,7 @@ semantic_config = {
             "name": "数据库类型",
             "column": "db_type",
             "table": "db_cluster",
-            "type": "categorical",  # categorical / time
+            "logical_type": "enum",  # text / number / date / datetime / enum
             "allowed_values": ["MySQL", "PostgreSQL"],  # 枚举约束
             "mapping": {"mysql": "MySQL"}  # 同义词映射
         }

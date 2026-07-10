@@ -40,7 +40,7 @@ from ..services.evaluation_service import (
 from ..services.feature_gate import ensure_agent_available, feature_disabled_error_code
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
-from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload
+from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload, is_time_logical_dimension
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -133,12 +133,12 @@ def _dimension_items(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _time_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [item for item in _dimension_items(config) if str(item.get("type") or "") == "time"]
+    return [item for item in _dimension_items(config) if is_time_logical_dimension(item)]
 
 
 def _categorical_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     blocked_tokens = ("id", "编号", "号码", "邮箱", "email", "phone", "手机")
-    candidates = [item for item in _dimension_items(config) if str(item.get("type") or "") == "categorical"]
+    candidates = [item for item in _dimension_items(config) if not is_time_logical_dimension(item)]
     preferred = [
         item for item in candidates
         if str(item.get("allowed_values") or "").strip()

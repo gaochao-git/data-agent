@@ -200,7 +200,7 @@ def _compact_dimension_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "name": item.get("name") or "",
         "description": _truncate(item.get("description") or "", 160),
         "supplement": _truncate(item.get("metadata_supplement") or "", 240),
-        "type": item.get("type") or "",
+        "logical_type": item.get("logical_type") or "",
         "allowed_values": [str(value)[:80] for value in allowed_values if str(value or "").strip()],
         "mapping": {str(key)[:80]: str(value)[:80] for key, value in mapping.items() if str(key or "").strip() and str(value or "").strip()},
     }

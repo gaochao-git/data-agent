@@ -17,7 +17,7 @@ from ..agent import get_chat_data_graph
 from ..agent.data_analyze_graph import get_data_analyze_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
-from .semantic_common import AGENT_ID, DATA_ANALYZE_AGENT_ID, _build_table_columns_map, _semantic_config_prompt_payload
+from .semantic_common import AGENT_ID, DATA_ANALYZE_AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
 from .semantic_json_parser import parse_llm_json
 from .llm_config import get_chat_data_llm
 from .sql_parser import extract_physical_tables
@@ -254,6 +254,7 @@ def _build_history_learning_table_context(datasource: Dict[str, Any], config: Di
 
 def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
     """压缩单条历史，控制 LLM 输入长度。"""
+    semantic_builder_config = sample.get("semantic_builder_config") if isinstance(sample.get("semantic_builder_config"), dict) else None
     builder_config = sample.get("builder_config") if isinstance(sample.get("builder_config"), dict) else None
     compact: Dict[str, Any] = {
         "execution_id": sample.get("execution_id"),
@@ -267,14 +268,15 @@ def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
     conversation_context = sample.get("conversation_context")
     if isinstance(conversation_context, dict) and sample.get("source") == "agent":
         compact["conversation_context"] = conversation_context
-    if builder_config:
+    if semantic_builder_config or builder_config:
+        source_config = semantic_builder_config or builder_config or {}
         compact["builder_config"] = {
-            "mainTable": builder_config.get("mainTable"),
-            "joins": (builder_config.get("joins") or [])[:10],
-            "dimensions": (builder_config.get("dimensions") or [])[:20],
-            "aggregations": (builder_config.get("aggregations") or [])[:20],
-            "filters": (builder_config.get("filters") or [])[:20],
-            "orderBy": (builder_config.get("orderBy") or [])[:10],
+            "mainTable": source_config.get("mainTable"),
+            "joins": (source_config.get("joins") or [])[:10],
+            "dimensions": (source_config.get("dimensions") or [])[:20],
+            "aggregations": (source_config.get("aggregations") or source_config.get("metrics") or [])[:20],
+            "filters": (source_config.get("filters") or [])[:20],
+            "orderBy": (source_config.get("orderBy") or source_config.get("order_by") or [])[:10],
         }
     return compact
 
@@ -406,10 +408,12 @@ def _normalize_metric_or_dimension_suggestion(item: Dict[str, Any], category: st
         "expression": str(item.get("expression") or "").strip(),
     })
     if category == "dimensions":
-        dim_type = str(item.get("type") or "").strip().lower()
-        if dim_type not in {"categorical", "time", "number"}:
+        logical_type = str(item.get("logical_type") or "").strip().lower()
+        if not logical_type and "type" not in item:
+            logical_type = "text"
+        if logical_type not in LOGICAL_TYPE_VALUES:
             return None
-        normalized["type"] = dim_type
+        normalized["logical_type"] = logical_type
         normalized["column"] = str(item.get("column") or item.get("field_name") or "").strip()
     return normalized if normalized["name"] and normalized["reason"] else None
 
@@ -422,6 +426,14 @@ def _normalize_issue_suggestion(item: Dict[str, Any], normalized: Dict[str, Any]
     return normalized if normalized["title"] and normalized["content"] and normalized["reason"] else None
 
 
+def _empty_history_learning_skip_counts() -> Dict[str, Dict[str, int]]:
+    """初始化历史学习建议过滤计数。"""
+    return {
+        category: {"invalid": 0, "existing": 0, "duplicate": 0}
+        for category in ("metrics", "dimensions", "issues")
+    }
+
+
 def _history_suggestion_review_reasons(
     normalized: Dict[str, Any],
     category: str,
@@ -430,13 +442,20 @@ def _history_suggestion_review_reasons(
     table_columns = _build_table_columns_map(datasource)
     table_name = str(normalized.get("table") or "").strip()
     review_reasons: List[str] = []
+    if category in {"metrics", "dimensions"} and not table_name:
+        review_reasons.append("缺少表名，需要人工确认")
     if table_name and table_name not in table_columns:
         review_reasons.append(f"表不在当前数据源缓存中：{table_name}")
     if category == "dimensions":
         column_name = str(normalized.get("column") or normalized.get("field_name") or "").strip()
+        if not column_name:
+            review_reasons.append("缺少字段名，需要人工确认")
         if table_name and column_name and table_name in table_columns and column_name not in table_columns[table_name]:
             review_reasons.append(f"字段不在当前表结构中：{table_name}.{column_name}")
     if category == "metrics":
+        expression = str(normalized.get("expression") or "").strip()
+        if not expression:
+            review_reasons.append("缺少指标表达式，需要人工确认")
         expression_columns = _extract_expression_columns(normalized.get("expression"))
         missing_columns = sorted(col for col in expression_columns if table_name in table_columns and col not in table_columns[table_name])
         if table_name and missing_columns:
@@ -480,20 +499,33 @@ def _normalize_history_learning_result(
     sample_map = _sample_map_by_execution_id(samples)
     existing_indexes = _build_existing_semantic_indexes(config)
     result: Dict[str, List[Dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
+    raw_counts: Dict[str, int] = {}
+    skip_counts = _empty_history_learning_skip_counts()
     for category in result.keys():
         seen: Set[str] = set()
         raw_items = suggestions.get(category) if isinstance(suggestions, dict) else []
-        for raw_item in (raw_items if isinstance(raw_items, list) else [])[:30]:
+        limited_items = (raw_items if isinstance(raw_items, list) else [])[:30]
+        raw_counts[category] = len(limited_items)
+        for raw_item in limited_items:
             item = _normalize_history_suggestion_item(raw_item, category, sample_map, datasource)
             if not item:
+                skip_counts[category]["invalid"] += 1
                 continue
             if category in {"metrics", "dimensions"} and _is_existing_history_suggestion(item, category, existing_indexes):
+                skip_counts[category]["existing"] += 1
                 continue
             key = str(item.get("name") or item.get("title") or "") + "::" + str(item.get("table") or item.get("content") or "")
             if key in seen:
+                skip_counts[category]["duplicate"] += 1
                 continue
             seen.add(key)
             result[category].append(item)
+    logger.info(
+        "history_learning normalize: raw_counts=%s normalized_counts=%s skip_counts=%s",
+        raw_counts,
+        {category: len(items) for category, items in result.items()},
+        skip_counts,
+    )
     return result
 
 
@@ -576,6 +608,8 @@ class SemanticHistoryLearningService:
         }
         if query_type == "builder" and isinstance(task_payload.get("builder_config"), dict):
             sample["builder_config"] = task_payload.get("builder_config")
+        if query_type == "builder" and isinstance(task_payload.get("semantic_builder_config"), dict):
+            sample["semantic_builder_config"] = task_payload.get("semantic_builder_config")
         return sample
 
     async def _attach_agent_context(

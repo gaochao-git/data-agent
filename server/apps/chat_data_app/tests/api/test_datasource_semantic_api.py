@@ -82,7 +82,7 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
             {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
         ],
         "dimensions": [
-            {"name": "城市", "column": "city", "table": "orders", "type": "categorical"}
+            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
         ],
         "relationships": [],
     }
@@ -110,7 +110,7 @@ def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fa
             {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
         ],
         "dimensions": [
-            {"name": "城市", "column": "city", "table": "orders", "type": "categorical"}
+            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
         ],
         "relationships": [],
     }

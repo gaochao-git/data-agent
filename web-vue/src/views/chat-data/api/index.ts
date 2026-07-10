@@ -1014,7 +1014,7 @@ export interface SemanticHistoryLearningSuggestion {
   field_name?: string
   column?: string
   expression?: string
-  type?: 'categorical' | 'time' | 'number'
+  logical_type?: 'text' | 'number' | 'date' | 'datetime' | 'enum'
   content?: string
   reason: string
   source: 'agent' | 'builder' | 'sql'

@@ -267,7 +267,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
         {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items"},
     ]
     config["dimensions"] = [
-        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
+        {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"},
     ]
     config["relationships"] = [
         {

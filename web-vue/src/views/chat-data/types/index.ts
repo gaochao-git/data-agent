@@ -534,7 +534,7 @@ export interface SemanticDimension {
   expression?: string
   table: string
   table_alias?: string
-  type: 'categorical' | 'time' | 'number'
+  logical_type?: 'text' | 'number' | 'date' | 'datetime' | 'enum'
   description?: string
   metadata_supplement?: string
   mapping?: Record<string, string>

@@ -164,6 +164,11 @@ def _advance_checkpointer_endpoint(failed_endpoint, reason: Exception) -> None:
 
 def _get_mysql_checkpointer():
     """获取 MySQL checkpointer"""
+    return _MySQLCheckpointerFailoverContext(_build_mysql_checkpointer_context_factory())
+
+
+def _build_mysql_checkpointer_context_factory():
+    """构造 MySQL checkpointer 上下文工厂。"""
     try:
         from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
     except ImportError:
@@ -182,7 +187,34 @@ def _get_mysql_checkpointer():
         )
         return AIOMySQLSaver.from_conn_string(conn_string)
 
-    return _MySQLCheckpointerFailoverContext(context_factory)
+    return context_factory
+
+
+async def _probe_mysql_checkpointer_endpoint(endpoint, context_factory) -> bool:
+    """探测单个 checkpoint 库节点是否可用。"""
+    try:
+        async with context_factory(endpoint):
+            pass
+        return True
+    except Exception as err:
+        if not is_mysql_connection_error(err):
+            logger.error("checkpoint库节点探测遇到非连接类错误: %s, error=%s", endpoint.label(), err)
+            raise
+        logger.warning("checkpoint库节点探测失败: %s, error=%s", endpoint.label(), err)
+        return False
+
+
+async def select_available_checkpointer_endpoint() -> None:
+    """启动时按顺序选择一个可用 checkpoint 库节点。"""
+    if _endpoint_selector is None:
+        raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
+    context_factory = _build_mysql_checkpointer_context_factory()
+    for endpoint in _endpoint_selector.endpoints:
+        if await _probe_mysql_checkpointer_endpoint(endpoint, context_factory):
+            _endpoint_selector.set_current(endpoint)
+            logger.info("checkpoint库当前连接节点: %s", endpoint.label())
+            return
+    raise ValueError("所有 checkpoint 库节点均不可用")
 
 
 # ============ 初始化函数 ============
@@ -192,7 +224,7 @@ async def setup_checkpointer():
     初始化 checkpointer 和业务表
 
     - SQLite: 启用 WAL 模式提高并发性能
-    - MySQL: 调用 checkpointer.setup() 创建 checkpoint 表
+    - MySQL: 启动时探测可用 checkpoint 库节点
     - 所有类型: 使用 SQLAlchemy 创建业务表
 
     建议在应用启动时调用一次。
@@ -207,7 +239,7 @@ async def setup_checkpointer():
             await conn.commit()
         logger.info("SQLite WAL 模式已启用")
     elif CHECKPOINTER_TYPE == "mysql":
-        logger.info("跳过 MySQL checkpointer 自动初始化")
+        await select_available_checkpointer_endpoint()
 
     # 使用 SQLAlchemy 初始化业务表
     await init_database()

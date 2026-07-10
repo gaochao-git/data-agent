@@ -540,17 +540,16 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
             or field.get('mysql_type')
             or field.get('hive_type')
             or field.get('columnType')
-            or field.get('type')
             or ''
         ).strip()
 
     def get_dimension_type(field: dict) -> str:
         return str(
-            field.get('mysql_type')
+            field.get('logical_type')
+            or field.get('mysql_type')
             or field.get('hive_type')
             or field.get('columnType')
             or field.get('data_type')
-            or field.get('type')
             or ''
         ).strip()
 
@@ -645,11 +644,20 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
             if table_ref:
                 prompt_line = f"{prompt_line}，表: {table_ref}"
 
-            # ✨ 如果有预定义的可选值，展示给大模型（避免枚举值幻觉）
+            # 业务枚举给 DSL 使用；SQL 映射只在直接 SQL 路径使用。
             allowed_values = d.get('allowed_values')
+            mapping = d.get('mapping') if isinstance(d.get('mapping'), dict) else {}
+            value_hints = []
             if allowed_values:
                 values_str = "、".join(str(v) for v in allowed_values)
-                dimensions_lines.append(f"- {prompt_line} - 可选值: [{values_str}]")
+                value_hints.append(f"业务可选值: [{values_str}]")
+            if mapping:
+                mapping_str = "，".join(f"{key}={value}" for key, value in mapping.items() if str(key).strip() and str(value).strip())
+                if mapping_str:
+                    value_hints.append(f"SQL取值映射: {mapping_str}")
+                    value_hints.append("生成 DSL 时使用业务可选值；直接生成 SQL 时使用映射后的物理值")
+            if value_hints:
+                dimensions_lines.append(f"- {prompt_line} - {'；'.join(value_hints)}")
             else:
                 dimensions_lines.append(f"- {prompt_line}")
 

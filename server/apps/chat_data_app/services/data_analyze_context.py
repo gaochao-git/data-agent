@@ -71,7 +71,9 @@ def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_i
                     "description": _truncate(item.get("description") or "", 80),
                     "table": item.get("table") or "",
                     "column": item.get("column") or "",
-                    "type": item.get("type") or "",
+                    "logical_type": item.get("logical_type") or "",
+                    "allowed_values": item.get("allowed_values") or [],
+                    "mapping": item.get("mapping") or {},
                 }
                 for item in dimension_items
             ],

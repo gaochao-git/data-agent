@@ -359,7 +359,7 @@ def test_summarize_semantic_config_truncates_business_fields():
         "description": "x" * 300,
         "ontology_rules": "业务规则" * 200,
         "metrics": [{"name": "销售额", "table": "orders", "expression": "sum(amount)", "metadata_supplement": "金额单位元"}],
-        "dimensions": [{"name": "机构", "table": "orders", "column": "org_name", "type": "categorical"}],
+        "dimensions": [{"name": "机构", "table": "orders", "column": "org_name", "logical_type": "text"}],
         "relationships": [
             {
                 "left_table": "orders",
@@ -421,7 +421,7 @@ def test_summarize_semantic_config_keeps_all_metrics_dimensions_and_business_val
                 "description": f"维度描述{i}",
                 "column": f"col_{i}",
                 "table": "orders",
-                "type": "categorical",
+                "logical_type": "text",
                 "allowed_values": [f"枚举{i}_{j}" for j in range(3)],
                 "mapping": {f"别名{i}_{j}": f"标准{i}_{j}" for j in range(2)},
             }

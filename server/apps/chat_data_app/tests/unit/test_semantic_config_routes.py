@@ -29,6 +29,7 @@ from apps.chat_data_app.schema import (
     SemanticPrefillRequest,
 )
 from apps.chat_data_app.services.file_text_extractor import extract_text_from_file_bytes
+from apps.chat_data_app.services import semantic_config_validator
 
 
 def test_semantic_permission_helpers():
@@ -49,30 +50,57 @@ def test_validate_semantic_fields_checks_dimensions_and_metrics():
         ]
     }
 
-    assert semantic_config._validate_semantic_fields(
+    assert semantic_config_validator.validate_semantic_fields(
         datasource,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
     ) is None
-    assert "所属表不存在" in semantic_config._validate_semantic_fields(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
-    assert "字段不存在" in semantic_config._validate_semantic_fields(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
-    assert "必须引用表" in semantic_config._validate_semantic_fields(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
-    assert "字段显示名称重复" in semantic_config._validate_semantic_fields(
+    assert "所属表不存在" in semantic_config_validator.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
+    assert "字段不存在" in semantic_config_validator.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
+    assert "必须引用表" in semantic_config_validator.validate_semantic_fields(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
+    assert "字段显示名称重复" in semantic_config_validator.validate_semantic_fields(
         datasource,
         metrics=[{"name": "数量", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "数量", "table": "orders", "column": "city"}],
     )
-    assert "字段显示名称不能为空" in semantic_config._validate_semantic_fields(
+    assert "字段显示名称不能为空" in semantic_config_validator.validate_semantic_fields(
         datasource,
         metrics=[{"name": " ", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "所属表不存在" in semantic_config._validate_semantic_fields(
+    assert "所属表不存在" in semantic_config_validator.validate_semantic_fields(
         datasource,
         metrics=[{"name": "销售额", "table": "missing", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "缺少表结构" in semantic_config._validate_semantic_fields({"ds_tables": []}, [], [])
+    assert "缺少表结构" in semantic_config_validator.validate_semantic_fields({"ds_tables": []}, [], [])
+
+
+def test_validate_semantic_logical_types_requires_enum_column_dict():
+    class Manager:
+        async def get_column_dict_async(self, datasource_id, table_name, column_name):
+            if column_name == "status":
+                return {"enum_values": [{"value": "1", "label": "有效"}]}
+            if column_name == "empty_enum":
+                return {"enum_values": []}
+            return None
+
+    manager = Manager()
+    assert asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+        manager,
+        "ds_a",
+        [{"name": "状态", "table": "orders", "column": "status", "logical_type": "enum"}],
+    )) is None
+    assert "请先维护字段字典枚举值" in asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+        manager,
+        "ds_a",
+        [{"name": "空枚举", "table": "orders", "column": "empty_enum", "logical_type": "enum"}],
+    ))
+    assert asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+        manager,
+        "ds_a",
+        [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
+    )) is None
 
 
 def test_history_message_and_feedback_helpers():
@@ -141,13 +169,13 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
     compact_builder = semantic_config._compact_history_sample_for_llm({
         "execution_id": "exec_2",
         "source": "builder",
-        "builder_config": {
+        "semantic_builder_config": {
             "mainTable": "orders",
             "joins": [{"id": i} for i in range(12)],
             "dimensions": [{"id": i} for i in range(25)],
-            "aggregations": [{"id": i} for i in range(25)],
+            "metrics": [{"id": i} for i in range(25)],
             "filters": [{"id": i} for i in range(25)],
-            "orderBy": [{"id": i} for i in range(12)],
+            "order_by": [{"id": i} for i in range(12)],
         },
     })
 
@@ -161,6 +189,8 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
     assert compact_agent["conversation_context"]["user_turns"][0]["content"] == "查销售额"
     assert len(compact_builder["builder_config"]["joins"]) == 10
     assert len(compact_builder["builder_config"]["dimensions"]) == 20
+    assert len(compact_builder["builder_config"]["aggregations"]) == 20
+    assert len(compact_builder["builder_config"]["orderBy"]) == 10
     assert semantic_config._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
     assert semantic_config._normalize_history_suggestion_item({"source": "bad"}, "metrics", sample_map, datasource) is None
     assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
@@ -184,6 +214,17 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
         "content": "内容",
         "reason": "缺标题",
     }, "issues", sample_map, datasource) is None
+    default_text_dimension = semantic_config._normalize_history_suggestion_item({
+        "source": "sql",
+        "confidence": "high",
+        "sample_execution_ids": ["exec_1"],
+        "support_count": 1,
+        "name": "渠道",
+        "table": "orders",
+        "field_name": "amount",
+        "reason": "历史过滤",
+    }, "dimensions", sample_map, datasource)
+    assert default_text_dimension["logical_type"] == "text"
 
 
 def test_history_learning_context_and_indexes():
@@ -235,7 +276,7 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
             ],
             "dimensions": [
                 {"name": "新城市", "table": "orders", "field_name": "city", "column": "city", "type": "bad", "reason": "类型无效", "source": "builder", "confidence": "high", "sample_execution_ids": ["exec_2"], "support_count": 1},
-                {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "type": "categorical", "reason": "历史过滤", "source": "builder", "confidence": "high", "sample_execution_ids": ["exec_2"], "support_count": 1},
+                {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "logical_type": "text", "reason": "历史过滤", "source": "builder", "confidence": "high", "sample_execution_ids": ["exec_2"], "support_count": 1},
             ],
             "issues": [
                 {"title": "缺少枚举", "content": "订单状态需要枚举", "reason": "用户反馈", "source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1},
@@ -529,7 +570,7 @@ class _FakeSemanticManager:
             "create_by": "user_a",
             "scope_type": "private",
             "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-            "dimensions": [{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+            "dimensions": [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
             "relationships": [],
         }
         self.public_config = {
@@ -538,7 +579,7 @@ class _FakeSemanticManager:
             "create_by": "admin",
             "scope_type": "public",
             "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-            "dimensions": [{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+            "dimensions": [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
             "relationships": [],
         }
         self.created_kwargs = None
@@ -611,7 +652,7 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
         description="描述",
         enabled=True,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[],
     )
     create_response = _response_payload(asyncio.run(semantic_config.create_semantic_config("ds_a", create_payload, object())))
@@ -619,7 +660,7 @@ def test_semantic_config_list_create_update_delete_toggle_routes(monkeypatch):
     update_payload = SemanticConfigUpdateRequest(
         name="订单分析V2",
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[],
     )
     update_response = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", update_payload, object())))
@@ -717,7 +758,7 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
             ),
             SimpleNamespace(
                 query_type="builder",
-                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "按城市看销售额", "builder_config": {"dimensions": ["城市"]}}, ensure_ascii=False),
+                request_payload=json.dumps({"semantic_config_id": "cfg_a", "query_text": "按城市看销售额", "semantic_builder_config": {"dimensions": ["城市"]}}, ensure_ascii=False),
                 error_message="",
             ),
         ),
@@ -782,6 +823,7 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
     assert response["data"]["source_stats"]["builder"]["matched"] == 1
     assert response["data"]["source_stats"]["sql"]["matched"] == 1
     assert response["data"]["samples"][0]["conversation_context"]["user_turns"][0]["content"].startswith("conv_a")
+    assert response["data"]["samples"][1]["semantic_builder_config"]["dimensions"] == ["城市"]
     assert response["data"]["suggestions"]["metrics"][0]["name"] == "客单价"
 
 
@@ -833,9 +875,9 @@ def test_semantic_helper_edge_cases():
 
     assert configs[0]["can_manage"] is False
     assert configs[1]["can_manage"] is True
-    assert semantic_config._expression_uses_physical_column("", {"amount"}) is False
-    assert semantic_config._expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
-    assert semantic_config._expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
+    assert semantic_config_validator.expression_uses_physical_column("", {"amount"}) is False
+    assert semantic_config_validator.expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
+    assert semantic_config_validator.expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
     assert semantic_config._quote_identifier("a`b") == "`a``b`"
     assert semantic_config._parse_json_object({"a": 1}) == {"a": 1}
     assert semantic_config._parse_json_object("{bad") == {}
@@ -1669,7 +1711,7 @@ def test_history_learning_normalization_duplicate_and_review_branches():
             {"name": "缺字段指标", "table": "orders", "expression": "SUM(pay_amount)", "reason": "缺字段", "source": "agent", "confidence": "medium", "sample_execution_ids": ["exec_2"], "support_count": 2},
         ],
         "dimensions": [
-            {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "type": "categorical", "reason": "缺字段", "source": "sql", "confidence": "low", "sample_execution_ids": ["exec_1"], "support_count": 1},
+            {"name": "渠道", "table": "orders", "field_name": "channel", "column": "channel", "logical_type": "text", "reason": "缺字段", "source": "sql", "confidence": "low", "sample_execution_ids": ["exec_1"], "support_count": 1},
         ],
         "issues": "bad",
     }
@@ -1792,7 +1834,7 @@ def test_semantic_config_remaining_helper_branch_edges():
         "table": "orders",
         "field_name": "missing",
         "column": "missing",
-        "type": "categorical",
+        "logical_type": "text",
         "reason": "缺字段",
     }, "dimensions", sample_map, datasource)["needs_review"] is True
     assert semantic_config._normalize_history_suggestion_item({
@@ -1867,7 +1909,7 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
         ontology_rules="规则",
         enabled=False,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        dimensions=[{"name": "城市", "table": "orders", "column": "city", "type": "categorical"}],
+        dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[{
             "left_table": "orders",
             "right_table": "orders",
@@ -2033,7 +2075,7 @@ def test_semantic_config_remaining_history_helper_edges():
             "table": "orders",
             "field_name": "city",
             "column": "city",
-            "type": "categorical",
+            "logical_type": "text",
             "reason": "常用",
         },
         "dimensions",

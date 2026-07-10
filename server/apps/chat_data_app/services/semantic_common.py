@@ -7,6 +7,7 @@ from typing import Any, Dict, Set
 AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
+LOGICAL_TYPE_VALUES = {"text", "number", "date", "datetime", "enum"}
 
 
 def _build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:
@@ -20,6 +21,31 @@ def _build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:
         column_names = {col.get("name") for col in columns if col.get("name")}
         table_columns[table_name] = column_names
     return table_columns
+
+
+def _normalize_logical_type(value: Any) -> str:
+    """Normalize dimension logical type, returning empty string for unsupported values."""
+    logical_type = str(value or "").strip().lower()
+    return logical_type if logical_type in LOGICAL_TYPE_VALUES else ""
+
+
+def ensure_dimension_logical_type(dimension: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a dimension copy with logical_type filled for runtime use only."""
+    next_dimension = dict(dimension or {})
+    logical_type = _normalize_logical_type(next_dimension.get("logical_type"))
+    next_dimension["logical_type"] = logical_type or "text"
+    next_dimension.pop("type", None)
+    return next_dimension
+
+
+def is_time_logical_dimension(config: Dict[str, Any]) -> bool:
+    """Return whether a semantic dimension should be handled as date/datetime."""
+    return _normalize_logical_type((config or {}).get("logical_type")) in {"date", "datetime"}
+
+
+def is_number_logical_dimension(config: Dict[str, Any]) -> bool:
+    """Return whether a semantic dimension should be handled as number."""
+    return _normalize_logical_type((config or {}).get("logical_type")) == "number"
 
 
 def _semantic_config_prompt_payload(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -40,15 +66,16 @@ def _semantic_config_prompt_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         ],
         "dimensions": [
             {
-                "name": item.get("name"),
-                "field_name": item.get("field_name"),
-                "column": item.get("column"),
-                "table": item.get("table"),
-                "type": item.get("type"),
-                "description": item.get("description"),
-                "allowed_values": item.get("allowed_values"),
+                "name": dimension.get("name"),
+                "field_name": dimension.get("field_name"),
+                "column": dimension.get("column"),
+                "table": dimension.get("table"),
+                "logical_type": dimension.get("logical_type"),
+                "description": dimension.get("description"),
+                "allowed_values": dimension.get("allowed_values"),
+                "mapping": dimension.get("mapping"),
             }
-            for item in (config.get("dimensions") or [])[:40]
+            for dimension in [ensure_dimension_logical_type(item) for item in (config.get("dimensions") or [])[:40]]
         ],
         "relationships": (config.get("relationships") or [])[:20],
     }

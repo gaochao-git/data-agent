@@ -114,7 +114,7 @@ class FakeDatasourceManager:
                             {"name": "销售额", "expression": "SUM(amount)", "table": "orders"}
                         ],
                         "dimensions": [
-                            {"name": "城市", "column": "city", "table": "orders", "type": "categorical"}
+                            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}
                         ],
                         "relationships": [],
                     },

@@ -198,7 +198,7 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}, "出金总额": {"name": "出金总额"}, "入金总额": {"name": "入金总额"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "allowed_values": ["paid", "cancelled"], "mapping": {"已支付": "paid"}},
+            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
             "下单时间": {"name": "下单时间"},
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
@@ -299,7 +299,7 @@ def test_input_validator_tree_mapping_and_null_allowed_values():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "allowed_values": ["paid"], "mapping": {"已支付": "paid"}},
+            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付"], "mapping": {"已支付": "paid"}},
             "下单时间": {"name": "下单时间", "allowed_values": ["today"]},
         },
     )
@@ -324,14 +324,14 @@ def test_input_validator_or_tree_validation_and_normalization_branches():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "allowed_values": ["paid", "cancelled"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
+            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
             "用户等级": {"name": "用户等级"},
         },
     )
 
     filters, err = validator.validate_filters([{"or": [
         {"dimension": "订单状态", "operator": "=", "value": "已支付"},
-        {"dimension": "订单状态", "operator": "IN", "value": ["已取消", "paid"]},
+        {"dimension": "订单状态", "operator": "IN", "value": ["已取消", "已支付"]},
     ]}])
 
     assert err is None
@@ -355,7 +355,7 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
     validator = InputValidator(
         metrics_map={"订单数": {"name": "订单数"}},
         dimensions_map={
-            "订单状态": {"name": "订单状态", "allowed_values": ["paid", "cancelled"], "mapping": {"已支付": "paid"}},
+            "订单状态": {"name": "订单状态", "logical_type": "enum", "allowed_values": ["已支付", "已取消"], "mapping": {"已支付": "paid", "已取消": "cancelled"}},
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
         },
@@ -417,6 +417,58 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
         {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": "unknown"}}
     ])[1]
     assert validator._is_zero_literal("not-number") is False
+
+
+def test_input_validator_logical_type_filter_values():
+    validator = InputValidator(
+        metrics_map={"订单数": {"name": "订单数"}},
+        dimensions_map={
+            "文本字段": {"name": "文本字段", "logical_type": ""},
+            "显式文本字段": {"name": "显式文本字段", "logical_type": "text", "allowed_values": ["A"], "mapping": {"A": "a"}},
+            "数值字段": {"name": "数值字段", "logical_type": "number"},
+            "日期字段": {"name": "日期字段", "logical_type": "date"},
+            "时间字段": {"name": "时间字段", "logical_type": "datetime"},
+            "状态": {
+                "name": "状态",
+                "logical_type": "enum",
+                "allowed_values": ["有效", "无效"],
+                "mapping": {"有效": "1", "无效": "0"},
+            },
+        },
+    )
+
+    assert validator.validate_filters([{"dimension": "文本字段", "operator": "=", "value": "100"}])[1] is None
+    text_filters, text_err = validator.validate_filters([{"dimension": "显式文本字段", "operator": "=", "value": "100"}])
+    assert text_err is None
+    assert text_filters[0]["value"] == "100"
+    assert validator.validate_filters([{"dimension": "数值字段", "operator": "=", "value": 100}])[1] is None
+    assert "必须是数字" in validator.validate_filters([{"dimension": "数值字段", "operator": "=", "value": "100"}])[1]
+    assert validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "2026-07-10"}])[1] is None
+    assert "yyyy-MM-dd 格式" in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "20260710"}])[1]
+    assert "yyyy-MM-dd 格式" in validator.validate_filters([{"dimension": "日期字段", "operator": "=", "value": "2026-02-30"}])[1]
+    assert validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10 12:30:45"}])[1] is None
+    assert "yyyy-MM-dd HH:mm:ss 格式" in validator.validate_filters([{"dimension": "时间字段", "operator": "=", "value": "2026-07-10"}])[1]
+
+    filters, err = validator.validate_filters([{"dimension": "状态", "operator": "=", "value": "有效"}])
+    assert err is None
+    assert filters[0]["value"] == "1"
+    assert "不在允许值范围" in validator.validate_filters([{"dimension": "状态", "operator": "=", "value": "1"}])[1]
+
+
+def test_input_validator_enum_logical_type_requires_complete_mapping():
+    validator = InputValidator(
+        metrics_map={"订单数": {"name": "订单数"}},
+        dimensions_map={
+            "状态": {
+                "name": "状态",
+                "logical_type": "enum",
+                "allowed_values": ["有效", "无效"],
+                "mapping": {"有效": "1"},
+            },
+        },
+    )
+
+    assert "缺少物理值映射" in validator.validate_filters([{"dimension": "状态", "operator": "=", "value": "有效"}])[1]
 
 
 def test_sql_parser_strips_comments_splits_statements_and_detects_query_sql():

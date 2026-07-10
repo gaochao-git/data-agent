@@ -129,7 +129,7 @@ def _add_semantic_join_fixture(fake_datasource_manager):
         {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"}
     ]
     config["dimensions"] = [
-        {"name": "城市", "column": "city_name", "table": "city_dim", "type": "categorical"},
+        {"name": "城市", "column": "city_name", "table": "city_dim", "logical_type": "text"},
     ]
     config["relationships"] = [
         {
@@ -201,7 +201,7 @@ def test_compile_semantic_builder_sql_uses_semantic_metric_name_for_ambiguous_co
         {"name": "退款额", "expression": "SUM(orders.refund_amount)", "table": "orders", "field_name": "amount"},
     ]
     config["dimensions"] = [
-        {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
+        {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
@@ -236,7 +236,7 @@ def test_compile_semantic_builder_sql_does_not_reuse_selected_metric_for_named_h
         {"name": "销售额含税", "expression": "SUM(orders.amount * 1.06)", "table": "orders", "field_name": "amount"},
     ]
     config["dimensions"] = [
-        {"name": "城市", "column": "city", "table": "orders", "type": "categorical"},
+        {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)
@@ -290,7 +290,7 @@ def test_compile_semantic_builder_sql_keeps_metric_expression_for_having_and_ord
         {"name": "明细销售额", "expression": "SUM(order_items.quantity * order_items.unit_price)", "table": "order_items"}
     ]
     config["dimensions"] = [
-        {"name": "商品名称", "column": "product_name", "table": "products", "type": "categorical"},
+        {"name": "商品名称", "column": "product_name", "table": "products", "logical_type": "text"},
     ]
     config["relationships"] = [
         {
@@ -344,7 +344,7 @@ def test_compile_semantic_builder_sql_accepts_structured_metric_having(client, f
         {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items"},
     ]
     config["dimensions"] = [
-        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
+        {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"},
     ]
     config["relationships"] = [
         {
@@ -396,8 +396,8 @@ def test_compile_semantic_builder_sql_normalizes_time_filter_to_range(client, fa
         {"name": "订单数", "expression": "COUNT(DISTINCT orders.order_id)", "table": "orders"},
     ]
     config["dimensions"] = [
-        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
-        {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
+        {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"},
+        {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_builder_compiler.get_datasource_manager", lambda: fake_datasource_manager)

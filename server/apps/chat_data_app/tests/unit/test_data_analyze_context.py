@@ -52,7 +52,7 @@ async def test_build_data_analyze_context_summarizes_datasource(monkeypatch):
                         "name": "风险语义层",
                         "source_type": "hive",
                         "metrics": [{"name": "风险事件数", "table": "risk_event"}],
-                        "dimensions": [{"name": "风险等级", "table": "risk_event", "type": "categorical"}],
+                        "dimensions": [{"name": "风险等级", "table": "risk_event", "logical_type": "text"}],
                     }
                 ],
             }

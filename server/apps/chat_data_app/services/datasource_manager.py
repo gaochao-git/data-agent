@@ -18,6 +18,7 @@ from utils.storage_paths import NL2SQL_BASE_DIR
 from ..daos.datasource_dao import DataSourceDao
 from .datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials, sanitize_source_config
 from .hive_meta_http import get_hive_meta_schema_async
+from .semantic_common import ensure_dimension_logical_type
 
 logger = get_logger(__name__)
 
@@ -391,6 +392,62 @@ class DataSourceManager:
             return current_text
         return f"{current_text}\n{dict_text}"
 
+    @staticmethod
+    def _column_dict_enum_allowed_values(column_dict: Dict[str, Any]) -> List[str]:
+        return [
+            str(enum_item.get("label") or enum_item.get("value")).strip()
+            for enum_item in column_dict.get("enum_values") or []
+            if str(enum_item.get("label") or enum_item.get("value") or "").strip()
+        ]
+
+    @staticmethod
+    def _column_dict_enum_mapping(column_dict: Dict[str, Any]) -> Dict[str, str]:
+        return {
+            str(enum_item.get("label") or enum_item.get("value")).strip(): str(enum_item.get("value")).strip()
+            for enum_item in column_dict.get("enum_values") or []
+            if str(enum_item.get("label") or enum_item.get("value") or "").strip() and str(enum_item.get("value") or "").strip()
+        }
+
+    @staticmethod
+    def _enum_mapping_covers_allowed_values(allowed_values: Any, mapping: Any) -> bool:
+        allowed_set = {str(item).strip() for item in allowed_values or [] if str(item or "").strip()} if isinstance(allowed_values, list) else set()
+        mapping_keys = {str(key).strip() for key, value in (mapping or {}).items() if str(key or "").strip() and str(value or "").strip()} if isinstance(mapping, dict) else set()
+        return bool(allowed_set and allowed_set <= mapping_keys)
+
+    def _merge_column_dict_enum_config(self, dimension: Dict[str, Any], column_dict: Dict[str, Any]) -> None:
+        allowed_values = self._column_dict_enum_allowed_values(column_dict)
+        mapping = self._column_dict_enum_mapping(column_dict)
+        if allowed_values and not dimension.get("allowed_values"):
+            dimension["allowed_values"] = allowed_values
+        if mapping and not dimension.get("mapping"):
+            dimension["mapping"] = mapping
+        if not dimension.get("logical_type") and self._enum_mapping_covers_allowed_values(dimension.get("allowed_values"), dimension.get("mapping")):
+            dimension["logical_type"] = "enum"
+
+    def _merge_dimension_column_dict(self, dimension: Dict[str, Any], column_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not column_dict:
+            return ensure_dimension_logical_type(dimension)
+        self._merge_column_dict_enum_config(dimension, column_dict)
+        dimension = ensure_dimension_logical_type(dimension)
+        supplement = self._format_column_dict_supplement(column_dict)
+        if supplement:
+            dimension["metadata_supplement"] = self._merge_metadata_supplement(dimension.get("metadata_supplement"), supplement)
+        return dimension
+
+    @staticmethod
+    def _normalize_runtime_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
+        next_config = dict(config or {})
+        next_config["dimensions"] = [ensure_dimension_logical_type(item) for item in next_config.get("dimensions") or []]
+        return next_config
+
+    def _merge_metric_column_dict(self, metric: Dict[str, Any], column_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not column_dict:
+            return metric
+        supplement = self._format_column_dict_supplement(column_dict)
+        if supplement:
+            metric["metadata_supplement"] = self._merge_metadata_supplement(metric.get("metadata_supplement"), supplement)
+        return metric
+
     def _merge_column_dict_into_semantic_config(self, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]) -> Dict[str, Any]:
         """把物理字段数据字典临时合并到语义配置运行时对象。"""
         next_config = dict(config or {})
@@ -398,25 +455,13 @@ class DataSourceManager:
         for item in next_config.get("dimensions") or []:
             dimension = dict(item or {})
             key = (str(dimension.get("table") or "").strip(), str(dimension.get("column") or dimension.get("field_name") or "").strip())
-            column_dict = column_dicts.get(key)
-            if column_dict:
-                if not dimension.get("allowed_values"):
-                    dimension["allowed_values"] = [enum_item.get("value") for enum_item in column_dict.get("enum_values") or [] if enum_item.get("value")]
-                supplement = self._format_column_dict_supplement(column_dict)
-                if supplement:
-                    dimension["metadata_supplement"] = self._merge_metadata_supplement(dimension.get("metadata_supplement"), supplement)
-            next_dimensions.append(dimension)
+            next_dimensions.append(self._merge_dimension_column_dict(dimension, column_dicts.get(key)))
 
         next_metrics: List[Dict[str, Any]] = []
         for item in next_config.get("metrics") or []:
             metric = dict(item or {})
             key = (str(metric.get("table") or "").strip(), self._extract_metric_source_column(metric))
-            column_dict = column_dicts.get(key)
-            if column_dict:
-                supplement = self._format_column_dict_supplement(column_dict)
-                if supplement:
-                    metric["metadata_supplement"] = self._merge_metadata_supplement(metric.get("metadata_supplement"), supplement)
-            next_metrics.append(metric)
+            next_metrics.append(self._merge_metric_column_dict(metric, column_dicts.get(key)))
 
         next_config["dimensions"] = next_dimensions
         next_config["metrics"] = next_metrics
@@ -429,13 +474,13 @@ class DataSourceManager:
             datasource = await self.datasource_dao.get_datasource_async(datasource_id)
             group_id = str((datasource or {}).get("group_id") or "").strip()
         if not group_id:
-            return config
+            return self._normalize_runtime_semantic_config(config)
         try:
             column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
         except AttributeError:
             column_dicts = {}
         if not column_dicts:
-            return config
+            return self._normalize_runtime_semantic_config(config)
         return self._merge_column_dict_into_semantic_config(config, column_dicts)
 
     async def _save_datasource_async(
@@ -969,7 +1014,7 @@ class DataSourceManager:
             datasource = await self.datasource_dao.get_datasource_async(datasource_id)
             group_id = str((datasource or {}).get("group_id") or "").strip()
             if not group_id:
-                return configs
+                return [self._normalize_runtime_semantic_config(config) for config in configs]
             column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
         except AttributeError:
             column_dicts = {}
@@ -977,7 +1022,7 @@ class DataSourceManager:
             logger.warning("读取字段数据字典失败，指标集选择降级使用原始配置: datasource_id=%s error=%s", datasource_id, e)
             column_dicts = {}
         if not column_dicts:
-            return configs
+            return [self._normalize_runtime_semantic_config(config) for config in configs]
         return [self._merge_column_dict_into_semantic_config(config, column_dicts) for config in configs]
 
     async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[dict]:

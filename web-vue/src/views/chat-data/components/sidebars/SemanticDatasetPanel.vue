@@ -123,8 +123,8 @@ const stopSectionResize = () => {
 }
 
 const getDimensionType = (dim: SemanticDimension): 'string' | 'number' | 'date' => {
-  if (dim.type === 'number') return 'number'
-  if (dim.type === 'time') return 'date'
+  if (dim.logical_type === 'number') return 'number'
+  if (dim.logical_type === 'date' || dim.logical_type === 'datetime') return 'date'
   return 'string'
 }
 

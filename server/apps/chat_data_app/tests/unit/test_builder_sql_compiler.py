@@ -1694,8 +1694,8 @@ def test_semantic_unified_engine_allows_dimension_in_metrics():
             {"name": "订单金额", "table": "orders", "column": "amount", "expression": "SUM(orders.amount)"}
         ],
         "dimensions": [
-            {"name": "订单编号", "table": "orders", "column": "order_no", "expression": "orders.order_no", "type": "categorical"},
-            {"name": "用户ID", "table": "orders", "column": "user_id", "expression": "orders.user_id", "type": "categorical"},
+            {"name": "订单编号", "table": "orders", "column": "order_no", "expression": "orders.order_no", "logical_type": "text"},
+            {"name": "用户ID", "table": "orders", "column": "user_id", "expression": "orders.user_id", "logical_type": "text"},
         ],
         "relationships": [],
         "tables": [
@@ -1727,8 +1727,8 @@ def test_semantic_unified_engine_detail_intent_avoids_aggregate_card_sql():
             {"name": "订单数量", "table": "orders", "column": "order_id", "expression": "COUNT(orders.order_id)"}
         ],
         "dimensions": [
-            {"name": "订单编号", "table": "orders", "column": "order_id", "expression": "orders.order_id", "type": "categorical"},
-            {"name": "用户ID", "table": "orders", "column": "user_id", "expression": "orders.user_id", "type": "categorical"},
+            {"name": "订单编号", "table": "orders", "column": "order_id", "expression": "orders.order_id", "logical_type": "text"},
+            {"name": "用户ID", "table": "orders", "column": "user_id", "expression": "orders.user_id", "logical_type": "text"},
         ],
         "relationships": [],
         "tables": [
@@ -1760,8 +1760,8 @@ def test_semantic_unified_engine_dimensions_only_query_is_detail():
             {"name": "订单数量", "table": "orders", "column": "order_id", "expression": "COUNT(orders.order_id)"}
         ],
         "dimensions": [
-            {"name": "订单编号", "table": "orders", "column": "order_id", "expression": "orders.order_id", "type": "categorical"},
-            {"name": "订单金额", "table": "orders", "column": "amount", "expression": "orders.amount", "type": "number"},
+            {"name": "订单编号", "table": "orders", "column": "order_id", "expression": "orders.order_id", "logical_type": "text"},
+            {"name": "订单金额", "table": "orders", "column": "amount", "expression": "orders.amount", "logical_type": "number"},
         ],
         "relationships": [],
         "tables": [
@@ -1792,9 +1792,9 @@ def test_semantic_unified_engine_uses_aliases_for_same_physical_table_roles():
         "source_type": "mysql",
         "metrics": [],
         "dimensions": [
-            {"name": "订单编号", "table": "orders", "table_alias": "orders", "column": "order_no", "expression": "orders.order_no", "type": "categorical"},
-            {"name": "买家名称", "table": "users", "table_alias": "users", "column": "name", "expression": "users.name", "type": "categorical"},
-            {"name": "卖家名称", "table": "users", "table_alias": "users_2", "column": "name", "expression": "users.name", "type": "categorical"},
+            {"name": "订单编号", "table": "orders", "table_alias": "orders", "column": "order_no", "expression": "orders.order_no", "logical_type": "text"},
+            {"name": "买家名称", "table": "users", "table_alias": "users", "column": "name", "expression": "users.name", "logical_type": "text"},
+            {"name": "卖家名称", "table": "users", "table_alias": "users_2", "column": "name", "expression": "users.name", "logical_type": "text"},
         ],
         "relationships": [
             {

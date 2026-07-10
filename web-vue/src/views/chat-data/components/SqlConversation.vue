@@ -661,9 +661,10 @@ const generatedConversationQueries = computed<FallbackQuery[]>(() => {
   const config = selectedSemanticConfigForRecommendations.value
   const metrics = (config?.metrics || []).map(getMetricDisplayName).filter(Boolean)
   const dimensions = (config?.dimensions || []).map(getDimensionDisplayName).filter(Boolean)
-  const timeDimension = (config?.dimensions || []).find(item => item.type === 'time')
+  const isTimeDimension = (item: SemanticDimension) => item.logical_type === 'date' || item.logical_type === 'datetime'
+  const timeDimension = (config?.dimensions || []).find(isTimeDimension)
   const timeDimensionName = timeDimension ? getDimensionDisplayName(timeDimension) : ''
-  const categoricalDimensions = (config?.dimensions || []).filter(item => item.type !== 'time').map(getDimensionDisplayName).filter(Boolean)
+  const categoricalDimensions = (config?.dimensions || []).filter(item => !isTimeDimension(item)).map(getDimensionDisplayName).filter(Boolean)
   const firstMetric = metrics[0] || ''
   const secondMetric = metrics[1] || ''
   const thirdMetric = metrics[2] || ''

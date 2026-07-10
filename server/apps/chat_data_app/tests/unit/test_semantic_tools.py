@@ -564,7 +564,7 @@ def test_unified_semantic_tools_use_bound_config_without_selector():
         "id": "sc_a",
         "source_type": "mysql",
         "metrics": [{"name": "订单数", "expression": "COUNT(orders.order_id)", "table": "orders"}],
-        "dimensions": [{"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"}],
+        "dimensions": [{"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"}],
         "relationships": [],
     })
     assert [item.name for item in tools] == ["select_semantic_config_tool", "dsl2sql_tool"]
@@ -597,7 +597,7 @@ def test_dsl2sql_tool_loads_runtime_config_and_handles_missing(monkeypatch):
             "id": semantic_config_id,
             "source_type": "mysql",
             "metrics": [{"name": "订单数", "expression": "COUNT(orders.order_id)", "table": "orders"}],
-            "dimensions": [{"name": "城市", "column": "city", "table": "orders", "type": "categorical"}],
+            "dimensions": [{"name": "城市", "column": "city", "table": "orders", "logical_type": "text"}],
             "relationships": [],
         }
 

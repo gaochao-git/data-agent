@@ -373,7 +373,10 @@ class SemanticDimension(BaseModel):
     expression: Optional[str] = Field(default=None, description="SQL表达式，如'DATE(create_time)'")
     table: str = Field(..., description="所属表名")
     table_alias: Optional[str] = Field(default=None, description="查询表别名；为空时默认等于所属表名")
-    type: Literal["categorical", "time", "number"] = Field(default="categorical", description="维度类型")
+    logical_type: Optional[Literal["text", "number", "date", "datetime", "enum"]] = Field(
+        default=None,
+        description="逻辑值类型，用于 DSL 过滤值校验和前端字段类型展示"
+    )
     description: Optional[str] = Field(default=None, description="维度描述")
     metadata_supplement: Optional[str] = Field(default=None, description="字段级元数据补充说明")
     mapping: Optional[Dict[str, str]] = Field(default=None, description="同义词映射（同义词→标准值），如{'mysql':'MySQL', 'pg':'PostgreSQL'}")
