@@ -211,9 +211,18 @@ def _get_creator_name(row: Dict[str, Any], user_names: Optional[Dict[str, str]] 
     return str(row.get("create_by_name") or (user_names or {}).get(creator_id) or "").strip()
 
 
-def _skill_row_to_info(row: Dict[str, Any], user_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def _is_skill_owner(row: Dict[str, Any], user_id: str = "") -> bool:
+    return bool(user_id and str(row.get("owner_user_id") or "") == str(user_id))
+
+
+def _can_manage_skill(row: Dict[str, Any], user_id: str = "") -> bool:
+    return bool(row.get("skill_source") == "user" and _is_skill_owner(row, user_id))
+
+
+def _skill_row_to_info(row: Dict[str, Any], user_id: str = "", user_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """将数据库技能行转换为前端技能对象。"""
     creator_id = str(row.get("create_by") or row.get("owner_user_id") or "").strip()
+    can_manage = _can_manage_skill(row, user_id)
     return {
         "skill_id": row.get("skill_id"),
         "name": row.get("skill_name"),
@@ -226,11 +235,12 @@ def _skill_row_to_info(row: Dict[str, Any], user_names: Optional[Dict[str, str]]
         "visibility_type": row.get("visibility_type") or "private",
         "publish_status": row.get("skill_publish_status") or "draft",
         "current_version_no": int(row.get("current_skill_version_no") or 0),
-        "draft_version_no": int(row.get("draft_skill_version_no") or 0),
-        "has_draft": bool(row.get("draft_skill_version_no")),
+        "draft_version_no": int(row.get("draft_skill_version_no") or 0) if can_manage else 0,
+        "has_draft": bool(row.get("draft_skill_version_no")) if can_manage else False,
         "owner_user_id": row.get("owner_user_id") or "",
         "creator_id": creator_id,
         "creator_name": _get_creator_name(row, user_names=user_names),
+        "can_manage": can_manage,
         "favorite": bool(row.get("favorite_flag")),
         "enabled": bool(row.get("enabled_flag", 1)),
         "create_time": str(row.get("create_time") or ""),
@@ -274,6 +284,7 @@ def _builtin_metadata_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
         "visibility_type": "global",
         "publish_status": "published",
         "current_version_no": 1,
+        "can_manage": False,
         "favorite": False,
         "enabled": True,
     }
@@ -415,7 +426,7 @@ class SkillService:
         builtin_metadata = await asyncio.to_thread(load_metadata)
         builtin_names = {str(item.get("name") or "") for item in builtin_metadata.values()}
         source_rows = [
-            _skill_row_to_info(row, user_names=user_names)
+            _skill_row_to_info(row, user_id=user_id, user_names=user_names)
             for row in (db_rows or [])
             if not (row.get("skill_source") == "system" and str(row.get("skill_name") or "") not in builtin_names)
         ] if db_rows is not None else []
@@ -793,7 +804,9 @@ class SkillService:
                 return None
             if row.get("skill_source") == "user" and not include_draft and not int(row.get("current_skill_version_no") or 0):
                 return None
-            skill_path = await self._resolve_db_skill_md_path_async(row, include_draft=include_draft)
+            can_manage = _can_manage_skill(row, user_id)
+            effective_include_draft = include_draft and can_manage
+            skill_path = await self._resolve_db_skill_md_path_async(row, include_draft=effective_include_draft)
             if not skill_path:
                 return None
             parsed = parse_metadata(skill_path)
@@ -811,11 +824,12 @@ class SkillService:
                 "visibility_type": row.get("visibility_type") or "private",
                 "publish_status": row.get("skill_publish_status") or "draft",
                 "current_version_no": int(row.get("current_skill_version_no") or 0),
-                "draft_version_no": int(row.get("draft_skill_version_no") or 0),
-                "has_draft": bool(row.get("draft_skill_version_no")),
+                "draft_version_no": int(row.get("draft_skill_version_no") or 0) if can_manage else 0,
+                "has_draft": bool(row.get("draft_skill_version_no")) if can_manage else False,
                 "owner_user_id": row.get("owner_user_id") or "",
                 "creator_id": str(row.get("create_by") or row.get("owner_user_id") or "").strip(),
                 "creator_name": _get_creator_name(row, user_names=user_names),
+                "can_manage": can_manage,
                 "enabled": bool(row.get("enabled_flag", 1)),
                 "favorite": bool(row.get("favorite_flag")),
             })
@@ -857,6 +871,7 @@ class SkillService:
             "owner_user_id": metadata.get("owner_user_id") or "",
             "creator_id": metadata.get("creator_id") or "",
             "creator_name": metadata.get("creator_name") or "",
+            "can_manage": bool(metadata.get("can_manage")),
             "enabled": bool(metadata.get("enabled", True)),
             "favorite": bool(metadata.get("favorite")),
         }

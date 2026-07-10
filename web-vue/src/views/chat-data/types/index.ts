@@ -100,6 +100,7 @@ export interface SkillInfo {
   owner_user_id?: string
   creator_id?: string
   creator_name?: string
+  can_manage?: boolean
   favorite?: boolean
   enabled?: boolean
   create_time?: string
