@@ -274,7 +274,7 @@ def test_select_semantic_config_tool_returns_all_retrieved_semantic_summaries(mo
     assert payload["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
 
 
-def test_select_semantic_config_tool_omits_result_when_a_retrieved_config_cannot_load(monkeypatch):
+def test_select_semantic_config_tool_keeps_loaded_configs_when_a_retrieved_config_cannot_load(monkeypatch):
     loaded = []
 
     async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
@@ -294,8 +294,103 @@ def test_select_semantic_config_tool_omits_result_when_a_retrieved_config_cannot
     payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
 
     assert loaded == ["sc_order", "sc_missing"]
+    assert payload["semantic_config_ids"] == ["sc_order"]
+    assert list(payload["semantic_configs"]) == ["sc_order"]
+
+
+def test_select_semantic_config_tool_keeps_only_complete_configs_within_context_budget(monkeypatch):
+    class FixedToolResultBudget:
+        static_input_tokens = 10
+        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+
+        def remaining_for_tool_result(self, _messages):
+            return 200
+
+    async def fake_select_semantic_config_for_query(**_kwargs):
+        return {"semantic_config_ids": ["sc_order", "sc_user"]}
+
+    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
+        return {
+            "id": semantic_config_id,
+            "name": semantic_config_id,
+            "metrics": [{"name": "指标", "description": "指标说明" * 8}],
+            "dimensions": [],
+        }
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(
+        include_query_tools=False,
+        datasource_id="ds_bound",
+        tool_result_budget=FixedToolResultBudget(),
+    )[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询订单和用户", "state": {"messages": []}}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert payload["semantic_config_ids"] == ["sc_order"]
+    assert list(payload["semantic_configs"]) == ["sc_order"]
+
+
+def test_select_semantic_config_tool_returns_controlled_error_when_first_config_exceeds_budget(monkeypatch):
+    class FixedToolResultBudget:
+        static_input_tokens = 10
+        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+
+        def remaining_for_tool_result(self, _messages):
+            return 1
+
+    async def fake_select_semantic_config_for_query(**_kwargs):
+        return {"semantic_config_ids": ["sc_order"]}
+
+    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
+        return {"id": semantic_config_id, "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []}
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(
+        include_query_tools=False,
+        datasource_id="ds_bound",
+        tool_result_budget=FixedToolResultBudget(),
+    )[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询订单", "state": {"messages": []}}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert payload["success"] is False
     assert payload["semantic_config_ids"] == []
-    assert payload["semantic_configs"] == {}
+    assert "超过当前模型可用上下文" in payload["message"]
+
+
+def test_select_semantic_config_tool_does_not_skip_an_oversized_top_ranked_config(monkeypatch):
+    class FixedToolResultBudget:
+        static_input_tokens = 10
+        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+
+        def remaining_for_tool_result(self, _messages):
+            return 180
+
+    async def fake_select_semantic_config_for_query(**_kwargs):
+        return {"semantic_config_ids": ["sc_large", "sc_small"]}
+
+    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
+        if semantic_config_id == "sc_large":
+            return {"id": semantic_config_id, "metrics": [{"name": "指标", "description": "说明" * 100}], "dimensions": []}
+        return {"id": semantic_config_id, "metrics": [], "dimensions": []}
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(
+        include_query_tools=False,
+        datasource_id="ds_bound",
+        tool_result_budget=FixedToolResultBudget(),
+    )[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询", "state": {"messages": []}}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    assert payload["success"] is False
+    assert payload["semantic_config_ids"] == []
 
 
 def test_select_semantic_config_tool_error_branches(monkeypatch):

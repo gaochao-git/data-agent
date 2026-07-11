@@ -307,7 +307,14 @@ const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
 }
 
 const tokenUsageDisplay = computed(() => formatTokenUsageDisplay(tokenUsage.value))
-const tokenUsagePercentage = computed(() => Math.max(0, Math.min(100, Number(tokenUsage.value?.percentage ?? 0))))
+const tokenUsagePercentage = computed(() => {
+  const usage = tokenUsage.value
+  if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) return 0
+  const percentage = Number.isFinite(usage.percentage)
+    ? Number(usage.percentage)
+    : Math.round((usage.used / usage.total) * 1000) / 10
+  return Math.max(0, Math.min(100, percentage))
+})
 const tokenUsagePercentageText = computed(() => tokenUsageDisplay.value ? `${Math.round(tokenUsagePercentage.value)}` : '')
 const tokenUsageRingStyle = computed(() => {
   const percentage = tokenUsageDisplay.value ? tokenUsagePercentage.value : 0
@@ -316,7 +323,7 @@ const tokenUsageRingStyle = computed(() => {
     background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
   }
 })
-const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `上下文占用：${tokenUsageDisplay.value}` : '上下文计算中')
+const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `输入预算占用：${tokenUsageDisplay.value}` : '上下文计算中')
 const TOKEN_USAGE_PANEL_WIDTH = 460
 const TOKEN_USAGE_PANEL_MARGIN = 16
 const tokenUsagePanelStyle = computed(() => ({
@@ -367,10 +374,14 @@ const tokenUsageDetailRows = computed(() => {
   const usage = tokenUsage.value
   if (!usage) return []
   const rows = [
-    { label: '当前上下文', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
-    { label: '总上下文', value: usage.total },
+    { label: '当前输入', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
+    { label: '可用输入预算', value: usage.total },
+    { label: '模型上下文窗口', value: usage.context_window },
+    { label: '输出预留', value: usage.max_output_tokens },
   ]
-  return rows.filter(row => Number.isFinite(row.value))
+  return rows.filter((row): row is { label: string; value: number } => (
+    typeof row.value === 'number' && Number.isFinite(row.value)
+  ))
 })
 
 type TokenUsageRow = {
@@ -2193,7 +2204,7 @@ const handleViewAnalysis = (msg: Message) => {
                     :style="tokenUsagePanelStyle"
                   >
                     <div class="flex items-center justify-between mb-2">
-                      <div class="font-semibold text-gray-800">上下文占用明细</div>
+                      <div class="font-semibold text-gray-800">输入预算明细</div>
                       <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="tokenUsagePanelOpen = false">
                         <i class="fa-solid fa-xmark"></i>
                       </button>
@@ -2206,7 +2217,7 @@ const handleViewAnalysis = (msg: Message) => {
                     </div>
                     <div v-if="tokenUsageMessageRows.length" class="space-y-1.5">
                       <div class="flex items-center justify-between">
-                        <span class="text-[11px] text-gray-400">完整上下文占用</span>
+                        <span class="text-[11px] text-gray-400">本次输入内容</span>
                         <div class="inline-flex rounded bg-gray-100 p-0.5">
                           <button
                             type="button"

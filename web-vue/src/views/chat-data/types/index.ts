@@ -183,6 +183,9 @@ export interface ChatDataTokenUsage {
   output_tokens?: number
   total_tokens?: number
   context_window?: number
+  max_output_tokens?: number
+  input_budget_tokens?: number
+  input_budget_trigger_ratio?: number
   estimated?: boolean
   llm_calls?: Array<{
     index: number

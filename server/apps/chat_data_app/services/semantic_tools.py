@@ -17,6 +17,7 @@ from .semantic_sql_generator import SemanticSQLGenerator
 from ..schema import ExecuteSemanticInput, SelectSemanticConfigInput
 from .datasource_manager import get_datasource_manager
 from .semantic_config_selector import select_semantic_config_for_query
+from .context_budget import ToolResultBudget, estimate_text_tokens
 
 logger = get_logger(__name__)
 
@@ -293,6 +294,11 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
     }
 
 
+def _serialize_selection_tool_payload(payload: Dict[str, Any]) -> str:
+    """序列化最终工具结果，作为上下文预算的唯一计量对象。"""
+    return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def _semantic_config_directory_to_tool_payload(directory: List[Dict[str, Any]]) -> Dict[str, Any]:
     """将指标集目录转为工具返回结构。"""
     return {
@@ -310,6 +316,7 @@ def create_semantic_config_selection_tools(
     datasource_id: str | None = None,
     semantic_config: Dict[str, Any] | None = None,
     user_id: str | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
 ):
     """创建统一语义查询工具。"""
     bound_datasource_id = str(datasource_id or "").strip() or None
@@ -351,7 +358,7 @@ def create_semantic_config_selection_tools(
             if _is_semantic_config_directory_query(user_query):
                 directory = await list_runtime_semantic_config_directory(datasource_id, bound_user_id)
                 payload = _semantic_config_directory_to_tool_payload(directory)
-                return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+                return _serialize_selection_tool_payload(payload)
             selection = await select_semantic_config_for_query(
                 datasource_id=datasource_id,
                 user_query=user_query,
@@ -364,16 +371,54 @@ def create_semantic_config_selection_tools(
                 for config_id in (selection or {}).get("semantic_config_ids") or []
                 if str(config_id).strip()
             ]
-            semantic_configs = {}
+            semantic_configs: Dict[str, Dict[str, Any]] = {}
+            omitted_config_ids: list[str] = []
+            first_config_exceeds_budget = False
+            remaining_tokens = (
+                tool_result_budget.remaining_for_tool_result(list((state or {}).get("messages") or []))
+                if tool_result_budget is not None
+                else None
+            )
             for config_id in selected_config_ids:
                 config = await _load_runtime_semantic_config_for_user(datasource_id, config_id, bound_user_id)
-                if config:
-                    # 该对象就是后续 DSL2SQL 使用的运行时指标集；工具结果会原样送入主模型并展示给用户。
-                    semantic_configs[config_id] = config
-            if len(semantic_configs) != len(selected_config_ids):
-                selection = {**(selection or {}), "semantic_config_ids": []}
+                if not config:
+                    omitted_config_ids.append(config_id)
+                    continue
+                candidate_configs = {**semantic_configs, config_id: config}
+                candidate_payload = _selection_to_tool_payload(selection, candidate_configs)
+                candidate_content = _serialize_selection_tool_payload(candidate_payload)
+                if remaining_tokens is not None and estimate_text_tokens(candidate_content) > remaining_tokens:
+                    omitted_config_ids.append(config_id)
+                    # 相关性最高的完整指标集都不能装入时，后续低相关配置不能替代它。
+                    first_config_exceeds_budget = not semantic_configs
+                    if first_config_exceeds_budget:
+                        break
+                    continue
+                # 运行时指标集必须完整返回，不能为了上下文预算截断指标、维度或关系。
+                semantic_configs[config_id] = config
             payload = _selection_to_tool_payload(selection, semantic_configs)
-            return "[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+            content = _serialize_selection_tool_payload(payload)
+            if first_config_exceeds_budget or (selected_config_ids and not semantic_configs and remaining_tokens is not None):
+                payload = {
+                    "success": False,
+                    "semantic_config_ids": [],
+                    "semantic_configs": {},
+                    "message": "相关指标集的运行时配置超过当前模型可用上下文，请缩小指标集或手动选择指标集后重试。",
+                }
+                content = _serialize_selection_tool_payload(payload)
+            if remaining_tokens is not None:
+                logger.info(
+                    "指标集运行时配置上下文预算: model=%s input_budget=%s static_tokens=%s message_tokens=%s available_tokens=%s candidates=%s kept=%s omitted=%s",
+                    model_id or "-",
+                    tool_result_budget.budget.input_budget_tokens,
+                    tool_result_budget.static_input_tokens,
+                    tool_result_budget.budget.input_budget_tokens - tool_result_budget.static_input_tokens - remaining_tokens,
+                    remaining_tokens,
+                    len(selected_config_ids),
+                    len(semantic_configs),
+                    omitted_config_ids,
+                )
+            return content
         except Exception as exc:
             logger.error("select_semantic_config_tool 执行失败: %s", exc, exc_info=True)
             return f"select_semantic_config_tool 执行失败: {exc}"

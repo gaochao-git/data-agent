@@ -9,7 +9,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from .middleware.token_usage_middleware import count_messages_tokens, estimate_tokens
+from ..services.context_budget import count_messages_tokens, estimate_tokens
 
 
 QUERY_RESULT_PATTERN = re.compile(r"<query_result>\s*(.*?)\s*</query_result>", re.DOTALL)
@@ -36,13 +36,25 @@ def edit_messages_for_llm(
     *,
     context_window: int,
     config: dict[str, Any] | None = None,
+    message_budget_tokens: int | None = None,
 ) -> tuple[list[BaseMessage], dict[str, Any]]:
     """按上下文预算编辑发给模型的消息，不修改 checkpoint 中的原始消息。"""
     cfg = _config_from_mapping(config)
     original_messages = list(messages or [])
     before_tokens = count_messages_tokens(original_messages)
-    trigger_tokens = max(int(max(context_window, 1) * cfg.trigger_ratio), 1)
-    report = _build_report(cfg, before_tokens=before_tokens, after_tokens=before_tokens, triggered=False)
+    trigger_tokens = max(
+        int(message_budget_tokens)
+        if message_budget_tokens is not None
+        else int(max(context_window, 1) * cfg.trigger_ratio),
+        1,
+    )
+    report = _build_report(
+        cfg,
+        before_tokens=before_tokens,
+        after_tokens=before_tokens,
+        triggered=False,
+        message_budget_tokens=trigger_tokens,
+    )
     if not cfg.enabled or before_tokens <= trigger_tokens:
         return original_messages, report
 
@@ -72,7 +84,14 @@ def edit_messages_for_llm(
     return edited_messages, report
 
 
-def _build_report(cfg: ContextEditConfig, *, before_tokens: int, after_tokens: int, triggered: bool) -> dict[str, Any]:
+def _build_report(
+    cfg: ContextEditConfig,
+    *,
+    before_tokens: int,
+    after_tokens: int,
+    triggered: bool,
+    message_budget_tokens: int,
+) -> dict[str, Any]:
     return {
         "enabled": cfg.enabled,
         "triggered": triggered,
@@ -81,6 +100,7 @@ def _build_report(cfg: ContextEditConfig, *, before_tokens: int, after_tokens: i
         "estimated_tokens_before": before_tokens,
         "estimated_tokens_after": after_tokens,
         "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
+        "message_budget_tokens": message_budget_tokens,
         "trigger_ratio": cfg.trigger_ratio,
         "keep_recent_round_candidates": list(cfg.keep_recent_round_candidates),
         "kept_recent_rounds": None,

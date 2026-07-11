@@ -7,10 +7,11 @@ from langchain_core.messages import SystemMessage
 from langgraph.config import get_stream_writer
 
 from utils.logger import get_logger
+from ..services.context_budget import REQUEST_OVERHEAD_TOKENS, ToolResultBudget, build_context_usage_payload, count_messages_tokens, count_tools_tokens
 from ..services.runtime_config import get_context_edit_config
 from .context_editing import edit_messages_for_llm
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
-from .middleware.token_usage_middleware import build_request_breakdown, build_token_usage_payload, count_messages_tokens, count_tools_tokens, get_context_window
+from .middleware.token_usage_middleware import build_request_breakdown
 from .prompts.chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 from .state import ChatDataAgentState
 from .tools import TOOLS
@@ -179,6 +180,7 @@ def create_agent_node(
     model_id: str | None = None,
     enable_thinking: bool | None = None,
     available_skills_context: str | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
 ) -> Callable:
     """
     创建 agent 节点的工厂函数
@@ -219,41 +221,44 @@ def create_agent_node(
         logger.info(f"[agent] system_prompt 长度: {prompt_length} 字符, semantic={bool(semantic_config)}")
         # logger.info(f"[agent] runtime system_prompt (semantic={bool(semantic_config)}):\n{system_prompt}")
 
-        # 构建消息列表
-        context_window = get_context_window(model_id)
-        messages, context_edit = edit_messages_for_llm(
-            raw_messages,
-            context_window=context_window,
-            config=get_context_edit_config(),
-        )
-        _log_context_editing_if_triggered(context_edit, context_window=context_window, model_id=model_id)
-        llm_messages = [SystemMessage(content=system_prompt)] + messages
+        request_budget = tool_result_budget or ToolResultBudget(model_id)
+
+        def prepare_request(effective_model_id: str | None):
+            budget = request_budget.configure(system_prompt, active_tools, model_id=effective_model_id)
+            messages, context_edit = edit_messages_for_llm(
+                raw_messages,
+                context_window=budget.context_window,
+                config=get_context_edit_config(),
+                message_budget_tokens=request_budget.remaining_for_messages(),
+            )
+            _log_context_editing_if_triggered(context_edit, context_window=budget.context_window, model_id=effective_model_id)
+            llm_messages = [SystemMessage(content=system_prompt), *messages]
+            message_tokens = count_messages_tokens(llm_messages)
+            tool_tokens = count_tools_tokens(active_tools)
+            input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
+            token_usage = build_context_usage_payload(budget, input_tokens)
+            token_usage.update({
+                "input_tokens": input_tokens,
+                "current_input_tokens": input_tokens,
+                "output_tokens": 0,
+                "total_tokens": input_tokens,
+                "estimated": True,
+                "context_editing": context_edit,
+                "breakdown": build_request_breakdown(
+                    messages=llm_messages,
+                    message_tokens=message_tokens,
+                    tools=active_tools,
+                    tools_tokens=tool_tokens,
+                    overhead_tokens=REQUEST_OVERHEAD_TOKENS,
+                ),
+            })
+            return llm_messages, token_usage
+
+        llm_messages, token_usage = prepare_request(model_id)
+        _emit_token_usage_event(token_usage)
 
         # 调用 LLM（指定模型失败时回退默认模型）
         llm = get_chat_data_llm(model=model_id, streaming=True, enable_thinking=enable_thinking)
-
-        # 统计上下文 tokens
-        message_tokens = count_messages_tokens(llm_messages)
-        tool_tokens = count_tools_tokens(active_tools)
-        input_tokens = message_tokens + tool_tokens
-        token_usage = build_token_usage_payload(used=input_tokens, total=context_window)
-        token_usage.update({
-            "input_tokens": input_tokens,
-            "current_input_tokens": input_tokens,
-            "output_tokens": 0,
-            "total_tokens": input_tokens,
-            "context_window": context_window,
-            "estimated": True,
-            "context_editing": context_edit,
-            "breakdown": build_request_breakdown(
-                messages=llm_messages,
-                message_tokens=message_tokens,
-                tools=active_tools,
-                tools_tokens=tool_tokens,
-                overhead_tokens=0,
-            ),
-        })
-        _emit_token_usage_event(token_usage)
         try:
             if active_tools:
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)
@@ -266,6 +271,8 @@ def create_agent_node(
                 raise
             fallback_model = get_default_chat_data_model()
             logger.warning(f"[agent] 指定模型调用失败，回退默认模型: model_id={model_id}, fallback={fallback_model}, err={err}")
+            llm_messages, token_usage = prepare_request(fallback_model)
+            _emit_token_usage_event(token_usage)
             llm = get_chat_data_llm(model=fallback_model, streaming=True, enable_thinking=enable_thinking)
             if active_tools:
                 response = await llm.bind_tools(active_tools).ainvoke(llm_messages)

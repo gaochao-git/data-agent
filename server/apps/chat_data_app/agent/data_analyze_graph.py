@@ -15,6 +15,7 @@ from typing_extensions import NotRequired, TypedDict
 from ..chart_types import get_chart_type_prompt_text
 from ..services.data_analyze_workspace import ensure_data_analyze_workspace
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
+from ..services.context_budget import ToolResultBudget
 from ..services.workspace_execution import (
     SandboxExecutionSessionRef,
     attach_workspace_execution_session,
@@ -233,6 +234,7 @@ def create_data_analyze_tools(
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
     model_id: str | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
 ) -> list[Any]:
     """在 DataAnalyzeAgent 内组装当前允许模型调用的工具。"""
     root = validate_workspace_root(workspace_root)
@@ -242,7 +244,13 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
-        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id, user_id=user_id),
+        *create_semantic_config_selection_tools(
+            model_id=model_id,
+            include_query_tools=False,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            tool_result_budget=tool_result_budget,
+        ),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
         create_exec_sql_tool(
             datasource_id=datasource_id,
@@ -329,6 +337,7 @@ def create_data_analyze_agent(
         stream_usage=True,
         enable_thinking=enable_thinking,
     )
+    tool_result_budget = ToolResultBudget(model_id)
     tools = create_data_analyze_tools(
         workspace_root,
         datasource_id=datasource_id,
@@ -339,9 +348,10 @@ def create_data_analyze_agent(
         operator_name=operator_name,
         execution_session_ref=execution_session_ref,
         model_id=model_id,
+        tool_result_budget=tool_result_budget,
     )
-    token_usage_middleware = create_request_token_usage_middleware(model_id)
-    middleware = [token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)]
+    token_usage_middleware = create_request_token_usage_middleware(model_id, tool_result_budget=tool_result_budget)
+    middleware = []
     fallback_model = get_default_chat_data_model()
     if model_id and fallback_model and fallback_model != model_id:
         fallback_llm = get_chat_data_llm(
@@ -351,6 +361,7 @@ def create_data_analyze_agent(
             enable_thinking=enable_thinking,
         )
         middleware.append(ModelFallbackMiddleware(fallback_llm))
+    middleware.extend([token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)])
     agent = create_agent(
         model=llm,
         tools=tools,

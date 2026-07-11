@@ -9,15 +9,13 @@ from typing import Any, Dict, List, Optional
 from langchain_core.messages import HumanMessage
 
 from utils.logger import get_logger
-from ..agent.middleware.token_usage_middleware import estimate_text_tokens
+from .context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
 from .semantic_json_parser import parse_llm_json
 from .datasource_manager import get_datasource_manager
 from .llm_config import get_chat_data_llm
 
 logger = get_logger(__name__)
 
-SELECTOR_CHUNK_TOKEN_BUDGET = 90_000
-SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT = 100_000
 SELECTOR_MAX_CONCURRENCY = 4
 SELECTOR_DIRECTORY_TOP_K = 5
 SELECTOR_MAX_SELECTED_CONFIGS = 5
@@ -316,13 +314,13 @@ def _build_selector_prompt(user_query: str, configs: List[Dict[str, Any]], datas
 
 def _estimate_selector_prompt_tokens(user_query: str, configs: List[Dict[str, Any]], datasource_group_context: str = "") -> int:
     """估算选择器提示词 token 数。"""
-    return estimate_text_tokens(_build_selector_prompt(user_query, configs, datasource_group_context))
+    return estimate_text_tokens(_build_selector_prompt(user_query, configs, datasource_group_context)) + REQUEST_OVERHEAD_TOKENS
 
 
 def _chunk_semantic_config_summaries(
     summaries: List[Dict[str, Any]],
     user_query: str,
-    token_budget: int = SELECTOR_CHUNK_TOKEN_BUDGET,
+    token_budget: int,
     datasource_group_context: str = "",
 ) -> List[List[Dict[str, Any]]]:
     """按完整指标集分片，禁止把单个指标集拆到两个分片。"""
@@ -331,12 +329,12 @@ def _chunk_semantic_config_summaries(
     safe_budget = max(int(token_budget or 0), 1)
     for summary in summaries:
         single_tokens = _estimate_selector_prompt_tokens(user_query, [summary], datasource_group_context)
-        if single_tokens > SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT:
+        if single_tokens > safe_budget:
             logger.warning(
-                "单个指标集选择上下文超过限制但不会拆分: config_id=%s tokens=%s limit=%s",
+                "单个指标集选择上下文超过统一输入预算但不会拆分: config_id=%s tokens=%s input_budget=%s",
                 summary.get("id") or "",
                 single_tokens,
-                SELECTOR_SINGLE_REQUEST_TOKEN_LIMIT,
+                safe_budget,
             )
         if not current_chunk:
             current_chunk = [summary]
@@ -463,18 +461,24 @@ async def select_semantic_config_for_query(
 
     candidate_configs, _directory_candidates = _retrieve_semantic_config_candidates(enabled_configs, normalized_query)
     summaries = [_summarize_semantic_config(config) for config in candidate_configs]
-    chunks = _chunk_semantic_config_summaries(summaries, normalized_query, datasource_group_context=normalized_group_context)
+    selector_budget = get_model_context_budget(model_id, max_output_tokens=1200)
+    chunks = _chunk_semantic_config_summaries(
+        summaries,
+        normalized_query,
+        token_budget=selector_budget.input_budget_tokens,
+        datasource_group_context=normalized_group_context,
+    )
     chunk_tokens = [
         _estimate_selector_prompt_tokens(normalized_query, chunk, normalized_group_context)
         for chunk in chunks
     ]
     logger.info(
-        "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s max_chunk_tokens=%s",
+        "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s input_budget_tokens=%s",
         normalized_datasource_id,
         len(candidate_configs),
         len(chunks),
         chunk_tokens,
-        max(chunk_tokens) if chunk_tokens else 0,
+        selector_budget.input_budget_tokens,
     )
     llm = get_chat_data_llm(model=model_id, streaming=False, max_tokens=1200)
     if len(chunks) == 1:
