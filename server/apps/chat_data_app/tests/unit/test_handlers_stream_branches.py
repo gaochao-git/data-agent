@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -6,6 +7,19 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from apps.chat_data_app import handlers
+
+
+def tool_event_contents(events: list[str]) -> list[str]:
+    """解析 SSE 工具事件中的原始工具结果。"""
+    contents = []
+    for event in events:
+        if not event.startswith("event: tool\n"):
+            continue
+        payload = json.loads(event.split("data: ", 1)[1].strip())
+        content = str(payload.get("content") or "")
+        if content:
+            contents.append(content)
+    return contents
 
 
 async def collect_stream(generator):
@@ -147,14 +161,8 @@ def test_message_end_payload_ignores_empty_latest_ai_timestamp():
     assert handlers._latest_assistant_timestamp(state) == ""
 
 
-def test_semantic_select_required_skips_selected_or_query_plan_payloads():
-    assert handlers._should_emit_semantic_select_required({"selected": True, "candidates": [{"id": "sc"}]}) is False
-    assert handlers._should_emit_semantic_select_required({"query_plan": {}, "candidates": [{"id": "sc"}]}) is False
-    assert handlers._should_emit_semantic_select_required({"candidates": [{"id": "sc"}]}) is True
-
-
 @pytest.mark.asyncio
-async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeypatch):
+async def test_stream_sql_generation_tool_chunks_retrieval_and_interrupt(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -177,10 +185,10 @@ async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeyp
             yield FakeChunk(content="skip", msg_type="ai"), {"langgraph_node": "tools"}
             yield FakeChunk(), {"langgraph_node": "agent"}
             yield FakeChunk(tool_calls=[{"id": "tc1", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "select_semantic_config_tool", "args": '{"semantic_config_id":'}]), {"langgraph_node": "agent"}
-            yield FakeChunk(tool_call_chunks=[{"id": None, "args": '"cfg"}'}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "select_semantic_config_tool", "args": '{"query":'}]), {"langgraph_node": "agent"}
+            yield FakeChunk(tool_call_chunks=[{"id": None, "args": '"查销售额"}'}]), {"langgraph_node": "agent"}
             yield FakeChunk(
-                content='[select_semantic_config_tool] {"selected": true, "selected_config_id": "cfg", "selected_config_name": "指标集"}',
+                content='[select_semantic_config_tool] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集", "metrics": [{"name": "销售额"}]}}}',
                 msg_type="tool",
                 tool_call_id="tc1",
             ), {"langgraph_node": "tools"}
@@ -194,18 +202,14 @@ async def test_stream_sql_generation_tool_chunks_selection_and_interrupt(monkeyp
         user_query="查销售额",
         datasource_id="ds",
         user_id="u1",
-        semantic_config_selection={
-            "semantic_config_id": "cfg",
-            "matched_metrics": ["销售额", ""],
-            "matched_dimensions": ["城市"],
-            "auto_selected": True,
-        },
     ))
     text = "".join(chunks)
-    assert "semantic_config_selected" in text
+    assert '"semantic_config_ids": ["cfg"]' in tool_event_contents(chunks)[-1]
     assert "accumulated_args" in text
     assert "event: message" in text
     assert "event: tool" in text
+    assert "semantic_config_selected" not in text
+    assert "semantic_config_select_required" not in text
     assert "status" in text and "pending" in text
     assert "message_end" in text
     assert text.rstrip().endswith("data: [DONE]")
@@ -465,7 +469,7 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
             yield FakeChunk(content="forced done", msg_type="tool", tool_call_id="forced"), {"langgraph_node": "tools"}
             yield FakeChunk(tool_calls=[{"id": "tc_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "agent"}
             yield FakeChunk(
-                content='[select_semantic_config_tool] {"selected": false}',
+                content='[select_semantic_config_tool] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
                 msg_type="tool",
                 tool_call_id="tc_select",
             ), {"langgraph_node": "tools"}
@@ -488,7 +492,7 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
 
 
 @pytest.mark.asyncio
-async def test_data_analyze_stream_thinking_and_semantic_selection_branches(monkeypatch):
+async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monkeypatch):
     class Agent:
         async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
             yield ("custom", {"type": "token_usage", "usage": {}})
@@ -499,7 +503,7 @@ async def test_data_analyze_stream_thinking_and_semantic_selection_branches(monk
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_selected", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
-                    content='[select_semantic_config_tool] {"selected": true, "selected_config_id": "cfg", "selected_config_name": "指标集"}',
+                    content='[select_semantic_config_tool] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集"}}}',
                     msg_type="tool",
                     tool_call_id="tc_selected",
                     name="select_semantic_config_tool",
@@ -509,7 +513,7 @@ async def test_data_analyze_stream_thinking_and_semantic_selection_branches(monk
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_candidates", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
-                    content='[select_semantic_config_tool] {"selected": false, "candidates": [{"id": "cfg_a", "name": "指标集A"}]}',
+                    content='[select_semantic_config_tool] {"success": true, "semantic_config_ids": ["cfg_a"], "semantic_configs": {"cfg_a": {"id": "cfg_a", "name": "指标集A"}}}',
                     msg_type="tool",
                     tool_call_id="tc_candidates",
                     name="select_semantic_config_tool",
@@ -540,8 +544,12 @@ async def test_data_analyze_stream_thinking_and_semantic_selection_branches(monk
     assert "event: thinking" in text
     assert "思考后继续" in text
     assert "event: task_stage_delta" in text
-    assert "semantic_config_selected" in text
-    assert "semantic_config_select_required" in text
+    assert "event: tool" in text
+    semantic_tool_contents = tool_event_contents(chunks)
+    assert '"semantic_config_ids": ["cfg"]' in semantic_tool_contents[0]
+    assert '"semantic_config_ids": ["cfg_a"]' in semantic_tool_contents[1]
+    assert "semantic_config_selected" not in text
+    assert "semantic_config_select_required" not in text
 
 
 @pytest.mark.asyncio
@@ -551,7 +559,7 @@ async def test_data_analyze_stream_tool_selection_payload_empty_branch(monkeypat
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_empty", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
-                    content='[select_semantic_config_tool] {"selected": false}',
+                    content='[select_semantic_config_tool] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
                     msg_type="tool",
                     tool_call_id="tc_empty",
                     name="select_semantic_config_tool",

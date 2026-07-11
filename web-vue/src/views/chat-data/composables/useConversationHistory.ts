@@ -4,7 +4,7 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
 import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
@@ -55,10 +55,6 @@ const appendAssistantHistoryMessage = (target: Message, source: Message) => {
   }
   if (source.semanticConfigSelection) {
     target.semanticConfigSelection = source.semanticConfigSelection
-    target.semanticConfigSelectRequired = undefined
-  }
-  if (source.semanticConfigSelectRequired && !target.semanticConfigSelection) {
-    target.semanticConfigSelectRequired = source.semanticConfigSelectRequired
   }
   target.segments = [
     ...(target.segments || []),
@@ -218,77 +214,9 @@ const normalizeSemanticConfigSelection = (value: unknown): SemanticConfigSelecti
   }
 }
 
-const parseSemanticConfigToolPayload = (content: string): Record<string, unknown> | null => {
-  const text = String(content || '').trim()
-  if (!text.startsWith('[select_semantic_config_tool]')) return null
-  const raw = text.replace('[select_semantic_config_tool]', '').trim()
-  if (!raw) return null
-  try {
-    const payload = JSON.parse(raw)
-    return payload && typeof payload === 'object' ? payload as Record<string, unknown> : null
-  } catch {
-    return null
-  }
-}
-
-const normalizeSemanticConfigSelectionFromTool = (payload: Record<string, unknown>): SemanticConfigSelectionInfo | null => {
-  if (!payload.selected) return null
-  const semanticConfigId = String(payload.selected_config_id || '').trim()
-  if (!semanticConfigId) return null
-  return normalizeSemanticConfigSelection({
-    semantic_config_id: semanticConfigId,
-    semantic_config_name: payload.selected_config_name || semanticConfigId,
-    confidence: payload.confidence || '',
-    reason: payload.reason || payload.message || '',
-    matched_metrics: payload.matched_metrics,
-    matched_dimensions: payload.matched_dimensions,
-    auto_selected: true,
-    user_selected: false,
-  })
-}
-
-const normalizeSemanticConfigSelectRequiredFromTool = (payload: Record<string, unknown>, query: string): SemanticConfigSelectRequiredInfo | null => {
-  if (payload.selected) return null
-  if (payload.query_plan && typeof payload.query_plan === 'object') return null
-  const rawCandidates = Array.isArray(payload.candidates) ? payload.candidates : []
-  type Candidate = SemanticConfigSelectRequiredInfo['candidates'][number]
-  const candidates = rawCandidates
-    .map((item): Candidate | null => {
-      if (!item || typeof item !== 'object') return null
-      const data = item as Record<string, unknown>
-      const id = String(data.id || '').trim()
-      if (!id) return null
-      return {
-        id,
-        name: typeof data.name === 'string' ? data.name : id,
-        coverage: typeof data.coverage === 'string' ? data.coverage : '',
-        confidence: typeof data.confidence === 'string' ? data.confidence : '',
-        reason: typeof data.reason === 'string' ? data.reason : '',
-      }
-    })
-    .filter((item): item is Candidate => item !== null)
-  if (candidates.length === 0) return null
-  const message = String(payload.message || '该问题可由多个指标集回答，请选择一个指标集后继续查询').trim()
-  const reason = String(payload.reason || '').trim()
-  return {
-    query,
-    message,
-    reason,
-    ambiguous: Boolean(payload.ambiguous),
-    cross_config_required: Boolean(payload.cross_config_required),
-    candidates,
-  }
-}
-
 const applySemanticConfigSelection = (message: Message, selection: SemanticConfigSelectionInfo) => {
   if (message.semanticConfigSelection?.user_selected && !selection.user_selected) return
   message.semanticConfigSelection = selection
-  message.semanticConfigSelectRequired = undefined
-}
-
-const applySemanticConfigSelectRequired = (message: Message, selectRequired: SemanticConfigSelectRequiredInfo) => {
-  if (message.semanticConfigSelection) return
-  message.semanticConfigSelectRequired = selectRequired
 }
 
 interface UseConversationHistoryOptions {
@@ -396,13 +324,8 @@ export function useConversationHistory({
           // 后处理：将 tool 消息的结果关联到对应的 tool_call
           const toolResultMap = new Map<string, string>()
           let pendingSemanticConfigSelection: SemanticConfigSelectionInfo | null = null
-          let pendingToolSemanticConfigSelection: SemanticConfigSelectionInfo | null = null
-          let pendingToolSemanticConfigSelectRequired: SemanticConfigSelectRequiredInfo | null = null
-          let latestAssistantBeforeTool: Message | null = null
-          let latestUserQuery = ''
           formattedMessages.forEach((msg) => {
             if (msg.role === 'user') {
-              latestUserQuery = msg.content || ''
               pendingSemanticConfigSelection = msg.semanticConfigSelection || null
               msg.semanticConfigSelection = undefined
               return
@@ -412,32 +335,9 @@ export function useConversationHistory({
               pendingSemanticConfigSelection = null
             }
             if (msg.role === 'assistant') {
-              latestAssistantBeforeTool = msg
-              if (pendingToolSemanticConfigSelection) {
-                applySemanticConfigSelection(msg, pendingToolSemanticConfigSelection)
-                pendingToolSemanticConfigSelection = null
-              }
-              if (pendingToolSemanticConfigSelectRequired) {
-                applySemanticConfigSelectRequired(msg, pendingToolSemanticConfigSelectRequired)
-                pendingToolSemanticConfigSelectRequired = null
-              }
             }
             if (msg.role === 'tool' && msg.toolCallId && msg.content) {
               toolResultMap.set(msg.toolCallId, msg.content)
-              if (msg.toolName === 'select_semantic_config_tool') {
-                const payload = parseSemanticConfigToolPayload(msg.content)
-                if (payload) {
-                  const selection = normalizeSemanticConfigSelectionFromTool(payload)
-                  const selectRequired = selection ? null : normalizeSemanticConfigSelectRequiredFromTool(payload, latestUserQuery)
-                  if (selection) {
-                    if (latestAssistantBeforeTool) applySemanticConfigSelection(latestAssistantBeforeTool, selection)
-                    else pendingToolSemanticConfigSelection = selection
-                  } else if (selectRequired) {
-                    if (latestAssistantBeforeTool) applySemanticConfigSelectRequired(latestAssistantBeforeTool, selectRequired)
-                    else pendingToolSemanticConfigSelectRequired = selectRequired
-                  }
-                }
-              }
             }
           })
 

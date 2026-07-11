@@ -81,7 +81,12 @@ def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_i
     return result
 
 
-async def build_data_analyze_context(datasource_id: Optional[str], semantic_config_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
+async def build_data_analyze_context(
+    datasource_id: Optional[str],
+    semantic_config_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    member_datasource_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """构建 DataAnalyze 可用工具和数据上下文。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
@@ -111,6 +116,8 @@ async def build_data_analyze_context(datasource_id: Optional[str], semantic_conf
             semantic_configs = datasource.get("semantic_configs")
             if semantic_configs is None:
                 semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
+        selected_member_ids = [str(item or "").strip() for item in member_datasource_ids or [] if str(item or "").strip()]
+        execution_targets = await ds_manager.get_execution_datasources_async(normalized_datasource_id, selected_member_ids) if selected_member_ids else []
         return {
             "datasource": {
                 "id": normalized_datasource_id,
@@ -118,11 +125,21 @@ async def build_data_analyze_context(datasource_id: Optional[str], semantic_conf
                 "description": _truncate(datasource.get("ds_description") or datasource.get("description") or "", 160),
                 "source_type": datasource.get("source_type") or "",
             },
+            "execution_targets": [
+                {
+                    "member_datasource_id": str(item.get("member_datasource_id") or "").strip(),
+                    "member_name": item.get("member_name") or item.get("name") or "",
+                    "org_code": item.get("org_code") or (item.get("source_config") or {}).get("org_code") or "",
+                }
+                for item in execution_targets
+                if str(item.get("member_datasource_id") or "").strip()
+            ],
             "tables": _summarize_tables(datasource.get("ds_tables") or []),
             "semantic_configs": _summarize_semantic_configs(semantic_configs or [], semantic_config_id),
             "tool_chain": get_data_analyze_tool_chain(),
             "notes": [
                 "数据源、表字段、语义指标和维度已注入提示词，可作为默认分析口径。",
+                "每次语义查询必须在工具参数中明确传入 execution_targets 里的 member_datasource_ids。",
                 "用户没有明确口径时，优先从已有指标和维度中选择最匹配项并继续推进，在结果中说明默认口径和可调整参数。",
             ],
         }

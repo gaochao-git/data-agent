@@ -244,113 +244,6 @@ def _format_tool_event(
     return _format_sse("tool", data)
 
 
-def _build_semantic_selection_error(selection: Optional[Dict[str, Any]]) -> str:
-    """构造智能选择指标集失败提示。"""
-    if not selection:
-        return "当前数据源组没有可用于智能问数的指标集，请先维护并启用指标集"
-    candidates = selection.get("candidates") or []
-    candidate_names = [
-        str(item.get("name") or item.get("id") or "").strip()
-        for item in candidates[:3]
-        if isinstance(item, dict) and str(item.get("name") or item.get("id") or "").strip()
-    ]
-    if selection.get("cross_config_required"):
-        reason = str(selection.get("cross_config_reason") or selection.get("reason") or "").strip()
-        suffix = f"：{reason}" if reason else ""
-        return f"当前问题涉及多个指标集，暂不支持跨指标集合并查询{suffix}。请拆成多个问题，或维护一个覆盖该场景的综合指标集"
-    if selection.get("ambiguous"):
-        reason = str(selection.get("ambiguity_reason") or selection.get("reason") or "").strip()
-        if candidate_names:
-            return f"该问题可由多个指标集回答，请明确选择：{'、'.join(candidate_names)}"
-        return reason or "该问题可由多个指标集回答，请先明确选择要使用的指标集"
-    if candidates:
-        candidate_text = "；".join(
-            f"{item.get('name') or item.get('id')}: {item.get('reason') or item.get('confidence') or '可能相关'}"
-            for item in candidates[:3]
-            if isinstance(item, dict)
-        )
-        return f"未能确定最适合的指标集，可参考候选：{candidate_text}"
-    reason = str(selection.get("reason") or "").strip()
-    return reason or "当前可用指标集暂不支持该问题，请补充相关指标或维度后再查询"
-
-
-def _build_semantic_select_required_event(selection: Optional[Dict[str, Any]], user_query: str) -> Dict[str, Any]:
-    """构造前端候选指标集选择事件。"""
-    selection = selection or {}
-    candidates = []
-    for item in selection.get("candidates") or []:
-        if not isinstance(item, dict):
-            continue
-        config_id = str(item.get("id") or "").strip()
-        if not config_id:
-            continue
-        candidates.append({
-            "id": config_id,
-            "name": item.get("name") or config_id,
-            "coverage": item.get("coverage") or "",
-            "confidence": item.get("confidence") or "",
-            "reason": item.get("reason") or "",
-        })
-    return {
-        "query": user_query,
-        "message": _build_semantic_selection_error(selection),
-        "reason": selection.get("ambiguity_reason") or selection.get("cross_config_reason") or selection.get("reason") or "",
-        "ambiguous": bool(selection.get("ambiguous")),
-        "cross_config_required": bool(selection.get("cross_config_required")),
-        "candidates": candidates,
-    }
-
-
-def _extract_select_semantic_config_payload(content: Any) -> Dict[str, Any] | None:
-    """解析选择指标集工具返回内容。"""
-    text = str(content or "").strip()
-    if not text.startswith("[select_semantic_config_tool]"):
-        return None
-    raw = text.replace("[select_semantic_config_tool]", "", 1).strip()
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("无法解析指标集选择工具返回: %s", raw[:200])
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _semantic_selection_event_from_tool_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """将选择工具返回转换成前端已使用的指标集选择事件。"""
-    selected_config_id = str(payload.get("selected_config_id") or "").strip()
-    return {
-        "semantic_config_id": selected_config_id,
-        "semantic_config_name": payload.get("selected_config_name") or selected_config_id,
-        "confidence": payload.get("confidence") or "",
-        "reason": payload.get("reason") or payload.get("message") or "",
-        "matched_metrics": payload.get("matched_metrics") or [],
-        "matched_dimensions": payload.get("matched_dimensions") or [],
-        "auto_selected": True,
-    }
-
-
-def _semantic_select_required_event_from_tool_payload(payload: Dict[str, Any], user_query: str) -> Dict[str, Any]:
-    """将选择工具返回转换成前端候选指标集选择事件。"""
-    selection = {
-        "reason": payload.get("message") or payload.get("reason") or "",
-        "ambiguity_reason": payload.get("reason") or payload.get("message") or "",
-        "cross_config_reason": payload.get("reason") or payload.get("message") or "",
-        "ambiguous": bool(payload.get("ambiguous")),
-        "cross_config_required": bool(payload.get("cross_config_required")),
-        "candidates": payload.get("candidates") or [],
-    }
-    return _build_semantic_select_required_event(selection, user_query)
-
-
-def _should_emit_semantic_select_required(payload: Dict[str, Any]) -> bool:
-    """多指标集 query_plan 由智能体继续拆分执行，不触发前端二选一候选框。"""
-    if payload.get("selected"):
-        return False
-    if isinstance(payload.get("query_plan"), dict):
-        return False
-    return bool(payload.get("candidates"))
-
-
 def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
     """标准化前端传入的指标集选择留痕。"""
     if not isinstance(value, dict):
@@ -781,6 +674,7 @@ async def _stream_sql_generation(
             graph = get_chat_data_graph(
                 checkpointer=checkpointer,
                 semantic_config=semantic_config,
+                datasource_id=datasource_id,
                 model_id=model_id,
                 enable_thinking=enable_thinking,
                 user_id=user_id,
@@ -830,7 +724,6 @@ async def _stream_sql_generation(
                     "datasource_id": datasource_id,
                     "available_member_datasource_ids": available_member_datasource_ids,
                     "matched_member_datasource_ids": matched_member_datasource_ids,
-                    "require_explicit_member_selection": True,
                 },
                 "semantic_config_id": semantic_config_id,
                 "semantic_config": semantic_config,
@@ -993,14 +886,6 @@ async def _stream_sql_generation(
                         # 添加累积的 args 到消息中（前端可以从这里获取）
                         msg_data["accumulated_args"] = accumulated_args
                         msg_data["tool_name"] = tool_call_names.get(tool_call_id, "")
-                    tool_name = msg_data.get("tool_name") or tool_call_names.get(tool_call_id, "")
-                    if tool_name == "select_semantic_config_tool":
-                        selection_payload = _extract_select_semantic_config_payload(msg_data.get("content"))
-                        if selection_payload:
-                            if selection_payload.get("selected"):
-                                yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                            elif _should_emit_semantic_select_required(selection_payload):
-                                yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, user_query))
                     yield _format_sse(event_name, msg_data)
                 else:
                     # AI 消息添加时间戳
@@ -1134,7 +1019,10 @@ async def data_analyze_completion_handler(
             log_phase("get_or_create_conversation")
             log_phase("skip_preload_skill")
             semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-            data_context = await build_data_analyze_context(datasource_id, semantic_config_id, user_id=user_id)
+            data_context_kwargs = {"user_id": user_id}
+            if member_datasource_ids:
+                data_context_kwargs["member_datasource_ids"] = member_datasource_ids
+            data_context = await build_data_analyze_context(datasource_id, semantic_config_id, **data_context_kwargs)
             log_phase("build_data_context")
             workspace_paths, data_context_file = await prepare_data_analyze_workspace(conversation_id, data_context)
             log_phase("ensure_workspace")
@@ -1316,13 +1204,6 @@ async def data_analyze_completion_handler(
                             tool_call_args_fallback.pop(tool_call_id, None)
                         if active_tool_call_id == tool_call_id:
                             active_tool_call_id = None
-                        if msg_data.get("tool_name") == "select_semantic_config_tool":
-                            selection_payload = _extract_select_semantic_config_payload(msg_data.get("content"))
-                            if selection_payload:
-                                if selection_payload.get("selected"):
-                                    yield _format_sse("semantic_config_selected", _semantic_selection_event_from_tool_payload(selection_payload))
-                                elif _should_emit_semantic_select_required(selection_payload):
-                                    yield _format_sse("semantic_config_select_required", _semantic_select_required_event_from_tool_payload(selection_payload, query))
                         yield _format_sse("tool", msg_data)
                     else:
                         yield _format_sse("message", msg_data)

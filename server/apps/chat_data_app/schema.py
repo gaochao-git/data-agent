@@ -591,9 +591,10 @@ class SelectSemanticConfigInput(BaseModel):
 class ExecuteSemanticInput(BaseModel):
     """语义查询执行工具的输入参数（供 LangGraph Agent 工具使用）"""
     model_config = {"extra": "ignore"}
-    semantic_config_id: Optional[str] = Field(
-        default=None,
-        description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果",
+    semantic_config_id: str = Field(
+        ...,
+        min_length=1,
+        description="本次 DSL 使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -625,10 +626,15 @@ class SemanticQueryInput(BaseModel):
         default=None,
         description="DSL 明确无法表达时使用的只读 SQL；与 dsl 二选一",
     )
-    semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
+    semantic_config_id: str = Field(
+        ...,
+        min_length=1,
+        description="本次查询使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
+    )
     member_datasource_ids: List[str] = Field(
-        default_factory=list,
-        description="本次查询要执行的成员数据源 ID 列表；仅使用系统提示词中当前可用范围列出的执行对象",
+        ...,
+        min_length=1,
+        description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
 
 

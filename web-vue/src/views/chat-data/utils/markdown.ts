@@ -18,12 +18,8 @@ const parseJsonObject = (raw: string): Record<string, unknown> | null => {
 
 const isSemanticConfigSelectionPayload = (payload: Record<string, unknown>): boolean => {
   return (
-    Object.prototype.hasOwnProperty.call(payload, 'selected_config_id')
-    && (
-      Object.prototype.hasOwnProperty.call(payload, 'matched_metrics')
-      || Object.prototype.hasOwnProperty.call(payload, 'matched_dimensions')
-      || Object.prototype.hasOwnProperty.call(payload, 'candidates')
-    )
+    Object.prototype.hasOwnProperty.call(payload, 'semantic_config_ids')
+    || Object.prototype.hasOwnProperty.call(payload, 'semantic_config_directory')
   )
 }
 

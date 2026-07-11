@@ -6,7 +6,7 @@
 import { ref, computed, watch, nextTick, toRef, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SemanticConfigItem, SemanticDimension, SemanticMetric } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigItem, SemanticDimension, SemanticMetric } from '../types'
 import { createDashboardFromSpec, getChatDataConfig, getSkills } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
@@ -143,7 +143,7 @@ const loadingParticles = Array.from({ length: 30 }, (_, index) => ({
 }))
 
 const hasAnalysisDataContent = (data: AnalysisData | null): boolean => {
-  return Boolean(data?.thinkingSegments?.length || data?.toolCalls.length || data?.semanticConfigSelection || data?.semanticConfigSelectRequired)
+  return Boolean(data?.thinkingSegments?.length || data?.toolCalls.length || data?.semanticConfigSelection)
 }
 
 // 打开分析面板
@@ -1055,19 +1055,6 @@ const handleDashboardSpec = (payload: DashboardSpecPayload, messageId: string) =
   }
 }
 
-const handleSemanticConfigSelected = (payload: SemanticConfigSelectionInfo, messageId: string) => {
-  const msgIndex = messages.value.findIndex((m) => m.id === messageId)
-  if (msgIndex >= 0 && messages.value[msgIndex]) {
-    const msg = messages.value[msgIndex]!
-    msg.semanticConfigSelection = payload
-    msg.semanticConfigSelectRequired = undefined
-    syncAnalysisPanelFromMessage(msg, true)
-  }
-  if (payload.user_selected) {
-    emit('semanticConfigSelected', payload)
-  }
-}
-
 const handleCreateDashboardFromSpec = async (msg: Message) => {
   if (!msg.dashboardSpec?.dashboard_spec) return
   creatingDashboardMessageId.value = msg.id
@@ -1129,17 +1116,6 @@ const hasDashboardSpecContent = (payload?: DashboardSpecPayload): boolean => {
 
 const getDashboardSpecWarningCount = (payload?: DashboardSpecPayload): number => {
   return Array.isArray(payload?.validation_warnings) ? payload.validation_warnings.length : 0
-}
-
-const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequiredInfo, messageId: string) => {
-  const msgIndex = messages.value.findIndex((m) => m.id === messageId)
-  if (msgIndex >= 0 && messages.value[msgIndex]) {
-    const msg = messages.value[msgIndex]!
-    msg.semanticConfigSelectRequired = payload
-    msg.error = undefined
-    finishAssistantMessage(msg)
-    syncAnalysisPanelFromMessage(msg, true)
-  }
 }
 
 const submitQuery = async (
@@ -1218,7 +1194,6 @@ const submitQuery = async (
       msg.error = undefined
       msg.isStreaming = true
       msg.toolCalls = []
-      msg.semanticConfigSelectRequired = undefined
       msg.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
       msg.skill = effectiveSkill || undefined
     }
@@ -1312,7 +1287,7 @@ const submitQuery = async (
           }
         }
       },
-      // semanticConfigId 为空时由后端智能选择指标集
+      // 未手动选择时由主模型通过检索工具决定本次查询使用的指标集。
       options.semanticConfigIdOverride !== undefined ? options.semanticConfigIdOverride : (props.semanticConfigId || null),
       // modelId - 选中模型的 value
       selectedModelValue.value,
@@ -1328,8 +1303,6 @@ const submitQuery = async (
       (usage) => {
         tokenUsage.value = usage
       },
-      (payload) => handleSemanticConfigSelected(payload, assistantMessageId),
-      (payload) => handleSemanticConfigSelectRequired(payload, assistantMessageId),
       effectiveSemanticConfigSelection,
       enableDeepThinking.value
     )
@@ -1351,32 +1324,6 @@ const submitQuery = async (
 const handleSubmit = async () => {
   const queryText = input.value.trim()
   await submitQuery(queryText)
-}
-
-const handleSemanticConfigCandidateClick = async (msg: Message, candidate: SemanticConfigSelectRequiredInfo['candidates'][number]) => {
-  if (msg.semanticConfigSelectRequired?.cross_config_required) return
-  const configId = String(candidate.id || '').trim()
-  const query = String(msg.semanticConfigSelectRequired?.query || '').trim()
-  if (!configId || !query) return
-  const selection: SemanticConfigSelectionInfo = {
-    semantic_config_id: configId,
-    semantic_config_name: candidate.name || configId,
-    confidence: candidate.confidence || '',
-    reason: candidate.reason || msg.semanticConfigSelectRequired?.reason || '用户从候选指标集中选择',
-    matched_metrics: [],
-    matched_dimensions: [],
-    auto_selected: false,
-    user_selected: true,
-  }
-  msg.semanticConfigSelection = selection
-  msg.semanticConfigSelectRequired = undefined
-  await submitQuery(query, {
-    semanticConfigIdOverride: configId,
-    semanticConfigSelection: selection,
-    assistantMessageId: msg.id,
-    appendUserMessage: false,
-    messageSkill: msg.skill || null,
-  })
 }
 
 // 停止生成
@@ -1529,7 +1476,6 @@ const buildAnalysisDataFromMessage = (msg: Message): AnalysisData => {
     thinkingSegments: msg.thinkingSegments || [],
     toolCalls: getVisibleToolCalls(msg.toolCalls),
     semanticConfigSelection: msg.semanticConfigSelection || null,
-    semanticConfigSelectRequired: msg.semanticConfigSelectRequired || null,
     textContent: ''
   }
 }
@@ -1562,7 +1508,7 @@ const hasVisibleAssistantContent = (content: string): boolean => {
 
 // 首 token 前已有气泡占位时，底部状态行不重复显示。
 const shouldShowStreamingStatus = (message: Message): boolean => {
-  return hasVisibleAssistantContent(message.content) || getVisibleToolCalls(message.toolCalls).length > 0 || Boolean(message.semanticConfigSelection || message.semanticConfigSelectRequired)
+  return hasVisibleAssistantContent(message.content) || getVisibleToolCalls(message.toolCalls).length > 0 || Boolean(message.semanticConfigSelection)
 }
 
 // 检查是否有已完成的查询结果
@@ -1665,16 +1611,13 @@ const renderSummaryMarkdown = (content: string) => {
 const createAnalysisData = (msg: Message): AnalysisData | null => {
   const data = buildAnalysisDataFromMessage(msg)
   if (!hasAnalysisDataContent(data)) return null
-  if (!hasCompletedQueryResult(msg.toolCalls) && !data.semanticConfigSelection && !data.semanticConfigSelectRequired && !data.thinkingSegments?.length && data.toolCalls.length === 0) return null
+  if (!hasCompletedQueryResult(msg.toolCalls) && !data.semanticConfigSelection && !data.thinkingSegments?.length && data.toolCalls.length === 0) return null
   return data
 }
 
 // 获取流式阶段文案
 const getStreamingStageText = (msg: Message): string => {
   const toolCalls = getVisibleToolCalls(msg.toolCalls)
-  if (msg.semanticConfigSelectRequired) {
-    return '等待选择指标集...'
-  }
   if (msg.semanticConfigSelection && toolCalls.length === 0) {
     return '已选择指标集，正在生成查询...'
   }
@@ -1695,7 +1638,6 @@ const shouldShowStreamingProgress = (msg: Message): boolean => {
     msg.thinkingSegments?.length
     || getVisibleToolCalls(msg.toolCalls).length > 0
     || msg.semanticConfigSelection
-    || msg.semanticConfigSelectRequired
   )
 }
 
@@ -1943,31 +1885,6 @@ const handleViewAnalysis = (msg: Message) => {
           <!-- AI 消息 -->
           <div v-else class="flex flex-col gap-3">
             <div class="max-w-full p-4 rounded-2xl rounded-bl-md bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-              <div
-                v-if="msg.semanticConfigSelectRequired"
-                class="mb-3 rounded-lg border border-red-100 bg-red-50/70 px-3 py-2 text-[13px] text-red-700"
-              >
-                <div class="flex items-start gap-2">
-                  <i class="fa-solid fa-circle-exclamation mt-0.5 text-[12px]"></i>
-                  <div class="min-w-0 flex-1">
-                    <div class="font-medium">{{ msg.semanticConfigSelectRequired.message }}</div>
-                    <div v-if="msg.semanticConfigSelectRequired.candidates.length && !msg.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-2">
-                      <button
-                        v-for="candidate in msg.semanticConfigSelectRequired.candidates"
-                        :key="candidate.id"
-                        type="button"
-                        class="rounded-md border border-red-200 bg-white px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        :disabled="isGenerating"
-                        :title="candidate.reason || '使用该指标集继续查询'"
-                        @click="handleSemanticConfigCandidateClick(msg, candidate)"
-                      >
-                        {{ candidate.name || candidate.id }}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
               <!-- 简洁模式：查询完成后只显示结果 -->
               <template v-if="shouldShowCompactMode(msg)">
                 <div class="flex flex-col gap-4">

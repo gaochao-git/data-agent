@@ -261,9 +261,9 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板卡片的 `dsl` 使用与智能问数一致的语义层规则，由平台工具转换为 SQL。不要手写 SQL，除非用户明确要求并且工具支持。
 
-可用指标、维度、数据源和表结构已经在系统提示词 `<data_context>` 中注入。生成 DSL 前必须先确定唯一指标集：优先使用 `semantic_configs` 中 `selected=true` 的指标集；如果没有 `selected=true`，必须先调用 `select_semantic_config_tool`，并只使用工具返回的唯一 `selected_config_id` 对应指标集。
+可用指标、维度、数据源和表结构已经在系统提示词 `<data_context>` 中注入。生成 DSL 前必须先确定唯一指标集：优先使用已手动选择的指标集；否则先调用 `select_semantic_config_tool`，再从工具返回的 `semantic_config_ids` 中根据用户的业务目标选择一个指标集。
 
-未确定唯一指标集时，不得从多个 `semantic_configs` 中自行挑选指标或维度，不得生成看板 DSL，不得调用 `dsl2sql_tool`。
+看板只能使用一个指标集。多个返回项都可能符合、但无法判断用户要哪个业务口径时，必须先向用户澄清；不得混用多个 `semantic_configs` 的指标或维度，不得生成看板 DSL，不得调用 `dsl2sql_tool`。
 
 看板生成场景禁止在卡片中直接写 `sql` 字段。即使模型能够推断物理表和字段，也必须使用当前指标体系中的 `metrics`、`dimensions`、`filters` 生成 DSL，再交给平台工具转换 SQL。
 
@@ -323,7 +323,7 @@ DSL 字段：
 ## 校验流程
 
 1. 先确定唯一指标集，再生成完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`。
-2. `dashboard_spec.semantic_config_id` 必须取已手动选择的指标集 ID，或 `select_semantic_config_tool` 返回的 `selected_config_id`。
+2. `dashboard_spec.semantic_config_id` 必须取已手动选择的指标集 ID，或 `select_semantic_config_tool` 返回的 `semantic_config_ids` 之一。
 3. 调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`。
 4. 根据返回 warnings 和错误修正 DSL。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。

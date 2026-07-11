@@ -30,14 +30,16 @@ def create_dsl2sql_tool(datasource_id: str | None = None, semantic_config_id: st
     bound_operator_name = str(operator_name or "").strip() or None
 
     @tool("dsl2sql_tool")
-    async def dsl2sql_tool(dsl: Any, user_query: str = "", semantic_config_id: str | None = None) -> str:
+    async def dsl2sql_tool(dsl: Any, semantic_config_id: str, user_query: str = "") -> str:
         """使用与智能问数一致的语义层规则校验单个 DSL 或批量卡片 DSL，并转换为 SQL。"""
         try:
             if not bound_datasource_id:
                 return "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
-            effective_semantic_config_id = str(semantic_config_id or bound_semantic_config_id or "").strip() or None
+            effective_semantic_config_id = str(semantic_config_id or "").strip() or None
             if not effective_semantic_config_id:
-                return "dsl2sql_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 select_semantic_config_tool 后显式传入指标集ID"
+            if bound_semantic_config_id and effective_semantic_config_id != bound_semantic_config_id:
+                return f"dsl2sql_tool 执行失败: 当前会话已选择指标集 {bound_semantic_config_id}，请传入该 semantic_config_id"
             dsl = normalize_dsl_payload(dsl)
             if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
                 result = await validate_dashboard_spec_payload(

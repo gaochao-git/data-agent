@@ -262,26 +262,17 @@ def _get_datasource_id_from_state(state: dict | None) -> str | None:
     return datasource_id or None
 
 
-def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[str], list[str], bool]:
+def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[str]]:
     context = _get_execution_context(state)
-    selected_member_ids = _normalize_member_datasource_ids(
-        context.get("member_datasource_ids")
-        or (state or {}).get("member_datasource_ids")
-    )
     available_member_ids = _normalize_member_datasource_ids(
         context.get("available_member_datasource_ids")
         or (state or {}).get("available_member_datasource_ids")
-        or selected_member_ids
     )
     matched_member_ids = _normalize_member_datasource_ids(
         context.get("matched_member_datasource_ids")
         or (state or {}).get("matched_member_datasource_ids")
     )
-    require_explicit = bool(
-        context.get("require_explicit_member_selection")
-        or (state or {}).get("require_explicit_member_selection")
-    )
-    return selected_member_ids, available_member_ids, matched_member_ids, require_explicit
+    return available_member_ids, matched_member_ids
 
 
 @tool(args_schema=SemanticQueryInput)
@@ -310,11 +301,19 @@ async def semantic_query_tool(
     state = state or {}
 
     datasource_id = _get_datasource_id_from_state(state)
-    state_config = state.get("semantic_config")
-    state_config_id = str((state_config or {}).get("id") or "").strip() if isinstance(state_config, dict) else ""
-    semantic_config_id = str(semantic_config_id or state.get("semantic_config_id") or state_config_id or "").strip() or None
-    if not semantic_config_id and not isinstance(state_config, dict):
-        return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+    semantic_config_id = str(semantic_config_id or "").strip() or None
+    if not semantic_config_id:
+        return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id"
+    selected_semantic_config_id = str(
+        state.get("semantic_config_id")
+        or (state.get("semantic_config") or {}).get("id")
+        or ""
+    ).strip()
+    if selected_semantic_config_id and semantic_config_id != selected_semantic_config_id:
+        return (
+            "semantic_query_tool 执行失败: 当前会话已选择指标集 "
+            f"{selected_semantic_config_id}，请在 semantic_config_id 中传入该 ID"
+        )
 
     config = await _resolve_semantic_query_config(state, datasource_id, semantic_config_id)
     if not config:
@@ -347,47 +346,31 @@ async def semantic_query_tool(
     user_id = str(state.get("user_id") or "").strip() or None
     operator_name = str(state.get("operator_name") or "").strip() or None
     requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    selected_member_datasource_ids, available_member_datasource_ids, matched_member_datasource_ids, require_explicit_member_selection = _get_member_scope_from_state(state)
+    available_member_datasource_ids, matched_member_datasource_ids = _get_member_scope_from_state(state)
     allowed_member_datasource_ids = available_member_datasource_ids
-    if require_explicit_member_selection and not allowed_member_datasource_ids:
+    if not allowed_member_datasource_ids:
         return "semantic_query_tool 执行失败: 本次请求没有可用执行对象，请先选择有权限的数据源后再查询"
-    if requested_member_datasource_ids:
-        if matched_member_datasource_ids:
-            invalid_matched_member_ids = [
-                member_id
-                for member_id in requested_member_datasource_ids
-                if member_id not in matched_member_datasource_ids
-            ]
-            if invalid_matched_member_ids:
-                return (
-                    "semantic_query_tool 执行失败: 本次查询的执行对象与用户问题中指定的机构不一致；"
-                    f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
-                )
-        if allowed_member_datasource_ids:
-            invalid_member_ids = [
-                member_id
-                for member_id in requested_member_datasource_ids
-                if member_id not in allowed_member_datasource_ids
-            ]
-            if invalid_member_ids:
-                return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
-        effective_member_datasource_ids = requested_member_datasource_ids
-    elif selected_member_datasource_ids:
-        effective_member_datasource_ids = selected_member_datasource_ids
-    elif require_explicit_member_selection and len(allowed_member_datasource_ids) > 1:
-        return "semantic_query_tool 执行失败: 多个可用执行对象时必须传入本次要查询的 member_datasource_ids；如果用户未明确机构范围，请先确认查询哪个机构或是否查询全部"
-    else:
-        effective_member_datasource_ids = available_member_datasource_ids
-    if (
-        require_explicit_member_selection
-        and len(available_member_datasource_ids) > 1
-        and len(effective_member_datasource_ids) == 1
-        and not matched_member_datasource_ids
-        and effective_member_datasource_ids[0] == available_member_datasource_ids[0]
-    ):
-        query_result_default_member_note = "用户未指定机构，本次默认查询第 1 个机构；最终回答需要说明该默认机构范围。"
-    else:
-        query_result_default_member_note = ""
+    if not requested_member_datasource_ids:
+        return "semantic_query_tool 执行失败: 缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围"
+    if matched_member_datasource_ids:
+        invalid_matched_member_ids = [
+            member_id
+            for member_id in requested_member_datasource_ids
+            if member_id not in matched_member_datasource_ids
+        ]
+        if invalid_matched_member_ids:
+            return (
+                "semantic_query_tool 执行失败: 本次查询的执行对象与用户问题中指定的机构不一致；"
+                f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
+            )
+    invalid_member_ids = [
+        member_id
+        for member_id in requested_member_datasource_ids
+        if member_id not in allowed_member_datasource_ids
+    ]
+    if invalid_member_ids:
+        return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
+    effective_member_datasource_ids = requested_member_datasource_ids
     logger.info(
         "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
         user_id,
@@ -397,12 +380,13 @@ async def semantic_query_tool(
     )
     conversation_id = str(state.get("conversation_id") or "").strip() or None
     query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    query_result["datasource_id"] = datasource_id
+    query_result["member_datasource_ids"] = effective_member_datasource_ids
     query_result["sql"] = query_result.get("sql") or sql
+    query_result["semantic_config_id"] = str(config.get("id") or semantic_config_id or "").strip()
+    query_result["semantic_config_name"] = str(config.get("name") or config.get("semantic_config_name") or query_result["semantic_config_id"]).strip()
     query_result["query_mode"] = query_mode
     query_result["confidence"] = confidence
-    if query_result_default_member_note:
-        query_result["default_member_notice"] = query_result_default_member_note
-
     if query_result["success"]:
         result_json = json.dumps(query_result, ensure_ascii=False)
         if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
@@ -410,9 +394,13 @@ async def semantic_query_tool(
             result_summary = {
                 "success": True,
                 "artifact_id": artifact_id,
+                "datasource_id": query_result.get("datasource_id"),
+                "member_datasource_ids": query_result.get("member_datasource_ids", []),
                 "columns": query_result.get("columns", []),
                 "total_count": query_result.get("total_count", 0),
                 "execution_time_ms": query_result.get("execution_time_ms"),
+                "semantic_config_id": query_result.get("semantic_config_id"),
+                "semantic_config_name": query_result.get("semantic_config_name"),
                 "result_size_chars": len(result_json),
                 "llm_analysis_skipped": True,
                 "query_mode": query_mode,

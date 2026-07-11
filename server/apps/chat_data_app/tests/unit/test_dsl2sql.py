@@ -1690,6 +1690,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_accepts_dsl_payload(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1701,6 +1702,7 @@ class TestSemanticToolInput:
         }
         model = ExecuteSemanticInput.model_validate(payload)
         assert model.dsl["metrics"] == ["订单数"]
+        assert model.semantic_config_id == "sc_orders"
 
     def test_execute_semantic_input_rejects_top_level_metrics(self):
         payload = {
@@ -1713,6 +1715,7 @@ class TestSemanticToolInput:
     def test_execute_semantic_input_rejects_mode(self):
         payload = {
             "mode": "detail",
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1727,6 +1730,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_allows_injected_state(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1742,6 +1746,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_ignores_visualization(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["总销量"],
                 "dimensions": [],

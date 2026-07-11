@@ -32,8 +32,6 @@ class ExecutionContext(TypedDict, total=False):
     available_member_datasource_ids: list[str]
     # 用户原文已精确匹配到的成员数据源ID列表，用于防止执行错机构
     matched_member_datasource_ids: list[str]
-    # 多成员场景是否要求工具调用显式传入 member_datasource_ids
-    require_explicit_member_selection: bool
 
 
 class PromptContext(TypedDict, total=False):

@@ -5,7 +5,7 @@
  */
 import { computed, ref, watch, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
-import type { ExecutionTargetOption, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ExecutionTargetOption, SemanticConfigSelectionInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import ToolCallList from './ToolCallList.vue'
 
 // 分析过程数据
@@ -14,7 +14,6 @@ export interface AnalysisData {
   thinkingSegments?: ThinkingSegment[] // 按时序分段的思考内容
   toolCalls: ToolCallInfo[]    // 工具调用列表
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
-  semanticConfigSelectRequired?: SemanticConfigSelectRequiredInfo | null
   textContent?: string         // 其他文字内容
 }
 
@@ -47,9 +46,6 @@ const visibleToolCalls = computed(() => {
 // 是否有工具调用
 const hasToolCalls = computed(() => visibleToolCalls.value.length > 0)
 
-// 是否有需要用户处理的指标集选择过程；自动选择结果在工具调用结果中展示。
-const hasSemanticConfigStep = computed(() => Boolean(props.data?.semanticConfigSelectRequired))
-
 const thinkingSegments = computed<ThinkingSegment[]>(() => {
   const maxToolCount = visibleToolCalls.value.length
   return props.data?.thinkingSegments
@@ -63,17 +59,7 @@ const thinkingSegments = computed<ThinkingSegment[]>(() => {
 })
 const hasUnderstandingStep = computed(() => thinkingSegments.value.length > 0)
 const isEnabledFlag = (value: unknown) => value === true || value === 'true' || value === 1 || value === '1'
-const semanticConfigBeforeUnderstanding = computed(() => Boolean(
-  isEnabledFlag(props.data?.semanticConfigSelection?.user_selected)
-  && !isEnabledFlag(props.data?.semanticConfigSelection?.auto_selected)
-))
-const understandingStepOrder = computed(() => semanticConfigBeforeUnderstanding.value ? 2 : 1)
-const semanticConfigStepOrder = computed(() => semanticConfigBeforeUnderstanding.value ? 1 : 2)
-const semanticConfigHasNext = computed(() => Boolean(
-  semanticConfigBeforeUnderstanding.value
-    ? (hasUnderstandingStep.value || hasToolCalls.value || props.isStreaming)
-    : (hasToolCalls.value || props.isStreaming)
-))
+const understandingStepOrder = computed(() => 1)
 
 type TimelineEntry =
   | { type: 'thinking'; key: string; segment: ThinkingSegment }
@@ -97,7 +83,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 })
 
 const hasTimeline = computed(() => timelineEntries.value.length > 0)
-const hasCompletionStep = computed(() => !props.isStreaming && (hasTimeline.value || hasSemanticConfigStep.value))
+const hasCompletionStep = computed(() => !props.isStreaming && hasTimeline.value)
 
 const isTimelineEntryInProgress = (entry: TimelineEntry, index: number): boolean => {
   if (!props.isStreaming) return false
@@ -128,7 +114,7 @@ const handleContentScroll = () => {
 }
 
 watch(
-  () => [props.data?.thinkingSegments, props.data?.toolCalls, props.data?.semanticConfigSelection, props.data?.semanticConfigSelectRequired],
+  () => [props.data?.thinkingSegments, props.data?.toolCalls, props.data?.semanticConfigSelection],
   () => {
     if (props.isStreaming && contentRef.value && isNearBottom.value) {
       nextTick(() => {
@@ -178,45 +164,9 @@ const renderMarkdown = (content: string) => md.render(content)
     <div ref="contentRef" class="analysis-panel-scroll min-w-0 flex-1 overflow-y-scroll overflow-x-hidden pt-4 pb-10" @scroll="handleContentScroll">
       <div class="flex w-full min-w-0 flex-col px-4">
         <!-- 等待第一个数据时的占位（面板已打开但还没有内容） -->
-        <div v-if="!hasTimeline && !hasSemanticConfigStep" class="flex items-center gap-2 text-gray-500 text-sm py-2">
+        <div v-if="!hasTimeline" class="flex items-center gap-2 text-gray-500 text-sm py-2">
           <i class="fa-solid fa-spinner fa-spin text-blue-500"></i>
           <span>正在思考...</span>
-        </div>
-
-        <!-- 需要用户选择指标集的阻塞场景 -->
-        <div v-if="hasSemanticConfigStep" class="flex min-w-0 relative" :style="{ order: semanticConfigStepOrder }">
-          <div class="flex flex-col items-center mr-4">
-            <div :class="[
-              'w-6 h-6 flex items-center justify-center rounded-full shrink-0 text-[10px]',
-              'bg-gradient-to-br from-blue-500/15 to-blue-500/5 text-blue-500'
-            ]">
-              <i class="fa-solid fa-list-check"></i>
-            </div>
-            <div
-              v-if="semanticConfigHasNext"
-              class="w-px flex-1 min-h-5 mt-2"
-              style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
-            ></div>
-          </div>
-          <div class="min-w-0 flex-1 pb-6">
-            <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">选择指标集</h4>
-            <div v-if="data.semanticConfigSelectRequired" class="w-full min-w-0 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2 text-sm text-slate-700">
-              <div class="font-medium text-slate-800">{{ data.semanticConfigSelectRequired.message || '需要选择指标集' }}</div>
-              <div v-if="data.semanticConfigSelectRequired.reason" class="mt-1.5 text-xs leading-relaxed text-slate-600">
-                {{ data.semanticConfigSelectRequired.reason }}
-              </div>
-              <div v-if="data.semanticConfigSelectRequired.candidates.length && !data.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-1.5">
-                <span
-                  v-for="candidate in data.semanticConfigSelectRequired.candidates"
-                  :key="candidate.id"
-                  class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
-                  :title="candidate.reason || candidate.coverage || ''"
-                >
-                  {{ candidate.name || candidate.id }}
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- 按时序展示思考与工具调用 -->
@@ -244,35 +194,40 @@ const renderMarkdown = (content: string) => md.render(content)
           </div>
           <div class="min-w-0 flex-1 pb-6">
             <template v-if="entry.type === 'thinking'">
-              <button
-                type="button"
-                class="mb-2 flex w-full items-center gap-2 border-none bg-transparent p-0 text-left text-sm font-medium text-gray-900 cursor-pointer"
-                @click="toggleThinking(entry.key)"
-              >
-                <i
-                  :class="[
-                    'fa-solid fa-chevron-right text-[10px] text-gray-400 transition-transform',
-                    !isThinkingCollapsed(entry.key) && 'rotate-90'
-                  ]"
-                ></i>
-                <span>思考</span>
-                <span class="ml-auto text-[11px] font-normal text-gray-400">
-                  {{ isThinkingCollapsed(entry.key) ? '展开' : '收起' }}
-                </span>
-              </button>
-              <div
-                v-if="!isThinkingCollapsed(entry.key)"
-                class="w-full min-w-0 text-sm leading-relaxed text-gray-400 markdown-body"
-                v-html="renderMarkdown(entry.segment.content)"
-              ></div>
+              <div class="min-w-0 max-w-full overflow-hidden rounded-xl border border-black/[0.04] bg-white/60">
+                <button
+                  type="button"
+                  class="flex w-full min-w-0 items-center justify-between px-3.5 py-2.5 text-left text-sm font-medium text-gray-700 cursor-pointer transition-colors duration-200 hover:bg-black/[0.03]"
+                  :class="{ 'bg-black/[0.02]': !isThinkingCollapsed(entry.key) }"
+                  @click="toggleThinking(entry.key)"
+                >
+                  <span class="flex min-w-0 items-center gap-3">
+                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-black/5 text-[11px] text-gray-500">
+                      <i class="fa-solid fa-brain"></i>
+                    </span>
+                    <span class="truncate">思考</span>
+                  </span>
+                  <i
+                    :class="[
+                      'fa-solid fa-chevron-right shrink-0 text-xs text-gray-400 transition-transform duration-200',
+                      !isThinkingCollapsed(entry.key) && 'rotate-90'
+                    ]"
+                  ></i>
+                </button>
+                <div
+                  v-if="!isThinkingCollapsed(entry.key)"
+                  class="min-w-0 border-t border-black/[0.04] bg-black/[0.02] px-3.5 py-2.5 text-sm leading-relaxed text-gray-400 markdown-body"
+                  v-html="renderMarkdown(entry.segment.content)"
+                ></div>
+              </div>
             </template>
             <template v-else>
-              <h4 class="text-sm font-medium text-gray-900 m-0 mb-2">工具调用</h4>
               <ToolCallList
                 :tool-calls="[entry.tool]"
                 :datasource-id="datasourceId"
                 :execution-targets="executionTargets"
                 :default-expanded="false"
+                :show-running-indicator="false"
               />
             </template>
           </div>

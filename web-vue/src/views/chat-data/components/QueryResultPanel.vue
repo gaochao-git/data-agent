@@ -27,6 +27,8 @@ interface QueryResult {
   sql?: string
   query_mode?: string
   confidence?: number | string
+  semantic_config_id?: string
+  semantic_config_name?: string
   columns?: string[]
   data?: Record<string, unknown>[]
   total_count?: number
@@ -155,6 +157,8 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
         sql: item.sql || result.sql,
         query_mode: item.query_mode || result.query_mode,
         confidence: item.confidence ?? result.confidence,
+        semantic_config_id: item.semantic_config_id || result.semantic_config_id,
+        semantic_config_name: item.semantic_config_name || result.semantic_config_name,
       }),
       sql: item.sql || result.sql || props.sql,
       memberDatasourceId: item.member_datasource_id,

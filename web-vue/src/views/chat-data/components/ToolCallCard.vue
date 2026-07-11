@@ -16,6 +16,7 @@ interface Props {
   isExpanded?: boolean
   compact?: boolean
   active?: boolean
+  showRunningIndicator?: boolean
   datasourceId?: string
   executionTargets?: ExecutionTargetOption[]
   onViewAnalysis?: () => void
@@ -25,7 +26,8 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   isExpanded: false,
   compact: false,
-  active: false
+  active: false,
+  showRunningIndicator: true
 })
 
 const emit = defineEmits<{
@@ -103,6 +105,7 @@ const PARAM_LABELS: Record<string, string> = {
   glob: '文件匹配',
   output_mode: '输出模式',
   dsl: '语义DSL',
+  query_params: '查询参数',
   dashboard_spec: '看板规格',
   query: '用户问题',
   user_query: '用户问题',
@@ -113,24 +116,11 @@ const PARAM_LABELS: Record<string, string> = {
 
 type SemanticSelectionResult = {
   success?: boolean
-  selected?: boolean
-  selected_config_id?: string
-  selected_config_name?: string
-  confidence?: string
-  reason?: string
+  directory?: boolean
+  semantic_config_ids?: string[]
+  semantic_configs?: Record<string, Record<string, unknown>>
+  semantic_config_directory?: Array<Record<string, unknown>>
   message?: string
-  matched_metrics?: string[]
-  matched_dimensions?: string[]
-  ambiguous?: boolean
-  cross_config_required?: boolean
-  candidates?: Array<{ id?: string; name?: string; reason?: string; coverage?: string; confidence?: string }>
-  query_plan?: {
-    type?: string
-    tasks?: Array<Record<string, unknown>>
-    final_action?: string
-    calculation?: string
-    reason?: string
-  }
 }
 
 // DSL 参数标签颜色
@@ -237,11 +227,12 @@ function buildSemanticDslParam(args: Record<string, unknown>): Record<string, un
 }
 
 // 过滤要展示的参数
-const displayParams = computed(() => {
+type DisplayParam = [key: string, value: unknown]
+
+const displayParams = computed<DisplayParam[]>(() => {
   const args = props.toolCall.args || {}
-  const entries = Object.entries(args).filter(([key, value]) => {
+  const entries: DisplayParam[] = Object.entries(args).filter(([key, value]) => {
     if (key === 'visualization') return false
-    if (key === 'semantic_config_id') return false
     if (value === null || value === undefined) return false
     if (Array.isArray(value) && value.length === 0) return false
     if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0) return false
@@ -249,6 +240,10 @@ const displayParams = computed(() => {
   })
   const semanticDsl = buildSemanticDslParam(args)
   if (semanticDsl && !isEmptyParamValue(semanticDsl)) entries.push(['dsl', semanticDsl])
+  if (props.toolCall.tool_name === 'dsl2sql_tool' || props.toolCall.tool_name === 'semantic_query_tool') {
+    const queryArgs = Object.fromEntries(entries)
+    return Object.keys(queryArgs).length > 0 ? [['query_params', queryArgs]] : []
+  }
   return entries
 })
 
@@ -330,37 +325,32 @@ function parseSemanticSelectionResult(result?: string): SemanticSelectionResult 
 
 const semanticSelectionResult = computed(() => parseSemanticSelectionResult(props.toolCall.result))
 const semanticSelectionRawJson = computed(() => {
-  const result = semanticSelectionResult.value
-  return result ? JSON.stringify(result, null, 2) : ''
+  if (!semanticSelectionResult.value) return ''
+  return cleanResult(String(props.toolCall.result || '')).trim()
 })
-const semanticSelectionTitle = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result) return ''
-  return result.selected_config_name || result.selected_config_id || ''
-})
-const semanticSelectionMatchedItems = computed(() => {
+const semanticSelectionConfigs = computed(() => {
   const result = semanticSelectionResult.value
   if (!result) return []
-  const items: Array<{ label: string; values: string[] }> = []
-  if (result.matched_metrics?.length) items.push({ label: '指标', values: result.matched_metrics })
-  if (result.matched_dimensions?.length) items.push({ label: '维度', values: result.matched_dimensions })
-  return items
-})
-const semanticSelectionCandidates = computed(() => {
-  const result = semanticSelectionResult.value
-  if (!result || result.selected) return []
-  return result.candidates || []
+  const configs = result.semantic_configs || {}
+  const ids = Array.isArray(result.semantic_config_ids) ? result.semantic_config_ids : []
+  if (result.directory) {
+    return (result.semantic_config_directory || []).map((config) => ({
+      id: String(config.id || '').trim(),
+      name: String(config.name || config.id || '').trim(),
+    })).filter(config => config.id)
+  }
+  return ids.map((id) => ({
+    id: String(id || '').trim(),
+    name: String(configs[id]?.name || id).trim(),
+  })).filter(config => config.id)
 })
 const semanticSelectionHeader = computed(() => {
   const result = semanticSelectionResult.value
   if (!result) return ''
-  if (result.selected && semanticSelectionTitle.value) return `自动选择：${semanticSelectionTitle.value}`
-  const planType = result.query_plan?.type || ''
-  if (planType === 'multi_config_independent' || planType === 'multi_config_calculation') return '需要拆分多个指标集查询'
-  if (planType === 'cross_join_required' || result.cross_config_required) return '需要跨指标集处理'
-  if (result.ambiguous) return '需要选择指标集'
-  if ((result.candidates || []).length > 0) return '未找到单一可覆盖指标集'
-  return '未匹配到可用指标集'
+  if (result.directory) return '当前可见指标集'
+  return semanticSelectionConfigs.value.length > 0
+    ? `检索到 ${semanticSelectionConfigs.value.length} 个相关指标集`
+    : '未检索到相关指标集'
 })
 
 // 解析结果内容，将 SQL 代码块与普通文本分离
@@ -489,7 +479,7 @@ function getSqlTokenClass(type: string): string {
       <span class="font-mono font-semibold">{{ toolCall.tool_name }}</span>
       <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400">{{ compactDescription }}</span>
     </span>
-    <i v-if="isRunning" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
+    <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
   </div>
   <div
     v-else
@@ -509,7 +499,7 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-wrench"></i>
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700">{{ meta.label }}</span>
-        <i v-if="isRunning" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
+        <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <i
@@ -538,7 +528,7 @@ function getSqlTokenClass(type: string): string {
             <template v-for="[key, value] in displayParams" :key="key">
               <!-- DSL 标签类型 -->
               <div v-if="isDslTagParam(key) && Array.isArray(value)" class="mb-2 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
                 <div class="min-w-0 flex flex-wrap gap-1">
                   <span
                     v-for="(item, idx) in getDslTagItems(key, value as unknown[])"
@@ -571,7 +561,7 @@ function getSqlTokenClass(type: string): string {
               </div>
               <!-- 普通类型 -->
               <div v-else class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-2 last:mb-0">
-                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:w-20 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
+                <span class="shrink-0 pt-0.5 text-xs text-gray-400 sm:max-w-28 sm:truncate" :title="PARAM_LABELS[key] || key">{{ PARAM_LABELS[key] || key }}</span>
                 <span class="min-w-0 max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-700">{{ formatParamValue(key, value) }}</span>
               </div>
             </template>
@@ -581,7 +571,7 @@ function getSqlTokenClass(type: string): string {
 
       <!-- 结果区 -->
       <div v-if="toolCall.status === 'running'" class="flex items-center gap-2 text-sm text-[#1f82d9] p-3 bg-[linear-gradient(135deg,rgba(31,130,217,0.08)_0%,rgba(31,130,217,0.02)_100%)] rounded-[10px]">
-        <i class="fa-solid fa-spinner fa-spin text-base"></i>
+        <i v-if="showRunningIndicator" class="fa-solid fa-spinner fa-spin text-base"></i>
         <span>执行中...</span>
       </div>
       <div v-else-if="toolCall.status === 'completed' && (toolCall.result || toolCall.renderId)" class="mb-3 last:mb-0">
@@ -602,48 +592,19 @@ function getSqlTokenClass(type: string): string {
               <i class="fa-solid fa-layer-group text-[11px] text-blue-500"></i>
               <span>{{ semanticSelectionHeader }}</span>
             </div>
-            <div v-if="semanticSelectionResult.reason" class="mt-1.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-600">
-              {{ semanticSelectionResult.reason }}
-            </div>
-            <div v-if="semanticSelectionMatchedItems.length" class="mt-2 flex flex-col gap-1.5">
-              <div v-for="item in semanticSelectionMatchedItems" :key="item.label" class="flex items-start gap-2 text-xs text-slate-600">
-                <span class="shrink-0 text-slate-500">{{ item.label }}</span>
-                <div class="min-w-0 flex flex-wrap gap-1">
-                  <span
-                    v-for="value in item.values.slice(0, 8)"
-                    :key="value"
-                    class="rounded border border-blue-100 bg-white px-1.5 py-0.5 text-blue-600"
-                  >
-                    {{ value }}
-                  </span>
-                  <span v-if="item.values.length > 8" class="text-slate-400">+{{ item.values.length - 8 }}</span>
-                </div>
-              </div>
-            </div>
-            <div v-if="semanticSelectionCandidates.length" class="mt-2 flex flex-wrap gap-1.5">
+            <div v-if="semanticSelectionConfigs.length" class="mt-2 flex flex-wrap gap-1.5">
               <span
-                v-for="candidate in semanticSelectionCandidates"
-                :key="candidate.id || candidate.name"
+                v-for="config in semanticSelectionConfigs"
+                :key="config.id"
                 class="rounded border border-blue-100 bg-white px-2 py-0.5 text-xs text-blue-600"
-                :title="candidate.reason || candidate.coverage || ''"
+                :title="config.id"
               >
-                {{ candidate.name || candidate.id }}
+                {{ config.name || config.id }}
               </span>
             </div>
             <div v-if="semanticSelectionRawJson" class="mt-3">
-              <div class="mb-1.5 flex items-center justify-between gap-2">
-                <span class="text-xs text-slate-500">原始 JSON</span>
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-1 border-none bg-transparent p-0 text-[11px] text-slate-400 cursor-pointer hover:text-slate-600"
-                  title="复制 JSON"
-                  @click.stop="copyText(semanticSelectionRawJson, '已复制 JSON')"
-                >
-                  <i class="fa-regular fa-copy"></i>
-                  <span>复制JSON</span>
-                </button>
-              </div>
-              <pre class="max-h-48 max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-emerald-600 m-0">{{ semanticSelectionRawJson }}</pre>
+              <div class="mb-1.5 text-xs text-slate-500">模型实际接收内容</div>
+              <pre class="max-h-[32rem] max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-white border border-blue-100 text-xs font-mono leading-relaxed text-slate-700 m-0">{{ semanticSelectionRawJson }}</pre>
             </div>
           </div>
           <!-- 文本结果 -->

@@ -6,7 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -1912,22 +1912,6 @@ const isFirstExecutionDetailSegment = (message: Message, segmentIndex: number): 
   return false
 }
 
-const handleSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
-  const assistant = ensureAssistantMessage()
-  assistant.semanticConfigSelection = payload
-  assistant.semanticConfigSelectRequired = undefined
-  if (payload.user_selected) {
-    emit('semanticConfigSelected', payload)
-  }
-}
-
-const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequiredInfo) => {
-  const assistant = ensureAssistantMessage()
-  completeRunningReasoningStages(assistant)
-  assistant.semanticConfigSelectRequired = payload
-  assistant.isStreaming = false
-}
-
 const getExistingAssistantMessage = (messageId?: string) => {
   if (!messageId) return null
   const message = messages.value.find(item => item.id === messageId)
@@ -1961,7 +1945,6 @@ const submitAnalysisQuery = async (
     assistantMessage.toolCalls = []
     assistantMessage.segments = []
     assistantMessage.taskStages = []
-    assistantMessage.semanticConfigSelectRequired = undefined
     assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
     assistantMessage.isStreaming = true
   } else {
@@ -2037,8 +2020,6 @@ const submitAnalysisQuery = async (
       (usage) => {
         tokenUsage.value = usage
       },
-      (payload) => handleSemanticConfigSelected(payload),
-      (payload) => handleSemanticConfigSelectRequired(payload),
       effectiveSemanticConfigSelection,
       enableDeepThinking.value
     )
@@ -2088,31 +2069,6 @@ const handleSubmit = async () => {
     messageSkill,
     restoreInputText: queryText,
     semanticConfigIdOverride: manualSemanticConfigId,
-  })
-}
-
-const handleSemanticConfigCandidateClick = async (msg: Message, candidate: SemanticConfigSelectRequiredInfo['candidates'][number]) => {
-  if (msg.semanticConfigSelectRequired?.cross_config_required) return
-  const configId = String(candidate.id || '').trim()
-  const query = String(msg.semanticConfigSelectRequired?.query || '').trim()
-  if (!configId || !query) return
-  const selection: SemanticConfigSelectionInfo = {
-    semantic_config_id: configId,
-    semantic_config_name: candidate.name || configId,
-    confidence: candidate.confidence || '',
-    reason: candidate.reason || msg.semanticConfigSelectRequired?.reason || '用户从候选指标集中选择',
-    matched_metrics: [],
-    matched_dimensions: [],
-    auto_selected: false,
-    user_selected: true,
-  }
-  msg.semanticConfigSelection = selection
-  msg.semanticConfigSelectRequired = undefined
-  await submitAnalysisQuery(query, {
-    semanticConfigIdOverride: configId,
-    semanticConfigSelection: selection,
-    assistantMessageId: msg.id,
-    appendUserMessage: false,
   })
 }
 
@@ -2231,31 +2187,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 />
               </div>
               <div v-else class="min-w-0 rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
-                <div
-                  v-if="msg.semanticConfigSelectRequired"
-                  class="mb-3 rounded-lg border border-red-100 bg-red-50/70 px-3 py-2 text-[13px] text-red-700"
-                >
-                  <div class="flex items-start gap-2">
-                    <i class="fa-solid fa-circle-exclamation mt-0.5 text-[12px]"></i>
-                    <div class="min-w-0 flex-1">
-                      <div class="font-medium">{{ msg.semanticConfigSelectRequired.message }}</div>
-                      <div v-if="msg.semanticConfigSelectRequired.candidates.length && !msg.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-2">
-                        <button
-                          v-for="candidate in msg.semanticConfigSelectRequired.candidates"
-                          :key="candidate.id"
-                          type="button"
-                          class="rounded-md border border-red-200 bg-white px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          :disabled="isGenerating"
-                          :title="candidate.reason || '使用该指标集继续分析'"
-                          @click="handleSemanticConfigCandidateClick(msg, candidate)"
-                        >
-                          {{ candidate.name || candidate.id }}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <div v-if="msg.segments?.length" class="min-w-0 space-y-3">
                   <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
                     <div
