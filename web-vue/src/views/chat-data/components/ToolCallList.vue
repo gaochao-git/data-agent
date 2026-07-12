@@ -13,6 +13,7 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   defaultExpanded?: boolean
   compact?: boolean
+  showRunningIndicator?: boolean
   activeToolCallId?: string | null
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
@@ -21,6 +22,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   defaultExpanded: false,
   compact: false,
+  showRunningIndicator: true,
   activeToolCallId: null,
   isAnalysisActive: false
 })
@@ -66,6 +68,7 @@ const toggleExpand = (id: string) => {
       :tool-call="tc"
       :is-expanded="expandedIds.has(tc.tool_call_id)"
       :compact="compact"
+      :show-running-indicator="showRunningIndicator"
       :active="activeToolCallId === tc.tool_call_id"
       :datasource-id="datasourceId"
       :execution-targets="executionTargets"

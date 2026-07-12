@@ -14,7 +14,6 @@ import type {
   ChatDataTokenUsage,
   ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
-  SemanticConfigSelectRequiredInfo,
 } from '../types'
 
 /**
@@ -89,8 +88,6 @@ export function useSqlGenerator() {
     onTaskStage?: (payload: TaskStageInfo) => void,
     onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
     onTokenUsage?: (payload: ChatDataTokenUsage) => void,
-    onSemanticConfigSelected?: (payload: SemanticConfigSelectionInfo) => void,
-    onSemanticConfigSelectRequired?: (payload: SemanticConfigSelectRequiredInfo) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
     enableThinking?: boolean
   ): Promise<void> => {
@@ -247,26 +244,6 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 thinking 数据失败:', err, dataStr)
-            }
-            continue
-          }
-
-          if (event === 'semantic_config_selected') {
-            try {
-              const data = JSON.parse(dataStr)
-              onSemanticConfigSelected?.(data as SemanticConfigSelectionInfo)
-            } catch (err) {
-              console.error('解析 semantic_config_selected 数据失败:', err, dataStr)
-            }
-            continue
-          }
-
-          if (event === 'semantic_config_select_required') {
-            try {
-              const data = JSON.parse(dataStr)
-              onSemanticConfigSelectRequired?.(data as SemanticConfigSelectRequiredInfo)
-            } catch (err) {
-              console.error('解析 semantic_config_select_required 数据失败:', err, dataStr)
             }
             continue
           }

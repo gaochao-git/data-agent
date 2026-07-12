@@ -3,65 +3,32 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 import weakref
 
 from langchain.agents.middleware import wrap_model_call
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from ...services.runtime_config import get_context_window
+from ...services.context_budget import (
+    ContextBudget,
+    REQUEST_OVERHEAD_TOKENS,
+    build_context_usage_payload,
+    count_messages_tokens,
+    count_tools_tokens,
+    estimate_text_tokens,
+    estimate_tokens,
+    get_model_context_budget,
+)
 
 _AGENT_TOKEN_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 
 
-def count_messages_tokens(messages: list[BaseMessage]) -> int:
-    """估算 LangChain messages 的 token 数。"""
-    return sum(_message_tokens(message) for message in messages or [])
-
-
-def estimate_tokens(text: str) -> int:
-    """按当前项目约定估算 Qwen / DeepSeek token 数。"""
-    text = str(text or "")
-    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    en_words = len(re.findall(r"[a-zA-Z0-9]+", re.sub(r"[\u4e00-\u9fff]", " ", text)))
-    other_chars = len(re.findall(r"[^\w\s\u4e00-\u9fff]", text))
-    return int(zh_chars * 0.7 + en_words * 1.3 + other_chars * 0.5)
-
-
-def count_tools_tokens(tools: list[Any] | None) -> int:
-    """估算工具 schema 的 token 数。"""
-    total = 0
-    for tool in tools or []:
-        try:
-            payload = tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
-        except Exception:
-            payload = str(tool)
-        total += estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
-    return int(total)
-
-
-def estimate_text_tokens(text: str) -> int:
-    """估算普通文本的 token 数。"""
-    if not text:
-        return 0
-    return count_messages_tokens([HumanMessage(content=text)])
-
-
-def build_token_usage_payload(*, used: int, total: int) -> dict[str, Any]:
-    """构造前端展示用 usage payload。"""
-    safe_total = max(int(total or 0), 1)
-    safe_used = max(int(used or 0), 0)
-    return {
-        "used": safe_used,
-        "total": safe_total,
-        "percentage": round((safe_used / safe_total) * 100, 1),
-        "remaining": max(safe_total - safe_used, 0),
-    }
-
-
-def create_request_token_usage_middleware(model_id: str | None = None):
+def create_request_token_usage_middleware(
+    model_id: str | None = None,
+    *,
+    tool_result_budget: Any | None = None,
+):
     """创建每次模型请求前的当前上下文估算 middleware。"""
     records: list[dict[str, Any]] = []
 
@@ -69,16 +36,21 @@ def create_request_token_usage_middleware(model_id: str | None = None):
     async def request_token_usage_middleware(request, handler):
         final_messages = _build_request_messages(request)
         tools = list(getattr(request, "tools", None) or [])
+        effective_model_id = _request_model_name(request) or model_id
+        if tool_result_budget is not None:
+            system_message = getattr(request, "system_message", None)
+            system_prompt = str(getattr(system_message, "content", "") or "")
+            tool_result_budget.configure(system_prompt, tools, model_id=effective_model_id)
         message_tokens = count_messages_tokens(final_messages)
         tool_tokens = count_tools_tokens(tools)
-        input_tokens = message_tokens + tool_tokens + 3
+        input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
         record = {
             "index": len(records) + 1,
-            "model": model_id or _request_model_name(request),
+            "model": effective_model_id,
             "input_tokens": input_tokens,
             "message_tokens": message_tokens,
             "tool_schema_tokens": tool_tokens,
-            "overhead_tokens": 3,
+            "overhead_tokens": REQUEST_OVERHEAD_TOKENS,
             "estimated": True,
             "message_count": len(final_messages),
             "breakdown": build_request_breakdown(
@@ -86,7 +58,7 @@ def create_request_token_usage_middleware(model_id: str | None = None):
                 message_tokens=message_tokens,
                 tools=tools,
                 tools_tokens=tool_tokens,
-                overhead_tokens=3,
+                overhead_tokens=REQUEST_OVERHEAD_TOKENS,
             ),
         }
         records.append(record)
@@ -95,7 +67,9 @@ def create_request_token_usage_middleware(model_id: str | None = None):
         return response
 
     def get_token_usage() -> dict[str, Any] | None:
-        return build_usage_from_llm_calls(records, get_context_window(model_id))
+        effective_model_id = str(records[-1].get("model") or model_id or "") if records else model_id
+        budget = tool_result_budget.budget if tool_result_budget is not None else get_model_context_budget(effective_model_id)
+        return build_usage_from_llm_calls(records, budget)
 
     request_token_usage_middleware.get_token_usage = get_token_usage  # type: ignore[attr-defined]
     request_token_usage_middleware.token_usage_records = records  # type: ignore[attr-defined]
@@ -106,14 +80,13 @@ def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], mo
     """估算主执行 agent 本轮请求的上下文占用。"""
     system_tokens = estimate_text_tokens(system_prompt)
     message_tokens = count_messages_tokens(messages)
-    input_tokens = system_tokens + message_tokens
-    context_window = get_context_window(model_id)
-    payload = build_token_usage_payload(used=input_tokens, total=context_window)
+    input_tokens = system_tokens + message_tokens + REQUEST_OVERHEAD_TOKENS
+    budget = get_model_context_budget(model_id)
+    payload = build_context_usage_payload(budget, input_tokens)
     payload.update({
         "input_tokens": input_tokens,
         "output_tokens": 0,
         "total_tokens": input_tokens,
-        "context_window": context_window,
         "estimated": True,
         "breakdown": build_prompt_breakdown(
             system_tokens=system_tokens,
@@ -176,7 +149,15 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
             "description": "按当前项目估算公式统计 history、当前输入、AI tool_calls 和工具结果。",
             "children": build_message_breakdown(non_system_messages, start_index=len(system_messages)),
         })
-    _ = overhead_tokens
+    if overhead_tokens:
+        items.append({
+            "key": "request_overhead",
+            "label": "请求协议开销",
+            "tokens": max(int(overhead_tokens), 0),
+            "estimated_tokens": max(int(overhead_tokens), 0),
+            "estimated": True,
+            "description": "模型协议固定开销，已计入本次输入预算。",
+        })
     return items
 
 
@@ -209,8 +190,7 @@ def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
 
 def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], message_tokens: int, measured_input_tokens: int) -> list[dict[str, Any]]:
     """构造无 request middleware 时的上下文占用拆分。"""
-    _ = measured_input_tokens
-    return [
+    items = [
         {
             "key": "system_prompt",
             "label": "系统提示词与数据上下文",
@@ -229,6 +209,17 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
             "children": build_message_breakdown(messages, scale=1.0),
         },
     ]
+    overhead_tokens = max(int(measured_input_tokens or 0) - max(int(system_tokens or 0), 0) - max(int(message_tokens or 0), 0), 0)
+    if overhead_tokens:
+        items.append({
+            "key": "request_overhead",
+            "label": "请求协议开销",
+            "tokens": overhead_tokens,
+            "estimated_tokens": overhead_tokens,
+            "estimated": True,
+            "description": "模型协议固定开销，已计入本次输入预算。",
+        })
+    return items
 
 
 def build_message_breakdown(messages: list[BaseMessage], *, scale: float = 1.0, start_index: int = 0) -> list[dict[str, Any]]:
@@ -261,7 +252,7 @@ def _scale_tokens(tokens: int, scale: float) -> int:
     return max(int(round(max(int(tokens or 0), 0) * scale)), 0)
 
 
-def build_usage_from_llm_calls(calls: list[dict[str, Any]], context_window: int) -> dict[str, Any] | None:
+def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudget | int) -> dict[str, Any] | None:
     """从单次模型调用记录构造前端 usage payload。"""
     if not calls:
         return None
@@ -271,7 +262,13 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], context_window: int)
     cumulative_input_tokens = sum(int(call.get("input_tokens") or 0) for call in calls)
     output_tokens = sum(int(call.get("output_tokens") or 0) for call in calls)
     total_tokens = cumulative_input_tokens + output_tokens
-    payload = build_token_usage_payload(used=current_input_tokens, total=context_window)
+    context_budget = budget if isinstance(budget, ContextBudget) else ContextBudget(
+        context_window=max(int(budget), 1),
+        max_output_tokens=0,
+        trigger_ratio=1.0,
+        input_budget_tokens=max(int(budget), 1),
+    )
+    payload = build_context_usage_payload(context_budget, current_input_tokens)
     payload.update({
         "input_tokens": current_input_tokens,
         "current_input_tokens": current_input_tokens,
@@ -279,30 +276,11 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], context_window: int)
         "cumulative_input_tokens": cumulative_input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
-        "context_window": context_window,
         "estimated": True,
         "llm_calls": calls,
         "breakdown": list(current_call.get("breakdown") or []),
     })
     return payload
-
-
-def _message_tokens(message: BaseMessage) -> int:
-    total = 4
-    content = getattr(message, "content", None)
-    if content:
-        if isinstance(content, str):
-            total += estimate_tokens(content)
-        else:
-            total += estimate_tokens(json.dumps(content, ensure_ascii=False, default=str))
-    tool_calls = getattr(message, "tool_calls", None)
-    if tool_calls:
-        total += estimate_tokens(json.dumps(tool_calls, ensure_ascii=False, default=str))
-    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-    raw_tool_calls = additional_kwargs.get("tool_calls")
-    if raw_tool_calls:
-        total += estimate_tokens(json.dumps(raw_tool_calls, ensure_ascii=False, default=str))
-    return int(total)
 
 
 def _build_request_messages(request: Any) -> list[BaseMessage]:

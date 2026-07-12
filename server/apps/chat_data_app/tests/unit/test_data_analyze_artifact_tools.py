@@ -238,6 +238,7 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     tool = dsl2sql.create_dsl2sql_tool("ds_a", "sc_a", user_id="user_a", operator_name="测试用户")
 
     single = _strip_tool_payload(await tool.ainvoke({
+        "semantic_config_id": "sc_a",
         "dsl": json.dumps({"metrics": ["销售额"], "offset": 5}, ensure_ascii=False),
         "user_query": "查销售额",
     }))
@@ -247,10 +248,12 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     assert single["warnings"] == ["已移除明细字段"]
 
     batch_from_cards = _strip_tool_payload(await tool.ainvoke({
+        "semantic_config_id": "sc_a",
         "dsl": {"cards": [{"title": "销售额"}]},
         "user_query": "生成看板",
     }))
     batch_from_list = _strip_tool_payload(await tool.ainvoke({
+        "semantic_config_id": "sc_a",
         "dsl": [{"title": "销售额"}, {"title": "订单数"}],
         "user_query": "生成看板",
     }))
@@ -259,14 +262,15 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     assert batch_from_list["valid_count"] == 2
 
     compare = _strip_tool_payload(await tool.ainvoke({
+        "semantic_config_id": "sc_a",
         "dsl": {"metrics": ["销售额"], "compare": {"type": "yoy"}},
     }))
     assert compare["success"] is False
     assert "复杂同比/环比请使用智能分析" in compare["error"]
 
-    assert await dsl2sql.create_dsl2sql_tool("", "sc_a").ainvoke({"dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
-    assert await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
-    assert await tool.ainvoke({"dsl": "不是json"}) == "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
+    assert await dsl2sql.create_dsl2sql_tool("", "sc_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
+    assert await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 select_semantic_config_tool 后显式传入指标集ID"
+    assert await tool.ainvoke({"semantic_config_id": "sc_a", "dsl": "不是json"}) == "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
 
 
 @pytest.mark.asyncio
@@ -276,6 +280,6 @@ async def test_dsl2sql_tool_returns_error_text_when_dependency_raises(monkeypatc
 
     monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_config)
 
-    result = await dsl2sql.create_dsl2sql_tool("ds_a", "sc_a").ainvoke({"dsl": {"metrics": ["销售额"]}})
+    result = await dsl2sql.create_dsl2sql_tool("ds_a", "sc_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
 
     assert result == "dsl2sql_tool 执行失败: 配置不存在"

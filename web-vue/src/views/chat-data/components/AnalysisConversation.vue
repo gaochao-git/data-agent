@@ -6,7 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticConfigSelectRequiredInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -29,6 +29,7 @@ interface Props {
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   ensureConversationId?: (agentId?: string) => Promise<string | null>
+  ensureConversationDatasource?: () => Promise<boolean>
   executionTargets?: ExecutionTargetOption[]
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
@@ -114,7 +115,14 @@ const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
 }
 
 const tokenUsageDisplay = computed(() => formatTokenUsageDisplay(tokenUsage.value))
-const tokenUsagePercentage = computed(() => Math.max(0, Math.min(100, Number(tokenUsage.value?.percentage ?? 0))))
+const tokenUsagePercentage = computed(() => {
+  const usage = tokenUsage.value
+  if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) return 0
+  const percentage = Number.isFinite(usage.percentage)
+    ? Number(usage.percentage)
+    : Math.round((usage.used / usage.total) * 1000) / 10
+  return Math.max(0, Math.min(100, percentage))
+})
 const tokenUsagePercentageText = computed(() => tokenUsageDisplay.value ? `${Math.round(tokenUsagePercentage.value)}` : '')
 const tokenUsageRingStyle = computed(() => {
   const percentage = tokenUsageDisplay.value ? tokenUsagePercentage.value : 0
@@ -123,7 +131,7 @@ const tokenUsageRingStyle = computed(() => {
     background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
   }
 })
-const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `上下文占用：${tokenUsageDisplay.value}` : '上下文计算中')
+const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `输入预算占用：${tokenUsageDisplay.value}` : '上下文计算中')
 const TOKEN_USAGE_PANEL_WIDTH = 460
 const TOKEN_USAGE_PANEL_MARGIN = 16
 const tokenUsagePanelStyle = computed(() => ({
@@ -174,10 +182,14 @@ const tokenUsageDetailRows = computed(() => {
   const usage = tokenUsage.value
   if (!usage) return []
   const rows = [
-    { label: '当前上下文', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
-    { label: '总上下文', value: usage.total },
+    { label: '当前输入', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
+    { label: '可用输入预算', value: usage.total },
+    { label: '模型上下文窗口', value: usage.context_window },
+    { label: '输出预留', value: usage.max_output_tokens },
   ]
-  return rows.filter(row => Number.isFinite(row.value))
+  return rows.filter((row): row is { label: string; value: number } => (
+    typeof row.value === 'number' && Number.isFinite(row.value)
+  ))
 })
 
 type TokenUsageRow = {
@@ -1912,22 +1924,6 @@ const isFirstExecutionDetailSegment = (message: Message, segmentIndex: number): 
   return false
 }
 
-const handleSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
-  const assistant = ensureAssistantMessage()
-  assistant.semanticConfigSelection = payload
-  assistant.semanticConfigSelectRequired = undefined
-  if (payload.user_selected) {
-    emit('semanticConfigSelected', payload)
-  }
-}
-
-const handleSemanticConfigSelectRequired = (payload: SemanticConfigSelectRequiredInfo) => {
-  const assistant = ensureAssistantMessage()
-  completeRunningReasoningStages(assistant)
-  assistant.semanticConfigSelectRequired = payload
-  assistant.isStreaming = false
-}
-
 const getExistingAssistantMessage = (messageId?: string) => {
   if (!messageId) return null
   const message = messages.value.find(item => item.id === messageId)
@@ -1961,7 +1957,6 @@ const submitAnalysisQuery = async (
     assistantMessage.toolCalls = []
     assistantMessage.segments = []
     assistantMessage.taskStages = []
-    assistantMessage.semanticConfigSelectRequired = undefined
     assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
     assistantMessage.isStreaming = true
   } else {
@@ -1984,6 +1979,15 @@ const submitAnalysisQuery = async (
     }
     if (!convId) {
       ElMessage.error('无法创建会话')
+      if (options.appendUserMessage !== false) {
+        messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
+      }
+      activeAssistantMessageId.value = null
+      if (options.restoreInputText) input.value = options.restoreInputText
+      if (options.messageSkill) selectedSkill.value = options.messageSkill
+      return
+    }
+    if (props.ensureConversationDatasource && !await props.ensureConversationDatasource()) {
       if (options.appendUserMessage !== false) {
         messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
       }
@@ -2037,8 +2041,6 @@ const submitAnalysisQuery = async (
       (usage) => {
         tokenUsage.value = usage
       },
-      (payload) => handleSemanticConfigSelected(payload),
-      (payload) => handleSemanticConfigSelectRequired(payload),
       effectiveSemanticConfigSelection,
       enableDeepThinking.value
     )
@@ -2088,31 +2090,6 @@ const handleSubmit = async () => {
     messageSkill,
     restoreInputText: queryText,
     semanticConfigIdOverride: manualSemanticConfigId,
-  })
-}
-
-const handleSemanticConfigCandidateClick = async (msg: Message, candidate: SemanticConfigSelectRequiredInfo['candidates'][number]) => {
-  if (msg.semanticConfigSelectRequired?.cross_config_required) return
-  const configId = String(candidate.id || '').trim()
-  const query = String(msg.semanticConfigSelectRequired?.query || '').trim()
-  if (!configId || !query) return
-  const selection: SemanticConfigSelectionInfo = {
-    semantic_config_id: configId,
-    semantic_config_name: candidate.name || configId,
-    confidence: candidate.confidence || '',
-    reason: candidate.reason || msg.semanticConfigSelectRequired?.reason || '用户从候选指标集中选择',
-    matched_metrics: [],
-    matched_dimensions: [],
-    auto_selected: false,
-    user_selected: true,
-  }
-  msg.semanticConfigSelection = selection
-  msg.semanticConfigSelectRequired = undefined
-  await submitAnalysisQuery(query, {
-    semanticConfigIdOverride: configId,
-    semanticConfigSelection: selection,
-    assistantMessageId: msg.id,
-    appendUserMessage: false,
   })
 }
 
@@ -2231,31 +2208,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 />
               </div>
               <div v-else class="min-w-0 rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
-                <div
-                  v-if="msg.semanticConfigSelectRequired"
-                  class="mb-3 rounded-lg border border-red-100 bg-red-50/70 px-3 py-2 text-[13px] text-red-700"
-                >
-                  <div class="flex items-start gap-2">
-                    <i class="fa-solid fa-circle-exclamation mt-0.5 text-[12px]"></i>
-                    <div class="min-w-0 flex-1">
-                      <div class="font-medium">{{ msg.semanticConfigSelectRequired.message }}</div>
-                      <div v-if="msg.semanticConfigSelectRequired.candidates.length && !msg.semanticConfigSelectRequired.cross_config_required" class="mt-2 flex flex-wrap gap-2">
-                        <button
-                          v-for="candidate in msg.semanticConfigSelectRequired.candidates"
-                          :key="candidate.id"
-                          type="button"
-                          class="rounded-md border border-red-200 bg-white px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          :disabled="isGenerating"
-                          :title="candidate.reason || '使用该指标集继续分析'"
-                          @click="handleSemanticConfigCandidateClick(msg, candidate)"
-                        >
-                          {{ candidate.name || candidate.id }}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <div v-if="msg.segments?.length" class="min-w-0 space-y-3">
                   <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
                     <div
@@ -2562,7 +2514,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       :style="tokenUsagePanelStyle"
                     >
                       <div class="flex items-center justify-between mb-2">
-                        <div class="font-semibold text-gray-800">上下文占用明细</div>
+                        <div class="font-semibold text-gray-800">输入预算明细</div>
                         <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="tokenUsagePanelOpen = false">
                           <i class="fa-solid fa-xmark"></i>
                         </button>
@@ -2575,7 +2527,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       </div>
                       <div v-if="tokenUsageMessageRows.length" class="space-y-1.5">
                         <div class="flex items-center justify-between">
-                          <span class="text-[11px] text-gray-400">完整上下文占用</span>
+                          <span class="text-[11px] text-gray-400">本次输入内容</span>
                           <div class="inline-flex rounded bg-gray-100 p-0.5">
                             <button
                               type="button"

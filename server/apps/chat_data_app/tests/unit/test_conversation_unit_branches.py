@@ -338,6 +338,7 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                         {"run_id": "run1", "stage": "thinking", "status": "completed", "content": "理解"}
                     ],
                     "token_usage": {"used": 12, "total": 100},
+                    "conversation_datasource_id": "ds_a",
                 },
                 tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
             )
@@ -349,8 +350,30 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert detail["task_stages"][0]["stage"] == "thinking"
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"] == {"used": 12, "total": 100}
+    assert detail["datasource_id"] == "ds_a"
     assert detail["pending_tool"]["args"] == {"sql": "select 1"}
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_datasource_id_reads_persisted_state():
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Graph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={"conversation_datasource_id": "ds_a"})
+
+    assert await conversation_module.get_checkpoint_datasource_id(
+        "conv",
+        lambda _checkpointer: Graph(),
+        lambda: CheckpointerContext(),
+    ) == "ds_a"
+    assert await conversation_module.get_checkpoint_datasource_id("conv", None, lambda: CheckpointerContext()) is None
 
 
 @pytest.mark.asyncio

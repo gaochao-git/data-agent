@@ -35,7 +35,13 @@ def create_exec_sql_tool(
     bound_workspace_root = str(workspace_root or "").strip()
 
     @tool("semantic_query_tool")
-    async def semantic_query_tool(dsl: Any, save_as: str | None = None, semantic_config_id: str | None = None, user_query: str = "") -> str:
+    async def semantic_query_tool(
+        dsl: Any,
+        semantic_config_id: str,
+        member_datasource_ids: list[str],
+        save_as: str | None = None,
+        user_query: str = "",
+    ) -> str:
         """
         根据语义 DSL 生成只读 SQL 并返回真实数据结果。
 
@@ -45,9 +51,23 @@ def create_exec_sql_tool(
         try:
             if not bound_datasource_id:
                 return "semantic_query_tool 执行失败: 当前会话未绑定数据源"
-            effective_semantic_config_id = str(semantic_config_id or bound_semantic_config_id or "").strip() or None
+            effective_semantic_config_id = str(semantic_config_id or "").strip() or None
             if not effective_semantic_config_id:
-                return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 或手动选择指标集"
+                return "semantic_query_tool 执行失败: 缺少 semantic_config_id，请先调用 select_semantic_config_tool 后显式传入指标集ID"
+            if bound_semantic_config_id and effective_semantic_config_id != bound_semantic_config_id:
+                return f"semantic_query_tool 执行失败: 当前会话已选择指标集 {bound_semantic_config_id}，请传入该 semantic_config_id"
+            requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
+            if not requested_member_datasource_ids:
+                return "semantic_query_tool 执行失败: 缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围"
+            if not bound_member_datasource_ids:
+                return "semantic_query_tool 执行失败: 当前会话没有可用执行对象，请先在页面选择数据源"
+            invalid_member_ids = [
+                member_id
+                for member_id in requested_member_datasource_ids
+                if member_id not in bound_member_datasource_ids
+            ]
+            if invalid_member_ids:
+                return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}"
             dsl_payload = normalize_json_like_payload(dsl)
             if not isinstance(dsl_payload, dict) or isinstance(dsl_payload.get("cards"), list):
                 return "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
@@ -81,13 +101,19 @@ def create_exec_sql_tool(
             query_result = await _execute_sql_real(
                 sql=sql,
                 datasource_id=bound_datasource_id,
-                member_datasource_ids=bound_member_datasource_ids,
+                member_datasource_ids=requested_member_datasource_ids,
                 user_id=bound_user_id,
                 semantic_config_id=effective_semantic_config_id,
                 query_text=user_query or None,
                 conversation_id=bound_conversation_id,
                 operator_name=bound_operator_name,
             )
+            query_result["datasource_id"] = bound_datasource_id
+            query_result["member_datasource_ids"] = requested_member_datasource_ids
+            query_result["semantic_config_id"] = str(semantic_config.get("id") or effective_semantic_config_id).strip()
+            query_result["semantic_config_name"] = str(
+                semantic_config.get("name") or semantic_config.get("semantic_config_name") or query_result["semantic_config_id"]
+            ).strip()
             if save_path:
                 write_result = await sandbox_write_text_file(
                     session_ref=execution_session_ref,
@@ -98,6 +124,10 @@ def create_exec_sql_tool(
                 result_summary = {
                     "success": bool(query_result.get("success")),
                     "result_path": write_result.get("file_path") or save_path,
+                    "datasource_id": query_result.get("datasource_id"),
+                    "member_datasource_ids": query_result.get("member_datasource_ids", []),
+                    "semantic_config_id": query_result.get("semantic_config_id"),
+                    "semantic_config_name": query_result.get("semantic_config_name"),
                     "columns": query_result.get("columns", []),
                     "row_count": len(query_result.get("data", []) or []),
                     "total_count": query_result.get("total_count"),

@@ -27,7 +27,7 @@ from ..services import dashboard_runtime
 from ..services.dashboard_spec_service import create_dashboard_from_spec_payload
 from ..services.dashboard_service import get_dashboard_service
 from ..services.query_metadata import generate_query_metadata
-from .common import _get_current_user
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 router = APIRouter()

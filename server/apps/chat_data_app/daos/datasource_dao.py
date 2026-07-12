@@ -518,6 +518,20 @@ class DataSourceDao:
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
+    async def get_datasource_meta_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+        row = await self._get_group_row_by_id_async(datasource_id)
+        if not row:
+            return None
+        datasource = self._map_group_row(row)
+        datasource["member_datasource_ids"] = _parse_member_sources_text(
+            row.get("member_sources_text"),
+            row.get("template_source"),
+            row.get("source_type"),
+            None,
+        )
+        datasource["member_sources"] = self._build_member_sources(row)
+        return datasource
+
     async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
         row = await self._get_group_row_by_name_async(group_name)
         if not row:
@@ -525,6 +539,20 @@ class DataSourceDao:
         datasource = self._map_group_row(row)
         datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource.get("group_id"))
         datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource.get("group_id"))
+        datasource["member_sources"] = self._build_member_sources(row)
+        return datasource
+
+    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+        row = await self._get_group_row_by_name_async(group_name)
+        if not row:
+            return None
+        datasource = self._map_group_row(row)
+        datasource["member_datasource_ids"] = _parse_member_sources_text(
+            row.get("member_sources_text"),
+            row.get("template_source"),
+            row.get("source_type"),
+            None,
+        )
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 

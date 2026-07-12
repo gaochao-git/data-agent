@@ -31,9 +31,11 @@ def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
     assert captured["save"] == (state.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
 
 
-def test_state_reducers_cover_reasoning_append():
+def test_state_reducers_keep_first_conversation_datasource():
     assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
     assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
+    assert state.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
+    assert state.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
 
 
 def test_serialize_semantic_config_selection_keeps_refresh_payload():

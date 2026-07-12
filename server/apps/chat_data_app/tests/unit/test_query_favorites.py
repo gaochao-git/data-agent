@@ -6,13 +6,14 @@ from types import SimpleNamespace
 
 from starlette.requests import Request
 
-from apps.chat_data_app.routes import (
+from apps.chat_data_app.routers.query_favorites import (
     create_query_favorite,
     delete_query_favorite,
     get_query_favorites,
     update_query_favorite,
 )
 from apps.chat_data_app.schema import QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest
+from apps.chat_data_app.services import query_providers
 
 
 class _FakeExecuteResult:
@@ -88,7 +89,7 @@ def _fake_current_user(user_id: str = "u-login"):
 
 
 def test_create_query_favorite_uses_current_user_id(monkeypatch):
-    from apps.chat_data_app import routes
+    from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 
     fake_db = _FakeDB()
 
@@ -96,8 +97,8 @@ def test_create_query_favorite_uses_current_user_id(monkeypatch):
     async def fake_session():
         yield fake_db
 
-    monkeypatch.setattr(routes, "_get_current_user", lambda _req: _fake_current_user())
-    monkeypatch.setattr(routes, "get_session", fake_session)
+    monkeypatch.setattr(query_favorites_routes, "_get_current_user", lambda _req: _fake_current_user())
+    monkeypatch.setattr(query_providers, "get_session", fake_session)
 
     payload = QueryFavoriteCreateRequest(
         datasource_id="ds1",
@@ -112,7 +113,7 @@ def test_create_query_favorite_uses_current_user_id(monkeypatch):
 
 
 def test_get_query_favorites_filters_by_current_user(monkeypatch):
-    from apps.chat_data_app import routes
+    from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 
     fake_db = _FakeDB(items=[_FakeFavorite()])
 
@@ -120,8 +121,8 @@ def test_get_query_favorites_filters_by_current_user(monkeypatch):
     async def fake_session():
         yield fake_db
 
-    monkeypatch.setattr(routes, "_get_current_user", lambda _req: _fake_current_user())
-    monkeypatch.setattr(routes, "get_session", fake_session)
+    monkeypatch.setattr(query_favorites_routes, "_get_current_user", lambda _req: _fake_current_user())
+    monkeypatch.setattr(query_providers, "get_session", fake_session)
 
     resp = asyncio.run(get_query_favorites(_make_request(), datasource_id="ds1", query_type="sql", limit=10))
     assert _payload(resp)["status"] == "success"
@@ -130,7 +131,7 @@ def test_get_query_favorites_filters_by_current_user(monkeypatch):
 
 
 def test_update_delete_query_favorite_filter_by_current_user(monkeypatch):
-    from apps.chat_data_app import routes
+    from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 
     item = _FakeFavorite()
     fake_db = _FakeDB(item=item)
@@ -139,8 +140,8 @@ def test_update_delete_query_favorite_filter_by_current_user(monkeypatch):
     async def fake_session():
         yield fake_db
 
-    monkeypatch.setattr(routes, "_get_current_user", lambda _req: _fake_current_user())
-    monkeypatch.setattr(routes, "get_session", fake_session)
+    monkeypatch.setattr(query_favorites_routes, "_get_current_user", lambda _req: _fake_current_user())
+    monkeypatch.setattr(query_providers, "get_session", fake_session)
 
     update_payload = QueryFavoriteUpdateRequest(favorite_title="new-title")
     update_resp = asyncio.run(update_query_favorite(1, update_payload, _make_request()))

@@ -11,7 +11,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.middleware.token_usage_middleware import (
     bind_token_usage_middleware,
-    build_token_usage_payload,
     build_request_breakdown,
     build_usage_from_llm_calls,
     build_message_breakdown,
@@ -22,15 +21,15 @@ from apps.chat_data_app.agent.middleware.token_usage_middleware import (
     estimate_prompt_usage,
     estimate_text_tokens,
     estimate_tokens,
-    get_context_window,
     invoke_with_token_usage,
     _build_request_messages,
     _extract_result_messages,
     _get_agent_token_usage,
-    _message_tokens,
     _merge_response_usage,
     _request_model_name,
 )
+from apps.chat_data_app.services.context_budget import ContextBudget, build_context_usage_payload, get_model_context_budget
+from apps.chat_data_app.services.runtime_config import get_context_window
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 
@@ -44,13 +43,14 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert get_context_window("unknown-model") == 128000
     assert get_context_window("QWEN-Plus") == 128000
 
-    payload = build_token_usage_payload(used=-10, total=0)
-    assert payload == {
-        "used": 0,
-        "total": 1,
-        "percentage": 0.0,
-        "remaining": 1,
-    }
+    payload = build_context_usage_payload(
+        ContextBudget(context_window=1, max_output_tokens=0, trigger_ratio=1.0, input_budget_tokens=1),
+        used=-10,
+    )
+    assert payload["used"] == 0
+    assert payload["total"] == 1
+    assert payload["percentage"] == 0.0
+    assert payload["remaining"] == 1
 
 
 def test_count_tools_tokens_uses_tool_schema_text():
@@ -88,8 +88,21 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
 
     assert usage["used"] > 0
     assert usage["input_tokens"] == usage["used"]
-    assert usage["total"] == 256000
+    budget = get_model_context_budget("qwen3.5-35b-a3b")
+    assert usage["total"] == budget.input_budget_tokens
+    assert usage["context_window"] == budget.context_window
+    assert usage["max_output_tokens"] == budget.max_output_tokens
+    assert usage["input_budget_tokens"] == budget.input_budget_tokens
     assert usage["estimated"] is True
+
+
+def test_model_context_budget_uses_shared_input_limit(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;64000")
+    monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "20000")
+
+    budget = get_model_context_budget("budget-model")
+
+    assert budget.input_budget_tokens == min(int(64000 * 0.70), 64000 - 20000)
 
 
 def test_build_message_breakdown_includes_message_metadata_and_content():
@@ -131,8 +144,7 @@ def test_message_tokens_handle_structured_content_and_raw_tool_calls():
         additional_kwargs={"tool_calls": [{"function": {"name": "run_sql", "arguments": "{\"sql\":\"select 1\"}"}}]},
     )
 
-    assert _message_tokens(message) > 4
-    assert count_messages_tokens([message]) == _message_tokens(message)
+    assert count_messages_tokens([message]) > 4
     rows = build_message_breakdown([message])
     assert "raw_tool_calls" in rows[0]["content"]
 
@@ -159,7 +171,7 @@ def test_build_prompt_breakdown_keeps_current_input_context_only():
     assert breakdown[1]["children"][0]["content"] == "统计订单数"
 
 
-def test_build_prompt_breakdown_does_not_add_provider_overhead():
+def test_build_prompt_breakdown_includes_provider_overhead_when_measured():
     breakdown = build_prompt_breakdown(
         system_tokens=100,
         messages=[HumanMessage(content="你好")],
@@ -171,7 +183,8 @@ def test_build_prompt_breakdown_does_not_add_provider_overhead():
     message_item = next(item for item in breakdown if item["key"] == "messages")
     assert system_item["tokens"] == 100
     assert message_item["tokens"] == 10
-    assert not any(item["key"] == "framework_overhead" for item in breakdown)
+    overhead_item = next(item for item in breakdown if item["key"] == "request_overhead")
+    assert overhead_item["tokens"] == 890
 
 
 def test_build_request_breakdown_groups_tools_and_keeps_messages():
@@ -202,6 +215,9 @@ def test_build_request_breakdown_groups_tools_and_keeps_messages():
     assert message_item["children"][0]["role"] == "human"
     assert message_item["children"][1]["role"] == "ai"
     assert message_item["children"][2]["role"] == "tool"
+    assert breakdown[-1]["key"] == "request_overhead"
+    assert breakdown[-1]["tokens"] == 3
+    assert sum(item["tokens"] for item in breakdown) == 53
 
 
 def test_build_request_breakdown_includes_system_message_group():
@@ -216,9 +232,10 @@ def test_build_request_breakdown_includes_system_message_group():
         overhead_tokens=3,
     )
 
-    assert [item["key"] for item in breakdown] == ["system_prompt", "messages"]
+    assert [item["key"] for item in breakdown] == ["system_prompt", "messages", "request_overhead"]
     assert breakdown[0]["children"][0]["role"] == "system"
     assert breakdown[1]["children"][0]["message_index"] == 1
+    assert breakdown[2]["tokens"] == 3
 
 
 def test_build_request_breakdown_can_return_only_tool_schema():

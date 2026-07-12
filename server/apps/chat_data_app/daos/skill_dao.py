@@ -21,8 +21,12 @@ class SkillDao:
     def _skill_visible_filter(self, user_id: str):
         return or_(
             ChatDataSkill.skill_source == "system",
-            ChatDataSkill.visibility_type == "global",
             ChatDataSkill.owner_user_id == (user_id or ""),
+            and_(
+                ChatDataSkill.visibility_type == "global",
+                ChatDataSkill.skill_publish_status == "published",
+                ChatDataSkill.current_skill_version_no > 0,
+            ),
         )
 
     def _skill_base_filters(self, user_id: str, include_disabled: bool = True):

@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent import chat_data_graph, nodes, sql_assist_graph
+from apps.chat_data_app.services.context_budget import ContextBudget
 
 
 def test_prompt_formatters():
@@ -67,9 +68,7 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
     monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 10)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 5)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 100)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **kwargs: {"messages": len(kwargs["messages"]), "tools": len(kwargs["tools"])})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
     monkeypatch.setattr("apps.chat_data_app.agent.tools.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
 
     agent_node = nodes.create_agent_node(
@@ -86,8 +85,8 @@ async def test_create_agent_node_uses_semantic_prompt_tools_and_token_usage(monk
 
     assert result["messages"][0].content == "SQL 已生成"
     assert result["messages"][0].additional_kwargs["timestamp"]
-    assert result["token_usage"]["input_tokens"] == 15
-    assert result["token_usage"]["context_window"] == 100
+    assert result["token_usage"]["input_tokens"] == 18
+    assert result["token_usage"]["context_window"] > 0
     assert fake_llm.bound_tools == ["dsl2sql_tool"]
     system_prompt = fake_llm.messages[0].content
     assert "语义配置内容" in system_prompt
@@ -124,9 +123,7 @@ async def test_create_agent_node_normalizes_repeated_tool_call_name(monkeypatch)
     monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 1)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
 
     result = await nodes.create_agent_node([fake_tool], semantic_config=None)({
         "messages": [HumanMessage(content="查询入金金额")],
@@ -223,7 +220,15 @@ async def test_create_agent_node_uses_context_edited_messages_for_llm(monkeypatc
     ]
 
     monkeypatch.setattr(nodes, "get_chat_data_llm", lambda **_kwargs: fake_llm)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 6000)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: ContextBudget(
+            context_window=10000,
+            max_output_tokens=2000,
+            trigger_ratio=0.70,
+            input_budget_tokens=7000,
+        ),
+    )
     monkeypatch.setattr(nodes, "get_context_edit_config", lambda: {
         "enabled": True,
         "trigger_ratio": 0.70,
@@ -255,9 +260,7 @@ async def test_create_agent_node_falls_back_when_explicit_model_fails(monkeypatc
     monkeypatch.setattr(nodes, "get_default_chat_data_model", lambda: "default_model")
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 0)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
     monkeypatch.setattr("apps.chat_data_app.agent.tools.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
 
     result = await nodes.create_agent_node([], semantic_config={"id": "sc_a"}, model_id="bad_model")({
@@ -284,9 +287,7 @@ async def test_create_agent_node_explicit_model_fallback_without_tools(monkeypat
     monkeypatch.setattr(nodes, "get_default_chat_data_model", lambda: "default_model")
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 0)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
 
     result = await nodes.create_agent_node([], semantic_config=None, model_id="bad_model")({
         "messages": [HumanMessage(content="查询")],
@@ -311,9 +312,7 @@ async def test_create_agent_node_explicit_model_fallback_with_tools(monkeypatch)
     monkeypatch.setattr(nodes, "get_default_chat_data_model", lambda: "default_model")
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 1)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
     monkeypatch.setattr("apps.chat_data_app.agent.tools.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
 
     result = await nodes.create_agent_node(["dsl2sql_tool"], semantic_config={"id": "sc_a"}, model_id="bad_model")({
@@ -334,9 +333,7 @@ async def test_create_agent_node_no_model_reraises_and_no_tools(monkeypatch):
     monkeypatch.setattr(nodes, "get_chat_data_llm", lambda model=None, **_kwargs: AlwaysFailLLM())
     monkeypatch.setattr(nodes, "count_messages_tokens", lambda messages: 1)
     monkeypatch.setattr(nodes, "count_tools_tokens", lambda tools: 0)
-    monkeypatch.setattr(nodes, "get_context_window", lambda model_id: 10)
     monkeypatch.setattr(nodes, "build_request_breakdown", lambda **_kwargs: {})
-    monkeypatch.setattr(nodes, "build_token_usage_payload", lambda used, total: {"used": used, "total": total})
 
     with pytest.raises(RuntimeError, match="model down"):
         await nodes.create_agent_node([], semantic_config=None, model_id=None)({
@@ -390,28 +387,32 @@ def test_chat_data_graph_tool_error_and_compile(monkeypatch):
     monkeypatch.setattr(chat_data_graph, "TOOLS", ["semantic_query_tool"])
     selection_tool_kwargs = {}
 
-    def fake_create_semantic_config_selection_tools(model_id=None, semantic_config=None, user_id=None):
-        selection_tool_kwargs.update({"model_id": model_id, "semantic_config": semantic_config, "user_id": user_id})
+    def fake_create_semantic_config_selection_tools(model_id=None, semantic_config=None, user_id=None, tool_result_budget=None):
+        selection_tool_kwargs.update({"model_id": model_id, "semantic_config": semantic_config, "user_id": user_id, "tool_result_budget": tool_result_budget})
         return ["select_semantic_config_tool", "dsl2sql_tool"]
 
     monkeypatch.setattr(chat_data_graph, "create_semantic_config_selection_tools", fake_create_semantic_config_selection_tools)
     monkeypatch.setattr(
         chat_data_graph,
         "create_agent_node",
-        lambda tools, semantic_config=None, model_id=None, enable_thinking=None, available_skills_context=None: (
+        lambda tools, semantic_config=None, model_id=None, enable_thinking=None, available_skills_context=None, tool_result_budget=None: (
             "agent",
             tools,
             semantic_config,
             model_id,
             enable_thinking,
             available_skills_context,
+            tool_result_budget,
         ),
     )
 
     compiled = chat_data_graph.get_chat_data_graph(checkpointer="ckpt", semantic_config={"id": "sc_a"}, model_id="m1", user_id="u1")
 
     assert compiled["nodes"][0][0] == "agent"
-    assert selection_tool_kwargs == {"model_id": "m1", "semantic_config": {"id": "sc_a"}, "user_id": "u1"}
+    assert selection_tool_kwargs["model_id"] == "m1"
+    assert selection_tool_kwargs["semantic_config"] == {"id": "sc_a"}
+    assert selection_tool_kwargs["user_id"] == "u1"
+    assert selection_tool_kwargs["tool_result_budget"] is not None
     tool_names = [getattr(item, "name", item) for item in compiled["nodes"][0][1][1]]
     assert tool_names == ["skill_load", "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool"]
     assert compiled["edges"] == [("__start__", "agent"), ("tools", "agent")]

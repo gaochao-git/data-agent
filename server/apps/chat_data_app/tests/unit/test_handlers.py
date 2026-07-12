@@ -15,11 +15,8 @@ from apps.chat_data_app.handlers import (
     _append_user_selected_execution_targets_to_context,
     _build_query_skills_context,
     _build_semantic_config_directory_info_async,
-    _build_semantic_selection_error,
-    _build_semantic_select_required_event,
     _extract_reasoning_content,
     _format_reasoning_for_display,
-    _extract_select_semantic_config_payload,
     _format_sse,
     _format_thinking_event,
     _format_tool_event,
@@ -37,13 +34,22 @@ from apps.chat_data_app.handlers import (
     _finish_running_tool,
     _register_running_tool,
     _resolve_active_tool_call_id,
-    _semantic_selection_event_from_tool_payload,
-    _semantic_select_required_event_from_tool_payload,
     data_analyze_completion_handler,
     prepare_data_analyze_workspace,
     sql_completion_handler,
 )
 from apps.chat_data_app.agent.tools import sql as agent_sql_tools
+
+
+def _tool_event_contents(events: list[str]) -> list[str]:
+    """解析 SSE 工具事件中的原始工具结果。"""
+    contents = []
+    for event in events:
+        if not event.startswith("event: tool\n"):
+            continue
+        payload = json.loads(event.split("data: ", 1)[1].strip())
+        contents.append(str(payload.get("content") or ""))
+    return contents
 
 
 def test_resolve_active_tool_call_id_prefers_chunk_id():
@@ -163,71 +169,6 @@ def test_normalize_enable_thinking_branches():
     assert _normalize_enable_thinking("no") is False
     assert _normalize_enable_thinking("unknown") is None
     assert _normalize_enable_thinking(object()) is None
-
-
-def test_semantic_selection_helper_branches():
-    assert _build_semantic_selection_error(None).startswith("当前数据源组没有")
-    assert "跨指标集" in _build_semantic_selection_error({
-        "cross_config_required": True,
-        "cross_config_reason": "订单和库存分别在不同指标集",
-    })
-    assert _build_semantic_selection_error({
-        "ambiguous": True,
-        "candidates": [{"id": "cfg_a", "name": "订单分析"}, {"id": "cfg_b"}],
-    }) == "该问题可由多个指标集回答，请明确选择：订单分析、cfg_b"
-    assert _build_semantic_selection_error({"ambiguous": True, "reason": "请明确指标集"}) == "请明确指标集"
-    assert "未能确定最适合" in _build_semantic_selection_error({
-        "candidates": [
-            {"id": "cfg_a", "name": "订单分析", "reason": "命中订单"},
-            {"id": "cfg_b", "confidence": "low"},
-            "skip",
-        ]
-    })
-    assert _build_semantic_selection_error({"reason": ""}).startswith("当前可用指标集")
-
-    required = _build_semantic_select_required_event(
-        {
-            "ambiguous": True,
-            "ambiguity_reason": "多个候选",
-            "candidates": [
-                {"id": "", "name": "无效"},
-                {"id": "cfg_a", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "命中"},
-                "skip",
-            ],
-        },
-        "查询金额",
-    )
-    assert required["query"] == "查询金额"
-    assert required["ambiguous"] is True
-    assert required["candidates"] == [{"id": "cfg_a", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "命中"}]
-
-
-def test_select_semantic_config_payload_helpers():
-    assert _extract_select_semantic_config_payload("plain") is None
-    assert _extract_select_semantic_config_payload("[select_semantic_config_tool]\n{bad") is None
-    assert _extract_select_semantic_config_payload("[select_semantic_config_tool]\n[]") is None
-    payload = _extract_select_semantic_config_payload('[select_semantic_config_tool]\n{"selected": true, "selected_config_id": "cfg_a"}')
-    assert payload == {"selected": True, "selected_config_id": "cfg_a"}
-
-    selected_event = _semantic_selection_event_from_tool_payload({
-        "selected_config_id": "cfg_a",
-        "selected_config_name": "",
-        "reason": "",
-        "message": "已选择",
-        "matched_metrics": ["订单数"],
-    })
-    required_event = _semantic_select_required_event_from_tool_payload({
-        "message": "需要选择",
-        "reason": "多个候选",
-        "ambiguous": True,
-        "candidates": [{"id": "cfg_a", "name": "订单分析"}],
-    }, "查订单")
-
-    assert selected_event["semantic_config_name"] == "cfg_a"
-    assert selected_event["reason"] == "已选择"
-    assert selected_event["matched_metrics"] == ["订单数"]
-    assert required_event["query"] == "查订单"
-    assert required_event["candidates"][0]["id"] == "cfg_a"
 
 
 def test_normalize_semantic_selection_payload_branches():
@@ -683,18 +624,19 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     assert called["tables"] is False
 
 
-def test_stream_sql_generation_emits_semantic_selection_event_from_tool(monkeypatch):
+def test_stream_sql_generation_streams_semantic_retrieval_tool_result(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": True,
-        "selected_config_id": "cfg_pay",
-        "selected_config_name": "支付汇总",
-        "coverage": "full",
-        "confidence": "high",
-        "reason": "命中交易金额",
-        "matched_metrics": ["交易金额"],
-        "matched_dimensions": ["机构"],
+        "success": True,
+        "semantic_config_ids": ["cfg_pay"],
+        "semantic_configs": {
+            "cfg_pay": {
+                "id": "cfg_pay",
+                "name": "支付汇总",
+                "metrics": [{"name": "交易金额", "expression": "SUM(pay.amount)"}],
+            },
+        },
     }
     fake_graph = _FakeGraph(
         events=[
@@ -716,9 +658,13 @@ def test_stream_sql_generation_emits_semantic_selection_event_from_tool(monkeypa
     )))
 
     joined = "".join(events)
-    assert "event: semantic_config_selected" in joined
-    assert '"semantic_config_id": "cfg_pay"' in joined
+    assert "event: tool" in joined
+    assert "[select_semantic_config_tool]" in _tool_event_contents(events)[-1]
+    assert '"semantic_config_ids": ["cfg_pay"]' in _tool_event_contents(events)[-1]
+    assert '"expression": "SUM(pay.amount)"' in _tool_event_contents(events)[-1]
     assert '"tool_name": "select_semantic_config_tool"' in joined
+    assert "event: semantic_config_selected" not in joined
+    assert "event: semantic_config_select_required" not in joined
     assert "已查询支付数据" in joined
 
 
@@ -788,20 +734,16 @@ def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
     assert human_message.additional_kwargs["skill_names"] == ["custom-query-skill", "risk-query-skill"]
 
 
-def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch):
+def test_stream_sql_generation_streams_multiple_semantic_configs_as_tool_result(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "full",
-        "confidence": "none",
-        "ambiguous": True,
-        "reason": "多个指标集都能回答",
-        "candidates": [
-            {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
-            {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
-        ],
-        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_pay"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_pay": {"id": "cfg_pay", "name": "支付汇总"},
+        },
     }
     fake_graph = _FakeGraph(
         events=[
@@ -816,34 +758,31 @@ def test_stream_sql_generation_emits_select_required_event_from_tool(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_select_required_tool_event",
+        thread_id="conv_multiple_semantic_tool_event",
         user_query="查询金额",
         datasource_id="ds_a",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
-    assert "event: semantic_config_select_required" in joined
-    assert '"query": "查询金额"' in joined
+    assert "event: tool" in joined
+    assert '"semantic_config_ids": ["cfg_order", "cfg_pay"]' in _tool_event_contents(events)[-1]
     assert "订单分析" in joined
     assert "支付汇总" in joined
+    assert "event: semantic_config_selected" not in joined
+    assert "event: semantic_config_select_required" not in joined
 
 
-def test_stream_sql_generation_does_not_emit_select_required_for_query_plan(monkeypatch):
+def test_stream_sql_generation_streams_retrieval_without_query_plan(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "partial",
-        "query_plan": {
-            "type": "multi_config_independent",
-            "tasks": [
-                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
-                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户数"},
-            ],
-            "final_action": "summarize",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_user"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_user": {"id": "cfg_user", "name": "用户分析"},
         },
-        "message": "该问题需要拆分为多个指标集子任务",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -858,39 +797,29 @@ def test_stream_sql_generation_does_not_emit_select_required_for_query_plan(monk
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_query_plan_tool_event",
+        thread_id="conv_retrieval_tool_event",
         user_query="查询订单金额和用户数",
         datasource_id="ds_a",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
+    assert "event: tool" in joined
     assert "event: semantic_config_select_required" not in joined
-    assert "multi_config_independent" in joined
+    assert "query_plan" not in joined
     assert "已按多个指标集完成查询" in joined
 
 
-def test_stream_sql_generation_does_not_emit_select_required_for_cross_join_plan(monkeypatch):
+def test_stream_sql_generation_streams_retrieval_without_cross_config_decision(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "partial",
-        "cross_config_required": True,
-        "query_plan": {
-            "type": "cross_join_required",
-            "tasks": [
-                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
-                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户等级"},
-            ],
-            "final_action": "unsupported",
-            "reason": "需要跨指标集 JOIN",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_user"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_user": {"id": "cfg_user", "name": "用户分析"},
         },
-        "candidates": [
-            {"id": "cfg_order", "name": "订单分析"},
-            {"id": "cfg_user", "name": "用户分析"},
-        ],
-        "message": "该问题需要跨指标集 JOIN，当前智能问数不支持",
     }
     fake_graph = _FakeGraph(
         events=[
@@ -905,15 +834,16 @@ def test_stream_sql_generation_does_not_emit_select_required_for_cross_join_plan
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_cross_join_required_plan",
+        thread_id="conv_cross_config_retrieval",
         user_query="按用户等级关联订单金额",
         datasource_id="ds_a",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
+    assert "event: tool" in joined
     assert "event: semantic_config_select_required" not in joined
-    assert "cross_join_required" in joined
+    assert "cross_config_required" not in joined
     assert "这个问题需要跨指标集合并，当前不支持。" in joined
 
 
@@ -1019,20 +949,16 @@ def test_stream_sql_generation_does_not_preblock_selected_config(monkeypatch):
     assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
 
 
-def test_stream_sql_generation_blocks_ambiguous_semantic_configs(monkeypatch):
+def test_stream_sql_generation_does_not_block_multiple_semantic_configs(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "full",
-        "confidence": "none",
-        "ambiguous": True,
-        "reason": "多个指标集都能回答",
-        "candidates": [
-            {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖订单金额"},
-            {"id": "cfg_pay", "name": "支付汇总", "coverage": "full", "confidence": "high", "reason": "覆盖支付金额"},
-        ],
-        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_pay"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_pay": {"id": "cfg_pay", "name": "支付汇总"},
+        },
     }
     fake_graph = _FakeGraph(
         events=[
@@ -1046,34 +972,30 @@ def test_stream_sql_generation_blocks_ambiguous_semantic_configs(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_ambiguous_semantic",
+        thread_id="conv_multiple_semantic",
         user_query="查询金额",
         datasource_id="ds_a",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
-    assert "event: semantic_config_select_required" in joined
-    assert '"query": "查询金额"' in joined
+    assert "event: tool" in joined
+    assert "event: semantic_config_select_required" not in joined
     assert "订单分析" in joined
     assert "支付汇总" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
 
 
-def test_stream_sql_generation_blocks_cross_config_required(monkeypatch):
+def test_stream_sql_generation_does_not_block_cross_config_retrieval(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "partial",
-        "confidence": "none",
-        "cross_config_required": True,
-        "reason": "订单金额和商品库存分属不同指标集",
-        "candidates": [
-            {"id": "cfg_order", "name": "订单分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖订单金额"},
-            {"id": "cfg_product", "name": "商品分析", "coverage": "partial", "confidence": "medium", "reason": "覆盖商品库存"},
-        ],
-        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_product"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_product": {"id": "cfg_product", "name": "商品分析"},
+        },
     }
     fake_graph = _FakeGraph(
         events=[
@@ -1087,16 +1009,17 @@ def test_stream_sql_generation_blocks_cross_config_required(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_chat_data_graph", lambda **_kwargs: fake_graph)
 
     events = asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_cross_semantic",
+        thread_id="conv_cross_semantic_retrieval",
         user_query="查询订单金额和商品库存",
         datasource_id="ds_a",
         semantic_config_id=None,
     )))
 
     joined = "".join(events)
-    assert "event: semantic_config_select_required" in joined
-    assert '"query": "查询订单金额和商品库存"' in joined
-    assert "订单金额和商品库存分属不同指标集" in joined
+    assert "event: tool" in joined
+    assert "event: semantic_config_select_required" not in joined
+    assert "订单分析" in joined
+    assert "商品分析" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
 
 
@@ -1513,19 +1436,14 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
 
 
-def test_data_analyze_completion_handler_auto_selects_semantic_config(monkeypatch):
+def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch):
     import asyncio
 
     captured = {}
     payload = {
-        "selected": True,
-        "selected_config_id": "cfg_sales",
-        "selected_config_name": "销售分析",
-        "coverage": "full",
-        "confidence": "high",
-        "reason": "命中销售额",
-        "matched_metrics": ["销售额"],
-        "matched_dimensions": ["日期"],
+        "success": True,
+        "semantic_config_ids": ["cfg_sales"],
+        "semantic_configs": {"cfg_sales": {"id": "cfg_sales", "name": "销售分析"}},
     }
 
     class FakeDataAnalyzeGraph:
@@ -1558,8 +1476,10 @@ def test_data_analyze_completion_handler_auto_selects_semantic_config(monkeypatc
     events = asyncio.run(_collect_async_iter(response.body_iterator))
     joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
 
-    assert "event: semantic_config_selected" in joined
-    assert '"semantic_config_id": "cfg_sales"' in joined
+    assert "event: tool" in joined
+    decoded_events = [item.decode("utf-8") if isinstance(item, bytes) else item for item in events]
+    assert '"semantic_config_ids": ["cfg_sales"]' in _tool_event_contents(decoded_events)[-1]
+    assert "event: semantic_config_selected" not in joined
     assert "分析完成" in joined
     assert captured["context_args"] == ("ds_a", None, "u1")
     assert captured["graph_kwargs"]["semantic_config_id"] is None
@@ -1572,20 +1492,16 @@ def test_data_analyze_completion_handler_auto_selects_semantic_config(monkeypatc
     assert captured["initial_state"]["conversation_id"] == "conv_da_auto_semantic"
 
 
-def test_data_analyze_completion_handler_requires_semantic_config_selection(monkeypatch):
+def test_data_analyze_completion_handler_streams_multiple_semantic_configs(monkeypatch):
     import asyncio
 
     payload = {
-        "selected": False,
-        "coverage": "full",
-        "confidence": "none",
-        "ambiguous": True,
-        "reason": "多个指标集都能回答",
-        "candidates": [
-            {"id": "cfg_order", "name": "订单分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
-            {"id": "cfg_sales", "name": "销售分析", "coverage": "full", "confidence": "high", "reason": "覆盖销售额"},
-        ],
-        "message": "存在多个可用指标集且业务口径无法唯一判断，请让用户从 candidates 中选择一个指标集后再查询",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_sales"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析"},
+            "cfg_sales": {"id": "cfg_sales", "name": "销售分析"},
+        },
     }
 
     async def fake_build_context(*_args, **_kwargs):
@@ -1611,10 +1527,10 @@ def test_data_analyze_completion_handler_requires_semantic_config_selection(monk
     events = asyncio.run(_collect_async_iter(response.body_iterator))
     joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
 
-    assert "event: semantic_config_select_required" in joined
+    assert "event: tool" in joined
+    assert "event: semantic_config_select_required" not in joined
     assert "订单分析" in joined
     assert "销售分析" in joined
-    assert '"query": "分析销售额"' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
 
 

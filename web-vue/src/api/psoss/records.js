@@ -9,6 +9,8 @@ export function getUserOrgList() {
       { orgCode: "ORG_CODE4", orgName: "拉卡拉" },
       { orgCode: "ORG_CODE5", orgName: "银商务" },
       { orgCode: "ORG_CODE6", orgName: "货拉拉" },
+      { orgCode: "ORG_CODE7", orgName: "运维平台1" },
+      { orgCode: "ORG_CODE8", orgName: "运维平台2" },
     ],
   });
 }

@@ -77,6 +77,8 @@ def test_stage_context_empty_and_multimodal_message_edges():
 
 def test_data_analyze_reasoning_merge_and_default_skill_prompt(monkeypatch, tmp_path):
     assert data_analyze_graph.merge_reasoning_segments([{"id": "old"}], [{"id": "new"}]) == [{"id": "old"}, {"id": "new"}]
+    assert data_analyze_graph.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
+    assert data_analyze_graph.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
 
     monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
     prompt = data_analyze_graph.build_data_analyze_system_prompt(
@@ -148,7 +150,7 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
     monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
     monkeypatch.setattr(data_analyze_graph, "get_default_chat_data_model", lambda: "fallback-model")
     monkeypatch.setattr(data_analyze_graph, "ModelFallbackMiddleware", FakeFallbackMiddleware)
-    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id: {"token_model": model_id})
+    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id, **_kwargs: {"token_model": model_id})
     monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(data_analyze_graph, "create_agent", fake_create_agent)
     monkeypatch.setattr(data_analyze_graph, "bind_token_usage_middleware", lambda agent, middleware: bound.append((agent, middleware)))
@@ -163,8 +165,8 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
 
     assert agent.name == "agent"
     assert len(captured["middleware"]) == 3
-    assert captured["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
-    assert isinstance(captured["middleware"][2], FakeFallbackMiddleware)
+    assert isinstance(captured["middleware"][0], FakeFallbackMiddleware)
+    assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
     assert bound == [(agent, {"token_model": "primary-model"})]
 
 
@@ -197,7 +199,7 @@ def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, t
 
     monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", lambda **_kwargs: object())
     monkeypatch.setattr(data_analyze_graph, "get_default_chat_data_model", lambda: "same-model")
-    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id: {"token_model": model_id})
+    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id, **_kwargs: {"token_model": model_id})
     monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
 
     def fake_create_agent(**kwargs):

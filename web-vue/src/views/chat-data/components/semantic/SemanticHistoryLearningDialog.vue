@@ -194,7 +194,7 @@ watch(visible, (next) => {
                 <tr v-for="item in historyLearningResult.suggestions.dimensions" :key="`learn-dim-${item.name}-${item.table}`" class="hover:bg-gray-50">
                   <td class="border border-gray-200 px-3 py-2">{{ item.name }}</td>
                   <td class="border border-gray-200 px-3 py-2">{{ item.table || '-' }} / {{ item.column || item.field_name || '-' }}</td>
-                  <td class="border border-gray-200 px-3 py-2">{{ item.type || 'categorical' }}</td>
+                  <td class="border border-gray-200 px-3 py-2">{{ item.logical_type || 'text' }}</td>
                   <td class="border border-gray-200 px-3 py-2">
                     <div>{{ item.reason }}</div>
                     <div v-if="item.needs_review" class="mt-1 text-red-500">{{ item.review_reason }}</div>

@@ -172,7 +172,6 @@ def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         _engine = create_engine()
-        logger.info("数据库引擎已创建: %s endpoint=%s", DATABASE_TYPE, _endpoint_selector.current().label())
     return _engine
 
 
@@ -217,8 +216,6 @@ async def init_database():
     """
     await select_available_database_endpoint()
     get_engine()
-    logger.info("mysql 数据库引擎初始化完成（表需手动创建）")
-
 
 async def close_database():
     """关闭数据库连接"""

@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from utils.logger import get_logger
+from ..services.context_budget import ToolResultBudget
 from .state import ChatDataAgentState
 from .nodes import create_agent_node
 from .tools import TOOLS, create_semantic_config_selection_tools
@@ -32,6 +33,7 @@ def _format_tool_error(exc: Exception) -> str:
 def get_chat_data_graph(
     checkpointer=None,
     semantic_config: dict | None = None,
+    datasource_id: str | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
     user_id: str | None = None,
@@ -48,9 +50,18 @@ def get_chat_data_graph(
     Returns:
         编译后的 LangGraph 图
     """
+    tool_result_budget = ToolResultBudget(model_id)
+    semantic_tool_kwargs = {
+        "model_id": model_id,
+        "semantic_config": semantic_config,
+        "user_id": user_id,
+        "tool_result_budget": tool_result_budget,
+    }
+    if datasource_id:
+        semantic_tool_kwargs["datasource_id"] = datasource_id
     tools = [
         create_readonly_skill_load_tool(user_id=user_id or ""),
-        *create_semantic_config_selection_tools(model_id=model_id, semantic_config=semantic_config, user_id=user_id),
+        *create_semantic_config_selection_tools(**semantic_tool_kwargs),
         *TOOLS,
     ]
 
@@ -61,6 +72,7 @@ def get_chat_data_graph(
         model_id=model_id,
         enable_thinking=enable_thinking,
         available_skills_context=available_skills_context,
+        tool_result_budget=tool_result_budget,
     )
 
     # 构建图

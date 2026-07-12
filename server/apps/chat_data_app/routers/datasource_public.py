@@ -11,7 +11,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from ..services.datasource_manager import get_datasource_manager
-from .common import _get_current_user
+from .dependencies import _get_current_user
 from .datasource_helpers import _get_optional_request_user_http_params
 
 logger = get_logger(__name__)

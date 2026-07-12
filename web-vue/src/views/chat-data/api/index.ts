@@ -71,7 +71,6 @@ type DatasourceGroupPayload = {
     port?: number
     database: string
   }
-  template_table_names?: string[]
   member_sources?: Array<{
     org_name: string
     org_code: string
@@ -81,6 +80,7 @@ type DatasourceGroupPayload = {
     database: string
   }>
 }
+type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 // ============ 技能 API ============
 
@@ -725,6 +725,18 @@ export function updateAdminDatasourceGroup(datasourceId: string, data: Datasourc
   })
 }
 
+/** 同步数据源组模板元数据 */
+export function syncAdminDatasourceMetadata(
+  datasourceId: string,
+  data: DatasourceGroupMetadataSyncPayload
+): Promise<ApiResponse<{ datasource: DataSource; table_count: number }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/metadata-sync`,
+    method: 'post',
+    data
+  })
+}
+
 // ============ 会话 API ============
 
 /** 获取会话列表 */
@@ -1002,7 +1014,7 @@ export interface SemanticHistoryLearningSuggestion {
   field_name?: string
   column?: string
   expression?: string
-  type?: 'categorical' | 'time' | 'number'
+  logical_type?: 'text' | 'number' | 'date' | 'datetime' | 'enum'
   content?: string
   reason: string
   source: 'agent' | 'builder' | 'sql'
@@ -1392,5 +1404,13 @@ export function streamQuickSql(data: {
 export function getConversationHistory(conversationId: string): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}`
+  })
+}
+
+/** 获取历史会话绑定的数据源组。 */
+export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/context`,
+    method: 'get',
   })
 }

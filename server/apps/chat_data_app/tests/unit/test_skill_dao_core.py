@@ -110,9 +110,24 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
             "skill_version_dir": "/tmp/sys-skill",
             "version_publish_status": "published",
         })
+        await dao.create_skill_with_version_async({
+            "skill_id": "global_draft",
+            "skill_name": "global-draft-skill",
+            "skill_title": "Global Draft Skill",
+            "skill_source": "user",
+            "visibility_type": "global",
+            "skill_publish_status": "draft",
+            "current_skill_version_no": 0,
+            "owner_user_id": "u1",
+        }, {
+            "skill_id": "global_draft",
+            "skill_version_no": 1,
+            "skill_version_dir": "/tmp/global-draft-skill/v1",
+            "version_publish_status": "draft",
+        })
 
         owner_rows = await dao.list_skills_async(user_id="u1")
-        assert {row["skill_id"] for row in owner_rows} == {"skill_owner", "skill_global", "sys_builtin"}
+        assert {row["skill_id"] for row in owner_rows} == {"skill_owner", "skill_global", "sys_builtin", "global_draft"}
         owner_skill = next(row for row in owner_rows if row["skill_id"] == "skill_owner")
         assert owner_skill["draft_skill_version_no"] == 1
         assert owner_skill["favorite_flag"] == 0
@@ -121,6 +136,7 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
 
         other_rows = await dao.list_skills_async(user_id="u2")
         assert {row["skill_id"] for row in other_rows} == {"skill_global", "sys_builtin"}
+        assert await dao.get_skill_async("global-draft-skill", user_id="u2") is None
         assert await dao.get_skill_async("owner-skill", user_id="u2") is None
         assert (await dao.get_skill_async("owner-skill", user_id="u1"))["skill_id"] == "skill_owner"
         assert (await dao.get_published_version_async("skill_global", 1))["skill_version_dir"] == "/tmp/global-skill/v1"

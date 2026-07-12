@@ -15,7 +15,7 @@ DEFAULT_MODEL_TEMPERATURE = 0.2
 DEFAULT_CHAT_DATA_CONTEXT_WINDOW = 128000
 
 
-def _get_default_max_tokens() -> int:
+def get_chat_data_max_tokens() -> int:
     """读取智能问数默认最大输出 token 数。"""
     raw = str(os.getenv("CHAT_DATA_MAX_TOKENS") or "").strip()
     if not raw:
@@ -169,7 +169,7 @@ def get_chat_data_llm(
         streaming=streaming,
         stream_usage=stream_usage,
         temperature=selected_config["temperature"] if temperature is None else temperature,
-        max_tokens=max_tokens or _get_default_max_tokens(),
+        max_tokens=max_tokens or get_chat_data_max_tokens(),
         timeout=timeout,
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),

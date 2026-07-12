@@ -100,6 +100,7 @@ export interface SkillInfo {
   owner_user_id?: string
   creator_id?: string
   creator_name?: string
+  can_manage?: boolean
   favorite?: boolean
   enabled?: boolean
   create_time?: string
@@ -182,6 +183,9 @@ export interface ChatDataTokenUsage {
   output_tokens?: number
   total_tokens?: number
   context_window?: number
+  max_output_tokens?: number
+  input_budget_tokens?: number
+  input_budget_trigger_ratio?: number
   estimated?: boolean
   llm_calls?: Array<{
     index: number
@@ -265,21 +269,6 @@ export interface SemanticConfigSelectionInfo {
   user_selected?: boolean
 }
 
-export interface SemanticConfigSelectRequiredInfo {
-  query: string
-  message: string
-  reason?: string
-  ambiguous?: boolean
-  cross_config_required?: boolean
-  candidates: Array<{
-    id: string
-    name?: string
-    coverage?: string
-    confidence?: string
-    reason?: string
-  }>
-}
-
 // 会话项
 export interface ConversationItem {
   id: string
@@ -304,7 +293,6 @@ export interface Message {
   dashboardSpec?: DashboardSpecPayload
   taskStages?: TaskStageInfo[]
   semanticConfigSelection?: SemanticConfigSelectionInfo
-  semanticConfigSelectRequired?: SemanticConfigSelectRequiredInfo
   skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
   // tool 消息专用字段
   toolCallId?: string
@@ -497,7 +485,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta' | 'semantic_config_selected' | 'semantic_config_select_required'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta'
 
 // 工具状态
 export type ToolStatus = 'pending' | 'running' | 'completed'
@@ -533,7 +521,7 @@ export interface SemanticDimension {
   expression?: string
   table: string
   table_alias?: string
-  type: 'categorical' | 'time' | 'number'
+  logical_type?: 'text' | 'number' | 'date' | 'datetime' | 'enum'
   description?: string
   metadata_supplement?: string
   mapping?: Record<string, string>

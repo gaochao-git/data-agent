@@ -750,7 +750,7 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
         "favorite_flag": 1,
         "enabled_flag": 0,
     }
-    info = skill_service_module._skill_row_to_info(row, user_names={"creator": "创建人"})
+    info = skill_service_module._skill_row_to_info(row, user_id="u1", user_names={"creator": "创建人"})
     version = skill_service_module._skill_version_to_info({"skill_id": "skill-1", "skill_version_no": "2", "version_publish_status": ""}, current_version_no=2)
     builtin = skill_service_module._builtin_metadata_to_info({"name": "builtin-skill", "title": "", "description": None, "input_schema": {"type": "object"}})
 
@@ -770,6 +770,7 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
     assert skill_service_module._alpha_suffix(27) == "aa"
     assert info["title"] == "sales-analysis"
     assert info["creator_name"] == "创建人"
+    assert info["can_manage"] is True
     assert info["has_draft"] is True
     assert info["favorite"] is True
     assert info["enabled"] is False
@@ -922,7 +923,7 @@ def test_db_skill_metadata_and_detail_resolve_draft_and_published_versions(tmp_p
         "skill_desc": "数据库描述",
         "skill_category": "custom",
         "skill_source": "user",
-        "visibility_type": "private",
+        "visibility_type": "global",
         "skill_publish_status": "published",
         "current_skill_version_no": 1,
         "draft_skill_version_no": 2,
@@ -949,12 +950,21 @@ def test_db_skill_metadata_and_detail_resolve_draft_and_published_versions(tmp_p
     metadata = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"}))
     detail = asyncio.run(service._get_db_skill_detail_async("demo-skill", include_draft=True, user_id="u1", user_names={"u1": "用户一"}))
     published_meta = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=False, user_id="u1"))
+    other_user_metadata = asyncio.run(service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u2"))
+    other_user_detail = asyncio.run(service._get_db_skill_detail_async("demo-skill", include_draft=True, user_id="u2"))
 
     assert metadata["path"] == str(draft_dir / "SKILL.md")
     assert metadata["creator_name"] == "用户一"
+    assert metadata["can_manage"] is True
+    assert metadata["has_draft"] is True
     assert detail["content"] == "# 草稿标题"
     assert detail["publish_status"] == "published"
     assert published_meta["path"] == str(published_dir / "SKILL.md")
+    assert other_user_metadata["path"] == str(published_dir / "SKILL.md")
+    assert other_user_metadata["can_manage"] is False
+    assert other_user_metadata["has_draft"] is False
+    assert other_user_metadata["draft_version_no"] == 0
+    assert other_user_detail["content"] == "# 发布标题"
 
 
 def test_db_skill_metadata_async_and_system_path(tmp_path, monkeypatch):
@@ -1748,6 +1758,7 @@ def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, mon
                 "skill_source": "user",
                 "skill_publish_status": "published",
                 "current_skill_version_no": 1,
+                "owner_user_id": "u1",
             }
 
         async def get_latest_draft_version_async(self, skill_id):
@@ -1768,7 +1779,7 @@ def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, mon
         assert await service._get_db_skill_metadata_async("missing") is None
 
         monkeypatch.setattr(service, "_dao", DraftFallbackStore())
-        metadata = await service._get_db_skill_metadata_async("demo-skill", include_draft=True)
+        metadata = await service._get_db_skill_metadata_async("demo-skill", include_draft=True, user_id="u1")
         assert metadata["path"] == str(published_dir / "SKILL.md")
 
         system_version_dir = tmp_path / "system-version"

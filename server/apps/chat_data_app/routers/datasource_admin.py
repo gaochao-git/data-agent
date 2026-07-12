@@ -18,6 +18,7 @@ from ..schema import (
     DatasourceColumnDictGenerateRequest,
     DatasourceColumnDictUpdateRequest,
     DatasourceGroupCreateRequest,
+    DatasourceGroupMetadataSyncRequest,
     DatasourceGroupUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
@@ -30,11 +31,12 @@ from ..services.hive_meta_http import get_hive_meta_tables_async
 from ..services.hive_sync import HiveSyncService
 from ..services.llm_config import get_chat_data_llm
 from ..services.mysql_sync import MySQLSyncService
-from .common import _get_current_user
+from .dependencies import _get_current_user
 from .datasource_helpers import (
     DATASOURCE_SYNC_TIMEOUT_SECONDS,
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
+    _get_datasource_physical_source_config,
     _get_optional_request_user_http_params,
     _load_tables_from_source,
     _merge_health_status,
@@ -55,15 +57,7 @@ def _selected_table_names(raw_table_names: List[str]) -> List[str]:
 
 
 def _normalize_group_sources(body: DatasourceGroupCreateRequest | DatasourceGroupUpdateRequest) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    template_source = _normalize_source_item(
-        body.source_type,
-        body.template_source.host,
-        body.template_source.port,
-        body.template_source.database,
-        body.template_source.org_name,
-        body.template_source.org_code,
-        body.template_source.query_executor_type,
-    )
+    template_source = _normalize_template_source(body)
     member_sources = [
         _normalize_source_item(
             body.source_type,
@@ -79,6 +73,18 @@ def _normalize_group_sources(body: DatasourceGroupCreateRequest | DatasourceGrou
     return template_source, member_sources
 
 
+def _normalize_template_source(body: DatasourceGroupCreateRequest | DatasourceGroupUpdateRequest) -> Dict[str, Any]:
+    return _normalize_source_item(
+        body.source_type,
+        body.template_source.host,
+        body.template_source.port,
+        body.template_source.database,
+        body.template_source.org_name,
+        body.template_source.org_code,
+        body.template_source.query_executor_type,
+    )
+
+
 @router.post("/admin/datasources/groups")
 async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request):
     """创建数据源组。"""
@@ -91,25 +97,17 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
             return business_response(msg="数据源组名称不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         ds_manager = get_datasource_manager()
-        exists = await ds_manager.get_datasource_by_group_name_async(group_name)
+        exists = await ds_manager.get_datasource_meta_by_group_name_async(group_name)
         if exists:
             return business_response(msg=f"数据源组名称已存在: {group_name}", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         template_source, member_sources = _normalize_group_sources(body)
-        tables = await _load_tables_from_source(
-            body.source_type,
-            template_source,
-            _selected_table_names(body.template_table_names) or None,
-            user_id=current_user.user_id,
-            username=current_user.username,
-        )
         datasource = await ds_manager.create_datasource_group_from_sources_async(
             group_name=group_name,
             group_desc=(body.group_desc or "").strip(),
             source_type=body.source_type,
             template_source_config=template_source,
             member_source_configs=member_sources,
-            tables=tables,
             query_context=(body.query_context or "").strip(),
             recommended_questions=body.recommended_questions,
             create_by=user_id,
@@ -129,7 +127,7 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
     try:
         current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
+        datasource = await ds_manager.get_datasource_meta_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
@@ -138,7 +136,7 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
             name = str(body.name).strip()
             if not name:
                 return business_response(msg="数据源名称不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-            exists = await ds_manager.get_datasource_by_group_name_async(name)
+            exists = await ds_manager.get_datasource_meta_by_group_name_async(name)
             if exists and exists.get("id") != datasource_id:
                 return business_response(msg=f"数据源名称已存在: {name}", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
@@ -165,7 +163,7 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
         user_id = str(current_user.user_id)
         username = str(current_user.username or "")
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
+        datasource = await ds_manager.get_datasource_meta_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
@@ -173,18 +171,11 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
         if not group_name:
             return business_response(msg="数据源组名称不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
-        exists = await ds_manager.get_datasource_by_group_name_async(group_name)
+        exists = await ds_manager.get_datasource_meta_by_group_name_async(group_name)
         if exists and exists.get("id") != datasource_id:
             return business_response(msg=f"数据源组名称已存在: {group_name}", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
         template_source, member_sources = _normalize_group_sources(body)
-        tables = await _load_tables_from_source(
-            body.source_type,
-            template_source,
-            _selected_table_names(body.template_table_names) or None,
-            user_id=current_user.user_id,
-            username=current_user.username,
-        )
         updated = await ds_manager.update_datasource_group_from_sources_async(
             datasource_id=datasource_id,
             group_name=group_name,
@@ -192,7 +183,6 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
             source_type=body.source_type,
             template_source_config=template_source,
             member_source_configs=member_sources,
-            tables=tables,
             query_context=(body.query_context or "").strip(),
             recommended_questions=body.recommended_questions,
             update_by=user_id,
@@ -206,6 +196,53 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
     except Exception as e:
         logger.error(f"更新数据源组失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.post("/admin/datasources/{datasource_id}/metadata-sync")
+async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGroupMetadataSyncRequest, request: Request):
+    """按模板数据源同步数据源组表结构元数据。"""
+    try:
+        current_user = _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        datasource = await ds_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+
+        selected_table_names = _selected_table_names(body.template_table_names)
+        if not selected_table_names:
+            return business_response(msg="请选择需要同步的表", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+
+        tables = await _load_tables_from_source(
+            datasource.get("source_type"),
+            _get_datasource_physical_source_config(datasource),
+            selected_table_names,
+            user_id=current_user.user_id,
+            username=current_user.username,
+        )
+        updated = await ds_manager.sync_datasource_tables_async(
+            datasource_id=datasource_id,
+            tables=tables,
+            update_by=str(current_user.user_id),
+            update_by_name=str(current_user.username or ""),
+        )
+        if not updated:
+            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        return business_response(
+            data={"datasource": updated, "table_count": len(tables)},
+            msg=f"同步成功，共 {len(tables)} 个表",
+        )
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except asyncio.TimeoutError:
+        logger.error("同步数据源组元数据超时: datasource_id=%s timeout=%ss", datasource_id, DATASOURCE_SYNC_TIMEOUT_SECONDS)
+        return business_response(
+            msg=f"同步超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒），请检查模板数据源配置或稍后重试",
+            code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
+            status="error",
+        )
+    except Exception as e:
+        logger.error(f"同步数据源组元数据失败: {str(e)}", exc_info=True)
+        return business_response(msg="同步失败，请检查模板数据源配置或稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
 @router.patch("/admin/datasources/{datasource_id}/mapped-modules")

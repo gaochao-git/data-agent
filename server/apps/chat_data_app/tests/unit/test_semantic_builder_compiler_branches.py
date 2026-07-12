@@ -32,10 +32,10 @@ def build_semantic_config():
             {"name": "用户数", "expression": "COUNT(DISTINCT users.user_id)", "table": "users"},
         ],
         "dimensions": [
-            {"name": "城市", "column": "city", "table": "orders", "type": "categorical", "expression": "orders.city"},
-            {"name": "状态", "column": "status", "table": "orders", "type": "categorical"},
-            {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
-            {"name": "用户等级", "column": "level", "table": "users", "table_alias": "u", "type": "categorical"},
+            {"name": "城市", "column": "city", "table": "orders", "logical_type": "text", "expression": "orders.city"},
+            {"name": "状态", "column": "status", "table": "orders", "logical_type": "text"},
+            {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime"},
+            {"name": "用户等级", "column": "level", "table": "users", "table_alias": "u", "logical_type": "text"},
         ],
         "relationships": [
             {

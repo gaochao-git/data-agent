@@ -90,23 +90,25 @@ def _post_completion(client, auth_headers, conversation_id, query, options=None)
     )
 
 
-def test_completion_api_streams_multi_config_query_plan_without_select_required(client, auth_headers, monkeypatch):
+def _tool_event_contents(stream_text: str) -> list[str]:
+    """解析 SSE 工具事件中的原始工具结果。"""
+    contents = []
+    for event in stream_text.split("\n\n"):
+        if not event.startswith("event: tool\n"):
+            continue
+        payload = json.loads(event.split("data: ", 1)[1])
+        contents.append(str(payload.get("content") or ""))
+    return contents
+
+
+def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
     payload = {
-        "selected": False,
-        "coverage": "partial",
-        "query_plan": {
-            "type": "multi_config_independent",
-            "tasks": [
-                {"task_id": "order", "semantic_config_id": "cfg_order", "question": "查询订单金额"},
-                {"task_id": "user", "semantic_config_id": "cfg_user", "question": "查询用户数"},
-            ],
-            "semantic_configs": {
-                "cfg_order": {"id": "cfg_order", "name": "订单分析"},
-                "cfg_user": {"id": "cfg_user", "name": "用户分析"},
-            },
-            "final_action": "summarize",
+        "success": True,
+        "semantic_config_ids": ["cfg_order", "cfg_user"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析", "metrics": [{"name": "订单金额"}]},
+            "cfg_user": {"id": "cfg_user", "name": "用户分析", "metrics": [{"name": "用户数"}]},
         },
-        "message": "该问题需要拆分为多个指标集子任务",
     }
     graph = FakeGraph([
         (
@@ -143,14 +145,15 @@ def test_completion_api_streams_multi_config_query_plan_without_select_required(
     ])
     _patch_completion_dependencies(monkeypatch, graph)
 
-    response = _post_completion(client, auth_headers, "conv_query_plan_api", "查询订单金额和用户数")
+    response = _post_completion(client, auth_headers, "conv_retrieval_api", "查询订单金额和用户数")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     text = response.text
     assert "event: semantic_config_select_required" not in text
     assert "event: tool" in text
-    assert "multi_config_independent" in text
+    assert '"semantic_config_ids": ["cfg_order", "cfg_user"]' in _tool_event_contents(text)[-1]
+    assert "query_plan" not in text
     assert "cfg_order" in text
     assert "cfg_user" in text
     assert "已分别查询订单金额和用户数。" in text
@@ -162,16 +165,13 @@ def test_completion_api_streams_multi_config_query_plan_without_select_required(
     assert graph.initial_state["messages"][0].additional_kwargs["timestamp"]
 
 
-def test_completion_api_streams_single_selected_config_event(client, auth_headers, monkeypatch):
+def test_completion_api_streams_single_semantic_retrieval_tool_result(client, auth_headers, monkeypatch):
     payload = {
-        "selected": True,
-        "selected_config_id": "cfg_order",
-        "selected_config_name": "订单分析",
-        "coverage": "full",
-        "confidence": "high",
-        "reason": "命中订单金额",
-        "matched_metrics": ["订单金额"],
-        "matched_dimensions": ["机构"],
+        "success": True,
+        "semantic_config_ids": ["cfg_order"],
+        "semantic_configs": {
+            "cfg_order": {"id": "cfg_order", "name": "订单分析", "metrics": [{"name": "订单金额", "expression": "SUM(orders.amount)"}]},
+        },
     }
     graph = FakeGraph([
         (
@@ -194,8 +194,10 @@ def test_completion_api_streams_single_selected_config_event(client, auth_header
 
     assert response.status_code == 200
     text = response.text
-    assert "event: semantic_config_selected" in text
-    assert '"semantic_config_id": "cfg_order"' in text
+    assert "event: tool" in text
+    assert '"semantic_config_ids": ["cfg_order"]' in _tool_event_contents(text)[-1]
+    assert '"expression": "SUM(orders.amount)"' in _tool_event_contents(text)[-1]
+    assert "event: semantic_config_selected" not in text
     assert "event: semantic_config_select_required" not in text
 
 
@@ -267,7 +269,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
         {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items"},
     ]
     config["dimensions"] = [
-        {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical"},
+        {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"},
     ]
     config["relationships"] = [
         {
@@ -311,7 +313,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
     monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda **_kwargs: asyncio.sleep(0, result=""))
     monkeypatch.setattr(handler_module, "get_datasource_manager", lambda: manager)
-    for module in (routes, semantic_builder_compiler, semantic_tools):
+    for module in (semantic_builder_compiler, semantic_tools):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
     for module_name in (
         "apps.chat_data_app.agent.nodes",

@@ -401,6 +401,7 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
             await store.get_all_datasources_async(),
             await store.get_all_datasources_async(include_tables=False),
             await store.get_datasource_async("group_a"),
+            await store.get_datasource_meta_async("group_a"),
             await store.get_datasource_by_group_name_async(""),
             await store.get_datasource_by_group_name_async("订单组"),
             await store.get_default_datasource_async(),
@@ -409,7 +410,7 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
             await store.get_column_dict_async("group_a", "orders", "status"),
         )
 
-    exists, missing, empty, all_datasources, all_without_tables, datasource, empty_name, by_name, default, tables, member_ids, column_dict = asyncio.run(run_checks())
+    exists, missing, empty, all_datasources, all_without_tables, datasource, datasource_meta, empty_name, by_name, default, tables, member_ids, column_dict = asyncio.run(run_checks())
 
     assert exists is True
     assert missing is False
@@ -418,6 +419,8 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     assert all_datasources[0]["ds_tables"][0]["groups"] == [{"table_group_name": "订单域"}]
     assert all_without_tables[0]["ds_tables"] == []
     assert datasource["member_datasource_ids"] == ["ORG_A", "ORG_B"]
+    assert datasource_meta["member_datasource_ids"] == ["ORG_A", "ORG_B"]
+    assert datasource_meta["ds_tables"] == []
     assert empty_name is None
     assert by_name["group_name"] == "订单组"
     assert default["is_default"] is True

@@ -6,8 +6,11 @@
 
 from typing import List, Dict, Tuple, Optional, Any
 import logging
+import re
+from datetime import datetime
 
 from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
+from apps.chat_data_app.services.semantic_filter_normalization import split_text_between_filter, time_equal_value_to_range
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ BINARY_OPERATORS = {'+', '-', '*', '/'}
 LIKE_OPERATORS = {'LIKE', 'NOT LIKE', 'STARTS WITH', 'ENDS WITH'}
 BUILDER_ONLY_FILTER_FIELDS = {'valueType', 'rightExpression', 'rightTable', 'rightTableAlias', 'rightColumn'}
 FILTER_VALUE_TYPES = {'literal', 'sql_function'}
+LOGICAL_TYPES = {'text', 'number', 'date', 'datetime', 'enum'}
+DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+DATETIME_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
 
 
 class InputValidator:
@@ -187,6 +193,9 @@ class InputValidator:
             err = self._validate_filter_value_type(filter_node)
             if err:
                 return err
+            err = self._validate_filter_logical_value(dim_name, filter_node)
+            if err:
+                return err
             err = self._validate_filter_allowed_value(filter_node)
             if err:
                 return err
@@ -224,6 +233,9 @@ class InputValidator:
             return f"错误：过滤条件中的维度 '{left_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
 
         err = self._validate_expression_operand(right, path='right')
+        if err:
+            return err
+        err = self._validate_expression_logical_value(left_name, right)
         if err:
             return err
         return self._validate_expression_allowed_value(left_name, operator, right)
@@ -270,23 +282,149 @@ class InputValidator:
         """结构化过滤右侧为 literal 时，沿用枚举维度值校验。"""
         dim_config = self.dimensions_map.get(left_dim_name) or {}
         allowed_values = dim_config.get('allowed_values') or []
-        if not allowed_values or not isinstance(right, dict) or right.get('type') != 'literal':
+        if not allowed_values or not self._should_validate_allowed_values(dim_config) or not isinstance(right, dict) or right.get('type') != 'literal':
             return None
         value = right.get('value')
         if value is None:
             return None
         allowed_set = {str(item) for item in allowed_values}
-        normalized_value = self._normalize_allowed_value(dim_config, value)
-        if str(normalized_value) not in allowed_set:
+        checked_value = value if self._logical_type(dim_config) == 'enum' else self._normalize_allowed_value(dim_config, value)
+        if str(checked_value) not in allowed_set:
             return f"错误：维度 '{left_dim_name}' 的值 '{value}' 不在允许值范围内。可用值：{', '.join(allowed_set)}"
         return None
+
+    def _validate_filter_logical_value(self, dim_name: str, filter_node: Dict) -> Optional[str]:
+        dim_config = self.dimensions_map.get(dim_name) or {}
+        operator = str(filter_node.get('operator', '=')).upper()
+        if operator in ('IS NULL', 'IS NOT NULL'):
+            return None
+        filter_node = split_text_between_filter(filter_node)
+        values = self._filter_literal_values(filter_node)
+        return self._validate_logical_values(dim_name, dim_config, values, operator)
+
+    def _validate_expression_logical_value(self, left_dim_name: str, right: Dict) -> Optional[str]:
+        if not isinstance(right, dict) or right.get('type') != 'literal':
+            return None
+        dim_config = self.dimensions_map.get(left_dim_name) or {}
+        return self._validate_logical_values(left_dim_name, dim_config, [right.get('value')], '=')
+
+    @staticmethod
+    def _filter_literal_values(filter_node: Dict) -> List[Any]:
+        value = filter_node.get('value')
+        values = value if isinstance(value, list) else [value]
+        value_type = filter_node.get('value_type')
+        value_types = value_type if isinstance(value_type, list) else [value_type] * len(values)
+        literal_values = []
+        for idx, item in enumerate(values):
+            item_type = value_types[idx] if idx < len(value_types) else None
+            if str(item_type or '').strip().lower() == 'sql_function':
+                continue
+            literal_values.append(item)
+        return literal_values
+
+    def _validate_logical_values(self, dim_name: str, dim_config: Dict, values: List[Any], operator: str) -> Optional[str]:
+        logical_type = self._logical_type(dim_config)
+        if not logical_type or logical_type == 'text':
+            return None
+        if logical_type not in LOGICAL_TYPES:
+            return f"错误：维度 '{dim_name}' 的 logical_type '{logical_type}' 不支持。可选值：{', '.join(sorted(LOGICAL_TYPES))}"
+        if logical_type == 'enum':
+            return self._validate_enum_config(dim_name, dim_config)
+        for item in values:
+            if item is None:
+                continue
+            if logical_type in {'date', 'datetime'} and self._is_sql_function_literal(item):
+                continue
+            if self._is_supported_time_filter_shorthand(dim_config, logical_type, operator, item):
+                continue
+            err = self._validate_single_logical_value(dim_name, logical_type, item)
+            if err:
+                return err
+        return None
+
+    @staticmethod
+    def _validate_enum_config(dim_name: str, dim_config: Dict) -> Optional[str]:
+        allowed_values = dim_config.get('allowed_values')
+        mapping = dim_config.get('mapping')
+        allowed_set = {str(item).strip() for item in allowed_values or [] if str(item or '').strip()} if isinstance(allowed_values, list) else set()
+        mapping_keys = {str(key).strip() for key, value in (mapping or {}).items() if str(key or '').strip() and str(value or '').strip()} if isinstance(mapping, dict) else set()
+        if not allowed_set or not mapping_keys:
+            return f"错误：维度 '{dim_name}' 的 logical_type 为 enum 时必须同时配置 allowed_values 和 mapping"
+        missing_values = sorted(allowed_set - mapping_keys)
+        if missing_values:
+            return f"错误：维度 '{dim_name}' 的枚举值 '{missing_values[0]}' 缺少物理值映射"
+        return None
+
+    @staticmethod
+    def _logical_type(dim_config: Dict) -> str:
+        return str((dim_config or {}).get('logical_type') or '').strip().lower()
+
+    @staticmethod
+    def _validate_single_logical_value(dim_name: str, logical_type: str, value: Any) -> Optional[str]:
+        if logical_type == 'text':
+            return None
+        if logical_type == 'number':
+            return None if InputValidator._is_number_value(value) else f"错误：维度 '{dim_name}' 的值必须是数字"
+        if logical_type == 'date':
+            return None if InputValidator._is_date_text(value) else f"错误：维度 '{dim_name}' 的值必须是 yyyy-MM-dd 格式"
+        if logical_type == 'datetime':
+            return None if InputValidator._is_datetime_text(value) else f"错误：维度 '{dim_name}' 的值必须是 yyyy-MM-dd HH:mm:ss 格式"
+        return None
+
+    @staticmethod
+    def _is_sql_function_literal(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\([^;]*\)", value.strip()))
+
+    @staticmethod
+    def _is_supported_time_filter_shorthand(dim_config: Dict, logical_type: str, operator: str, value: Any) -> bool:
+        if logical_type not in {'date', 'datetime'}:
+            return False
+        if not InputValidator._has_physical_field(dim_config):
+            return False
+        if operator == '=':
+            return time_equal_value_to_range(value) is not None
+        return False
+
+    @staticmethod
+    def _has_physical_field(dim_config: Dict) -> bool:
+        return any((dim_config or {}).get(key) for key in ('column', 'expression', 'field_name'))
+
+    @staticmethod
+    def _is_number_value(value: Any) -> bool:
+        if isinstance(value, bool) or value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        return False
+
+    @staticmethod
+    def _is_date_text(value: Any) -> bool:
+        if not isinstance(value, str) or not DATE_PATTERN.fullmatch(value.strip()):
+            return False
+        try:
+            datetime.strptime(value.strip(), "%Y-%m-%d")
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _is_datetime_text(value: Any) -> bool:
+        if not isinstance(value, str) or not DATETIME_PATTERN.fullmatch(value.strip()):
+            return False
+        try:
+            datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return False
+        return True
 
     def _validate_filter_allowed_value(self, filter_node: Dict) -> Optional[str]:
         """校验枚举维度过滤值是否在 allowed_values 范围内。"""
         dim_name = filter_node.get('dimension')
         dim_config = self.dimensions_map.get(dim_name) or {}
         allowed_values = dim_config.get('allowed_values') or []
-        if not allowed_values:
+        if not allowed_values or not self._should_validate_allowed_values(dim_config):
             return None
 
         operator = str(filter_node.get('operator', '=')).upper()
@@ -294,12 +432,12 @@ class InputValidator:
         if value is None or operator in ('IS NULL', 'IS NOT NULL') or operator in LIKE_OPERATORS:
             return None
 
-        values = value if isinstance(value, list) else [value]
+        values = self._filter_literal_values(filter_node)
         allowed_set = {str(item) for item in allowed_values}
         invalid_values = []
         for item in values:
-            normalized_value = self._normalize_allowed_value(dim_config, item)
-            if str(normalized_value) not in allowed_set:
+            checked_value = item if self._logical_type(dim_config) == 'enum' else self._normalize_allowed_value(dim_config, item)
+            if str(checked_value) not in allowed_set:
                 invalid_values.append(str(item))
         if invalid_values:
             return f"错误：维度 '{dim_name}' 的值 '{invalid_values[0]}' 不在允许值范围内。可用值：{', '.join(allowed_set)}"
@@ -315,7 +453,7 @@ class InputValidator:
         right = filter_node.get('right')
         left_dim_name = left.get('name')
         dim_config = self.dimensions_map.get(left_dim_name) or {}
-        if not dim_config.get('mapping') or not isinstance(right, dict) or right.get('type') != 'literal':
+        if not self._should_normalize_allowed_values(dim_config) or not isinstance(right, dict) or right.get('type') != 'literal':
             return filter_node
         normalized = dict(filter_node)
         normalized_right = dict(right)
@@ -340,7 +478,7 @@ class InputValidator:
         """返回应用 mapping 后的过滤条件副本。"""
         dim_name = filter_node.get('dimension')
         dim_config = self.dimensions_map.get(dim_name) or {}
-        if not dim_config.get('mapping'):
+        if not self._should_normalize_allowed_values(dim_config):
             return filter_node
         normalized = dict(filter_node)
         value = normalized.get('value')
@@ -357,6 +495,16 @@ class InputValidator:
         if 'or' in filter_node:
             return {'or': [self._normalize_tree_filter_allowed_values(child) for child in filter_node.get('or', [])]}
         return self._normalize_filter_leaf(filter_node)
+
+    @staticmethod
+    def _should_validate_allowed_values(dim_config: Dict) -> bool:
+        logical_type = InputValidator._logical_type(dim_config)
+        return logical_type == 'enum'
+
+    @staticmethod
+    def _should_normalize_allowed_values(dim_config: Dict) -> bool:
+        mapping = (dim_config or {}).get('mapping')
+        return bool(isinstance(mapping, dict) and mapping and InputValidator._should_validate_allowed_values(dim_config))
 
     def validate_having(self, having: List[Dict]) -> Tuple[List[Dict], Optional[str]]:
         """

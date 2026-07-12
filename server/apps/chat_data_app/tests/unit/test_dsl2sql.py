@@ -28,14 +28,14 @@ def build_config(source_type: str = "mysql") -> dict:
             {"name": "销售额", "expression": "SUM(order_items.amount)", "table": "order_items"},
         ],
         "dimensions": [
-            {"name": "下单时间", "column": "order_time", "table": "orders", "type": "time"},
-            {"name": "订单状态", "column": "status", "table": "orders", "type": "categorical", "allowed_values": ["paid", "cancelled"], "mapping": {"已支付": "paid"}},
-            {"name": "用户等级", "column": "level", "table": "users", "type": "categorical"},
-            {"name": "分账户PID", "column": "pid", "table": "orders", "type": "categorical"},
-            {"name": "名称", "column": "name", "table": "orders", "type": "categorical"},
-            {"name": "出金金额", "column": "out_amount", "table": "orders", "type": "number"},
-            {"name": "入金金额", "column": "in_amount", "table": "orders", "type": "number"},
-            {"name": "信用额度", "column": "credit_limit", "table": "users", "type": "number"},
+            {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime"},
+            {"name": "订单状态", "column": "status", "table": "orders", "logical_type": "text"},
+            {"name": "用户等级", "column": "level", "table": "users", "logical_type": "text"},
+            {"name": "分账户PID", "column": "pid", "table": "orders", "logical_type": "text"},
+            {"name": "名称", "column": "name", "table": "orders", "logical_type": "text"},
+            {"name": "出金金额", "column": "out_amount", "table": "orders", "logical_type": "number"},
+            {"name": "入金金额", "column": "in_amount", "table": "orders", "logical_type": "number"},
+            {"name": "信用额度", "column": "credit_limit", "table": "users", "logical_type": "number"},
         ],
         "relationships": [
             {
@@ -54,6 +54,19 @@ def build_config(source_type: str = "mysql") -> dict:
             },
         ],
     }
+
+
+def build_enum_config(source_type: str = "mysql") -> dict:
+    config = build_config(source_type)
+    config["dimensions"][1] = {
+        "name": "订单状态",
+        "column": "status",
+        "table": "orders",
+        "logical_type": "enum",
+        "allowed_values": ["已支付", "已取消"],
+        "mapping": {"已支付": "paid", "已取消": "cancelled"},
+    }
+    return config
 
 
 def generate(config: dict, payload: dict) -> str:
@@ -259,7 +272,7 @@ def test_generate_join_path_for_cross_table_metric_and_dimension():
 
 def test_prompt_dsl_examples_compile_to_sql():
     config = build_config()
-    config["dimensions"].append({"name": "渠道", "column": "channel", "table": "orders", "type": "categorical"})
+    config["dimensions"].append({"name": "渠道", "column": "channel", "table": "orders", "logical_type": "text"})
     examples = [
         (
             {"metrics": [], "dimensions": ["订单状态", "用户等级"]},
@@ -349,7 +362,7 @@ def test_generator_returns_config_not_support_errors():
 def test_invalid_allowed_value_is_rejected():
     with pytest.raises(ValueError, match="不在允许值范围"):
         generate(
-            build_config(),
+            build_enum_config(),
             {
                 "metrics": ["订单数"],
                 "filters": [{"dimension": "订单状态", "operator": "=", "value": "unknown"}],
@@ -359,7 +372,7 @@ def test_invalid_allowed_value_is_rejected():
 
 def test_allowed_value_mapping_is_accepted():
     sql = generate(
-        build_config(),
+        build_enum_config(),
         {
             "metrics": ["订单数"],
             "filters": [{"dimension": "订单状态", "operator": "=", "value": "已支付"}],
@@ -371,7 +384,7 @@ def test_allowed_value_mapping_is_accepted():
 
 def test_tree_filter_normalizes_allowed_value_mapping():
     sql = generate(
-        build_config(),
+        build_enum_config(),
         {
             "metrics": ["订单数"],
             "filters": [
@@ -1677,6 +1690,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_accepts_dsl_payload(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1688,6 +1702,7 @@ class TestSemanticToolInput:
         }
         model = ExecuteSemanticInput.model_validate(payload)
         assert model.dsl["metrics"] == ["订单数"]
+        assert model.semantic_config_id == "sc_orders"
 
     def test_execute_semantic_input_rejects_top_level_metrics(self):
         payload = {
@@ -1700,6 +1715,7 @@ class TestSemanticToolInput:
     def test_execute_semantic_input_rejects_mode(self):
         payload = {
             "mode": "detail",
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1714,6 +1730,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_allows_injected_state(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["订单数"],
                 "dimensions": [],
@@ -1729,6 +1746,7 @@ class TestSemanticToolInput:
 
     def test_execute_semantic_input_ignores_visualization(self):
         payload = {
+            "semantic_config_id": "sc_orders",
             "dsl": {
                 "metrics": ["总销量"],
                 "dimensions": [],

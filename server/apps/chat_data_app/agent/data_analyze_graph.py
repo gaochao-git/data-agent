@@ -15,6 +15,7 @@ from typing_extensions import NotRequired, TypedDict
 from ..chart_types import get_chart_type_prompt_text
 from ..services.data_analyze_workspace import ensure_data_analyze_workspace
 from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
+from ..services.context_budget import ToolResultBudget
 from ..services.workspace_execution import (
     SandboxExecutionSessionRef,
     attach_workspace_execution_session,
@@ -91,6 +92,11 @@ def merge_reasoning_segments(existing: list[dict[str, Any]] | None, new: list[di
     return list(existing or []) + list(new or [])
 
 
+def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
+    """数据源组首次绑定后不可被后续轮次覆盖。"""
+    return existing or new
+
+
 class DataAnalyzeFlowState(TypedDict):
     """DataAnalyze 外层任务流状态。"""
     messages: Annotated[list[BaseMessage], add_messages]
@@ -98,6 +104,7 @@ class DataAnalyzeFlowState(TypedDict):
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     token_usage: NotRequired[dict[str, Any] | None]
     task_run_id: str
+    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]
     member_datasource_ids: NotRequired[list[str]]
@@ -233,6 +240,7 @@ def create_data_analyze_tools(
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
     model_id: str | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
 ) -> list[Any]:
     """在 DataAnalyzeAgent 内组装当前允许模型调用的工具。"""
     root = validate_workspace_root(workspace_root)
@@ -242,7 +250,13 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
-        *create_semantic_config_selection_tools(model_id=model_id, include_query_tools=False, datasource_id=datasource_id, user_id=user_id),
+        *create_semantic_config_selection_tools(
+            model_id=model_id,
+            include_query_tools=False,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            tool_result_budget=tool_result_budget,
+        ),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
         create_exec_sql_tool(
             datasource_id=datasource_id,
@@ -329,6 +343,7 @@ def create_data_analyze_agent(
         stream_usage=True,
         enable_thinking=enable_thinking,
     )
+    tool_result_budget = ToolResultBudget(model_id)
     tools = create_data_analyze_tools(
         workspace_root,
         datasource_id=datasource_id,
@@ -339,9 +354,10 @@ def create_data_analyze_agent(
         operator_name=operator_name,
         execution_session_ref=execution_session_ref,
         model_id=model_id,
+        tool_result_budget=tool_result_budget,
     )
-    token_usage_middleware = create_request_token_usage_middleware(model_id)
-    middleware = [token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)]
+    token_usage_middleware = create_request_token_usage_middleware(model_id, tool_result_budget=tool_result_budget)
+    middleware = []
     fallback_model = get_default_chat_data_model()
     if model_id and fallback_model and fallback_model != model_id:
         fallback_llm = get_chat_data_llm(
@@ -351,6 +367,7 @@ def create_data_analyze_agent(
             enable_thinking=enable_thinking,
         )
         middleware.append(ModelFallbackMiddleware(fallback_llm))
+    middleware.extend([token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)])
     agent = create_agent(
         model=llm,
         tools=tools,

@@ -95,7 +95,7 @@ const buildSemanticDimensionField = (dim: SemanticDimension) => ({
   expression: dim.expression,
   displayName: dim.name,
   label: buildDimensionDragLabel(dim),
-  type: dim.type
+  type: dim.logical_type || 'text'
 })
 
 const buildSemanticMetricField = (metric: SemanticConfigItem['metrics'][number]) => {

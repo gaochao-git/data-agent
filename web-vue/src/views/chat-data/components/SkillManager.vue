@@ -104,18 +104,19 @@ const displayedSkills = computed(() => {
 const displayedContent = computed(() => selectedVersion.value?.content ?? selectedSkill.value?.content ?? '')
 const currentVersionNo = computed(() => selectedVersion.value?.skill_version_no || selectedSkill.value?.draft_version_no || selectedSkill.value?.current_version_no || 0)
 const editableVersionNo = computed(() => selectedSkill.value?.draft_version_no || selectedSkill.value?.current_version_no || currentVersionNo.value)
+const canManageSkill = (skill?: SkillInfo | null) => Boolean(skill?.can_manage)
 const canManageFiles = computed(() => Boolean(
-  selectedSkill.value?.source === 'user'
+  canManageSkill(selectedSkill.value)
   && currentVersionNo.value
   && (!selectedVersion.value || selectedVersion.value.version_publish_status === 'draft')
 ))
-const canShowFileTree = computed(() => Boolean(selectedSkill.value))
+const canShowFileTree = computed(() => Boolean(selectedSkill.value?.source === 'system' || canManageSkill(selectedSkill.value)))
 const selectedFileTitle = computed(() => selectedFileNode.value?.file_path || 'SKILL.md')
 const selectedFileContent = computed(() => selectedFileNode.value ? fileForm.content : displayedContent.value)
 const displayedContentHtml = computed(() => md.render(selectedFileContent.value || '暂无内容'))
 const canEditSelectedFile = computed(() => Boolean(canManageFiles.value && selectedFileNode.value && selectedFileEditing.value))
 const canDeleteSkill = (skill?: SkillInfo | null) => Boolean(
-  skill?.source === 'user'
+  canManageSkill(skill)
 )
 const canCopySkill = (skill?: SkillInfo | null) => Boolean(
   skill?.source && skill.source !== 'system'
@@ -217,7 +218,7 @@ const getSkillScopeLabel = (scope?: string) => {
 }
 
 const canActivateVersion = (version: SkillVersionInfo) => {
-  return Boolean(selectedSkill.value?.source === 'user' && !version.current && version.version_publish_status === 'published')
+  return Boolean(canManageSkill(selectedSkill.value) && !version.current && version.version_publish_status === 'published')
 }
 
 const getVersionStateLabel = (version: SkillVersionInfo) => {
@@ -261,7 +262,7 @@ const openCreatePanel = () => {
 
 const openEditPanel = () => {
   const skill = selectedSkill.value
-  if (!skill || skill.source !== 'user') return
+  if (!skill || !canManageSkill(skill)) return
   editingSkillId.value = skill.skill_id || skill.name
   form.skill_name = skill.name || ''
   form.skill_title = skill.title || skill.name || ''
@@ -293,7 +294,7 @@ const loadSkills = async () => {
 
 const loadSkillVersions = async (skill: SkillInfo) => {
   const skillId = skill.skill_id || skill.name
-  if (!skillId || skill.source !== 'user') {
+  if (!skillId || !canManageSkill(skill)) {
     skillVersions.value = []
     selectedVersion.value = null
     return
@@ -315,7 +316,7 @@ const loadSkillVersions = async (skill: SkillInfo) => {
 const loadSkillFiles = async () => {
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
   const versionNo = currentVersionNo.value
-  if (!skillId || selectedSkill.value?.source !== 'user' || !versionNo) {
+  if (!skillId || !canManageSkill(selectedSkill.value) || !versionNo) {
     skillFiles.value = {
       references: selectedSkill.value?.references || [],
       assets: selectedSkill.value?.assets || [],
@@ -828,7 +829,7 @@ watch(() => props.initialSkillId, (skillId) => {
             <p class="m-0 mt-1 text-sm text-slate-500">{{ selectedSkill.description || '暂无描述' }}</p>
           </div>
           <button
-            v-if="selectedSkill.source === 'user'"
+            v-if="canManageSkill(selectedSkill)"
             type="button"
             class="h-8 shrink-0 rounded border border-slate-200 bg-white px-3 text-xs text-slate-600 hover:bg-slate-50"
             @click="openEditPanel"
@@ -840,7 +841,7 @@ watch(() => props.initialSkillId, (skillId) => {
           <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">适用范围</div><div class="mt-1 truncate text-slate-700">{{ getSkillScopeLabel(selectedSkill.skill_scope) }}</div></div>
           <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">可见范围</div><div class="mt-1 truncate text-slate-700">{{ getVisibilityLabel(selectedSkill.visibility_type) }}</div></div>
         </div>
-        <div v-if="selectedSkill.source === 'user'" class="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+        <div v-if="canManageSkill(selectedSkill)" class="mb-4 rounded-lg border border-slate-200 bg-white p-3">
           <div class="mb-2 flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-slate-700">
               <span>版本</span>

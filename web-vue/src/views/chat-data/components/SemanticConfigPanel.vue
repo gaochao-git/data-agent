@@ -40,6 +40,8 @@ import type {
   TableInfo,
 } from '../types'
 
+type SemanticLogicalType = NonNullable<SemanticDimension['logical_type']>
+
 interface Props {
   datasourceId: string
   datasourceName: string
@@ -672,6 +674,7 @@ interface FieldConfigRow {
   columnComment?: string
   description?: string
   metadataSupplement?: string
+  logicalType: SemanticLogicalType
   metricAggFunc: string
   expression: string
   isCustom?: boolean
@@ -719,6 +722,7 @@ const columnDictDialogTitle = ref('')
 const columnDictPayload = ref<DatasourceColumnDictPayload | null>(null)
 const columnDictError = ref('')
 const columnDictVisibleMap = ref<Record<string, boolean>>({})
+const columnDictEnumVisibleMap = ref<Record<string, boolean>>({})
 let columnDictLoadSeq = 0
 const tablePreviewJsonText = computed(() => {
   if (tablePreviewRows.value.length === 0) return '[]'
@@ -741,6 +745,13 @@ const AGG_FUNCTION_OPTIONS = [
   { value: 'AVG', label: 'AVG', desc: '平均值' },
   { value: 'MAX', label: 'MAX', desc: '最大值' },
   { value: 'MIN', label: 'MIN', desc: '最小值' },
+]
+const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
+  { value: 'text', label: '文本' },
+  { value: 'number', label: '数值' },
+  { value: 'date', label: '日期' },
+  { value: 'datetime', label: '日期时间' },
+  { value: 'enum', label: '枚举' },
 ]
 
 const dimensionFunctionOptions = computed(() => (
@@ -765,6 +776,7 @@ const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(r
   displayName: row.displayName,
   description: row.description,
   metadataSupplement: row.metadataSupplement,
+  logicalType: row.logicalType,
   metricAggFunc: row.metricAggFunc,
   expression: row.expression,
   isCustom: row.isCustom,
@@ -846,6 +858,9 @@ const validateFieldRowsBeforeApply = () => {
     usedNames.add(displayName)
     if (!expressionUsesColumn(row.expression, sourceColumn)) {
       return `字段 ${row.table}.${row.column} 的表达式必须基于该物理字段`
+    }
+    if (row.isDimension && row.logicalType === 'enum' && !columnDictEnumVisibleMap.value[getFieldColumnDictKey(row)]) {
+      return `字段 ${row.table}.${sourceColumn} 选择了枚举逻辑类型，请先维护字段字典枚举值`
     }
   }
   return ''
@@ -936,7 +951,7 @@ const addDimension = (configId: string) => {
     expression: '',
     table: scope[0]?.table || '',
     table_alias: scope[0]?.alias || '',
-    type: 'categorical',
+    logical_type: 'text',
     description: '',
   }
 }
@@ -1407,6 +1422,14 @@ const isNumericColumnType = (columnType: string) => {
   return /int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/i.test(columnType || '')
 }
 
+const inferLogicalType = (columnType: string): SemanticLogicalType => {
+  const normalized = (columnType || '').toLowerCase()
+  if (/timestamp|datetime/.test(normalized)) return 'datetime'
+  if (/date|year/.test(normalized)) return 'date'
+  if (isNumericColumnType(normalized)) return 'number'
+  return 'text'
+}
+
 const getMetricDataType = (columnType: string) => {
   const normalized = (columnType || '').trim()
   if (!normalized) return undefined
@@ -1501,6 +1524,20 @@ const inferMetricDataType = (metric: SemanticMetric) => {
 }
 
 const normalizeFieldName = (value: string) => (value || '').trim()
+
+const buildDimensionPreserveKey = (dimension: Pick<SemanticDimension, 'table' | 'table_alias' | 'column' | 'field_name'>) => {
+  const tableAlias = getFieldTableAlias(dimension)
+  return `${tableAlias}.${dimension.field_name || dimension.column || ''}.${dimension.column || ''}`
+}
+
+const copyDimensionRuntimeConfig = (dimension: SemanticDimension, source?: SemanticDimension) => {
+  if (!source) return dimension
+  const next = { ...dimension }
+  if (source.allowed_values) next.allowed_values = [...source.allowed_values]
+  if (source.mapping) next.mapping = { ...source.mapping }
+  if (source.allowed_operators) next.allowed_operators = [...source.allowed_operators]
+  return next
+}
 
 const getUniqueCustomFieldName = (tableAlias: string, baseColumn: string) => {
   const base = normalizeFieldName(baseColumn) || 'field'
@@ -1668,6 +1705,7 @@ const confirmAddField = () => {
     columnComment,
     description: '',
     metadataSupplement: '',
+    logicalType: inferLogicalType(columnType),
     metricAggFunc,
     expression,
     isCustom: true,
@@ -1797,6 +1835,7 @@ const confirmMetricExpand = () => {
       columnComment: sourceRow.columnComment || getTableColumnComment(sourceRow.table, sourceColumn),
       description: '',
       metadataSupplement: sourceRow.metadataSupplement || '',
+      logicalType: sourceRow.logicalType,
       metricAggFunc: option.aggFunc,
       expression: option.expression,
       isCustom: true,
@@ -1900,6 +1939,7 @@ const addAutoPrefillMetricRow = (item: { table: string; column: string; source_c
     columnComment,
     description: '',
     metadataSupplement: '',
+    logicalType: inferLogicalType(columnType),
     metricAggFunc: aggFunc,
     expression,
     isCustom: true,
@@ -2058,6 +2098,7 @@ const acceptHistoryMetric = (suggestion: SemanticHistoryLearningSuggestion) => {
     columnComment: getTableColumnComment(tableName, sourceColumn),
     description: '',
     metadataSupplement: '',
+    logicalType: inferLogicalType(columnType),
     metricAggFunc: parseAggFuncFromExpression(suggestion.expression || 'COUNT(*)'),
     expression: expression || buildMetricExpression(isNumericColumnType(columnType) ? 'SUM' : 'COUNT', sourceColumn),
     isCustom: true,
@@ -2101,6 +2142,7 @@ const acceptHistoryDimension = (suggestion: SemanticHistoryLearningSuggestion) =
     columnComment: getTableColumnComment(tableName, columnName),
     description: '',
     metadataSupplement: '',
+    logicalType: suggestion.logical_type || inferLogicalType(columnType),
     metricAggFunc: 'COUNT',
     expression: (suggestion.expression || quoteIdentifier(columnName)).trim(),
     isCustom: true,
@@ -2173,6 +2215,10 @@ const hasColumnDictContent = (dict?: DatasourceColumnDictPayload | null) => {
   )
 }
 
+const hasColumnDictEnumValues = (dict?: DatasourceColumnDictPayload | null) => {
+  return Boolean(dict?.enum_values?.some(item => String(item.value || '').trim()))
+}
+
 const hasFieldColumnDict = (row: FieldConfigRow) => {
   const key = getFieldColumnDictKey(row)
   return Boolean(key && columnDictVisibleMap.value[key])
@@ -2183,6 +2229,7 @@ const refreshFieldColumnDictVisibleMap = async () => {
   const seq = ++columnDictLoadSeq
   if (!datasourceId || fieldRows.value.length === 0) {
     columnDictVisibleMap.value = {}
+    columnDictEnumVisibleMap.value = {}
     return
   }
   const targets = Array.from(new Set(
@@ -2197,6 +2244,7 @@ const refreshFieldColumnDictVisibleMap = async () => {
   ))
   if (targets.length === 0) {
     columnDictVisibleMap.value = {}
+    columnDictEnumVisibleMap.value = {}
     return
   }
   const tableTargets = new Map<string, Set<string>>()
@@ -2210,13 +2258,24 @@ const refreshFieldColumnDictVisibleMap = async () => {
     try {
       const res = await getDatasourceTableColumnDicts(datasourceId, tableName)
       const dicts = res.status === 'success' ? (res.data?.dicts || {}) : {}
-      return Array.from(columnNames).map(columnName => [getColumnDictKey(tableName, columnName), hasColumnDictContent(dicts[columnName])] as const)
+      return Array.from(columnNames).map(columnName => {
+        const dict = dicts[columnName]
+        return [
+          getColumnDictKey(tableName, columnName),
+          { visible: hasColumnDictContent(dict), enumVisible: hasColumnDictEnumValues(dict) },
+        ] as const
+      })
     } catch {
-      return Array.from(columnNames).map(columnName => [getColumnDictKey(tableName, columnName), false] as const)
+      return Array.from(columnNames).map(columnName => [
+        getColumnDictKey(tableName, columnName),
+        { visible: false, enumVisible: false },
+      ] as const)
     }
   }))
   if (seq !== columnDictLoadSeq) return
-  columnDictVisibleMap.value = Object.fromEntries(entries.flat())
+  const flattened = entries.flat()
+  columnDictVisibleMap.value = Object.fromEntries(flattened.map(([key, value]) => [key, value.visible]))
+  columnDictEnumVisibleMap.value = Object.fromEntries(flattened.map(([key, value]) => [key, value.enumVisible]))
 }
 
 const viewColumnDict = async (row: FieldConfigRow) => {
@@ -2288,6 +2347,7 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
         columnComment: getTableColumnComment(d.table, d.column),
         description: existed?.description || d.description || '',
         metadataSupplement: existed?.metadataSupplement || d.metadata_supplement || '',
+        logicalType: existed?.logicalType || d.logical_type || inferLogicalType(existed?.columnType || getTableColumnType(d.table, d.column)),
         metricAggFunc: existed?.metricAggFunc || 'COUNT',
         expression: existed?.expression || expression,
         isCustom: true,
@@ -2326,6 +2386,7 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
         columnComment: getTableColumnComment(m.table, exprColumn),
         description: m.description || existed?.description || '',
         metadataSupplement: m.metadata_supplement || existed?.metadataSupplement || '',
+        logicalType: existed?.logicalType || inferLogicalType(existed?.columnType || getTableColumnType(m.table, exprColumn)),
         metricAggFunc: agg,
         expression: expression || existed?.expression || quoteIdentifier(exprColumn),
         isCustom: true,
@@ -2352,19 +2413,21 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
       const displayName = metricInfo?.name || dimInfo?.name || buildAliasAwareDefaultDisplayName(entry, col.name, columnComment)
       const description = metricInfo?.description || dimInfo?.description || ''
       const metadataSupplement = metricInfo?.metadataSupplement || dimInfo?.metadata_supplement || ''
+      const columnType = col.mysql_type || col.hive_type || col.type || ''
       rows.push({
         key,
         table: table.table_name,
         tableAlias: entry.alias,
         column: col.name,
         sourceColumn: col.name,
-        columnType: col.mysql_type || col.type || '',
+        columnType,
         isDimension: dimensionSet.has(key) || defaultDimensionAliasSet.has(entry.alias),
         isMetric: !!metricInfo,
         displayName,
         columnComment,
         description,
         metadataSupplement,
+        logicalType: dimInfo?.logical_type || inferLogicalType(columnType),
         metricAggFunc,
         expression,
       })
@@ -2376,6 +2439,7 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
     rows.push({
       ...row,
       columnType: row.columnType || sourceInfo?.mysql_type || sourceInfo?.type || '',
+      logicalType: row.logicalType || inferLogicalType(row.columnType || sourceInfo?.mysql_type || sourceInfo?.hive_type || sourceInfo?.type || ''),
       expression: row.expression || quoteIdentifier(row.sourceColumn || row.column),
       isCustom: true,
       isMissingPhysical: !sourceInfo,
@@ -2399,6 +2463,7 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
       columnComment: getTableColumnComment(d.table, d.column),
       description: d.description || '',
       metadataSupplement: d.metadata_supplement || '',
+      logicalType: d.logical_type || inferLogicalType(getTableColumnType(d.table, d.column)),
       metricAggFunc: 'COUNT',
       expression: d.expression || quoteIdentifier(d.column),
       isMissingPhysical: true,
@@ -2427,6 +2492,7 @@ const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
       columnComment: getTableColumnComment(m.table, exprColumn),
       description: m.description || '',
       metadataSupplement: m.metadata_supplement || '',
+      logicalType: inferLogicalType(getTableColumnType(m.table, exprColumn)),
       metricAggFunc: agg,
       expression,
       isMissingPhysical: true,
@@ -2449,6 +2515,7 @@ const mergeFieldRowsWithDraft = (nextRows: FieldConfigRow[]) => {
       displayName: draft.displayName,
       description: draft.description ?? row.description,
       metadataSupplement: draft.metadataSupplement,
+      logicalType: draft.logicalType,
       metricAggFunc: draft.metricAggFunc,
       expression: draft.expression,
     }
@@ -2487,19 +2554,23 @@ const applyFieldSetting = (showToast = true) => {
     }
   })
 
+  const existingDimensionMap = new Map(config.dimensions.map(item => [buildDimensionPreserveKey(item), item]))
   const nextDimensions: SemanticDimension[] = fieldRows.value
     .filter(r => r.isDimension)
-    .map(r => ({
-      name: ((r.displayName || '').trim() || r.column),
-      field_name: r.column,
-      table: r.table,
-      table_alias: getFieldRowAlias(r),
-      column: r.sourceColumn || r.column,
-      expression: (r.isMetric ? quoteIdentifier(r.sourceColumn || r.column) : (r.expression || quoteIdentifier(r.sourceColumn || r.column))).trim(),
-      type: /date|time|timestamp|datetime|year/i.test(r.columnType) ? 'time' : /int|float|double|decimal|numeric|number|bigint|tinyint|smallint|mediumint/i.test(r.columnType) ? 'number' : 'categorical',
-      description: r.description || '',
-      metadata_supplement: (r.metadataSupplement || '').trim(),
-    }))
+    .map(r => {
+      const dimension: SemanticDimension = {
+        name: ((r.displayName || '').trim() || r.column),
+        field_name: r.column,
+        table: r.table,
+        table_alias: getFieldRowAlias(r),
+        column: r.sourceColumn || r.column,
+        expression: (r.isMetric ? quoteIdentifier(r.sourceColumn || r.column) : (r.expression || quoteIdentifier(r.sourceColumn || r.column))).trim(),
+        logical_type: r.logicalType || 'text',
+        description: r.description || '',
+        metadata_supplement: (r.metadataSupplement || '').trim(),
+      }
+      return copyDimensionRuntimeConfig(dimension, existingDimensionMap.get(buildDimensionPreserveKey(dimension)))
+    })
 
   const nextMetrics: SemanticMetric[] = fieldRows.value
     .filter(r => r.isMetric)
@@ -3155,7 +3226,7 @@ const saveOntologyRules = () => {
                     请先在左侧选择数据表
                   </div>
                   <div v-else class="flex-1 overflow-auto rounded-md border border-gray-200 bg-white">
-                    <table :class="[showFieldPhysicalDetails ? 'min-w-[1820px]' : 'min-w-[1420px]', 'w-full border-collapse text-[12px]']">
+                    <table :class="[showFieldPhysicalDetails ? 'min-w-[1940px]' : 'min-w-[1540px]', 'w-full border-collapse text-[12px]']">
                       <thead class="bg-gray-50 text-gray-600">
                         <tr>
                           <th class="text-left px-3 py-2 border border-gray-200">表</th>
@@ -3164,6 +3235,7 @@ const saveOntologyRules = () => {
                           <th v-if="showFieldPhysicalDetails" class="text-left px-3 py-2 border border-gray-200">列备注</th>
                           <th class="text-center px-3 py-2 border border-gray-200">维度</th>
                           <th class="text-center px-3 py-2 border border-gray-200">指标</th>
+                          <th class="text-left px-3 py-2 border border-gray-200 w-[118px]">逻辑类型</th>
                           <th class="text-left px-3 py-2 border border-gray-200">表达式</th>
                           <th class="text-left px-3 py-2 border border-gray-200">显示名称</th>
                           <th class="text-left px-3 py-2 border border-gray-200">字段备注</th>
@@ -3194,6 +3266,17 @@ const saveOntologyRules = () => {
                           </td>
                           <td class="px-3 py-2 border border-gray-200 text-center">
                             <input :checked="row.isMetric" :disabled="row.isMissingPhysical" type="checkbox" @change="handleMetricToggle(row, ($event.target as HTMLInputElement).checked)" />
+                          </td>
+                          <td class="px-3 py-2 border border-gray-200">
+                            <select
+                              v-model="row.logicalType"
+                              class="w-full px-2 py-1 border border-gray-200 rounded text-[12px] bg-white disabled:bg-gray-50 disabled:text-gray-400"
+                              :disabled="row.isMissingPhysical || !row.isDimension"
+                            >
+                              <option v-for="option in LOGICAL_TYPE_OPTIONS" :key="option.value" :value="option.value">
+                                {{ option.label }}
+                              </option>
+                            </select>
                           </td>
                           <td class="px-3 py-2 border border-gray-200">
                             <div class="flex items-center gap-1">

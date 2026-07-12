@@ -374,8 +374,8 @@ const toggleConfig = (configId: string) => {
 }
 
 const getDimensionIconType = (dimension: SemanticDimension): 'string' | 'number' | 'date' => {
-  if (dimension.type === 'number') return 'number'
-  if (dimension.type === 'time') return 'date'
+  if (dimension.logical_type === 'number') return 'number'
+  if (dimension.logical_type === 'date' || dimension.logical_type === 'datetime') return 'date'
   return 'string'
 }
 

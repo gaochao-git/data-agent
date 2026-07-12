@@ -18,6 +18,11 @@ def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None
     return list(existing or []) + list(new or [])
 
 
+def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
+    """数据源组首次绑定后不可被后续轮次覆盖。"""
+    return existing or new
+
+
 class MessageState(TypedDict):
     """对话消息状态。"""
     messages: Annotated[list[BaseMessage], add_messages]
@@ -32,8 +37,6 @@ class ExecutionContext(TypedDict, total=False):
     available_member_datasource_ids: list[str]
     # 用户原文已精确匹配到的成员数据源ID列表，用于防止执行错机构
     matched_member_datasource_ids: list[str]
-    # 多成员场景是否要求工具调用显式传入 member_datasource_ids
-    require_explicit_member_selection: bool
 
 
 class PromptContext(TypedDict, total=False):
@@ -59,6 +62,8 @@ class ChatDataAgentState(MessageState, total=False):
     operator_name: str | None
     # 来源会话ID（用于查询历史学习回溯对话上下文）
     conversation_id: str | None
+    # 会话首次使用的数据源组，用于历史恢复和防止跨数据源组继续提问
+    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     # 工具执行上下文
     execution_context: ExecutionContext
     # 提示词注入上下文

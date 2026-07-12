@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from .semantic_common import is_time_logical_dimension
+
 
 def split_text_between_filter(node: Dict[str, Any]) -> Dict[str, Any]:
     """Convert text BETWEEN values like ``a AND b`` into the list form expected by the SQL compiler."""
@@ -23,7 +25,7 @@ def split_text_between_filter(node: Dict[str, Any]) -> Dict[str, Any]:
 
 def is_time_dimension(config: Dict[str, Any]) -> bool:
     """Return whether a semantic field is configured as a time dimension."""
-    return str((config or {}).get("type") or "").strip().lower() == "time"
+    return is_time_logical_dimension(config)
 
 
 def time_equal_value_to_range(value: Any) -> Optional[tuple[str, str]]:

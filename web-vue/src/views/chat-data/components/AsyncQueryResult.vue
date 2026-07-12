@@ -14,6 +14,8 @@ interface QueryResult {
   sql?: string
   query_mode?: string
   confidence?: number | string
+  semantic_config_id?: string
+  semantic_config_name?: string
   columns?: string[]
   data?: Record<string, unknown>[]
   total_count?: number
@@ -216,13 +218,6 @@ const formatExecutionSeconds = (value?: number | null): string => {
   return `${(ms / 1000).toFixed(2)}秒`
 }
 
-const queryModeText = computed(() => {
-  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
-  if (mode === 'dsl2sql') return '语义查询'
-  if (mode === 'nl2sql') return '直接SQL'
-  return ''
-})
-
 const confidenceText = computed(() => {
   const value = activeResult.value?.confidence
   if (value === null || value === undefined || value === '') return ''
@@ -230,6 +225,20 @@ const confidenceText = computed(() => {
   if (!Number.isFinite(numeric)) return String(value)
   const percent = numeric <= 1 ? numeric * 100 : numeric
   return `${Math.round(percent)}%`
+})
+
+const queryModeTitle = computed(() => {
+  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
+  if (mode === 'dsl2sql') return '语义查询'
+  if (mode === 'nl2sql') return '直接 SQL 查询'
+  return ''
+})
+
+const semanticConfigLabel = computed(() => {
+  const result = activeResult.value
+  const name = String(result?.semantic_config_name || '').trim()
+  const id = String(result?.semantic_config_id || '').trim()
+  return name || id
 })
 
 const verticalText = computed(() => {
@@ -443,16 +452,24 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           <span v-if="activeResult?.execution_time_ms != null" class="shrink-0 whitespace-nowrap text-xs text-gray-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             {{ formatExecutionSeconds(activeResult.execution_time_ms) }}
           </span>
-          <span v-if="activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs font-medium text-gray-700">
+          <span v-if="activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             共 {{ activeResult.total_count }} 条
           </span>
           <span v-if="activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
             缓存结果
           </span>
-          <span v-if="queryModeText" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
-            {{ queryModeText }}
+          <span
+            v-if="semanticConfigLabel"
+            class="min-w-0 max-w-56 truncate text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded"
+            :title="`${semanticConfigLabel}${activeResult?.semantic_config_id ? ` (${activeResult.semantic_config_id})` : ''}`"
+          >
+            {{ semanticConfigLabel }}
           </span>
-          <span v-if="confidenceText" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
+          <span
+            v-if="confidenceText"
+            class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded"
+            :title="queryModeTitle"
+          >
             置信度 {{ confidenceText }}
           </span>
           <span v-if="isTruncated" class="shrink-0 whitespace-nowrap text-xs text-amber-600">
@@ -504,11 +521,10 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           <div class="relative">
             <button
               ref="viewBtnRef"
-              class="shrink-0 whitespace-nowrap h-[26px] min-w-[62px] px-2.5 flex items-center justify-center gap-1.5 border border-transparent rounded-md bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-[11px] cursor-pointer transition-all duration-200 shadow-[0_1px_4px_rgba(31,130,217,0.3)]"
+              class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center gap-1.5 border border-transparent rounded-md bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-[11px] cursor-pointer transition-all duration-200 shadow-[0_1px_4px_rgba(31,130,217,0.3)]"
               title="切换视图"
               @click="showChartMenu = !showChartMenu"
             >
-              <i :class="`fa-solid ${viewModes.find(m => m.key === viewMode)?.icon || 'fa-table'}`"></i>
               <span>视图</span>
               <i class="fa-solid fa-chevron-down text-[8px] ml-0.5 opacity-60"></i>
             </button>
@@ -546,11 +562,10 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           <!-- 保存按钮 -->
           <button
             v-if="activeResult?.sql || sql"
-            class="shrink-0 whitespace-nowrap h-[26px] min-w-[62px] px-2.5 flex items-center justify-center gap-1.5 border border-black/10 rounded-md bg-white text-gray-600 text-[11px] cursor-pointer transition-all duration-200 hover:border-[#1f82d9]/40 hover:bg-gradient-to-br hover:from-[#1f82d9]/10 hover:to-[#1f82d9]/5 hover:text-[#1f82d9]"
+            class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center border border-black/10 rounded-md bg-white text-gray-600 text-[11px] cursor-pointer transition-all duration-200 hover:border-[#1f82d9]/40 hover:bg-gradient-to-br hover:from-[#1f82d9]/10 hover:to-[#1f82d9]/5 hover:text-[#1f82d9]"
             title="保存到看板"
             @click="handleSave"
           >
-            <i class="fa-solid fa-bookmark"></i>
             <span>保存</span>
           </button>
         </div>

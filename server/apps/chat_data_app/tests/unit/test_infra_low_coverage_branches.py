@@ -16,7 +16,8 @@ import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.routers import common, data_analyze_workspace
+from apps.chat_data_app.routers import data_analyze_workspace, dependencies
+from apps.chat_data_app.services import semantic_common
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
@@ -432,8 +433,80 @@ def test_setup_checkpointer_sqlite_and_mysql(monkeypatch):
 
     events.clear()
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "mysql")
+    monkeypatch.setattr(checkpoint, "select_available_checkpointer_endpoint", lambda: asyncio.sleep(0, result=events.append(("checkpoint", None))))
     asyncio.run(checkpoint.setup_checkpointer())
-    assert events == [("init", None)]
+    assert events == [("checkpoint", None), ("init", None)]
+
+
+def test_select_available_checkpointer_endpoint_selects_first_available(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
+    events = []
+
+    class Context:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        async def __aenter__(self):
+            events.append(("enter", self.endpoint.label()))
+            return self
+
+        async def __aexit__(self, *_args):
+            events.append(("exit", self.endpoint.label()))
+            return False
+
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+    monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
+
+    asyncio.run(checkpoint.select_available_checkpointer_endpoint())
+
+    assert selector.current().label() == "127.0.0.1:3306"
+    assert events == [("enter", "127.0.0.1:3306"), ("exit", "127.0.0.1:3306")]
+
+
+def test_select_available_checkpointer_endpoint_skips_connection_errors(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
+    calls = []
+
+    class Context:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        async def __aenter__(self):
+            calls.append(self.endpoint.label())
+            if self.endpoint.host == "127.0.0.1":
+                raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+    monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
+
+    asyncio.run(checkpoint.select_available_checkpointer_endpoint())
+
+    assert calls == ["127.0.0.1:3306", "127.0.0.2:3307"]
+    assert selector.current().label() == "127.0.0.2:3307"
+
+
+def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monkeypatch):
+    selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306"))
+
+    class Context:
+        def __init__(self, _endpoint):
+            pass
+
+        async def __aenter__(self):
+            raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+    monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
+
+    with pytest.raises(ValueError, match="所有 checkpoint 库节点均不可用"):
+        asyncio.run(checkpoint.select_available_checkpointer_endpoint())
 
 
 def test_database_session_commit_rollback_and_info(monkeypatch):
@@ -1074,14 +1147,14 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
 
-    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
-    with pytest.raises(common.HTTPException, match="Missing user_id"):
-        common._get_current_user(SimpleNamespace(headers={}))
+    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    with pytest.raises(dependencies.HTTPException, match="Missing user_id"):
+        dependencies._get_current_user(SimpleNamespace(headers={}))
 
-    monkeypatch.setattr(common, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
-    assert common._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
+    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    assert dependencies._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
 
-    assert common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
+    assert semantic_common._build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}
 
     for field, value, message in [
         ("org_name", " ", "org_name"),

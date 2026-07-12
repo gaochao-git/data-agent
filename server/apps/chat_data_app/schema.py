@@ -318,7 +318,6 @@ class DatasourceGroupCreateRequest(BaseModel):
     recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
-    template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
 
     @field_validator("recommended_questions", mode="before")
@@ -335,13 +334,17 @@ class DatasourceGroupUpdateRequest(BaseModel):
     recommended_questions: List[str] = Field(default_factory=list, max_length=MAX_RECOMMENDED_QUESTION_COUNT, description="推荐问题，每条不超过50字")
     source_type: Literal["hive", "mysql"] = Field(..., description="数据源类型")
     template_source: DatasourceSourceItem = Field(..., description="模板数据源连接信息")
-    template_table_names: List[str] = Field(default_factory=list, description="模板数据源选中的表名列表")
     member_sources: List[DatasourceSourceItem] = Field(default_factory=list, description="组内其他成员数据源连接信息")
 
     @field_validator("recommended_questions", mode="before")
     @classmethod
     def validate_recommended_questions(cls, value: Any) -> List[str]:
         return _normalize_recommended_questions(value)
+
+
+class DatasourceGroupMetadataSyncRequest(BaseModel):
+    """数据源组模板元数据同步请求"""
+    template_table_names: List[str] = Field(default_factory=list, description="需要同步的模板表名列表")
 
 
 # ============ 语义层配置模型 ============
@@ -370,7 +373,10 @@ class SemanticDimension(BaseModel):
     expression: Optional[str] = Field(default=None, description="SQL表达式，如'DATE(create_time)'")
     table: str = Field(..., description="所属表名")
     table_alias: Optional[str] = Field(default=None, description="查询表别名；为空时默认等于所属表名")
-    type: Literal["categorical", "time", "number"] = Field(default="categorical", description="维度类型")
+    logical_type: Optional[Literal["text", "number", "date", "datetime", "enum"]] = Field(
+        default=None,
+        description="逻辑值类型，用于 DSL 过滤值校验和前端字段类型展示"
+    )
     description: Optional[str] = Field(default=None, description="维度描述")
     metadata_supplement: Optional[str] = Field(default=None, description="字段级元数据补充说明")
     mapping: Optional[Dict[str, str]] = Field(default=None, description="同义词映射（同义词→标准值），如{'mysql':'MySQL', 'pg':'PostgreSQL'}")
@@ -585,9 +591,10 @@ class SelectSemanticConfigInput(BaseModel):
 class ExecuteSemanticInput(BaseModel):
     """语义查询执行工具的输入参数（供 LangGraph Agent 工具使用）"""
     model_config = {"extra": "ignore"}
-    semantic_config_id: Optional[str] = Field(
-        default=None,
-        description="指标集 ID；已手动选择指标集时可不传，否则必须来自 select_semantic_config_tool 返回结果",
+    semantic_config_id: str = Field(
+        ...,
+        min_length=1,
+        description="本次 DSL 使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -619,10 +626,15 @@ class SemanticQueryInput(BaseModel):
         default=None,
         description="DSL 明确无法表达时使用的只读 SQL；与 dsl 二选一",
     )
-    semantic_config_id: Optional[str] = Field(default=None, description="指标集 ID；由 select_semantic_config_tool 选择后传入，用于查询历史归属")
+    semantic_config_id: str = Field(
+        ...,
+        min_length=1,
+        description="本次查询使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
+    )
     member_datasource_ids: List[str] = Field(
-        default_factory=list,
-        description="本次查询要执行的成员数据源 ID 列表；仅使用系统提示词中当前可用范围列出的执行对象",
+        ...,
+        min_length=1,
+        description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
 
 
