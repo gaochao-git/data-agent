@@ -4,22 +4,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..daos.conversation_dao import ConversationDao
 from utils.error_codes import ErrorCode
-from utils.database import get_session
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
-from ..services.data_analyze_workspace import ensure_data_analyze_workspace, resolve_workspace_path
+from ..services.data_analyze_workspace import can_access_data_analyze_conversation, ensure_data_analyze_workspace, resolve_workspace_path
 from ..services.feature_gate import get_data_analyze_unavailable_response
 from ..services.skill_service import skill_service
 from ..services.workspace_execution import list_workspace_files_from_sandbox, read_workspace_file_from_sandbox
 from .dependencies import _get_current_user
-from ..services.semantic_common import DATA_ANALYZE_AGENT_ID
 
 logger = get_logger(__name__)
 router = APIRouter()
-conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 @router.get("/data-analyze/conversations/{conversation_id}/workspace-files")
 async def list_data_analyze_workspace_files(conversation_id: str, request: Request):
@@ -29,7 +25,7 @@ async def list_data_analyze_workspace_files(conversation_id: str, request: Reque
         if unavailable_response:
             return unavailable_response
         current_user = _get_current_user(request)
-        if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
+        if not await can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_data_analyze_workspace(conversation_id)
         return business_response(data={"files": await list_workspace_files_from_sandbox(workspace_root=workspace_paths["root"], user_id=str(current_user.user_id))}, msg="获取成功")
@@ -50,7 +46,7 @@ async def read_data_analyze_workspace_file(conversation_id: str, path: str, requ
         if unavailable_response:
             return unavailable_response
         current_user = _get_current_user(request)
-        if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
+        if not await can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_data_analyze_workspace(conversation_id)
         return business_response(data=await read_workspace_file_from_sandbox(workspace_root=workspace_paths["root"], file_path=path, user_id=str(current_user.user_id)), msg="获取成功")
@@ -73,7 +69,7 @@ async def import_data_analyze_workspace_skill(conversation_id: str, payload: Ski
         if unavailable_response:
             return unavailable_response
         current_user = _get_current_user(request)
-        if not await _can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
+        if not await can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_data_analyze_workspace(conversation_id)
         skill_dir = resolve_workspace_path(workspace_paths["root"], payload.skill_dir_path)
@@ -92,14 +88,3 @@ async def import_data_analyze_workspace_skill(conversation_id: str, payload: Ski
     except Exception as e:
         logger.error("导入智能分析工作区技能失败: conversation_id=%s path=%s error=%s", conversation_id, payload.skill_dir_path, e, exc_info=True)
         return business_response(msg="导入技能失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED, status="error")
-
-
-async def _can_access_data_analyze_conversation(conversation_id: str, user_id: str) -> bool:
-    """校验当前用户是否可访问智能分析会话。"""
-    if not str(conversation_id or "").strip() or not str(user_id or "").strip():
-        return False
-    return await conversation_dao.exists_user_agent_thread(
-        conversation_id=conversation_id,
-        user_id=user_id,
-        agent_id=DATA_ANALYZE_AGENT_ID,
-    )

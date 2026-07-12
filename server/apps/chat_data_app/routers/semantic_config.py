@@ -13,7 +13,6 @@ from auth import AuthenticationError
 from utils.error_codes import ErrorCode
 from utils import conversation
 from utils.checkpoint import get_checkpointer
-from utils.database import get_session
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent import get_chat_data_graph
@@ -22,7 +21,6 @@ from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,
 )
-from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from ..schema import (
     SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
@@ -57,6 +55,7 @@ from ..services.semantic_history_learning_service import (
     _parse_json_object,
     _sample_map_by_execution_id,
     _semantic_scope_tables,
+    build_semantic_history_learning_service,
 )
 from ..services.semantic_common import (
     AGENT_ID,
@@ -180,9 +179,8 @@ async def _generate_history_learning_suggestions_by_llm(
 
 
 def _build_history_learning_service() -> SemanticHistoryLearningService:
-    """构建历史学习服务，保留路由模块测试替换点。"""
-    return SemanticHistoryLearningService(
-        dao=SemanticHistoryLearningDao(session_context=lambda: get_session()),
+    """构建历史学习服务。"""
+    return build_semantic_history_learning_service(
         context_loader=_load_history_conversation_context,
         suggestion_loader=_generate_history_learning_suggestions_by_llm,
         history_matcher=_history_belongs_to_config,

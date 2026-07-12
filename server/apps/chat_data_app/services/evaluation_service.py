@@ -334,3 +334,8 @@ class EvaluationService:
             "run": eval_run_row_to_payload(run_row),
             "cases": [eval_run_case_row_to_payload(row) for row in cases],
         }
+
+
+def build_evaluation_service(session_context: Optional[Callable] = None) -> EvaluationService:
+    """构建评测服务。"""
+    return EvaluationService(session_context=session_context or default_get_session)

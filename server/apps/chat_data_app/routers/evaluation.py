@@ -16,7 +16,6 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
-from utils.database import get_session
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
@@ -26,6 +25,7 @@ from ..services.datasource_manager import get_datasource_manager
 from ..services.evaluation_service import (
     EvaluationService,
     accuracy_bp,
+    build_evaluation_service,
     case_row_to_payload,
     eval_run_case_row_to_payload,
     eval_run_row_to_payload,
@@ -50,8 +50,8 @@ SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND
 
 
 def _build_evaluation_service() -> EvaluationService:
-    """构建评测服务，保留路由模块 get_session 测试替换点。"""
-    return EvaluationService(session_context=lambda: get_session())
+    """构建评测服务。"""
+    return build_evaluation_service()
 
 
 def _evaluation_http_exception_code(exc: HTTPException) -> int:

@@ -8,13 +8,18 @@ import json
 from pathlib import Path
 from typing import Any
 
+from utils.database import get_session
 from utils.logger import get_logger
 from utils.storage_paths import NL2SQL_BASE_DIR
+
+from ..daos.conversation_dao import ConversationDao
+from .semantic_common import DATA_ANALYZE_AGENT_ID
 
 logger = get_logger(__name__)
 
 THREADS_DIR = Path(NL2SQL_BASE_DIR) / "data_analyze_threads"
 WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads", "runtime-skills")
+conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
 def _safe_segment(value: str) -> str:
@@ -140,3 +145,14 @@ def read_workspace_text_file(conversation_id: str, path: str, max_bytes: int = 1
         "content": content,
         "size": size,
     }
+
+
+async def can_access_data_analyze_conversation(conversation_id: str, user_id: str) -> bool:
+    """校验当前用户是否可访问智能分析会话。"""
+    if not str(conversation_id or "").strip() or not str(user_id or "").strip():
+        return False
+    return await conversation_dao.exists_user_agent_thread(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        agent_id=DATA_ANALYZE_AGENT_ID,
+    )

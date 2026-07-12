@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage
 
 from utils import conversation
 from utils.checkpoint import get_checkpointer
+from utils.database import get_session
 from utils.logger import get_logger
 
 from ..agent import get_chat_data_graph
@@ -772,3 +773,19 @@ class SemanticHistoryLearningService:
             "suggestions": suggestions,
             "samples": samples[:limit],
         }
+
+
+def build_semantic_history_learning_service(
+    *,
+    context_loader: Optional[Callable[[str], Awaitable[Optional[Dict[str, Any]]]]] = None,
+    suggestion_loader: Optional[Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]] = None,
+    history_matcher: Optional[Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]] = None,
+    session_context: Optional[Callable[[], Any]] = None,
+) -> SemanticHistoryLearningService:
+    """构建指标集历史学习服务。"""
+    return SemanticHistoryLearningService(
+        dao=SemanticHistoryLearningDao(session_context=session_context or get_session),
+        context_loader=context_loader,
+        suggestion_loader=suggestion_loader,
+        history_matcher=history_matcher,
+    )

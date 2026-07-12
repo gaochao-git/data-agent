@@ -5,7 +5,6 @@ import json
 import logging
 from pathlib import Path
 import sys
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +16,7 @@ from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
 from apps.chat_data_app.routers import data_analyze_workspace, dependencies
+from apps.chat_data_app.services import data_analyze_workspace as data_analyze_workspace_service
 from apps.chat_data_app.services import semantic_common
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
@@ -1268,7 +1268,7 @@ async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
     user = SimpleNamespace(user_id="u1", username="用户1")
     monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
     monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: user)
-    monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", lambda conversation_id, user_id: asyncio.sleep(0, result=conversation_id == "conv_ok"))
+    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda conversation_id, user_id: asyncio.sleep(0, result=conversation_id == "conv_ok"))
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path / conversation_id)})
     monkeypatch.setattr(data_analyze_workspace, "list_workspace_files_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result=[{"path": "a.txt"}]))
     monkeypatch.setattr(data_analyze_workspace, "read_workspace_file_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result={"content": "hello"}))
@@ -1299,10 +1299,9 @@ async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_data_analyze_workspace_exception_branches(monkeypatch):
-    original_can_access = data_analyze_workspace._can_access_data_analyze_conversation
     monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
     monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
-    monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
     monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(ValueError("bad workspace")))
     assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
@@ -1312,22 +1311,13 @@ async def test_data_analyze_workspace_exception_branches(monkeypatch):
     assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
     assert _payload(await data_analyze_workspace.import_data_analyze_workspace_skill("conv", SkillImportFromWorkspaceRequest(skill_dir_path="workspace/a"), SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED
 
-    @asynccontextmanager
-    async def fake_session():
-        class Result:
-            def scalar_one_or_none(self):
-                return 1
+    class FakeConversationDao:
+        async def exists_user_agent_thread(self, conversation_id, user_id, agent_id):
+            return conversation_id == "conv" and user_id == "u1" and agent_id == semantic_common.DATA_ANALYZE_AGENT_ID
 
-        class Session:
-            async def execute(self, _stmt):
-                return Result()
-
-        yield Session()
-
-    monkeypatch.setattr(data_analyze_workspace, "get_session", fake_session)
-    monkeypatch.setattr(data_analyze_workspace, "_can_access_data_analyze_conversation", original_can_access)
-    assert await data_analyze_workspace._can_access_data_analyze_conversation("conv", "u1") is True
-    assert await data_analyze_workspace._can_access_data_analyze_conversation("", "u1") is False
+    monkeypatch.setattr(data_analyze_workspace_service, "conversation_dao", FakeConversationDao())
+    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("conv", "u1") is True
+    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("", "u1") is False
 
 
 def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):

@@ -30,6 +30,20 @@ from apps.chat_data_app.schema import (
 )
 from apps.chat_data_app.services.file_text_extractor import extract_text_from_file_bytes
 from apps.chat_data_app.services import semantic_config_validator
+from apps.chat_data_app.services.semantic_history_learning_service import build_semantic_history_learning_service
+
+
+def _patch_history_learning_service_session(monkeypatch, session_factory):
+    monkeypatch.setattr(
+        semantic_config,
+        "_build_history_learning_service",
+        lambda: build_semantic_history_learning_service(
+            session_context=session_factory,
+            context_loader=semantic_config._load_history_conversation_context,
+            suggestion_loader=semantic_config._generate_history_learning_suggestions_by_llm,
+            history_matcher=semantic_config._history_belongs_to_config,
+        ),
+    )
 
 
 def test_semantic_permission_helpers():
@@ -805,7 +819,7 @@ def test_history_learning_route_collects_agent_builder_and_sql_samples(monkeypat
             "issues": [],
         }
 
-    monkeypatch.setattr(semantic_config, "get_session", lambda: FakeSession())
+    _patch_history_learning_service_session(monkeypatch, lambda: FakeSession())
     monkeypatch.setattr(semantic_config, "_load_history_conversation_context", fake_load_history_context)
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_generate_suggestions)
     monkeypatch.setattr(semantic_config, "extract_physical_tables", lambda sql, source_type="mysql": SimpleNamespace(success=True, tables={"orders"}, error=""))
@@ -1511,7 +1525,7 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
             return SimpleNamespace(success=False, tables=set(), error="syntax")
         return SimpleNamespace(success=True, tables={"orders"}, error="")
 
-    monkeypatch.setattr(semantic_config, "get_session", lambda: FakeSession())
+    _patch_history_learning_service_session(monkeypatch, lambda: FakeSession())
     monkeypatch.setattr(semantic_config, "_load_history_conversation_context", lambda _conversation_id: asyncio.sleep(0, result=None))
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_generate_suggestions)
     monkeypatch.setattr(semantic_config, "extract_physical_tables", fake_extract_tables)
@@ -2002,7 +2016,7 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
         assert len(samples) == 2
         return {"metrics": [], "dimensions": [], "issues": []}
 
-    monkeypatch.setattr(semantic_config, "get_session", lambda: FakeSession())
+    _patch_history_learning_service_session(monkeypatch, lambda: FakeSession())
     monkeypatch.setattr(semantic_config, "_load_history_conversation_context", fake_load_context)
     monkeypatch.setattr(semantic_config, "_generate_history_learning_suggestions_by_llm", fake_suggestions)
 
@@ -2019,7 +2033,7 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
         async def execute(self, _stmt):
             raise RuntimeError("db failed")
 
-    monkeypatch.setattr(semantic_config, "get_session", lambda: RaisingSession())
+    _patch_history_learning_service_session(monkeypatch, lambda: RaisingSession())
     failed = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
         "ds_a",
         "cfg_a",

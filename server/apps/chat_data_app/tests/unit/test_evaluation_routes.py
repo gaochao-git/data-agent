@@ -20,6 +20,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
+from apps.chat_data_app.services.evaluation_service import build_evaluation_service
 from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE
 from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
@@ -44,7 +45,7 @@ def eval_db(monkeypatch):
                 await session.rollback()
                 raise
 
-    monkeypatch.setattr(evaluation, "get_session", fake_get_session)
+    monkeypatch.setattr(evaluation, "_build_evaluation_service", lambda: build_evaluation_service(fake_get_session))
     yield session_factory
     asyncio.run(engine.dispose())
 
