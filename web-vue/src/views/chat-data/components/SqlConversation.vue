@@ -51,6 +51,7 @@ interface Props {
   isLoadingConversations?: boolean
   // 懒创建会话
   ensureConversationId?: (agentId?: string) => Promise<string | null>
+  ensureConversationDatasource?: () => Promise<boolean>
   // 语义配置（指标集）ID
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
@@ -1235,6 +1236,15 @@ const submitQuery = async (
   if (!convId) {
     ElMessage.error('无法创建会话')
     // 回滚消息
+    if (userMessageId) {
+      messages.value = messages.value.filter(m => m.id !== userMessageId && m.id !== assistantMessageId)
+    }
+    isGenerating.value = false
+    input.value = normalizedQuery
+    selectedSkill.value = selectedSkillSnapshot
+    return
+  }
+  if (props.ensureConversationDatasource && !await props.ensureConversationDatasource()) {
     if (userMessageId) {
       messages.value = messages.value.filter(m => m.id !== userMessageId && m.id !== assistantMessageId)
     }

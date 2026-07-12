@@ -29,6 +29,7 @@ interface Props {
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   ensureConversationId?: (agentId?: string) => Promise<string | null>
+  ensureConversationDatasource?: () => Promise<boolean>
   executionTargets?: ExecutionTargetOption[]
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
@@ -1978,6 +1979,15 @@ const submitAnalysisQuery = async (
     }
     if (!convId) {
       ElMessage.error('无法创建会话')
+      if (options.appendUserMessage !== false) {
+        messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
+      }
+      activeAssistantMessageId.value = null
+      if (options.restoreInputText) input.value = options.restoreInputText
+      if (options.messageSkill) selectedSkill.value = options.messageSkill
+      return
+    }
+    if (props.ensureConversationDatasource && !await props.ensureConversationDatasource()) {
       if (options.appendUserMessage !== false) {
         messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
       }

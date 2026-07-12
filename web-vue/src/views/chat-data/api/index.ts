@@ -1406,3 +1406,11 @@ export function getConversationHistory(conversationId: string): Promise<Response
     url: `/agents/api/chatdata/conversations/${conversationId}`
   })
 }
+
+/** 获取历史会话绑定的数据源组。 */
+export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/context`,
+    method: 'get',
+  })
+}

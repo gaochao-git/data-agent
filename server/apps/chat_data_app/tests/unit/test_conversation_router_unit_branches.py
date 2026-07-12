@@ -369,6 +369,55 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
 
 
 @pytest.mark.asyncio
+async def test_completion_route_binds_datasource_and_rejects_mismatch(router_state, monkeypatch):
+    request = FakeRequest()
+
+    async def no_existing_conversation(*_args, **_kwargs):
+        return None
+
+    async def get_checkpoint_datasource_id(*_args, **_kwargs):
+        return "ds_a"
+
+    async def handler(**_kwargs):
+        return {"streamed": True}
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", no_existing_conversation)
+    monkeypatch.setattr(conversation_router.conversation, "get_checkpoint_datasource_id", get_checkpoint_datasource_id)
+    conversation_router._completion_handlers["agent_a"] = handler
+
+    response = await conversation_router.completion(
+        "conv",
+        conversation_router.CompletionRequest(agent_id="agent_a", query="hello", options={"datasource_id": "ds_a"}),
+        request,
+    )
+    assert response == {"streamed": True}
+
+    rejected = payload(await conversation_router.completion(
+        "conv",
+        conversation_router.CompletionRequest(agent_id="agent_a", query="hello", options={"datasource_id": "ds_b"}),
+        request,
+    ))
+    assert rejected["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_context_returns_checkpoint_datasource(router_state, monkeypatch):
+    request = FakeRequest()
+
+    async def get_config(*_args, **_kwargs):
+        return conversation_router._agent_configs["agent_a"]
+
+    async def get_checkpoint_datasource_id(*_args, **_kwargs):
+        return "ds_a"
+
+    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
+    monkeypatch.setattr(conversation_router.conversation, "get_checkpoint_datasource_id", get_checkpoint_datasource_id)
+
+    result = payload(await conversation_router.get_conversation_context("conv", request))
+    assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a"}
+
+
+@pytest.mark.asyncio
 async def test_resume_route_custom_and_generic(router_state, monkeypatch):
     request = FakeRequest()
 

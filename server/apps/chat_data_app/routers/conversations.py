@@ -630,13 +630,29 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         if unavailable_response:
             return unavailable_response
 
+        options = dict(request.options or {})
+        requested_datasource_id = str(options.get("datasource_id") or "").strip()
+        agent_config = get_agent_config(request.agent_id)
+        if requested_datasource_id and agent_config:
+            bound_datasource_id = await conversation.get_checkpoint_datasource_id(
+                conversation_id,
+                agent_config["get_graph"],
+                agent_config["get_checkpointer"],
+            )
+            if bound_datasource_id and bound_datasource_id != requested_datasource_id:
+                return business_response(
+                    msg="当前会话已绑定其他数据源组，请新建会话后再切换数据源组",
+                    code=ErrorCode.CHATDATA_BAD_REQUEST,
+                    status="error",
+                )
+
         # 调用对应的 completion 处理器
         # 使用 inspect 检查 handler 支持哪些参数
         sig = inspect.signature(handler)
         kwargs = {
             "conversation_id": conversation_id,
             "query": request.query,
-            "options": request.options,
+            "options": options,
         }
         if 'file_ids' in sig.parameters:
             kwargs['file_ids'] = request.file_ids
@@ -653,6 +669,31 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
         return business_response(msg=f"对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
+
+
+@router.get("/{conversation_id}/context")
+async def get_conversation_context(conversation_id: str, req: Request):
+    """读取历史会话的轻量上下文。"""
+    try:
+        if not conversation_id:
+            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+
+        user_id = _get_user_id(req)
+        config = await get_agent_config_by_conversation(conversation_id, user_id)
+        if not config:
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+
+        datasource_id = await conversation.get_checkpoint_datasource_id(
+            conversation_id,
+            config["get_graph"],
+            config["get_checkpointer"],
+        )
+        return business_response(data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功")
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except Exception as e:
+        logger.error(f"获取对话上下文失败: {e}", exc_info=True)
+        return business_response(msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/resume")

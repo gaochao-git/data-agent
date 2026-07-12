@@ -473,6 +473,27 @@ def _get_interrupt_info(state) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _get_checkpoint_datasource_id(values: Dict[str, Any] | None) -> Optional[str]:
+    """从 LangGraph state 读取会话首次绑定的数据源组。"""
+    datasource_id = str((values or {}).get("conversation_datasource_id") or "").strip()
+    return datasource_id or None
+
+
+async def get_checkpoint_datasource_id(
+    conversation_id: str,
+    get_graph: Callable,
+    get_checkpointer_fn: Callable,
+) -> Optional[str]:
+    """读取会话 checkpoint 中绑定的数据源组。"""
+    if get_graph is None:
+        return None
+    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
+    async with get_checkpointer_fn() as checkpointer:
+        graph = get_graph(checkpointer)
+        state = await graph.aget_state(config)
+    return _get_checkpoint_datasource_id(state.values if state and state.values else None)
+
+
 async def get_detail(
     db_path: str,
     conversation_id: str,
@@ -505,6 +526,7 @@ async def get_detail(
     reasoning_segments = []
     token_usage = None
     pending_tool = None
+    state = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
     # 部分 agent 不使用 LangGraph，有自己的消息存储
@@ -527,6 +549,7 @@ async def get_detail(
     return {
         "id": conversation_id,
         "title": title,
+        "datasource_id": _get_checkpoint_datasource_id(state.values if state and state.values else None),
         "messages": messages,
         "task_stages": task_stages,
         "reasoning_segments": reasoning_segments,

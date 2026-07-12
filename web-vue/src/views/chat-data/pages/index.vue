@@ -9,7 +9,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
 import { getUserOrgList } from '@/api/psoss/records'
-import { getDatasources, getConversations, createConversation, generateConversationTitle, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
 import SqlConversation from '../components/SqlConversation.vue'
@@ -540,6 +540,7 @@ const conversations = ref<ConversationItem[]>([])
 const currentConversationId = ref<string | null>(null)
 const currentConversationTitle = ref<string>('新会话')
 const currentConversationAgentId = ref<'chat_data' | 'chat_data_data_analyze'>('chat_data')
+const currentConversationDatasourceId = ref<string | null>(null)
 const isLoadingConversations = ref(false)
 const isLoadingMoreConversations = ref(false)
 const hasMoreConversations = ref(false)
@@ -749,6 +750,7 @@ const ensureConversationId = async (agentId: string = 'chat_data'): Promise<stri
       currentConversationId.value = res.data.id
       currentConversationAgentId.value = normalizedAgentId
       currentConversationTitle.value = '新会话'
+      currentConversationDatasourceId.value = selectedDatasourceId.value || null
       return res.data.id
     }
   } catch (err) {
@@ -812,6 +814,7 @@ watch(visibleModes, () => {
 const handleNewConversation = () => {
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
+  currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
 }
 
@@ -820,6 +823,7 @@ const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
   currentConversationAgentId.value = agentId
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
+  currentConversationDatasourceId.value = null
   conversationLoadSeq++
   conversations.value = []
   conversationsLoaded.value = false
@@ -834,19 +838,81 @@ const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
   void ensureConversationsLoaded(true)
 }
 
+const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
+  try {
+    const response = await getConversationContext(conversationId)
+    if (response.status !== 'success') {
+      throw new Error(response.msg || '读取历史会话上下文失败')
+    }
+    return String(response.data?.datasource_id || '').trim() || null
+  } catch (error) {
+    console.error('读取历史会话上下文失败:', error)
+    return undefined
+  }
+}
+
 // 选择会话
-const selectConversation = (id: string) => {
+const selectConversation = async (id: string): Promise<boolean> => {
+  const conv = conversations.value.find(c => c.id === id)
+  if (!conv) return false
+  const conversationDatasourceId = await loadConversationDatasourceId(id)
+  if (conversationDatasourceId === undefined) {
+    ElMessage.error('读取历史会话上下文失败')
+    return false
+  }
+  if (conversationDatasourceId) {
+    if (!datasources.value.some(datasource => datasource.id === conversationDatasourceId)) {
+      ElMessage.warning('该历史会话关联的数据源组已不可用，仅可查看历史内容')
+    } else {
+      selectedDatasourceId.value = conversationDatasourceId
+    }
+  }
   currentConversationId.value = id
   hasEnteredConversationOnce.value = true
-  const conv = conversations.value.find(c => c.id === id)
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationAgentId.value = conv?.agent_id === 'chat_data_data_analyze' ? 'chat_data_data_analyze' : 'chat_data'
+  currentConversationDatasourceId.value = conversationDatasourceId || null
   conversationKey.value++ // 强制重新渲染以加载历史
+  return true
+}
+
+const ensureConversationDatasource = async (): Promise<boolean> => {
+  const boundDatasourceId = currentConversationDatasourceId.value
+  if (boundDatasourceId) {
+    if (!datasources.value.some(datasource => datasource.id === boundDatasourceId)) {
+      ElMessage.warning('该历史会话关联的数据源组已不可用，无法继续提问')
+      return false
+    }
+    selectedDatasourceId.value = boundDatasourceId
+    return true
+  }
+  if (!currentConversationId.value) return true
+  const currentDatasourceName = currentDatasource.value?.group_name || '当前数据源组'
+  try {
+    await ElMessageBox.confirm(
+      `该历史会话未记录数据源组。继续提问将绑定到当前数据源组“${currentDatasourceName}”。`,
+      '确认数据源组',
+      { confirmButtonText: '确认继续', cancelButtonText: '取消', type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+const handleHistoryConversationSelect = async (id: string) => {
+  if (!await selectConversation(id)) return
+  showConversationListPanel.value = false
+  showHistoryPopover.value = false
 }
 
 // 首条消息完成后的回调
 const handleFirstMessageComplete = async (convId: string) => {
   hasEnteredConversationOnce.value = true
+  const boundDatasourceId = await loadConversationDatasourceId(convId)
+  if (currentConversationId.value === convId && boundDatasourceId) {
+    currentConversationDatasourceId.value = boundDatasourceId
+  }
   try {
     // 生成会话标题
     const res = await generateConversationTitle(convId)
@@ -1253,24 +1319,40 @@ const selectedExecutionTargetSummary = computed(() => {
 })
 
 const showContextSelectorDialog = ref(false)
+const draftSelectedDatasourceId = ref<string>('')
 const draftSelectedMemberDatasourceIds = ref<string[]>([])
 const draftDefaultAllExecutionTargets = ref(false)
 
-const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(currentDatasource.value))
+const draftDatasource = computed(() => {
+  const datasourceId = draftSelectedDatasourceId.value || selectedDatasourceId.value
+  return datasources.value.find(ds => ds.id === datasourceId) || null
+})
+
+const draftExecutionTargets = computed<ExecutionTargetOption[]>(() => buildExecutionTargets(draftDatasource.value))
+
+const canChangeDraftDatasource = computed(() => {
+  if (datasources.value.length <= 1) return false
+  return !isConversationContextMode.value || !currentConversationDatasourceId.value
+})
 
 const openContextSelector = () => {
+  draftSelectedDatasourceId.value = selectedDatasourceId.value || resolveDefaultDatasourceId(datasources.value)
   draftSelectedMemberDatasourceIds.value = [...activeMemberDatasourceIds.value]
   draftDefaultAllExecutionTargets.value = isConversationContextMode.value
   showContextSelectorDialog.value = true
 }
 
 watch(
-  () => [selectedDatasourceId.value, draftExecutionTargets.value.map(item => item.member_datasource_id).join(',')],
+  () => [
+    draftSelectedDatasourceId.value,
+    draftDatasource.value?.template_datasource_id,
+    draftExecutionTargets.value.map(item => item.member_datasource_id).join(','),
+  ],
   () => {
     const nextIds = resolveSelectedExecutionTargetIds(
       draftExecutionTargets.value,
       draftSelectedMemberDatasourceIds.value,
-      currentDatasource.value?.template_datasource_id,
+      draftDatasource.value?.template_datasource_id,
       true,
       draftDefaultAllExecutionTargets.value
     )
@@ -1287,10 +1369,13 @@ const handleConfirmContextSelector = () => {
   const nextIds = resolveSelectedExecutionTargetIds(
     draftExecutionTargets.value,
     draftSelectedMemberDatasourceIds.value,
-    currentDatasource.value?.template_datasource_id,
+    draftDatasource.value?.template_datasource_id,
     true,
     draftDefaultAllExecutionTargets.value
   )
+  if (draftSelectedDatasourceId.value && draftSelectedDatasourceId.value !== selectedDatasourceId.value) {
+    selectedDatasourceId.value = draftSelectedDatasourceId.value
+  }
   if (isConversationContextMode.value) {
     conversationMemberDatasourceIds.value = nextIds
   } else {
@@ -1550,7 +1635,7 @@ onUnmounted(() => {
                 :has-more="hasMoreConversations"
                 :show-new-conversation-button="false"
                 :hide-management="!!parentComponentName"
-                @select-conversation="(id: string) => { selectConversation(id); showConversationListPanel = false; showHistoryPopover = false }"
+                @select-conversation="handleHistoryConversationSelect"
                 @new-conversation="handleNewConversation"
                 @load-more-conversations="loadMoreConversations"
               />
@@ -1786,6 +1871,7 @@ onUnmounted(() => {
                   :semantic-configs="enabledSemanticConfigs"
                   :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
+                  :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"
                   :execution-target-multiple="true"
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
@@ -1815,6 +1901,7 @@ onUnmounted(() => {
                     :semantic-config-id="conversationSemanticConfigId"
                     :semantic-config-selection="conversationSemanticConfigSelection"
                     :ensure-conversation-id="ensureConversationId"
+                    :ensure-conversation-datasource="ensureConversationDatasource"
                     :execution-targets="executionTargets"
                     :execution-target-multiple="true"
                     :selected-member-datasource-ids="conversationMemberDatasourceIds"
@@ -1899,9 +1986,20 @@ onUnmounted(() => {
       <div class="space-y-4">
         <div>
           <div class="mb-2 text-[13px] font-medium text-slate-700">当前数据源组</div>
-          <div class="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-800">
-            {{ currentDatasource?.group_name || '暂无数据源' }}
-          </div>
+          <el-select
+            v-model="draftSelectedDatasourceId"
+            class="w-full"
+            :disabled="!canChangeDraftDatasource"
+            placeholder="请选择数据源组"
+            filterable
+          >
+            <el-option
+              v-for="ds in datasources"
+              :key="ds.id"
+              :value="ds.id"
+              :label="ds.group_name || ds.id"
+            />
+          </el-select>
         </div>
 
         <div>

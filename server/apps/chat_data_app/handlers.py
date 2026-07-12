@@ -725,6 +725,7 @@ async def _stream_sql_generation(
                     "available_member_datasource_ids": available_member_datasource_ids,
                     "matched_member_datasource_ids": matched_member_datasource_ids,
                 },
+                "conversation_datasource_id": datasource_id,
                 "semantic_config_id": semantic_config_id,
                 "semantic_config": semantic_config,
                 "user_id": user_id,
@@ -957,7 +958,7 @@ async def sql_completion_handler(
     else:
         skill_names = []
 
-    # 确保 thread 记录存在
+    # 保持懒创建会话的既有行为；数据源组由下方 graph state 首次绑定。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
 
     return StreamingResponse(
@@ -1048,6 +1049,7 @@ async def data_analyze_completion_handler(
                 "messages": [HumanMessage(content=query, additional_kwargs=human_message_kwargs)],
                 "task_stages": [],
                 "task_run_id": str(uuid.uuid4()),
+                "conversation_datasource_id": datasource_id,
                 "datasource_id": datasource_id,
                 "semantic_config_id": semantic_config_id,
                 "member_datasource_ids": member_datasource_ids or [],

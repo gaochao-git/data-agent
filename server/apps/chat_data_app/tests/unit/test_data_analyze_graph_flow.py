@@ -77,6 +77,8 @@ def test_stage_context_empty_and_multimodal_message_edges():
 
 def test_data_analyze_reasoning_merge_and_default_skill_prompt(monkeypatch, tmp_path):
     assert data_analyze_graph.merge_reasoning_segments([{"id": "old"}], [{"id": "new"}]) == [{"id": "old"}, {"id": "new"}]
+    assert data_analyze_graph.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
+    assert data_analyze_graph.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
 
     monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
     prompt = data_analyze_graph.build_data_analyze_system_prompt(

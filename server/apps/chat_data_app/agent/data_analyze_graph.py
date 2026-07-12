@@ -92,6 +92,11 @@ def merge_reasoning_segments(existing: list[dict[str, Any]] | None, new: list[di
     return list(existing or []) + list(new or [])
 
 
+def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
+    """数据源组首次绑定后不可被后续轮次覆盖。"""
+    return existing or new
+
+
 class DataAnalyzeFlowState(TypedDict):
     """DataAnalyze 外层任务流状态。"""
     messages: Annotated[list[BaseMessage], add_messages]
@@ -99,6 +104,7 @@ class DataAnalyzeFlowState(TypedDict):
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     token_usage: NotRequired[dict[str, Any] | None]
     task_run_id: str
+    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]
     member_datasource_ids: NotRequired[list[str]]
