@@ -3,7 +3,7 @@
  * 数据源管理组件
  * 支持数据源列表展示、新建数据源组、删除、设为默认
  */
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, watch, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getDatasources,
@@ -26,6 +26,12 @@ import {
 } from '../api'
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
 import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
+
+const props = withDefaults(defineProps<{
+  datasources?: DataSource[]
+}>(), {
+  datasources: () => [],
+})
 
 const emit = defineEmits<{
   (e: 'datasources-change', datasources: DataSource[]): void
@@ -799,6 +805,17 @@ const emitDatasourcesChange = () => {
   emit('datasources-change', datasources.value)
 }
 
+const normalizeDatasourceList = (items: DataSource[] = []) => {
+  return items.filter(ds => ds.group_name && ds.group_name.trim() !== '')
+}
+
+const applyDatasourceList = (items: DataSource[]) => {
+  datasources.value = normalizeDatasourceList(items)
+  columnDictStatusMap.value = {}
+  columnDictStatusLoadedKeys.value = new Set()
+  columnDictStatusLoadingKeys.value = new Set()
+}
+
 const replaceDatasourceInList = (updatedDatasource?: DataSource | null, keepCurrentTables = false) => {
   if (!updatedDatasource?.id) return
   const currentIndex = datasources.value.findIndex(ds => ds.id === updatedDatasource.id)
@@ -825,12 +842,7 @@ const fetchDatasources = async () => {
   try {
     const res = await getDatasources()
     if (res.status === 'success') {
-      datasources.value = (res.data.datasources || []).filter(
-        (ds: DataSource) => ds.group_name && ds.group_name.trim() !== ''
-      )
-      columnDictStatusMap.value = {}
-      columnDictStatusLoadedKeys.value = new Set()
-      columnDictStatusLoadingKeys.value = new Set()
+      applyDatasourceList(res.data.datasources || [])
       emitDatasourcesChange()
     }
   } catch (err) {
@@ -839,6 +851,15 @@ const fetchDatasources = async () => {
     datasourcesLoading.value = false
   }
 }
+
+watch(
+  () => props.datasources,
+  (nextDatasources) => {
+    if (datasourcesLoading.value) return
+    applyDatasourceList(nextDatasources || [])
+  },
+  { immediate: true }
+)
 
 // 展开/折叠
 const toggleDatasource = (dsId: string) => {
@@ -1244,6 +1265,7 @@ const handleCreateDatasourceGroup = async () => {
       if (res.data?.id) {
         editingGroupId.value = res.data.id
       }
+      await fetchDatasources()
       savedGroupConfigSnapshotKey.value = buildGroupConfigSnapshotKey()
       if (shouldResetTableSelectorAfterSave) {
         resetGroupTableSelector()

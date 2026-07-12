@@ -89,6 +89,7 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory') => {
         v-show="activeTab === 'datasource'"
         ref="datasourceManagerRef"
         class="h-full"
+        :datasources="datasources"
         @datasources-change="emit('datasourcesChange', $event)"
         @open-semantic-config="emit('openSemanticConfig', $event)"
       />
