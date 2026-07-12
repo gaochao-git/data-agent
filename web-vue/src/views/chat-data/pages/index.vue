@@ -298,6 +298,8 @@ const viewMode = ref<ViewMode>(resolveInitialMode())
 const builderMounted = ref(viewMode.value === 'builder')
 const editorMounted = ref(viewMode.value === 'editor')
 const dashboardMounted = ref(viewMode.value === 'dashboard')
+const dashboardEditorMounted = ref(viewMode.value === 'dashboard')
+const metricConfigMounted = ref(viewMode.value === 'metricConfig')
 
 // 选中的指标集 ID
 const selectedSemanticConfigId = ref<string | null>(null)
@@ -441,6 +443,9 @@ watch(viewMode, () => {
     editorMounted.value = true
   } else if (viewMode.value === 'dashboard') {
     dashboardMounted.value = true
+    dashboardEditorMounted.value = true
+  } else if (viewMode.value === 'metricConfig') {
+    metricConfigMounted.value = true
   }
   if (viewMode.value === 'conversation') {
     activeSidebarTab.value = 'metrics'
@@ -461,6 +466,7 @@ watch(viewMode, () => {
 // 打开看板编辑器
 const handleOpenDashboard = (dashboardId: string) => {
   activeDashboardId.value = dashboardId
+  dashboardEditorMounted.value = true
 }
 
 const handleDashboardCreatedFromConversation = (dashboard: Dashboard) => {
@@ -471,6 +477,7 @@ const handleDashboardCreatedFromConversation = (dashboard: Dashboard) => {
   ]
   activeDashboardId.value = dashboard.id
   dashboardMounted.value = true
+  dashboardEditorMounted.value = true
   viewMode.value = 'dashboard'
   activeSidebarTab.value = 'dashboard'
 }
@@ -1393,6 +1400,11 @@ const showSidebarContextBar = computed(() => {
   return datasources.value.length > 0 || executionTargets.value.length > 0
 })
 
+const showSidebarFooter = computed(() => {
+  if (viewMode.value === 'dashboard') return false
+  return showSidebarContextBar.value || canManageDatasource.value
+})
+
 watch(selectedDatasourceId, () => {
   conversationSelectedSemanticConfigId.value = null
   metricSelectedSemanticConfigId.value = null
@@ -1646,7 +1658,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
-    <div v-if="!noMatchedDatasource && viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
+    <div v-if="!noMatchedDatasource && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
         <select
@@ -1691,7 +1703,7 @@ onUnmounted(() => {
       </div>
       <div class="flex-1 min-h-0">
         <SemanticConfigPanel
-          v-if="selectedDatasourceId"
+          v-if="selectedDatasourceId && metricConfigMounted"
           :key="`${selectedDatasourceId}-${metricConfigPanelKey}`"
           :datasource-id="selectedDatasourceId"
           :datasource-name="metricConfigDatasource?.group_name || ''"
@@ -1711,7 +1723,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 下方内容区（82px 头部 + 48px 工具栏 = 130px） -->
-    <div v-if="!noMatchedDatasource && viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
+    <div v-if="!noMatchedDatasource" v-show="viewMode !== 'metricConfig'" class="flex overflow-hidden" :class="{ 'select-none': isResizingSidebar }" style="height: calc(100vh - 130px)">
       <!-- 左侧：公用侧边栏 -->
       <!-- 折叠态：窄条 -->
       <div v-if="!isSidebarVisible" class="flex flex-col items-center gap-1 pt-3 pb-3 bg-white border-r border-slate-200 shrink-0 w-12">
@@ -1801,7 +1813,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 底部：统一上下文选择 / 数据源组管理 -->
-        <div class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
+        <div v-if="showSidebarFooter" class="px-3 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
           <div class="flex items-center gap-2 min-w-0">
             <button
               v-if="showSidebarContextBar"
@@ -1840,31 +1852,34 @@ onUnmounted(() => {
 
       <!-- 右侧：主内容区 -->
       <div class="flex-1 flex flex-col min-w-0 overflow-hidden bg-white">
+        <div class="relative flex-1 min-h-0 overflow-hidden">
           <!-- 看板编辑器（优先显示） -->
-          <DashboardEditor
-            v-if="viewMode === 'dashboard' && activeDashboardId"
-            :key="activeDashboardId"
-            :dashboard-id="activeDashboardId"
-            :datasource-id="selectedDatasourceId"
-            :datasources="datasources"
-            :current-user-id="currentUser.id"
-            @close="handleCloseDashboard"
-          />
+          <div v-show="viewMode === 'dashboard' && !!activeDashboardId" class="absolute inset-0 overflow-hidden">
+            <DashboardEditor
+              v-if="dashboardEditorMounted && activeDashboardId"
+              :key="activeDashboardId"
+              :dashboard-id="activeDashboardId"
+              :datasource-id="selectedDatasourceId"
+              :datasources="datasources"
+              :current-user-id="currentUser.id"
+              class="h-full"
+              @close="handleCloseDashboard"
+            />
+          </div>
 
-          <template v-else>
-            <!-- 问数模式（v-show 保持存活，切换 tab 不销毁） -->
-            <div v-show="viewMode === 'conversation'" class="flex-1 min-h-0 relative">
-              <div class="h-full flex min-h-0">
-                <div class="flex-1 min-w-0 min-h-0">
-                  <SqlConversation
-                    v-if="currentConversationAgentId === 'chat_data'"
-                    ref="sqlConversationRef"
-                    :key="conversationKey"
-                    :datasources="datasources"
-                    :datasource="currentDatasource"
-                    :conversation-id="currentConversationId"
-                    :conversation-title="currentConversationTitle"
-                    :conversation-agent-id="currentConversationAgentId"
+          <!-- 问数模式（v-show 保持存活，切换 tab 不销毁） -->
+          <div v-show="viewMode === 'conversation'" class="absolute inset-0 overflow-hidden">
+            <div class="h-full flex min-h-0">
+              <div class="flex-1 min-w-0 min-h-0">
+                <SqlConversation
+                  v-if="currentConversationAgentId === 'chat_data'"
+                  ref="sqlConversationRef"
+                  :key="conversationKey"
+                  :datasources="datasources"
+                  :datasource="currentDatasource"
+                  :conversation-id="currentConversationId"
+                  :conversation-title="currentConversationTitle"
+                  :conversation-agent-id="currentConversationAgentId"
                   :selected-datasource-id="selectedDatasourceId"
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
@@ -1890,83 +1905,82 @@ onUnmounted(() => {
                   @switch-to-analysis="switchToAnalysisPanel"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"
-                  />
-                  <AnalysisConversation
-                    v-else
-                    :key="conversationKey"
-                    :datasource="currentDatasource"
-                    :conversation-id="currentConversationId"
-                    :conversation-agent-id="currentConversationAgentId"
-                    :selected-datasource-id="selectedDatasourceId"
-                    :semantic-config-id="conversationSemanticConfigId"
-                    :semantic-config-selection="conversationSemanticConfigSelection"
-                    :ensure-conversation-id="ensureConversationId"
-                    :ensure-conversation-datasource="ensureConversationDatasource"
-                    :execution-targets="executionTargets"
-                    :execution-target-multiple="true"
-                    :selected-member-datasource-ids="conversationMemberDatasourceIds"
-                    v-model:selected-model-id="selectedConversationModelId"
-                    class="h-full"
-                    @first-message-complete="handleFirstMessageComplete"
-                    @agent-change="handleAgentChange"
-                    @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
-                    @dashboard-created="handleDashboardCreatedFromConversation"
-                    @semantic-config-selected="handleConversationSemanticConfigSelected"
-                  />
-                </div>
+                />
+                <AnalysisConversation
+                  v-else
+                  :key="conversationKey"
+                  :datasource="currentDatasource"
+                  :conversation-id="currentConversationId"
+                  :conversation-agent-id="currentConversationAgentId"
+                  :selected-datasource-id="selectedDatasourceId"
+                  :semantic-config-id="conversationSemanticConfigId"
+                  :semantic-config-selection="conversationSemanticConfigSelection"
+                  :ensure-conversation-id="ensureConversationId"
+                  :ensure-conversation-datasource="ensureConversationDatasource"
+                  :execution-targets="executionTargets"
+                  :execution-target-multiple="true"
+                  :selected-member-datasource-ids="conversationMemberDatasourceIds"
+                  v-model:selected-model-id="selectedConversationModelId"
+                  class="h-full"
+                  @first-message-complete="handleFirstMessageComplete"
+                  @agent-change="handleAgentChange"
+                  @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
+                  @dashboard-created="handleDashboardCreatedFromConversation"
+                  @semantic-config-selected="handleConversationSemanticConfigSelected"
+                />
               </div>
-
             </div>
+          </div>
 
-            <!-- 辅助查询模式 -->
-            <div v-if="builderMounted" v-show="viewMode === 'builder'" class="flex-1 min-h-0">
-              <QueryBuilder
-                ref="queryBuilderRef"
-                :datasource-id="selectedDatasourceId"
-                :datasource="currentDatasource"
-                :datasources="datasources"
-                :semantic-config-id="selectedSemanticConfigId"
-                :semantic-config="currentSemanticConfig"
-                :semantic-configs="semanticConfigs"
-                :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
-                :execution-targets="executionTargets"
-                :execution-target-multiple="true"
-                :selected-member-datasource-ids="selectedMemberDatasourceIds"
-                :on-sql-change="options?.onSqlChange"
-                :hide-chart-panel="!!options?.hideBuilderChartPanel"
-                hide-execution-target-selector
-                hide-sidebar
-                class="h-full"
-                @datasource-change="handleDatasourceChange"
-                @semantic-config-change="(id: string) => selectedSemanticConfigId = id"
-                @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
-              />
-            </div>
+          <!-- 辅助查询模式 -->
+          <div v-if="builderMounted" v-show="viewMode === 'builder'" class="absolute inset-0 overflow-hidden">
+            <QueryBuilder
+              ref="queryBuilderRef"
+              :datasource-id="selectedDatasourceId"
+              :datasource="currentDatasource"
+              :datasources="datasources"
+              :semantic-config-id="selectedSemanticConfigId"
+              :semantic-config="currentSemanticConfig"
+              :semantic-configs="semanticConfigs"
+              :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
+              :execution-targets="executionTargets"
+              :execution-target-multiple="true"
+              :selected-member-datasource-ids="selectedMemberDatasourceIds"
+              :on-sql-change="options?.onSqlChange"
+              :hide-chart-panel="!!options?.hideBuilderChartPanel"
+              hide-execution-target-selector
+              hide-sidebar
+              class="h-full"
+              @datasource-change="handleDatasourceChange"
+              @semantic-config-change="(id: string) => selectedSemanticConfigId = id"
+              @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+            />
+          </div>
 
-            <!-- 自由查询模式 -->
-            <div v-if="editorMounted" v-show="viewMode === 'editor'" class="flex-1 min-h-0">
-              <SqlEditor
-                ref="sqlEditorRef"
-                :datasource-id="selectedDatasourceId"
-                :datasource="currentDatasource"
-                :table-schema="tableSchema"
-                :initial-sql="options?.initialSql"
-                :execution-targets="executionTargets"
-                :execution-target-multiple="true"
-                :selected-member-datasource-ids="selectedMemberDatasourceIds"
-                :on-sql-change="options?.onSqlChange"
-                hide-execution-target-selector
-                hide-sidebar
-                class="h-full"
-                @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
-              />
-            </div>
+          <!-- 自由查询模式 -->
+          <div v-if="editorMounted" v-show="viewMode === 'editor'" class="absolute inset-0 overflow-hidden">
+            <SqlEditor
+              ref="sqlEditorRef"
+              :datasource-id="selectedDatasourceId"
+              :datasource="currentDatasource"
+              :table-schema="tableSchema"
+              :initial-sql="options?.initialSql"
+              :execution-targets="executionTargets"
+              :execution-target-multiple="true"
+              :selected-member-datasource-ids="selectedMemberDatasourceIds"
+              :on-sql-change="options?.onSqlChange"
+              hide-execution-target-selector
+              hide-sidebar
+              class="h-full"
+              @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
+            />
+          </div>
 
-            <!-- 数据看板模式（未选中具体看板时） -->
-            <div v-show="viewMode === 'dashboard'" class="flex-1 min-h-0 flex items-center justify-center text-sm text-slate-400">
-              请选择左侧数据看板
-            </div>
-          </template>
+          <!-- 数据看板模式（未选中具体看板时） -->
+          <div v-show="viewMode === 'dashboard' && !activeDashboardId" class="absolute inset-0 flex items-center justify-center text-sm text-slate-400">
+            请选择左侧数据看板
+          </div>
+        </div>
       </div>
     </div>
 
