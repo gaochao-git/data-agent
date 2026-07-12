@@ -716,14 +716,6 @@ const generatedConversationQueries = computed<FallbackQuery[]>(() => {
     pushFallbackQuery(items, seen, `查询${firstDimension}分布`, 'fa-chart-pie')
   }
 
-  pushFallbackQuery(items, seen, '查询主要指标总览', 'fa-chart-simple')
-  pushFallbackQuery(items, seen, '按机构统计主要指标', 'fa-sitemap')
-  pushFallbackQuery(items, seen, '查看最近一段时间的数据趋势', 'fa-chart-line')
-  pushFallbackQuery(items, seen, '列出需要关注的异常数据', 'fa-triangle-exclamation')
-  pushFallbackQuery(items, seen, '找出排名靠前的记录', 'fa-ranking-star')
-  pushFallbackQuery(items, seen, '按类别对比核心指标', 'fa-table-cells')
-  pushFallbackQuery(items, seen, '查看数据量最大的分类', 'fa-chart-pie')
-
   return items.slice(0, 20)
 })
 
