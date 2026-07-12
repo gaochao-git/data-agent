@@ -267,6 +267,71 @@ async def get_agent_config_by_conversation(conversation_id: str, user_id: Option
     return _agent_configs.get(agent_id)
 
 
+async def _get_existing_agent_for_completion(conversation_id: str, request_agent_id: str, user_id: str) -> Optional[str]:
+    """校验会话归属并读取本用户会话的 agent_id。"""
+    existing_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
+    if existing_agent_id and existing_agent_id != request_agent_id:
+        return None
+    if existing_agent_id:
+        return existing_agent_id
+
+    unowned_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id)
+    return None if unowned_agent_id else ""
+
+
+async def _completion_datasource_binding_response(
+    conversation_id: str,
+    requested_datasource_id: str,
+    agent_id: str,
+):
+    """校验当前会话是否已绑定其他数据源组。"""
+    if not requested_datasource_id:
+        return None
+    agent_config = get_agent_config(agent_id)
+    if not agent_config:
+        return None
+
+    bound_datasource_id = await conversation.get_checkpoint_datasource_id(
+        conversation_id,
+        agent_config["get_graph"],
+        agent_config["get_checkpointer"],
+    )
+    if not bound_datasource_id or bound_datasource_id == requested_datasource_id:
+        return None
+    return business_response(
+        msg="当前会话已绑定其他数据源组，请新建会话后再切换数据源组",
+        code=ErrorCode.CHATDATA_BAD_REQUEST,
+        status="error",
+    )
+
+
+def _build_completion_handler_kwargs(
+    handler: Callable,
+    conversation_id: str,
+    request: CompletionRequest,
+    options: Dict[str, Any],
+    req: Request,
+    user_id: str,
+    username: str,
+) -> Dict[str, Any]:
+    """按 handler 签名构造 completion 入参。"""
+    sig = inspect.signature(handler)
+    kwargs = {
+        "conversation_id": conversation_id,
+        "query": request.query,
+        "options": options,
+    }
+    if 'file_ids' in sig.parameters:
+        kwargs['file_ids'] = request.file_ids
+    if 'user_id' in sig.parameters:
+        kwargs['user_id'] = user_id
+    if 'username' in sig.parameters:
+        kwargs['username'] = username
+    if 'request' in sig.parameters:
+        kwargs['request'] = req
+    return kwargs
+
+
 # ============ 认证辅助 ============
 
 def _get_current_user(request: Request):
@@ -615,13 +680,9 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
             return business_response(msg="消息不能为空", code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
 
         user_id, username = _get_current_user_identity(req)
-        existing_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
-        if existing_agent_id and existing_agent_id != request.agent_id:
+        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, request.agent_id, user_id)
+        if existing_agent_id is None:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        if not existing_agent_id:
-            unowned_agent_id = await conversation.get_agent_id(_default_db_path, conversation_id)
-            if unowned_agent_id:
-                return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
@@ -632,36 +693,16 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
         options = dict(request.options or {})
         requested_datasource_id = str(options.get("datasource_id") or "").strip()
-        agent_config = get_agent_config(request.agent_id)
-        if requested_datasource_id and agent_config:
-            bound_datasource_id = await conversation.get_checkpoint_datasource_id(
-                conversation_id,
-                agent_config["get_graph"],
-                agent_config["get_checkpointer"],
-            )
-            if bound_datasource_id and bound_datasource_id != requested_datasource_id:
-                return business_response(
-                    msg="当前会话已绑定其他数据源组，请新建会话后再切换数据源组",
-                    code=ErrorCode.CHATDATA_BAD_REQUEST,
-                    status="error",
-                )
+        datasource_binding_response = await _completion_datasource_binding_response(
+            conversation_id,
+            requested_datasource_id,
+            request.agent_id,
+        )
+        if datasource_binding_response:
+            return datasource_binding_response
 
         # 调用对应的 completion 处理器
-        # 使用 inspect 检查 handler 支持哪些参数
-        sig = inspect.signature(handler)
-        kwargs = {
-            "conversation_id": conversation_id,
-            "query": request.query,
-            "options": options,
-        }
-        if 'file_ids' in sig.parameters:
-            kwargs['file_ids'] = request.file_ids
-        if 'user_id' in sig.parameters:
-            kwargs['user_id'] = user_id
-        if 'username' in sig.parameters:
-            kwargs['username'] = username
-        if 'request' in sig.parameters:
-            kwargs['request'] = req
+        kwargs = _build_completion_handler_kwargs(handler, conversation_id, request, options, req, user_id, username)
 
         return await handler(**kwargs)
     except AuthenticationError as e:

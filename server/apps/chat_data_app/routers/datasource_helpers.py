@@ -292,67 +292,8 @@ def _semantic_health_issue(level: str, issue_type: str, message: str, target: st
     return issue
 
 
-def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str, Any]:
-    """校验单个指标集是否仍匹配当前物理表结构。"""
-    table_columns_map = _build_table_columns_map(datasource)
-    issues: List[Dict[str, Any]] = []
-    if not table_columns_map:
-        issues.append(_semantic_health_issue("error", "missing_schema", "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存", "datasource", config))
-        return {"config_id": config.get("id") or config.get("semantic_config_id"), "config_name": config.get("name") or "", "status": "invalid", "issues": issues}
-
-    for dim in config.get("dimensions") or []:
-        dim_name = dim.get("name") or dim.get("field_name") or ""
-        table_name = dim.get("table")
-        column_name = dim.get("column")
-        target = f"dimension:{dim_name}"
-        if not table_name or table_name not in table_columns_map:
-            issues.append(_semantic_health_issue("error", "missing_table", f"维度 {dim_name} 所属表不存在: {table_name}", target, config))
-            continue
-        if not column_name or column_name not in table_columns_map[table_name]:
-            issues.append(_semantic_health_issue("error", "missing_column", f"维度 {dim_name} 字段不存在: {table_name}.{column_name}", target, config))
-        expression = str(dim.get("expression") or "").strip()
-        if expression:
-            for identifier in _extract_expression_identifiers(expression):
-                if identifier not in table_columns_map[table_name]:
-                    issues.append(_semantic_health_issue("warning", "expression_column_changed", f"维度 {dim_name} 表达式疑似引用已变化字段: {table_name}.{identifier}", target, config))
-
-    for metric in config.get("metrics") or []:
-        metric_name = metric.get("name") or metric.get("field_name") or ""
-        table_name = metric.get("table")
-        expression = str(metric.get("expression") or "").strip()
-        target = f"metric:{metric_name}"
-        if not table_name or table_name not in table_columns_map:
-            issues.append(_semantic_health_issue("error", "missing_table", f"指标 {metric_name} 所属表不存在: {table_name}", target, config))
-            continue
-        if _is_count_all_expression(expression):
-            continue
-        identifiers = _extract_expression_identifiers(expression)
-        if not identifiers:
-            issues.append(_semantic_health_issue("warning", "expression_unparsed", f"指标 {metric_name} 表达式未识别到物理字段: {expression or '-'}", target, config))
-            continue
-        missing_identifiers = identifiers - table_columns_map[table_name]
-        for identifier in sorted(missing_identifiers):
-            issues.append(_semantic_health_issue("error", "expression_column_missing", f"指标 {metric_name} 表达式引用不存在字段: {table_name}.{identifier}", target, config))
-
-    for index, rel in enumerate(config.get("relationships") or [], start=1):
-        left_table = rel.get("left_table")
-        right_table = rel.get("right_table")
-        target = f"relationship:{left_table}->{right_table}"
-        if not left_table or left_table not in table_columns_map:
-            issues.append(_semantic_health_issue("error", "missing_table", f"关系 {index} 左表不存在: {left_table}", target, config))
-            continue
-        if not right_table or right_table not in table_columns_map:
-            issues.append(_semantic_health_issue("error", "missing_table", f"关系 {index} 右表不存在: {right_table}", target, config))
-            continue
-        conditions = rel.get("join_conditions") or [{"left_column": rel.get("left_column"), "right_column": rel.get("right_column")}]
-        for cond_index, cond in enumerate(conditions, start=1):
-            left_column = (cond or {}).get("left_column")
-            right_column = (cond or {}).get("right_column")
-            if not left_column or left_column not in table_columns_map[left_table]:
-                issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 左字段不存在: {left_table}.{left_column}", target, config))
-            if not right_column or right_column not in table_columns_map[right_table]:
-                issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 右字段不存在: {right_table}.{right_column}", target, config))
-
+def _build_semantic_health_result(config: Dict, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """构造单个指标集健康检查结果。"""
     status = "invalid" if any(item["level"] == "error" for item in issues) else "warning" if issues else "ok"
     return {
         "config_id": config.get("id") or config.get("semantic_config_id"),
@@ -360,6 +301,101 @@ def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str
         "status": status,
         "issues": issues,
     }
+
+
+def _validate_semantic_dimension_health(
+    dim: Dict[str, Any],
+    table_columns_map: Dict[str, Set[str]],
+    config: Dict,
+) -> List[Dict[str, Any]]:
+    """校验单个语义维度是否匹配物理表。"""
+    dim_name = dim.get("name") or dim.get("field_name") or ""
+    table_name = dim.get("table")
+    column_name = dim.get("column")
+    target = f"dimension:{dim_name}"
+    if not table_name or table_name not in table_columns_map:
+        return [_semantic_health_issue("error", "missing_table", f"维度 {dim_name} 所属表不存在: {table_name}", target, config)]
+
+    issues: List[Dict[str, Any]] = []
+    if not column_name or column_name not in table_columns_map[table_name]:
+        issues.append(_semantic_health_issue("error", "missing_column", f"维度 {dim_name} 字段不存在: {table_name}.{column_name}", target, config))
+    expression = str(dim.get("expression") or "").strip()
+    for identifier in _extract_expression_identifiers(expression):
+        if identifier not in table_columns_map[table_name]:
+            issues.append(_semantic_health_issue("warning", "expression_column_changed", f"维度 {dim_name} 表达式疑似引用已变化字段: {table_name}.{identifier}", target, config))
+    return issues
+
+
+def _validate_semantic_metric_health(
+    metric: Dict[str, Any],
+    table_columns_map: Dict[str, Set[str]],
+    config: Dict,
+) -> List[Dict[str, Any]]:
+    """校验单个语义指标是否匹配物理表。"""
+    metric_name = metric.get("name") or metric.get("field_name") or ""
+    table_name = metric.get("table")
+    expression = str(metric.get("expression") or "").strip()
+    target = f"metric:{metric_name}"
+    if not table_name or table_name not in table_columns_map:
+        return [_semantic_health_issue("error", "missing_table", f"指标 {metric_name} 所属表不存在: {table_name}", target, config)]
+    if _is_count_all_expression(expression):
+        return []
+
+    identifiers = _extract_expression_identifiers(expression)
+    if not identifiers:
+        return [_semantic_health_issue("warning", "expression_unparsed", f"指标 {metric_name} 表达式未识别到物理字段: {expression or '-'}", target, config)]
+
+    return [
+        _semantic_health_issue("error", "expression_column_missing", f"指标 {metric_name} 表达式引用不存在字段: {table_name}.{identifier}", target, config)
+        for identifier in sorted(identifiers - table_columns_map[table_name])
+    ]
+
+
+def _validate_semantic_relationship_health(
+    rel: Dict[str, Any],
+    index: int,
+    table_columns_map: Dict[str, Set[str]],
+    config: Dict,
+) -> List[Dict[str, Any]]:
+    """校验单个语义关系是否匹配物理表。"""
+    left_table = rel.get("left_table")
+    right_table = rel.get("right_table")
+    target = f"relationship:{left_table}->{right_table}"
+    if not left_table or left_table not in table_columns_map:
+        return [_semantic_health_issue("error", "missing_table", f"关系 {index} 左表不存在: {left_table}", target, config)]
+    if not right_table or right_table not in table_columns_map:
+        return [_semantic_health_issue("error", "missing_table", f"关系 {index} 右表不存在: {right_table}", target, config)]
+
+    issues: List[Dict[str, Any]] = []
+    conditions = rel.get("join_conditions") or [{"left_column": rel.get("left_column"), "right_column": rel.get("right_column")}]
+    for cond_index, cond in enumerate(conditions, start=1):
+        left_column = (cond or {}).get("left_column")
+        right_column = (cond or {}).get("right_column")
+        if not left_column or left_column not in table_columns_map[left_table]:
+            issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 左字段不存在: {left_table}.{left_column}", target, config))
+        if not right_column or right_column not in table_columns_map[right_table]:
+            issues.append(_semantic_health_issue("error", "missing_join_column", f"关系 {index}.{cond_index} 右字段不存在: {right_table}.{right_column}", target, config))
+    return issues
+
+
+def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str, Any]:
+    """校验单个指标集是否仍匹配当前物理表结构。"""
+    table_columns_map = _build_table_columns_map(datasource)
+    issues: List[Dict[str, Any]] = []
+    if not table_columns_map:
+        issues.append(_semantic_health_issue("error", "missing_schema", "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存", "datasource", config))
+        return _build_semantic_health_result(config, issues)
+
+    for dim in config.get("dimensions") or []:
+        issues.extend(_validate_semantic_dimension_health(dim, table_columns_map, config))
+
+    for metric in config.get("metrics") or []:
+        issues.extend(_validate_semantic_metric_health(metric, table_columns_map, config))
+
+    for index, rel in enumerate(config.get("relationships") or [], start=1):
+        issues.extend(_validate_semantic_relationship_health(rel, index, table_columns_map, config))
+
+    return _build_semantic_health_result(config, issues)
 
 
 def _build_datasource_semantic_health(datasource: Dict, configs: List[Dict]) -> Dict[str, Any]:
