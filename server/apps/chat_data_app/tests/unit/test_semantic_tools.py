@@ -24,6 +24,7 @@ from apps.chat_data_app.services.semantic_tools import (
     list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
     _is_semantic_config_directory_query,
+    _filter_semantic_config_tables_for_tool,
     _selection_to_tool_payload,
 )
 
@@ -92,6 +93,25 @@ def test_selection_to_tool_payload_branches():
     assert payload["semantic_configs"]["cfg_order"]["metrics"][0]["name"] == "订单金额"
     assert "query_plan" not in payload
     assert "cross_config_required" not in payload
+
+
+def test_filter_semantic_config_tables_for_tool_keeps_only_referenced_tables():
+    config = {
+        "id": "sc_order",
+        "metrics": [{"name": "订单金额", "table": "orders"}],
+        "dimensions": [{"name": "用户名称", "table": "users"}],
+        "relationships": [{"left_table": "orders", "right_table": "users"}],
+        "tables": [
+            {"table_name": "orders", "columns": [{"name": "amount"}]},
+            {"table_name": "users", "columns": [{"name": "username"}]},
+            {"table_name": "products", "columns": [{"name": "product_name"}]},
+        ],
+    }
+
+    filtered = _filter_semantic_config_tables_for_tool(config)
+
+    assert [item["table_name"] for item in filtered["tables"]] == ["orders", "users"]
+    assert [item["table_name"] for item in config["tables"]] == ["orders", "users", "products"]
 
 
 def test_select_semantic_config_tool_returns_full_directory_for_directory_query(monkeypatch):
@@ -272,6 +292,35 @@ def test_select_semantic_config_tool_returns_all_retrieved_semantic_summaries(mo
     assert payload["semantic_config_ids"] == ["sc_order", "sc_user"]
     assert payload["semantic_configs"]["sc_order"]["metrics"][0]["name"] == "订单金额"
     assert payload["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
+
+
+def test_select_semantic_config_tool_returns_only_selected_config_related_tables(monkeypatch):
+    async def fake_select_semantic_config_for_query(**_kwargs):
+        return {"semantic_config_ids": ["sc_order"]}
+
+    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
+        return {
+            "id": semantic_config_id,
+            "name": "订单分析",
+            "metrics": [{"name": "订单金额", "table": "orders"}],
+            "dimensions": [{"name": "用户名称", "table": "users"}],
+            "relationships": [{"left_table": "orders", "right_table": "users"}],
+            "tables": [
+                {"table_name": "orders", "columns": [{"name": "amount"}]},
+                {"table_name": "users", "columns": [{"name": "username"}]},
+                {"table_name": "products", "columns": [{"name": "product_name"}]},
+            ],
+        }
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+
+    tool = create_semantic_config_selection_tools(include_query_tools=False, datasource_id="ds_bound")[0]
+    result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
+    payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
+
+    tables = payload["semantic_configs"]["sc_order"]["tables"]
+    assert [item["table_name"] for item in tables] == ["orders", "users"]
 
 
 def test_select_semantic_config_tool_keeps_loaded_configs_when_a_retrieved_config_cannot_load(monkeypatch):
