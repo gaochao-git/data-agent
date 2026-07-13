@@ -104,9 +104,9 @@ watch(visible, (next) => {
           <div>
             <div class="text-xs text-gray-600 mb-1">学习来源</div>
             <el-checkbox-group v-model="historyLearningForm.sources" size="small">
-              <el-checkbox-button label="agent">智能问数</el-checkbox-button>
-              <el-checkbox-button label="builder">可视化查询</el-checkbox-button>
-              <el-checkbox-button label="sql">SQL查询</el-checkbox-button>
+              <el-checkbox-button value="agent">智能问数</el-checkbox-button>
+              <el-checkbox-button value="builder">可视化查询</el-checkbox-button>
+              <el-checkbox-button value="sql">SQL查询</el-checkbox-button>
             </el-checkbox-group>
           </div>
           <div class="flex items-center gap-3">

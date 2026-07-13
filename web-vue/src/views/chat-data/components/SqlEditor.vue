@@ -2502,7 +2502,7 @@ defineExpose({
                 <el-checkbox
                   v-for="column in historyColumnOptions"
                   :key="column.key"
-                  :label="column.key"
+                  :value="column.key"
                 >
                   {{ column.label }}
                 </el-checkbox>

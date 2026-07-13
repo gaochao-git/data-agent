@@ -351,7 +351,7 @@ defineExpose({
                 <el-checkbox
                   v-for="column in columnOptions"
                   :key="column.key"
-                  :label="column.key"
+                  :value="column.key"
                 >
                   {{ column.label }}
                 </el-checkbox>
@@ -446,7 +446,7 @@ defineExpose({
     <div class="flex shrink-0 items-center justify-between border-t border-slate-100 px-3 py-2">
       <span class="text-xs text-slate-400">共 {{ total }} 条</span>
       <el-pagination
-        small
+        size="small"
         background
         layout="sizes, prev, pager, next"
         :total="total"

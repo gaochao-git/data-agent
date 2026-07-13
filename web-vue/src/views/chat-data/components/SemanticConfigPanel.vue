@@ -3575,8 +3575,8 @@ const saveOntologyRules = () => {
       <div class="space-y-3">
         <div class="flex items-center justify-end">
           <el-radio-group v-model="addFieldLabelMode" size="small">
-            <el-radio-button label="description">中文</el-radio-button>
-            <el-radio-button label="name">英文</el-radio-button>
+            <el-radio-button value="description">中文</el-radio-button>
+            <el-radio-button value="name">英文</el-radio-button>
           </el-radio-group>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -3626,8 +3626,8 @@ const saveOntologyRules = () => {
         <div>
           <div class="text-xs text-gray-600 mb-1">新增类型</div>
           <el-radio-group v-model="addFieldForm.mode">
-            <el-radio-button label="metric">指标</el-radio-button>
-            <el-radio-button label="dimension">维度</el-radio-button>
+            <el-radio-button value="metric">指标</el-radio-button>
+            <el-radio-button value="dimension">维度</el-radio-button>
           </el-radio-group>
         </div>
       </div>

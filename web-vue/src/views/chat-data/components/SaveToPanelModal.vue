@@ -285,7 +285,7 @@ const handleClose = () => {
           <el-checkbox
             v-for="target in executionTargets"
             :key="target.member_datasource_id"
-            :label="target.member_datasource_id"
+            :value="target.member_datasource_id"
             border
             class="!mr-0"
           >
@@ -298,7 +298,7 @@ const handleClose = () => {
           <el-radio
             v-for="target in executionTargets"
             :key="target.member_datasource_id"
-            :label="target.member_datasource_id"
+            :value="target.member_datasource_id"
             border
             class="!mr-0"
           >
