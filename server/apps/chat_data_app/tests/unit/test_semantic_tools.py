@@ -24,7 +24,7 @@ from apps.chat_data_app.services.semantic_tools import (
     list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
     _is_semantic_config_directory_query,
-    _filter_semantic_config_tables_for_tool,
+    _semantic_config_for_selection_tool,
     _selection_to_tool_payload,
 )
 
@@ -95,22 +95,31 @@ def test_selection_to_tool_payload_branches():
     assert "cross_config_required" not in payload
 
 
-def test_filter_semantic_config_tables_for_tool_keeps_only_referenced_tables():
+def test_semantic_config_for_selection_tool_removes_full_table_schemas():
     config = {
         "id": "sc_order",
-        "metrics": [{"name": "订单金额", "table": "orders"}],
-        "dimensions": [{"name": "用户名称", "table": "users"}],
+        "metrics": [{"name": "订单金额", "table": "orders", "expression": "SUM(amount)"}],
+        "dimensions": [{"name": "用户名称", "table": "users", "column": "username"}],
         "relationships": [{"left_table": "orders", "right_table": "users"}],
         "tables": [
             {"table_name": "orders", "columns": [{"name": "amount"}]},
             {"table_name": "users", "columns": [{"name": "username"}]},
             {"table_name": "products", "columns": [{"name": "product_name"}]},
         ],
+        "ds_tables": [
+            {"table_name": "orders", "columns": [{"name": "amount"}]},
+        ],
     }
 
-    filtered = _filter_semantic_config_tables_for_tool(config)
+    tool_config = _semantic_config_for_selection_tool(config)
 
-    assert [item["table_name"] for item in filtered["tables"]] == ["orders", "users"]
+    assert "tables" not in tool_config
+    assert "ds_tables" not in tool_config
+    assert tool_config["metrics"][0]["table"] == "orders"
+    assert tool_config["metrics"][0]["expression"] == "SUM(amount)"
+    assert tool_config["dimensions"][0]["table"] == "users"
+    assert tool_config["dimensions"][0]["column"] == "username"
+    assert tool_config["relationships"] == [{"left_table": "orders", "right_table": "users"}]
     assert [item["table_name"] for item in config["tables"]] == ["orders", "users", "products"]
 
 
@@ -294,7 +303,7 @@ def test_select_semantic_config_tool_returns_all_retrieved_semantic_summaries(mo
     assert payload["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
 
 
-def test_select_semantic_config_tool_returns_only_selected_config_related_tables(monkeypatch):
+def test_select_semantic_config_tool_returns_selected_config_without_full_table_schemas(monkeypatch):
     async def fake_select_semantic_config_for_query(**_kwargs):
         return {"semantic_config_ids": ["sc_order"]}
 
@@ -319,8 +328,11 @@ def test_select_semantic_config_tool_returns_only_selected_config_related_tables
     result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
     payload = json.loads(result.replace("[select_semantic_config_tool]", "", 1).strip())
 
-    tables = payload["semantic_configs"]["sc_order"]["tables"]
-    assert [item["table_name"] for item in tables] == ["orders", "users"]
+    selected_config = payload["semantic_configs"]["sc_order"]
+    assert "tables" not in selected_config
+    assert selected_config["metrics"][0]["table"] == "orders"
+    assert selected_config["dimensions"][0]["table"] == "users"
+    assert selected_config["relationships"] == [{"left_table": "orders", "right_table": "users"}]
 
 
 def test_select_semantic_config_tool_keeps_loaded_configs_when_a_retrieved_config_cannot_load(monkeypatch):

@@ -6,7 +6,7 @@
 """
 
 import json
-from typing import List, Dict, Any, Optional, Annotated, Set
+from typing import List, Dict, Any, Optional, Annotated
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
@@ -286,7 +286,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
         "message": (
-            "已返回相关指标集及其运行时语义配置。请根据用户问题自行决定后续查询、澄清或回答；"
+            "已返回相关指标集运行时语义配置，不含数据源组全量表结构。请根据用户问题自行决定后续查询、澄清或回答；"
             "每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
             if returned_ids else
             "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。"
@@ -294,40 +294,11 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
     }
 
 
-def _table_names_from_semantic_items(config: Dict[str, Any]) -> Set[str]:
-    """提取指标集指标、维度和关系实际引用的物理表。"""
-    table_names: Set[str] = set()
-    for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
-        if not isinstance(item, dict):
-            continue
-        table_name = str(item.get("table") or "").strip()
-        if table_name:
-            table_names.add(table_name)
-    for relationship in [*(config.get("relationships") or []), *(config.get("joins") or [])]:
-        if not isinstance(relationship, dict):
-            continue
-        for key in ("left_table", "right_table", "leftTable", "rightTable"):
-            table_name = str(relationship.get(key) or "").strip()
-            if table_name:
-                table_names.add(table_name)
-    return table_names
-
-
-def _filter_semantic_config_tables_for_tool(config: Dict[str, Any]) -> Dict[str, Any]:
-    """裁剪工具返回中的表结构，只保留当前指标集引用的表。"""
+def _semantic_config_for_selection_tool(config: Dict[str, Any]) -> Dict[str, Any]:
+    """构造选择工具返回的指标集配置，避免泄露数据源组全量表结构。"""
     result = dict(config or {})
-    table_names = _table_names_from_semantic_items(result)
-    tables = result.get("tables")
-    if not isinstance(tables, list):
-        return result
-    if not table_names:
-        result["tables"] = []
-        return result
-    result["tables"] = [
-        table for table in tables
-        if isinstance(table, dict)
-        and str(table.get("table_name") or table.get("name") or "").strip() in table_names
-    ]
+    result.pop("tables", None)
+    result.pop("ds_tables", None)
     return result
 
 
@@ -421,7 +392,7 @@ def create_semantic_config_selection_tools(
                 if not config:
                     omitted_config_ids.append(config_id)
                     continue
-                tool_config = _filter_semantic_config_tables_for_tool(config)
+                tool_config = _semantic_config_for_selection_tool(config)
                 candidate_configs = {**semantic_configs, config_id: tool_config}
                 candidate_payload = _selection_to_tool_payload(selection, candidate_configs)
                 candidate_content = _serialize_selection_tool_payload(candidate_payload)
