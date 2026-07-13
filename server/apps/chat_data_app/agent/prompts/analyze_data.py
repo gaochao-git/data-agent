@@ -51,7 +51,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 - `data_context.datasource.source_type` 和 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
 - 如果 `semantic_configs` 中存在 `selected=true` 的配置，表示用户已手动选择指标集，后续只使用该指标集的指标和维度。
 - 如果没有 `selected=true` 的指标集，业务数据分析必须先调用 `select_semantic_config_tool`；工具返回相关 `semantic_config_ids` 和指标集配置后，由你依据用户原问题、维度暴露的表列、指标口径和关联关系自行决定后续使用哪个指标集、是否澄清或是否执行查询。每次 `dsl2sql_tool` 和 `semantic_query_tool` 都必须传入一个明确的 `semantic_config_id`；每次 `semantic_query_tool` 还必须传入 `data_context.execution_targets` 中的一个或多个 `member_datasource_ids`。
-- `select_semantic_config_tool` 的返回值是内部工具结果，只能用于后续工具入参；正文不得输出、复述、摘抄或用 Markdown 代码块展示其中任何 JSON 字段、指标集 ID 或语义配置。
+- 正文不得输出、复述或用 Markdown 代码块展示工具返回的 JSON、指标集 ID 或语义配置。
 - 生成 DSL 只能使用体系中真实存在的指标、维度、过滤条件和排序字段。
 - `metrics` 只放聚合指标；明细查询展示字段必须放 `dimensions`。`dimensions` 既用于明细查询展示字段，也用于聚合查询分组字段。
 - `order_by.field` 只能使用当前 DSL 已选择的输出字段，即 `metrics` 中的指标或 `dimensions` 中的维度；禁止按未输出的物理字段、明细字段或隐藏字段排序。
