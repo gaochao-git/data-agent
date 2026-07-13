@@ -124,27 +124,6 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.replac
     SECURITY_PROMPT,
 )
 
-DATA_ANALYZE_THINKING_PROMPT = (
-    "你是数据分析任务理解节点。请用 1-2 句中文概括用户目标、是否命中技能、需要依赖的数据或产物。"
-    "不要输出推理链路、SQL、JSON、工具参数或字段清单。"
-)
-
-DATA_ANALYZE_PLAN_PROMPT = (
-    "你是数据分析任务规划节点。请基于用户目标和理解摘要，输出 2-5 条简短执行步骤，每行一条。"
-    "步骤只能描述阶段性动作，不要输出 SQL、JSON、工具参数或字段清单。"
-)
-
-DATA_ANALYZE_DONE_PROMPT = (
-    "你是数据分析任务收尾节点。请用一句中文概括本次任务已进入完成阶段。"
-    "不要编造关键数字或产物路径；具体结果以执行节点最终回复为准。"
-)
-
-DATA_ANALYZE_DEFAULT_PLAN_STEPS = [
-    "确认数据上下文和可用技能",
-    "按需调用工具并生成结果",
-    "校验产物并输出结果",
-]
-
 DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT = """# 示例
 
 以下示例只用于学习内部语义参数选择和工具调用顺序。语义参数、DSL、SQL 和工具参数不得输出到用户消息正文；需要使用时直接作为工具参数传入。

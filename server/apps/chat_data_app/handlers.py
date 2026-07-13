@@ -1002,6 +1002,7 @@ async def data_analyze_completion_handler(
         nonlocal semantic_config_id
         started_at = time.perf_counter()
         last_phase_at = started_at
+        task_run_id = str(uuid.uuid4())
 
         def log_phase(phase: str) -> None:
             nonlocal last_phase_at
@@ -1048,7 +1049,7 @@ async def data_analyze_completion_handler(
             initial_state = {
                 "messages": [HumanMessage(content=query, additional_kwargs=human_message_kwargs)],
                 "task_stages": [],
-                "task_run_id": str(uuid.uuid4()),
+                "task_run_id": task_run_id,
                 "conversation_datasource_id": datasource_id,
                 "datasource_id": datasource_id,
                 "semantic_config_id": semantic_config_id,
@@ -1073,6 +1074,9 @@ async def data_analyze_completion_handler(
                     enable_thinking=enable_thinking,
                 )
                 log_phase("create_agent")
+                if request and await request.is_disconnected():
+                    logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
+                    return
                 tool_call_names: dict[str, str] = {}
                 tool_call_args_buffer: dict[str, str] = {}
                 tool_call_args_fallback: dict[str, dict[str, Any]] = {}
@@ -1089,9 +1093,6 @@ async def data_analyze_completion_handler(
                     else:
                         stream_mode, payload = stream_item
                     if stream_mode == "updates":
-                        for node_payload in (payload or {}).values():
-                            for stage in node_payload.get("task_stages") or []:
-                                yield _format_sse("task_stage", stage)
                         continue
                     if stream_mode == "custom":
                         if isinstance(payload, dict) and payload.get("type") == "token_usage":
@@ -1116,16 +1117,6 @@ async def data_analyze_completion_handler(
                         return
                     node_name = metadata.get("langgraph_node")
                     if node_name and node_name.startswith("__"):
-                        continue
-                    if node_name in {"thinking", "plan", "done"}:
-                        stage_name = "thinking" if node_name == "thinking" else ("plan" if node_name == "plan" else "done")
-                        content = getattr(message_chunk, "content", None)
-                        if content:
-                            yield _format_sse("task_stage_delta", {
-                                "stage": stage_name,
-                                "status": "running",
-                                "content": content,
-                            })
                         continue
                     has_content = bool(getattr(message_chunk, "content", None))
                     has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
@@ -1223,12 +1214,6 @@ async def data_analyze_completion_handler(
             yield _format_sse("done", "[DONE]")
         except Exception as e:
             logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
-            yield _format_sse("task_stage", {
-                "stage": "execute",
-                "status": "error",
-                "title": "任务执行",
-                "content": f"任务执行失败：{str(e)}",
-            })
             yield _format_sse("error", {"error": str(e)})
             yield _format_sse("done", "[DONE]")
 

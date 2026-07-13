@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware, wrap_model_call
 from langgraph.config import get_stream_writer
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -23,8 +23,6 @@ from ..services.workspace_execution import (
     get_workspace_execution_session,
 )
 from .prompts.analyze_data import (
-    DATA_ANALYZE_DEFAULT_PLAN_STEPS,
-    DATA_ANALYZE_DONE_PROMPT,
     DATA_ANALYZE_GENERIC_DIALECT_CONTEXT,
     DATA_ANALYZE_GENERIC_DIALECT_FEWSHOT_PROMPT,
     DATA_ANALYZE_HIVE_DIALECT_CONTEXT,
@@ -32,10 +30,8 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_MYSQL_DIALECT_CONTEXT,
     DATA_ANALYZE_MYSQL_DIALECT_FEWSHOT_PROMPT,
     DATA_ANALYZE_MULTI_STEP_FEWSHOT_PROMPT,
-    DATA_ANALYZE_PLAN_PROMPT,
     DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT,
     DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE,
-    DATA_ANALYZE_THINKING_PROMPT,
 )
 from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware, invoke_with_token_usage
 from .nodes import format_current_time_for_prompt, normalize_response_tool_call_names, timestamp_message
@@ -61,10 +57,6 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
     {"name": "semantic_query_tool", "status": "available", "description": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
 ]
-MAX_STAGE_HISTORY_MESSAGES = 10
-MAX_STAGE_HISTORY_CHARS = 4000
-MAX_STAGE_HISTORY_MESSAGE_CHARS = 800
-
 
 def merge_task_stages(existing: list[dict[str, Any]] | None, new: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """按阶段名合并任务阶段，保留最新状态。"""
@@ -121,75 +113,6 @@ class DataAnalyzeAgentState(AgentState):
     user_id: NotRequired[str | None]
     operator_name: NotRequired[str | None]
     conversation_id: NotRequired[str | None]
-
-
-def _latest_user_query(messages: list[BaseMessage]) -> str:
-    """提取最近一条用户消息。"""
-    for message in reversed(messages or []):
-        if getattr(message, "type", None) == "human":
-            return str(getattr(message, "content", "") or "")
-    return ""
-
-
-def _message_text(content: Any) -> str:
-    """提取消息中的可读文本。"""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts)
-    return str(content or "")
-
-
-def _truncate_text(text: str, max_chars: int) -> str:
-    """截断过长文本，控制阶段节点上下文大小。"""
-    normalized = str(text or "").strip()
-    if len(normalized) <= max_chars:
-        return normalized
-    return f"{normalized[:max_chars]}..."
-
-
-def _format_stage_conversation_context(messages: list[BaseMessage], *, max_messages: int = MAX_STAGE_HISTORY_MESSAGES, max_chars: int = MAX_STAGE_HISTORY_CHARS) -> str:
-    """格式化最近对话，供理解和规划节点感知上下文。"""
-    items: list[str] = []
-    for message in messages or []:
-        if isinstance(message, HumanMessage):
-            role = "用户"
-        elif isinstance(message, AIMessage):
-            role = "助手"
-        else:
-            continue
-        text = _truncate_text(_message_text(getattr(message, "content", "")), MAX_STAGE_HISTORY_MESSAGE_CHARS)
-        if text:
-            items.append(f"{role}：{text}")
-    if not items:
-        return ""
-    content = "\n".join(items[-max_messages:])
-    return _truncate_text(content, max_chars)
-
-
-def _build_stage_user_prompt(messages: list[BaseMessage], current_query: str, extra: str = "") -> str:
-    """构造阶段节点用户输入，包含最近历史和当前目标。"""
-    history = _format_stage_conversation_context(messages)
-    sections: list[str] = []
-    if history:
-        sections.append(f"最近历史会话：\n{history}")
-    sections.append(f"当前用户目标：\n{current_query}")
-    if extra:
-        sections.append(extra)
-    return "\n\n".join(sections)
-
-
-def _task_run_id(state: DataAnalyzeFlowState) -> str:
-    """获取当前任务阶段运行批次。"""
-    return str(state.get("task_run_id") or "").strip()
 
 
 def get_data_analyze_tool_chain() -> list[dict[str, str]]:
@@ -422,13 +345,7 @@ def create_data_analyze_flow_graph(
     operator_name: str | None = None,
     enable_thinking: bool | None = None,
 ):
-    """创建 thinking -> plan -> execute -> done 的 DataAnalyze 外层 LangGraph。"""
-    flow_llm: BaseChatModel = get_chat_data_llm(
-        model=model_id,
-        streaming=True,
-        stream_usage=True,
-        enable_thinking=enable_thinking,
-    )
+    """创建单层 DataAnalyze 执行图，保留外层 state 兼容历史 checkpoint。"""
     execution_session_ref = SandboxExecutionSessionRef()
     execute_agent = create_data_analyze_agent(
         workspace_root=workspace_root,
@@ -445,65 +362,11 @@ def create_data_analyze_flow_graph(
         enable_thinking=enable_thinking,
     )
 
-    async def thinking_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
-        messages = state.get("messages", [])
-        query = _latest_user_query(messages)
-        response = await flow_llm.ainvoke([
-            SystemMessage(content=DATA_ANALYZE_THINKING_PROMPT),
-            HumanMessage(content=_build_stage_user_prompt(messages, query)),
-        ])
-        return {
-            "task_stages": [{
-                "stage": "thinking",
-                "run_id": _task_run_id(state),
-                "status": "completed",
-                "title": "理解任务",
-                "content": str(response.content or "").strip(),
-            }],
-        }
-
-    async def plan_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
-        messages = state.get("messages", [])
-        query = _latest_user_query(messages)
-        run_id = _task_run_id(state)
-        thinking = next((
-            item
-            for item in state.get("task_stages", [])
-            if item.get("stage") == "thinking" and str(item.get("run_id") or "").strip() == run_id
-        ), {})
-        response = await flow_llm.ainvoke([
-            SystemMessage(content=DATA_ANALYZE_PLAN_PROMPT),
-            HumanMessage(content=_build_stage_user_prompt(messages, query, f"理解摘要：\n{thinking.get('content') or ''}")),
-        ])
-        steps = [line.strip(" -0123456789.、\t") for line in str(response.content or "").splitlines()]
-        steps = [line for line in steps if line][:5]
-        return {
-            "task_stages": [{
-                "stage": "plan",
-                "run_id": run_id,
-                "status": "completed",
-                "title": "规划步骤",
-                "content": "",
-                "steps": steps or DATA_ANALYZE_DEFAULT_PLAN_STEPS,
-            }],
-        }
-
-    async def execute_start_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
+    async def execute_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
         if execution_session_ref.current is None:
             execution_session_ref.current = await get_workspace_execution_session(workspace_root, user_id)
-        return {
-            "task_stages": [{
-                "stage": "execute",
-                "run_id": _task_run_id(state),
-                "status": "running",
-                "title": "任务执行",
-                "content": "",
-            }]
-        }
-
-    async def execute_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
         try:
-            return await execute_data_analyze_agent(
+            payload = await execute_data_analyze_agent(
                 agent=execute_agent,
                 state=state,
                 system_prompt=system_prompt,
@@ -513,48 +376,17 @@ def create_data_analyze_flow_graph(
             await cleanup_workspace_execution_session(execution_session_ref.current)
             execution_session_ref.current = None
             raise
-
-    async def done_node(state: DataAnalyzeFlowState) -> dict[str, Any]:
-        query = _latest_user_query(state.get("messages", []))
-        response = await flow_llm.ainvoke([
-            SystemMessage(content=DATA_ANALYZE_DONE_PROMPT),
-            HumanMessage(content=query),
-        ])
-        try:
-            return {
-                "task_stages": [
-                    {
-                        "stage": "execute",
-                        "run_id": _task_run_id(state),
-                        "status": "completed",
-                        "title": "任务执行",
-                        "content": "",
-                    },
-                    {
-                        "stage": "done",
-                        "run_id": _task_run_id(state),
-                        "status": "completed",
-                        "title": "完成",
-                        "content": str(response.content or "").strip() or "已完成本次智能分析任务。",
-                    },
-                ],
-            }
         finally:
-            await attach_workspace_execution_session(execution_session_ref.current, user_id)
-            execution_session_ref.current = None
+            if execution_session_ref.current is not None:
+                await attach_workspace_execution_session(execution_session_ref.current, user_id)
+                execution_session_ref.current = None
+
+        return payload
 
     builder = StateGraph(DataAnalyzeFlowState)
-    builder.add_node("thinking", thinking_node)
-    builder.add_node("plan", plan_node)
-    builder.add_node("execute_start", execute_start_node)
     builder.add_node("execute", execute_node)
-    builder.add_node("done", done_node)
-    builder.add_edge(START, "thinking")
-    builder.add_edge("thinking", "plan")
-    builder.add_edge("plan", "execute_start")
-    builder.add_edge("execute_start", "execute")
-    builder.add_edge("execute", "done")
-    builder.add_edge("done", END)
+    builder.add_edge(START, "execute")
+    builder.add_edge("execute", END)
     return builder.compile(checkpointer=checkpointer)
 
 

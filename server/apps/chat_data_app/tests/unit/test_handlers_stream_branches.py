@@ -498,8 +498,6 @@ async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monk
             yield ("custom", {"type": "token_usage", "usage": {}})
             yield ("messages", (FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (FakeChunk(content="思考后继续", additional_kwargs={"reasoning_content": "有内容思考"}), {"langgraph_node": "data_analyze_agent"}))
-            yield ("messages", (FakeChunk(content="", msg_type="ai"), {"langgraph_node": "thinking"}))
-            yield ("messages", (FakeChunk(content="阶段内容", msg_type="ai"), {"langgraph_node": "plan"}))
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_selected", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
@@ -543,7 +541,8 @@ async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monk
 
     assert "event: thinking" in text
     assert "思考后继续" in text
-    assert "event: task_stage_delta" in text
+    assert "event: task_stage" not in text
+    assert "event: task_stage_delta" not in text
     assert "event: tool" in text
     semantic_tool_contents = tool_event_contents(chunks)
     assert '"semantic_config_ids": ["cfg"]' in semantic_tool_contents[0]

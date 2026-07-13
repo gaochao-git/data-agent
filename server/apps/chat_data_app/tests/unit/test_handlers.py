@@ -1399,8 +1399,6 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
         async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
             assert initial_state["task_run_id"]
             assert config["configurable"]["thread_id"] == "conv_da"
-            yield ("updates", {"thinking": {"task_stages": [{"stage": "thinking", "status": "completed", "content": "理解完成"}]}})
-            yield ("messages", (_FakeMessageChunk(content="规划中"), {"langgraph_node": "plan"}))
             yield ("messages", (_FakeMessageChunk(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"dsl": {"metrics": ["销售额"]}}}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_1", "name": "semantic_query_tool", "args": '{"dsl":{"metrics":["销售额"]}}'}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (_FakeMessageChunk(content='{"success": true}', type_="tool", tool_call_id="call_1"), {"langgraph_node": "tools"}))
@@ -1424,9 +1422,8 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     events = asyncio.run(_collect_async_iter(response.body_iterator))
     joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
 
-    assert "event: task_stage" in joined
-    assert "理解完成" in joined
-    assert "event: task_stage_delta" in joined
+    assert "event: task_stage" not in joined
+    assert "event: task_stage_delta" not in joined
     assert '"tool_name": "semantic_query_tool"' in joined
     assert '"accumulated_args": {"dsl": {"metrics": ["销售额"]}}' in joined
     assert "分析完成" in joined
@@ -1588,7 +1585,7 @@ def test_data_analyze_completion_handler_emits_error_stage(monkeypatch):
     events = asyncio.run(_collect_async_iter(response.body_iterator))
     joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
 
-    assert "任务执行失败：context failed" in joined
+    assert "任务执行失败：context failed" not in joined
     assert 'event: error\ndata: {"error": "context failed"}' in joined
     assert joined.endswith("event: done\ndata: [DONE]\n\n")
 
