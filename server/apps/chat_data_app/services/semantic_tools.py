@@ -295,10 +295,11 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
 
 
 def _semantic_config_for_selection_tool(config: Dict[str, Any]) -> Dict[str, Any]:
-    """构造选择工具返回的指标集配置，避免泄露数据源组全量表结构。"""
+    """构造选择工具返回的指标集配置，去掉全量表结构和重复关系别名。"""
     result = dict(config or {})
     result.pop("tables", None)
     result.pop("ds_tables", None)
+    result.pop("joins", None)
     return result
 
 

@@ -101,6 +101,7 @@ def test_semantic_config_for_selection_tool_removes_full_table_schemas():
         "metrics": [{"name": "订单金额", "table": "orders", "expression": "SUM(amount)"}],
         "dimensions": [{"name": "用户名称", "table": "users", "column": "username"}],
         "relationships": [{"left_table": "orders", "right_table": "users"}],
+        "joins": [{"left_table": "orders", "right_table": "users"}],
         "tables": [
             {"table_name": "orders", "columns": [{"name": "amount"}]},
             {"table_name": "users", "columns": [{"name": "username"}]},
@@ -115,6 +116,7 @@ def test_semantic_config_for_selection_tool_removes_full_table_schemas():
 
     assert "tables" not in tool_config
     assert "ds_tables" not in tool_config
+    assert "joins" not in tool_config
     assert tool_config["metrics"][0]["table"] == "orders"
     assert tool_config["metrics"][0]["expression"] == "SUM(amount)"
     assert tool_config["dimensions"][0]["table"] == "users"
@@ -314,6 +316,7 @@ def test_select_semantic_config_tool_returns_selected_config_without_full_table_
             "metrics": [{"name": "订单金额", "table": "orders"}],
             "dimensions": [{"name": "用户名称", "table": "users"}],
             "relationships": [{"left_table": "orders", "right_table": "users"}],
+            "joins": [{"left_table": "orders", "right_table": "users"}],
             "tables": [
                 {"table_name": "orders", "columns": [{"name": "amount"}]},
                 {"table_name": "users", "columns": [{"name": "username"}]},
@@ -330,6 +333,7 @@ def test_select_semantic_config_tool_returns_selected_config_without_full_table_
 
     selected_config = payload["semantic_configs"]["sc_order"]
     assert "tables" not in selected_config
+    assert "joins" not in selected_config
     assert selected_config["metrics"][0]["table"] == "orders"
     assert selected_config["dimensions"][0]["table"] == "users"
     assert selected_config["relationships"] == [{"left_table": "orders", "right_table": "users"}]

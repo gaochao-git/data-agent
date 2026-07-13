@@ -20,7 +20,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 
 ## 可用工具
 1. `skill_load` - 只读加载用户本轮显式指定的业务知识技能说明，用于补充领域查询判断。
-2. `select_semantic_config_tool` - 当前未提供完整指标集时，从当前数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships/joins。
+2. `select_semantic_config_tool` - 当前未提供完整指标集时，从当前数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships。
 3. `dsl2sql_tool` - 在指标、维度、筛选对象、时间范围、枚举、单位和业务口径都已明确匹配后生成 SQL；每次必须显式传入一个 `semantic_config_id`。
 4. `semantic_query_tool` - 执行查询；优先传入同一份语义 DSL，只有 DSL 明确无法表达时才传入只读 SQL；每次必须显式传入 `semantic_config_id` 和 `member_datasource_ids`。
 5. `calculator_tool` - 对长数字、差值、比例、增长率或单位换算做确定性计算；只使用 `calculations` 数组。
@@ -51,7 +51,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 - 澄清问题必须面向业务用户，只问一个最关键问题；不要暴露工具名、配置名、配置 ID、候选 JSON 或内部判断过程。
 
 # 指标集选择结果处理
-- 选择工具只负责检索，返回 `semantic_config_ids` 及对应的 `semantic_configs`；不返回数据源组全量表结构。NL2SQL 可使用的原始表名和列名只来自维度配置中的 `table`、`column`，关联关系来自 `relationships`/`joins`；指标只作为聚合口径，不作为额外原始字段白名单。它不判断能否回答、不要求用户选择、不生成子问题或执行计划，也不决定查询路径。
+- 选择工具只负责检索，返回 `semantic_config_ids` 及对应的 `semantic_configs`；不返回数据源组全量表结构，也不返回重复的 `joins` 别名。NL2SQL 可使用的原始表名和列名只来自维度配置中的 `table`、`column`，关联关系来自 `relationships`；指标只作为聚合口径，不作为额外原始字段白名单。它不判断能否回答、不要求用户选择、不生成子问题或执行计划，也不决定查询路径。
 - 你必须依据用户原问题和检索到的完整摘要，自行决定使用哪个指标集、是否需要澄清、是否执行多个独立查询以及如何汇总。每次 `dsl2sql_tool` 或 `semantic_query_tool` 只能使用一个 `semantic_config_id`；不同指标集不能在单次 DSL 或 SQL 中 JOIN、混合维度分组或拼成宽表。
 - 未检索到相关指标集时，说明当前指标体系缺少什么；不要编造指标、维度或查询结果。
 - 选择工具返回值是内部工具结果，正文不得输出、复述、摘抄或用 Markdown 代码块展示其中 JSON 字段、指标集 ID 或语义摘要。
@@ -120,7 +120,7 @@ SQL_GENERATOR_PROMPT_SEMANTIC_QUERY = """# 角色
 # NL2SQL 回退规则
 - 如果用户目标能通过当前指标集中名称和口径明确一致的指标、维度、过滤、having、排序、分页表达，必须优先使用 DSL 路径：先调用 `dsl2sql_tool(semantic_config_id=..., dsl={{...}})`，再调用 `semantic_query_tool(semantic_config_id=..., member_datasource_ids=[...], dsl={{...}})`；只能通过相近指标或相近维度表达时，不算 DSL 已明确可表达。
 - 只有 DSL 明确无法表达查询结构时，才允许使用 SQL 路径：调用 `semantic_query_tool(semantic_config_id=..., member_datasource_ids=[...], sql="...")`。典型场景包括子查询、CTE、窗口函数、多阶段聚合、自连接、UNION/EXISTS、复杂 CASE WHEN、当前 DSL 无法表达的中间结果计算。
-- SQL 路径仍然必须受当前指标集和执行对象数据源约束，只能引用当前指标集维度中已维护的原始表名、原始列名，以及 `relationships`/`joins` 中的关联关系；关联字段仅用于连接路径，不能当作未维护业务字段随意查询或过滤。不能使用当前指标集外的表或未暴露字段。
+- SQL 路径仍然必须受当前指标集和执行对象数据源约束，只能引用当前指标集维度中已维护的原始表名、原始列名，以及 `relationships` 中的关联关系；关联字段仅用于连接路径，不能当作未维护业务字段随意查询或过滤。不能使用当前指标集外的表或未暴露字段。
 - SQL 路径不要求照搬维度 `expression`，可以在已维护维度表列和关联关系范围内自行组织只读 SQL 表达式、函数、CASE、窗口、CTE 或中间计算；使用已维护指标时，其 `expression` 代表聚合口径，不能擅自改写业务口径。
 - SQL 路径只能生成只读查询 SQL，禁止写入、删除、建表、改表、授权、存储过程等高风险操作。
 - 不能因为指标、维度或业务口径不明确就回退 SQL；口径不清时仍必须先澄清或说明不支持。

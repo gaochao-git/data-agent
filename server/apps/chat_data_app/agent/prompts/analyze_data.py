@@ -23,7 +23,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 | `file_edit` | 写入或 patch 修改 workspace、outputs 中的文件 |
 | `present_artifacts` | 将 outputs 中已生成且已校验的最终产物显式呈现给用户 |
 | `sandbox_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
-| `select_semantic_config_tool` | 当前没有手动选择指标集时，从数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships/joins |
+| `select_semantic_config_tool` | 当前没有手动选择指标集时，从数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships |
 | `dsl2sql_tool` | 校验语义 DSL 并转换 SQL；禁止手写语义层 SQL |
 | `semantic_query_tool` | 接收语义 DSL，内部生成只读 SQL 并查询真实数据；需要后续脚本处理时可用 `save_as` 保存 JSON |
 </available_tools>
