@@ -67,6 +67,7 @@ const configs = ref<SemanticConfigItem[]>([])
 const loading = ref(true)
 const expandedId = ref<string | null>(null)
 const savingId = ref<string | null>(null)
+const togglingEnabledId = ref<string | null>(null)
 const creatingConfig = ref(false)
 const savedConfigSignatures = ref<Record<string, string>>({})
 
@@ -588,6 +589,8 @@ const handleDeleteConfig = async (configId: string, configName: string) => {
 
 // 切换启用状态
 const handleToggleEnabled = async (config: SemanticConfigItem) => {
+  if (togglingEnabledId.value) return
+  togglingEnabledId.value = config.id
   try {
     const res = await semanticConfigToggleApi.value(props.datasourceId, config.id, !config.enabled)
     if (res.status !== 'success' || !res.data) {
@@ -602,6 +605,8 @@ const handleToggleEnabled = async (config: SemanticConfigItem) => {
     }
   } catch (err) {
     ElMessage.error('操作失败')
+  } finally {
+    togglingEnabledId.value = null
   }
 }
 
@@ -782,6 +787,51 @@ const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(r
   isCustom: row.isCustom,
 })))
 const isFieldRowsDirty = computed(() => buildFieldRowsEditSignature(fieldRows.value) !== fieldRowsSnapshot.value)
+const isSavingActiveConfig = computed(() => Boolean(activeConfig.value && savingId.value === activeConfig.value.id))
+
+const getFieldRowEffectiveDisplayName = (row: FieldConfigRow) => {
+  return ((row.displayName || '').trim() || row.column).trim()
+}
+
+const duplicateFieldDisplayNameSet = computed(() => {
+  const nameCounts = new Map<string, number>()
+  fieldRows.value.forEach(row => {
+    if (!row.isDimension && !row.isMetric) return
+    const displayName = getFieldRowEffectiveDisplayName(row)
+    if (!displayName) return
+    nameCounts.set(displayName, (nameCounts.get(displayName) || 0) + 1)
+  })
+  return new Set(
+    Array.from(nameCounts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name)
+  )
+})
+
+const getFieldRowDisplayNameError = (row: FieldConfigRow) => {
+  if (!row.isDimension && !row.isMetric) return ''
+  const displayName = getFieldRowEffectiveDisplayName(row)
+  if (!displayName) return '显示名称不能为空'
+  return duplicateFieldDisplayNameSet.value.has(displayName) ? `显示名称重复：${displayName}` : ''
+}
+
+const activeFieldRowsValidationError = computed(() => {
+  const duplicateName = Array.from(duplicateFieldDisplayNameSet.value)[0]
+  return duplicateName ? `字段显示名称重复：${duplicateName}` : ''
+})
+
+const activeConfigSaveDisabledReason = computed(() => {
+  if (!activeConfig.value) return '暂无指标集'
+  if (isSavingActiveConfig.value) return '正在保存'
+  if (!activeConfig.value.name) return '请填写指标集名称'
+  if (editingType.value !== null) return '请先完成当前编辑'
+  if (activeFieldRowsValidationError.value) return activeFieldRowsValidationError.value
+  if (!isActiveConfigDirty.value && !isFieldRowsDirty.value) return '没有需要保存的修改'
+  if (!canManageConfig(activeConfig.value)) return '没有权限修改该指标集'
+  return ''
+})
+
+const canSaveActiveConfig = computed(() => !activeConfigSaveDisabledReason.value)
 
 const quoteIdentifier = (name: string) => {
   const safe = (name || '').replace(/`/g, '``')
@@ -2903,10 +2953,15 @@ const saveOntologyRules = () => {
                     'px-3 py-2 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
                     activeConfig.enabled ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                   ]"
-                  :disabled="!canManageConfig(activeConfig)"
+                  :disabled="togglingEnabledId === activeConfig.id || !canManageConfig(activeConfig)"
                   @click="handleToggleEnabled(activeConfig)"
                 >
-                  <i :class="['fa-solid mr-1', activeConfig.enabled ? 'fa-circle-check' : 'fa-circle-pause']"></i>{{ activeConfig.enabled ? '已启用' : '已禁用' }}
+                  <template v-if="togglingEnabledId === activeConfig.id">
+                    <i class="fa-solid fa-spinner fa-spin mr-1"></i>处理中
+                  </template>
+                  <template v-else>
+                    <i :class="['fa-solid mr-1', activeConfig.enabled ? 'fa-circle-check' : 'fa-circle-pause']"></i>{{ activeConfig.enabled ? '已启用' : '已禁用' }}
+                  </template>
                 </button>
                 <button
                   class="px-3 py-2 rounded-md text-xs border border-blue-200 bg-white text-blue-600 transition-all duration-150 hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2925,12 +2980,13 @@ const saveOntologyRules = () => {
                 <button
                   :class="[
                     'px-3 py-2 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
-                    (isActiveConfigDirty || isFieldRowsDirty) ? 'bg-[#1677FF] text-white cursor-pointer hover:bg-[#0958D9]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    canSaveActiveConfig ? 'bg-[#1677FF] text-white cursor-pointer hover:bg-[#0958D9]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   ]"
-                  :disabled="savingId === activeConfig.id || !activeConfig.name || editingType !== null || (!isActiveConfigDirty && !isFieldRowsDirty) || !canManageConfig(activeConfig)"
+                  :disabled="!canSaveActiveConfig"
+                  :title="activeConfigSaveDisabledReason || '保存指标集'"
                   @click="saveActiveConfig"
                 >
-                  <template v-if="savingId === activeConfig.id">
+                  <template v-if="isSavingActiveConfig">
                     <i class="fa-solid fa-spinner fa-spin mr-1"></i>保存中
                   </template>
                   <template v-else>
@@ -3309,9 +3365,18 @@ const saveOntologyRules = () => {
                             <input
                               v-model="row.displayName"
                               type="text"
-                              class="w-full px-2 py-1 border border-gray-200 rounded text-[12px]"
+                              :class="[
+                                'w-full px-2 py-1 border rounded text-[12px] outline-none',
+                                getFieldRowDisplayNameError(row)
+                                  ? 'border-red-400 bg-red-50 text-red-700 focus:border-red-500'
+                                  : 'border-gray-200 focus:border-blue-500'
+                              ]"
+                              :title="getFieldRowDisplayNameError(row) || ''"
                               placeholder="默认字段名"
                             />
+                            <div v-if="getFieldRowDisplayNameError(row)" class="mt-1 text-[11px] leading-4 text-red-500">
+                              {{ getFieldRowDisplayNameError(row) }}
+                            </div>
                           </td>
                           <td class="px-3 py-2 border border-gray-200">
                             <input

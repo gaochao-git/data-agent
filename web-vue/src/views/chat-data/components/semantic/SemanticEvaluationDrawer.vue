@@ -206,7 +206,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
               </button>
               <button
                 v-else
-                class="px-3 py-1.5 rounded-md border-none bg-[#1677FF] text-xs text-white disabled:opacity-60"
+                class="px-3 py-1.5 rounded-md border-none bg-[#1677FF] text-xs text-white cursor-pointer transition-all duration-150 hover:bg-[#0958D9] active:bg-[#003EB3] focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-[#1677FF] disabled:active:bg-[#1677FF]"
                 :disabled="evaluationSelectedCount === 0"
                 :title="evaluationSelectedCount === 0 ? '请勾选要运行的用例' : '运行选中的评测用例'"
                 @click="runActiveEvaluation"
