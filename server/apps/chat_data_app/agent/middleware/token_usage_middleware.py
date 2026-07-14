@@ -7,6 +7,7 @@ from typing import Any
 import weakref
 
 from langchain.agents.middleware import wrap_model_call
+from langgraph.config import get_stream_writer
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -64,6 +65,7 @@ def create_request_token_usage_middleware(
         records.append(record)
         response = await handler(request)
         _merge_response_usage(record, response)
+        _emit_token_usage(get_token_usage())
         return response
 
     def get_token_usage() -> dict[str, Any] | None:
@@ -74,6 +76,16 @@ def create_request_token_usage_middleware(
     request_token_usage_middleware.get_token_usage = get_token_usage  # type: ignore[attr-defined]
     request_token_usage_middleware.token_usage_records = records  # type: ignore[attr-defined]
     return request_token_usage_middleware
+
+
+def _emit_token_usage(usage: dict[str, Any] | None) -> None:
+    """通过 LangGraph custom stream 输出模型入口上下文占用。"""
+    if not usage:
+        return
+    try:
+        get_stream_writer()({"type": "token_usage", "usage": usage})
+    except RuntimeError:
+        return
 
 
 def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
