@@ -4,6 +4,7 @@ import AsyncQueryResult from './AsyncQueryResult.vue'
 import ResultTabs from './ResultTabs.vue'
 import { getConversationArtifact } from '../api'
 import type { ChartType } from '../chartTypes'
+import { dedupeRepeatedErrorText, normalizeErrorKey } from '../utils'
 
 interface SemanticParams {
   metrics?: string[]
@@ -140,6 +141,72 @@ const getItemLabel = (item: Pick<QueryResultPanelItem, 'title' | 'memberName' | 
   return memberName || title || memberDatasourceId || `结果${index + 1}`
 }
 
+const parseItemResult = (item: QueryResultPanelItem): QueryResult | null => {
+  try {
+    return JSON.parse(item.resultData) as QueryResult
+  } catch {
+    return null
+  }
+}
+
+const buildMergedErrorItem = (
+  items: QueryResultPanelItem[],
+  parsedResults: QueryResult[],
+  groupIndex: number
+): QueryResultPanelItem => {
+  const firstResult = parsedResults[0]
+  const errorText = dedupeRepeatedErrorText(firstResult?.error, '查询失败')
+  const memberNames = items.map((item, index) => getMemberFullTitle(item) || item.title || `执行对象${index + 1}`)
+  const detailText = `影响执行对象：${memberNames.join('、')}`
+  const resultData = resultToData({
+    ...firstResult,
+    success: false,
+    columns: [],
+    data: [],
+    total_count: 0,
+    error: `${errorText}\n\n${detailText}`,
+  })
+  return {
+    key: `merged-error-${groupIndex}-${normalizeErrorKey(errorText)}`,
+    title: `执行失败（${items.length}个对象）`,
+    resultData,
+    sql: items[0]?.sql || props.sql,
+    status: 'error',
+  }
+}
+
+const mergeRepeatedErrorItems = (items: QueryResultPanelItem[]) => {
+  const result: QueryResultPanelItem[] = []
+  const errorGroups = new Map<string, { items: QueryResultPanelItem[]; parsedResults: QueryResult[] }>()
+  items.forEach((item) => {
+    const parsed = parseItemResult(item)
+    if (parsed?.success !== false) {
+      result.push(item)
+      return
+    }
+    const key = normalizeErrorKey(parsed.error || '')
+    if (!key) {
+      result.push(item)
+      return
+    }
+    const group = errorGroups.get(key) || { items: [], parsedResults: [] }
+    group.items.push(item)
+    group.parsedResults.push(parsed)
+    errorGroups.set(key, group)
+  })
+
+  Array.from(errorGroups.values()).forEach((group, index) => {
+    const firstItem = group.items[0]
+    if (!firstItem) return
+    if (group.items.length === 1) {
+      result.push(firstItem)
+      return
+    }
+    result.push(buildMergedErrorItem(group.items, group.parsedResults, index))
+  })
+  return result
+}
+
 const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
   const result = panelResult.value
   if (!result) return []
@@ -178,8 +245,8 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
 })
 
 const normalizedItems = computed<QueryResultPanelItem[]>(() => {
-  if (props.items.length > 0) return props.items
-  return itemsFromResult.value
+  const items = props.items.length > 0 ? props.items : itemsFromResult.value
+  return mergeRepeatedErrorItems(items)
 })
 
 const tabs = computed<ResultTabItem[]>(() =>

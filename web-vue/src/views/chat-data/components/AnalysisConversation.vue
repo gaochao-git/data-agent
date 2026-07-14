@@ -3,23 +3,31 @@
  * 智能分析独立会话页
  * 左侧展示流式消息与工具调用，右侧展示当前工具结果/分析产物预览。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, ChatDataTokenUsageBreakdown, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
-import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFileContent, getDataAnalyzeWorkspaceFiles, getSkills, importDataAnalyzeWorkspaceSkill } from '../api'
+import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
+import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFileContent, getDataAnalyzeWorkspaceFiles, importDataAnalyzeWorkspaceSkill } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { DataAnalyzeWorkspaceFile } from '../api'
 import ToolCallList from './ToolCallList.vue'
+import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import ChartSpecRenderer from './ChartSpecRenderer.vue'
 import { normalizeChartType } from '../chartTypes'
 import SkillManager from './SkillManager.vue'
-import AiGeneratedNotice from './AiGeneratedNotice.vue'
-import { hideSemanticConfigSelectionPayloads } from '../utils'
+import AssistantMessageFooter from './AssistantMessageFooter.vue'
+import ConversationSidePanel from './ConversationSidePanel.vue'
+import ConversationInputBar from './ConversationInputBar.vue'
+import ConversationTokenUsage from './ConversationTokenUsage.vue'
+import SkillCommandMenu from './SkillCommandMenu.vue'
+import { formatDateTimeValue, parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
+import { extractQueryResultPayload, extractSemanticParamsFromArgs } from '../utils/semanticTool'
+import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
 interface Props {
   datasource?: DataSource | null
@@ -66,8 +74,6 @@ const agentOptions = computed(() => [
 const selectedAgent = ref<'chat_data' | 'chat_data_data_analyze'>(
   'chat_data'
 )
-const isAgentSelectorOpen = ref(false)
-const agentSelectorRef = ref<HTMLElement | null>(null)
 const modelOptions = ref<ChatDataModelOption[]>([])
 const selectedModel = computed({
   get: () => props.selectedModelId || '',
@@ -80,130 +86,17 @@ const input = ref('')
 const inputFocused = ref(false)
 const isGenerating = ref(false)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
-const tokenUsagePanelOpen = ref(false)
-const tokenUsageSort = ref<'round' | 'desc' | 'asc'>('round')
-const expandedTokenMessageKeys = ref<Set<string>>(new Set())
-const tokenUsageButtonRef = ref<HTMLElement | null>(null)
-const tokenUsagePanelPosition = ref({ left: 24, bottom: 112 })
+const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const collapsedReasoningStageKeys = ref<Set<string>>(new Set())
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
 const focusInput = () => {
-  nextTick(() => textareaRef.value?.focus())
+  inputBarRef.value?.focus()
 }
 
 onMounted(focusInput)
 const isNearBottom = ref(true)
-const formatTokenUsageDisplay = (usage: ChatDataTokenUsage | null) => {
-  if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) {
-    return ''
-  }
-  const current = usage
-  const formatValue = (value: number) => {
-    if (value >= 1000000) {
-      const scaled = value / 1000000
-      return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}m`
-    }
-    if (value >= 1000) {
-      const scaled = value / 1000
-      return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}k`
-    }
-    return String(Math.round(value))
-  }
-  return `${current.estimated ? '约 ' : ''}${formatValue(current.used)} / ${formatValue(current.total)}`
-}
-
-const tokenUsageDisplay = computed(() => formatTokenUsageDisplay(tokenUsage.value))
-const tokenUsagePercentage = computed(() => {
-  const usage = tokenUsage.value
-  if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) return 0
-  const percentage = Number.isFinite(usage.percentage)
-    ? Number(usage.percentage)
-    : Math.round((usage.used / usage.total) * 1000) / 10
-  return Math.max(0, Math.min(100, percentage))
-})
-const tokenUsagePercentageText = computed(() => tokenUsageDisplay.value ? `${Math.round(tokenUsagePercentage.value)}` : '')
-const tokenUsageRingStyle = computed(() => {
-  const percentage = tokenUsageDisplay.value ? tokenUsagePercentage.value : 0
-  const color = percentage >= 90 ? '#ef4444' : percentage >= 70 ? '#f59e0b' : '#1677FF'
-  return {
-    background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
-  }
-})
-const tokenUsageButtonTitle = computed(() => tokenUsageDisplay.value ? `输入预算占用：${tokenUsageDisplay.value}` : '上下文计算中')
-const TOKEN_USAGE_PANEL_WIDTH = 460
-const TOKEN_USAGE_PANEL_MARGIN = 16
-const tokenUsagePanelStyle = computed(() => ({
-  left: `${tokenUsagePanelPosition.value.left}px`,
-  bottom: `${tokenUsagePanelPosition.value.bottom}px`,
-  width: `${TOKEN_USAGE_PANEL_WIDTH}px`,
-  maxWidth: `calc(100vw - ${TOKEN_USAGE_PANEL_MARGIN * 2}px)`,
-}))
-
-const updateTokenUsagePanelPosition = () => {
-  const rect = tokenUsageButtonRef.value?.getBoundingClientRect()
-  if (!rect || typeof window === 'undefined') return
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || TOKEN_USAGE_PANEL_WIDTH
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
-  const maxLeft = Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportWidth - TOKEN_USAGE_PANEL_WIDTH - TOKEN_USAGE_PANEL_MARGIN)
-  tokenUsagePanelPosition.value = {
-    left: Math.min(Math.max(rect.right - TOKEN_USAGE_PANEL_WIDTH, TOKEN_USAGE_PANEL_MARGIN), maxLeft),
-    bottom: Math.max(TOKEN_USAGE_PANEL_MARGIN, viewportHeight - rect.top + 8),
-  }
-}
-
-const toggleTokenUsagePanel = () => {
-  if (!tokenUsageDisplay.value) return
-  if (!tokenUsagePanelOpen.value) {
-    updateTokenUsagePanelPosition()
-  }
-  tokenUsagePanelOpen.value = !tokenUsagePanelOpen.value
-}
-
-const handleTokenUsageViewportChange = () => {
-  if (tokenUsagePanelOpen.value) {
-    updateTokenUsagePanelPosition()
-  }
-}
-
-const tokenUsageBreakdown = computed(() => {
-  const usage = tokenUsage.value
-  if (!usage?.breakdown?.length) return []
-  return usage.breakdown
-    .filter(item => Number.isFinite(item.tokens) && item.tokens !== 0)
-    .map(item => ({
-      ...item,
-      percentage: usage.used > 0 ? Math.round((item.tokens / usage.used) * 1000) / 10 : 0,
-    }))
-})
-
-const tokenUsageDetailRows = computed(() => {
-  const usage = tokenUsage.value
-  if (!usage) return []
-  const rows = [
-    { label: '当前输入', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
-    { label: '可用输入预算', value: usage.total },
-    { label: '模型上下文窗口', value: usage.context_window },
-    { label: '输出预留', value: usage.max_output_tokens },
-  ]
-  return rows.filter((row): row is { label: string; value: number } => (
-    typeof row.value === 'number' && Number.isFinite(row.value)
-  ))
-})
-
-type TokenUsageRow = {
-  key: string
-  label: string
-  tokens: number
-  percentage: number
-  description?: string
-  content?: string
-  role?: string
-  round?: number
-  messageIndex?: number
-  children?: TokenUsageRow[]
-}
 
 type AnalysisSubmitOptions = {
   semanticConfigIdOverride?: string | null
@@ -212,57 +105,13 @@ type AnalysisSubmitOptions = {
   appendUserMessage?: boolean
 }
 
-const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => ({
-  key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
-  label: labelPrefix ? `${labelPrefix} · ${item.label}` : item.label,
-  tokens: item.tokens,
-  percentage: tokenUsage.value?.used ? Math.round((item.tokens / tokenUsage.value.used) * 1000) / 10 : 0,
-  description: item.description,
-  content: item.content || item.description,
-  role: item.role,
-  round: item.round,
-  messageIndex: item.message_index,
-})
-
-const tokenUsageMessageRows = computed(() => {
-  const rows: TokenUsageRow[] = []
-  for (const item of tokenUsageBreakdown.value) {
-    if (!item.children?.length) continue
-    if (item.key === 'tool_schema') {
-      rows.push({ ...toTokenUsageRow(item, '', item.key), messageIndex: rows.length, children: item.children.map(child => toTokenUsageRow(child, item.label, item.key)) })
-      continue
-    }
-    for (const child of item.children || []) {
-      if (!Number.isFinite(child.tokens) || child.tokens === 0) continue
-      rows.push({ ...toTokenUsageRow(child, item.label, item.key), messageIndex: rows.length })
-    }
-  }
-  return rows.sort((a, b) => {
-    if (tokenUsageSort.value === 'desc') return b.tokens - a.tokens
-    if (tokenUsageSort.value === 'asc') return a.tokens - b.tokens
-    return (a.messageIndex ?? 0) - (b.messageIndex ?? 0)
-  })
-})
-
-const toggleTokenMessage = (key: string) => {
-  const next = new Set(expandedTokenMessageKeys.value)
-  if (next.has(key)) {
-    next.delete(key)
-  } else {
-    next.add(key)
-  }
-  expandedTokenMessageKeys.value = next
-}
-
 const resetTokenUsagePanel = () => {
   tokenUsage.value = null
-  tokenUsagePanelOpen.value = false
-  expandedTokenMessageKeys.value = new Set()
+  tokenUsagePanelRef.value?.closePanel()
 }
 
 const closeTokenUsagePanel = () => {
-  tokenUsagePanelOpen.value = false
-  expandedTokenMessageKeys.value = new Set()
+  tokenUsagePanelRef.value?.closePanel()
 }
 
 const getReasoningStageKey = (messageId: string, stageIndex: number) => `${messageId}:${stageIndex}`
@@ -300,14 +149,9 @@ const workspaceFileContents = ref<Record<string, string>>({})
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
 const workspaceFilesRefreshTimer = ref<number | null>(null)
-const selectedSkill = ref<SkillInfo | null>(null)
-const commandSkills = ref<SkillInfo[]>([])
-const isCommandSkillLoading = ref(false)
-const isSkillCommandOpen = ref(false)
 const isSkillManagerOpen = ref(false)
 const importedSkillIdForManager = ref<string | null>(null)
 const importingWorkspaceSkillPath = ref<string | null>(null)
-const highlightedSkillIndex = ref(0)
 const activeAssistantMessageId = ref<string | null>(null)
 const localConversationId = ref<string | null>(props.conversationId || null)
 const conversationIdRef = toRef(props, 'conversationId')
@@ -348,28 +192,26 @@ const selectedMemberDatasourceIds = computed({
   set: (value: string[]) => emit('update:selectedMemberDatasourceIds', props.executionTargetMultiple ? value : value.slice(0, 1)),
 })
 const selectedModelValue = computed(() => modelOptions.value.find(m => m.id === selectedModel.value)?.value || selectedModel.value || null)
-const selectedSkillTitle = computed(() => selectedSkill.value?.title || selectedSkill.value?.name || '')
-const selectedAgentLabel = computed(() => agentOptions.value.find(agent => agent.id === selectedAgent.value)?.label || '问数')
 const buildSkillRequestText = (text: string, skillName: string) => {
   const normalizedText = String(text || '').trim()
   return skillName ? `使用「${skillName}」技能回答：${normalizedText}` : normalizedText
 }
-const skillCommandKeyword = computed(() => {
-  if (selectedAgent.value !== 'chat_data_data_analyze') return null
-  const match = input.value.match(/^\/([^\s/]*)/)
-  return match ? (match[1] || '').toLowerCase() : null
+const {
+  selectedSkill,
+  selectedSkillTitle,
+  displayedCommandSkills,
+  isCommandSkillLoading,
+  highlightedSkillIndex,
+  showSkillCommand,
+  refreshCommandSkills,
+  selectCommandSkill: selectCommandSkillBase,
+  clearSelectedSkill: clearSelectedSkillBase,
+  handleSkillCommandKeyDown,
+} = useSkillCommandMenu({
+  input,
+  enabled: computed(() => selectedAgent.value === 'chat_data_data_analyze'),
+  agent: 'analyze',
 })
-const filteredCommandSkills = computed(() => {
-  const keyword = skillCommandKeyword.value
-  if (keyword === null) return []
-  const result = commandSkills.value.filter((skill) => {
-    if (!keyword) return true
-    const text = `${skill.name} ${skill.title || ''} ${skill.description || ''}`.toLowerCase()
-    return text.includes(keyword)
-  })
-  return result.slice(0, 8)
-})
-const showSkillCommand = computed(() => isSkillCommandOpen.value && skillCommandKeyword.value !== null)
 
 const findToolCallById = (id: string | null) => {
   if (!id) return null
@@ -386,8 +228,46 @@ const activeToolCall = computed(() => {
   const id = activeToolCallId.value
   return findToolCallById(id)
 })
+const getVisibleToolCalls = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
+  if (!toolCalls) return []
+  return toolCalls.filter((tc) => tc.tool_name !== 'load_skill_tool')
+}
+const sidePanelTitle = computed(() => sidePanelTab.value === 'console' ? '控制台' : '工具详情')
+const sidePanelSubtitle = computed(() => (
+  sidePanelTab.value === 'console'
+    ? producedFileTree.value.root
+    : '工具调用参数与结果'
+))
 
 const allToolCalls = computed(() => Array.from(toolCallsMap.value.values()))
+
+const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
+  if (toolInfo.tool_name !== 'semantic_query_tool') return toolInfo
+  const result = String(toolInfo.result || '')
+  const queryResultMatch = result.match(/<query_result>([\s\S]*?)<\/query_result>/)
+  const queryResultId = queryResultMatch?.[1]?.trim()
+    || (extractQueryResultPayload(result) ? result.replace(/^\[semantic_query_tool\]\s*/, '').trim() : '')
+  const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
+  return {
+    ...toolInfo,
+    renderId: queryResultId || toolInfo.renderId,
+    renderType: queryResultId ? 'queryResult' : toolInfo.renderType,
+    semanticParams,
+  }
+}
+
+const normalizeToolCallForDisplay = (toolInfo: ToolCallInfo): ToolCallInfo => (
+  toolInfo.tool_name === 'semantic_query_tool' ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
+)
+
+const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => (
+  Boolean(
+    toolCall?.tool_name === 'semantic_query_tool' &&
+    toolCall.status === 'completed' &&
+    toolCall.renderId &&
+    toolCall.renderType === 'queryResult'
+  )
+)
 
 const outputArtifactFiles = computed(() => workspaceFiles.value
   .filter(file => normalizeVisiblePath(file.relative_path || file.path).startsWith('outputs/'))
@@ -1078,8 +958,7 @@ const handleImportWorkspaceSkill = async () => {
     const response = await importDataAnalyzeWorkspaceSkill(conversationId, { skill_dir_path: skillDirPath })
     const skill = response.data
     importedSkillIdForManager.value = skill?.skill_id || skill?.name || null
-    commandSkills.value = []
-    await loadCommandSkills()
+    await refreshCommandSkills()
     isSkillManagerOpen.value = true
     ElMessage.success('技能已导入，可在技能管理中继续编辑')
   } catch (err: any) {
@@ -1286,56 +1165,6 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
   }
 }
 
-const selectedToolResult = computed(() => {
-  if (!activeToolCall.value) return ''
-  return replaceVisiblePathsForDisplay(activeToolCall.value.result || (activeToolCall.value.status === 'completed' ? '已完成，工具未返回文本内容。' : '执行中...'))
-})
-
-type ToolDetailResultPayload = {
-  columns?: unknown
-  data?: unknown
-  total_count?: unknown
-}
-
-const stripToolDetailResultHeader = (value: string) => String(value || '').replace(/^\[[^\]\n]+\]\s*\n/, '').trim()
-
-const parseToolDetailResultPayload = (value: string): ToolDetailResultPayload | null => {
-  const text = stripToolDetailResultHeader(value)
-  if (!text.startsWith('{') && !text.startsWith('[')) return null
-  try {
-    const parsed = JSON.parse(text)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as ToolDetailResultPayload : null
-  } catch {
-    return null
-  }
-}
-
-const activeToolResultPayload = computed(() => parseToolDetailResultPayload(selectedToolResult.value))
-const activeToolTableRows = computed<Record<string, unknown>[]>(() => {
-  const rows = activeToolResultPayload.value?.data
-  if (!Array.isArray(rows)) return []
-  return rows.filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object' && !Array.isArray(row))
-})
-const activeToolTableColumns = computed<string[]>(() => {
-  const payloadColumns = activeToolResultPayload.value?.columns
-  if (Array.isArray(payloadColumns)) {
-    const columns = payloadColumns.map(col => String(col || '').trim()).filter(Boolean)
-    if (columns.length) return columns
-  }
-  const firstRow = activeToolTableRows.value[0]
-  return firstRow ? Object.keys(firstRow) : []
-})
-const activeToolPreviewRows = computed(() => activeToolTableRows.value.slice(0, 20))
-const activeToolTotalRows = computed(() => {
-  const total = Number(activeToolResultPayload.value?.total_count)
-  return Number.isFinite(total) && total >= activeToolTableRows.value.length ? total : activeToolTableRows.value.length
-})
-const hasActiveToolTablePreview = computed(() => (
-  activeToolCall.value?.tool_name === 'semantic_query_tool' &&
-  activeToolTableColumns.value.length > 0 &&
-  activeToolPreviewRows.value.length > 0
-))
-
 const formatToolTableCell = (value: unknown): string => {
   if (value === null || value === undefined || value === '') return '-'
   if (typeof value === 'string') return value
@@ -1357,8 +1186,6 @@ const hasVisibleAssistantContent = (content: string): boolean => {
 const shouldShowStreamingStatus = (message: Message): boolean => {
   return hasVisibleAssistantContent(message.content) || Boolean(message.toolCalls?.length)
 }
-
-const formatJson = (value: unknown) => replaceVisiblePathsForDisplay(JSON.stringify(value || {}, null, 2))
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
   activeToolCallId.value = toolCall.tool_call_id
@@ -1385,8 +1212,10 @@ const syncHistoryToolCalls = () => {
       message.segments = rebuiltSegments
     }
     for (const toolCall of message.toolCalls) {
-      nextMap.set(toolCall.tool_call_id, toolCall)
+      const displayToolCall = normalizeToolCallForDisplay(toolCall)
+      nextMap.set(displayToolCall.tool_call_id, displayToolCall)
     }
+    message.toolCalls = message.toolCalls.map(normalizeToolCallForDisplay)
   }
   toolCallsMap.value = nextMap
 }
@@ -1398,6 +1227,38 @@ const { isLoadingHistory, resetHistory } = useConversationHistory({
 })
 
 const renderMarkdown = (content: string) => md.render(hideSemanticConfigSelectionPayloads(content))
+
+const normalizeCopyText = (value: unknown): string => (
+  hideSemanticConfigSelectionPayloads(String(value || '')).trim()
+)
+
+const getCopyableAssistantContent = (message: Message): string => {
+  if (message.role !== 'assistant') return ''
+  const segmentText = (message.segments || [])
+    .filter((segment): segment is { type: 'text'; content: string } => segment.type === 'text')
+    .map(segment => normalizeCopyText(segment.content))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+  return segmentText || normalizeCopyText(message.content) || normalizeCopyText(message.error)
+}
+
+const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
+
+const handleCopyAssistantMessage = async (message: Message) => {
+  const text = getCopyableAssistantContent(message)
+  if (!text) {
+    ElMessage.info('暂无可复制内容')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch (err) {
+    console.error('复制分析回复失败:', err)
+    ElMessage.error('复制失败，请稍后重试')
+  }
+}
 
 const handleScroll = () => {
   const container = chatContainerRef.value
@@ -1415,23 +1276,19 @@ const getMessageToolCall = (message: Message, toolCallId: string) => {
   return message.toolCalls?.find(item => item.tool_call_id === toolCallId) || findToolCallById(toolCallId)
 }
 
-const handleSkillSelect = (skill: SkillInfo) => {
-  selectedSkill.value = skill
-  nextTick(() => textareaRef.value?.focus())
+const getRenderableMessageToolCall = (message: Message, toolCallId: string) => {
+  const toolCall = getMessageToolCall(message, toolCallId)
+  return toolCall ? normalizeToolCallForDisplay(toolCall) : null
 }
 
-const loadCommandSkills = async () => {
-  if (commandSkills.value.length > 0 || isCommandSkillLoading.value) return
-  try {
-    isCommandSkillLoading.value = true
-    const response = await getSkills({ agent: 'analyze' })
-    commandSkills.value = response.data?.skills || []
-  } catch (err) {
-    commandSkills.value = []
-    console.error('加载技能列表失败:', err)
-  } finally {
-    isCommandSkillLoading.value = false
-  }
+const getRenderableQueryResultToolCall = (message: Message, toolCallId: string) => {
+  const toolCall = getRenderableMessageToolCall(message, toolCallId)
+  return shouldInlineRenderToolCall(toolCall) ? toolCall : null
+}
+
+const handleSkillSelect = (skill: SkillInfo) => {
+  selectedSkill.value = skill
+  inputBarRef.value?.focus()
 }
 
 const loadModelOptions = async () => {
@@ -1456,65 +1313,23 @@ const loadModelOptions = async () => {
 }
 
 onMounted(() => {
-  document.addEventListener('click', handleDocumentClick)
-  window.addEventListener('resize', handleTokenUsageViewportChange)
-  window.addEventListener('scroll', handleTokenUsageViewportChange, true)
   loadModelOptions()
 })
 
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleDocumentClick)
-  window.removeEventListener('resize', handleTokenUsageViewportChange)
-  window.removeEventListener('scroll', handleTokenUsageViewportChange, true)
-})
-
 const selectCommandSkill = (skill: SkillInfo) => {
-  selectedSkill.value = skill
-  input.value = input.value.replace(/^\/[^\s/]*\s?/, '')
-  isSkillCommandOpen.value = false
-  highlightedSkillIndex.value = 0
-  nextTick(() => textareaRef.value?.focus())
+  selectCommandSkillBase(skill)
+  inputBarRef.value?.focus()
 }
 
-const selectAgent = (agent: typeof agentOptions.value[number]) => {
-  if (agent.disabled) {
-    ElMessage.info('功能暂未开放')
-    isAgentSelectorOpen.value = false
-    return
-  }
-  selectedAgent.value = agent.id
-  isAgentSelectorOpen.value = false
-}
-
-const handleDocumentClick = (event: MouseEvent) => {
-  const target = event.target
-  if (!(target instanceof Node)) return
-  if (agentSelectorRef.value?.contains(target)) return
-  isAgentSelectorOpen.value = false
-}
+const handleDisabledAgentClick = () => ElMessage.info('功能暂未开放')
 
 const clearSelectedSkill = () => {
-  selectedSkill.value = null
-  nextTick(() => textareaRef.value?.focus())
+  clearSelectedSkillBase()
+  inputBarRef.value?.focus()
 }
 
 watch(input, () => {
-  nextTick(() => {
-    if (!textareaRef.value) return
-    textareaRef.value.style.height = 'auto'
-    textareaRef.value.style.height = `${Math.min(textareaRef.value.scrollHeight, 200)}px`
-  })
-})
-
-watch(skillCommandKeyword, (keyword) => {
-  if (keyword === null) {
-    isSkillCommandOpen.value = false
-    highlightedSkillIndex.value = 0
-    return
-  }
-  isSkillCommandOpen.value = true
-  highlightedSkillIndex.value = 0
-  loadCommandSkills()
+  nextTick(() => inputBarRef.value?.resizeTextarea())
 })
 
 watch(
@@ -1631,6 +1446,15 @@ const ensureAssistantMessage = () => {
   return assistant
 }
 
+const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
+  const finishedAt = parseDateTimeValue(timestamp)
+  if (!finishedAt) return
+  const message = messages.value.find(item => item.id === messageId)
+  if (message?.role === 'assistant') {
+    message.timestamp = finishedAt
+  }
+}
+
 const removeEmptyActiveAssistant = () => {
   const activeId = activeAssistantMessageId.value
   if (!activeId) return
@@ -1644,24 +1468,25 @@ const removeEmptyActiveAssistant = () => {
 
 const upsertToolMessage = (toolInfo: ToolCallInfo) => {
   if (!toolInfo.tool_call_id) return
+  const displayToolInfo = normalizeToolCallForDisplay(toolInfo)
   removeEmptyActiveAssistant()
-  toolCallsMap.value.set(toolInfo.tool_call_id, toolInfo)
+  toolCallsMap.value.set(displayToolInfo.tool_call_id, displayToolInfo)
   const assistant = ensureAssistantMessage()
   const toolCalls = assistant.toolCalls || []
-  const existingIndex = toolCalls.findIndex(item => item.tool_call_id === toolInfo.tool_call_id)
+  const existingIndex = toolCalls.findIndex(item => item.tool_call_id === displayToolInfo.tool_call_id)
   if (existingIndex >= 0) {
-    toolCalls[existingIndex] = toolInfo
+    toolCalls[existingIndex] = displayToolInfo
   } else {
-    toolCalls.push(toolInfo)
+    toolCalls.push(displayToolInfo)
   }
   assistant.toolCalls = [...toolCalls]
   const segments = assistant.segments || []
-  if (!segments.some(segment => segment.type === 'toolCall' && segment.toolCallId === toolInfo.tool_call_id)) {
-    segments.push({ type: 'toolCall', toolCallId: toolInfo.tool_call_id })
+  if (!segments.some(segment => segment.type === 'toolCall' && segment.toolCallId === displayToolInfo.tool_call_id)) {
+    segments.push({ type: 'toolCall', toolCallId: displayToolInfo.tool_call_id })
   }
   assistant.segments = [...segments]
   activeAssistantMessageId.value = assistant.id
-  if (toolInfo.status === 'completed') {
+  if (displayToolInfo.status === 'completed') {
     scheduleWorkspaceFilesRefresh()
   }
 }
@@ -1672,11 +1497,11 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
   const nextMap = new Map(toolCallsMap.value)
   for (const [id, tool] of nextMap) {
     if (!isUnfinishedToolStatus(tool.status)) continue
-    nextMap.set(id, {
+    nextMap.set(id, normalizeToolCallForDisplay({
       ...tool,
       status,
       result: result || tool.result,
-    })
+    }))
   }
   toolCallsMap.value = nextMap
 
@@ -1684,11 +1509,11 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
     if (!message.toolCalls?.length) continue
     message.toolCalls = message.toolCalls.map((tool) => {
       if (!isUnfinishedToolStatus(tool.status)) return tool
-      return {
+      return normalizeToolCallForDisplay({
         ...tool,
         status,
         result: result || tool.result,
-      }
+      })
     })
   }
 }
@@ -1819,34 +1644,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
   appendAssistantContent(msg.content || '')
 }
 
-const upsertTaskStage = (stage: TaskStageInfo) => {
-  const assistant = ensureAssistantMessage()
-  if (stage.source !== 'reasoning') {
-    completeRunningReasoningStages(assistant)
-  }
-  const stages = [...(assistant.taskStages || [])]
-  const incomingStage: TaskStageInfo = { ...stage, source: stage.source || 'task_stage' }
-  const existingIndex = stages.findIndex(item => item.stage === incomingStage.stage && item.source !== 'reasoning')
-  if (existingIndex >= 0) {
-    const existing = stages[existingIndex] || incomingStage
-    const isDelta = incomingStage.status === 'running' && incomingStage.content !== undefined && !incomingStage.title && !incomingStage.steps
-    stages[existingIndex] = isDelta
-      ? { ...existing, status: 'running', content: `${existing.content || ''}${incomingStage.content || ''}` }
-      : { ...existing, ...incomingStage }
-  }
-  else stages.push(incomingStage)
-  assistant.taskStages = stages
-  const stageIndex = existingIndex >= 0
-    ? existingIndex
-    : stages.findIndex(item => item.stage === incomingStage.stage && item.source !== 'reasoning')
-  const segments = assistant.segments || []
-  if (!segments.some(segment => segment.type === 'taskStage' && segment.stageIndex === stageIndex)) {
-    segments.push({ type: 'taskStage', stageIndex })
-    assistant.segments = [...segments]
-  }
-  activeAssistantMessageId.value = assistant.id
-}
-
 const getTaskStageLabel = (stage: TaskStageInfo['stage']): string => {
   const labels: Record<TaskStageInfo['stage'], string> = {
     thinking: '思考',
@@ -1964,6 +1761,7 @@ const submitAnalysisQuery = async (
     assistantMessage = ensureAssistantMessage()
     assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
   }
+  const assistantMessageId = assistantMessage.id
   if (options.appendUserMessage !== false) {
     input.value = ''
     selectedSkill.value = null
@@ -2034,9 +1832,9 @@ const submitAnalysisQuery = async (
       'chat_data_data_analyze',
       options.skillName || null,
       undefined,
-      (stage) => upsertTaskStage(stage),
       (payload) => {
         tokenUsage.value = payload.usage || null
+        updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
       },
       (usage) => {
         tokenUsage.value = usage
@@ -2102,29 +1900,7 @@ const handleStop = () => {
 }
 
 const handleKeyDown = (event: KeyboardEvent) => {
-  if (showSkillCommand.value) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      highlightedSkillIndex.value = Math.min(highlightedSkillIndex.value + 1, Math.max(filteredCommandSkills.value.length - 1, 0))
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      highlightedSkillIndex.value = Math.max(highlightedSkillIndex.value - 1, 0)
-      return
-    }
-    if ((event.key === 'Enter' || event.key === 'Tab') && filteredCommandSkills.value[highlightedSkillIndex.value]) {
-      event.preventDefault()
-      const skill = filteredCommandSkills.value[highlightedSkillIndex.value]
-      if (skill) selectCommandSkill(skill)
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      isSkillCommandOpen.value = false
-      return
-    }
-  }
+  if (handleSkillCommandKeyDown(event, selectCommandSkill)) return
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     handleSubmit()
@@ -2195,18 +1971,26 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 <div class="rounded-2xl rounded-br-md bg-[#1677FF]/10 px-4 py-2.5 text-[#1F3A56] shadow-[0_2px_8px_rgba(59,130,246,0.12)]">
                   <div class="whitespace-pre-wrap text-sm leading-relaxed">{{ msg.content }}</div>
                 </div>
+                <div class="mr-1 text-[10px] text-gray-400">
+                  {{ formatDateTimeValue(msg.timestamp) }}
+                </div>
               </template>
-              <div v-else-if="msg.role === 'tool'" class="rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
-                <ToolCallList
-                  v-if="msg.toolCalls?.length"
-                  :tool-calls="msg.toolCalls"
-                  :datasource-id="selectedDatasource"
-                  :execution-targets="props.executionTargets"
-                  compact
-                  :active-tool-call-id="activeToolCallId"
-                  @select-tool="selectToolCall"
-                />
-              </div>
+              <template v-else-if="msg.role === 'tool'">
+                <div class="rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
+                  <ToolCallList
+                    v-if="msg.toolCalls?.length"
+                    :tool-calls="msg.toolCalls"
+                    :datasource-id="selectedDatasource"
+                    :execution-targets="props.executionTargets"
+                    compact
+                    :active-tool-call-id="activeToolCallId"
+                    @select-tool="selectToolCall"
+                  />
+                </div>
+                <div v-if="formatDateTimeValue(msg.timestamp)" class="px-1 text-right text-[10px] text-gray-400">
+                  {{ formatDateTimeValue(msg.timestamp) }}
+                </div>
+              </template>
               <div v-else class="min-w-0 rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
                 <div v-if="msg.segments?.length" class="min-w-0 space-y-3">
                   <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
@@ -2227,12 +2011,19 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       ]"
                     >
                       <ToolCallList
-                        :tool-calls="[getMessageToolCall(msg, segment.toolCallId)!]"
+                        :tool-calls="[getRenderableMessageToolCall(msg, segment.toolCallId)!]"
                         :datasource-id="selectedDatasource"
                         :execution-targets="props.executionTargets"
                         compact
                         :active-tool-call-id="activeToolCallId"
                         @select-tool="selectToolCall"
+                      />
+                      <QueryResultPanel
+                        v-if="getRenderableQueryResultToolCall(msg, segment.toolCallId)"
+                        class="mt-2 max-h-[46vh]"
+                        :result-data="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.renderId!"
+                        :semantic-params="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.semanticParams"
+                        :sql="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.args?.sql as string | undefined"
                       />
                     </div>
                     <div
@@ -2388,8 +2179,17 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 </div>
                 <div v-if="msg.error" class="mt-2 text-sm text-red-500">{{ msg.error }}</div>
               </div>
-              <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="mt-1 flex justify-end px-1">
-                <AiGeneratedNotice />
+              <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="mt-1">
+                <AssistantMessageFooter :timestamp="formatDateTimeValue(msg.timestamp)">
+                  <button
+                    v-if="shouldShowMessageCopyButton(msg)"
+                    class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+                    @click="handleCopyAssistantMessage(msg)"
+                  >
+                    <i class="fa-regular fa-copy text-[11px]"></i>
+                    <span>复制</span>
+                  </button>
+                </AssistantMessageFooter>
               </div>
               <div v-if="msg.role === 'assistant' && msg.isStreaming && shouldShowStreamingStatus(msg)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
                 <i class="fa-solid fa-spinner fa-spin text-[11px]"></i>
@@ -2405,260 +2205,55 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
       <div v-if="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
-          <form class="relative" @submit.prevent="handleSubmit">
-            <div class="chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
-              <div class="min-h-[54px] px-4 pt-4 pb-2">
-                <div
-                  v-if="selectedSkillTitle"
-                  class="mb-2 flex w-fit items-center gap-1.5 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
-                >
-                  <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                  <span class="max-w-[140px] truncate">{{ selectedSkillTitle }}</span>
-                  <button type="button" class="text-blue-400 hover:text-blue-700" @click="clearSelectedSkill">
-                    <i class="fa-solid fa-xmark text-[10px]"></i>
-                  </button>
-                </div>
-                <textarea
-                  ref="textareaRef"
-                  v-model="input"
-                  :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入分析任务，输入 / 可选择技能' : '请输入分析任务，输入 / 可选择技能'"
-                  class="block w-full min-h-[26px] max-h-[200px] border-none bg-transparent text-[15px] leading-relaxed text-gray-700 resize-none outline-none overflow-y-hidden placeholder:text-gray-400"
-                  @keydown="handleKeyDown"
-                  @focus="inputFocused = true"
-                  @blur="inputFocused = false"
-                ></textarea>
-              </div>
-              <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
-                <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
-                  <button
-                    v-if="selectedAgent === 'chat_data_data_analyze'"
-                    type="button"
-                    class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                    title="技能管理"
-                    @click="isSkillManagerOpen = true"
-                  >
-                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-                    <span class="toolbar-label">技能</span>
-                  </button>
-                  <div ref="agentSelectorRef" class="relative">
-                    <button
-                      type="button"
-                      class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer hover:bg-black/[0.05]"
-                      @click="isAgentSelectorOpen = !isAgentSelectorOpen"
-                    >
-                      <i class="fa-solid fa-robot text-[10px] text-gray-400"></i>
-                      <span class="toolbar-label">{{ selectedAgentLabel }}</span>
-                      <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-                    </button>
-                    <div
-                      v-if="isAgentSelectorOpen"
-                      class="absolute left-0 bottom-8 z-50 min-w-[110px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
-                    >
-                      <button
-                        v-for="agent in agentOptions"
-                        :key="agent.id"
-                        type="button"
-                        :aria-disabled="agent.disabled"
-                        :title="agent.disabled ? '功能暂未开放' : undefined"
-                        :class="[
-                          'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs',
-                          selectedAgent === agent.id ? 'text-blue-600 bg-blue-50' : 'text-gray-600',
-                          agent.disabled ? '!text-gray-400 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'
-                        ]"
-                        @click="selectAgent(agent)"
-                      >
-                        <span>{{ agent.label }}</span>
-                        <i v-if="!agent.disabled && selectedAgent === agent.id" class="fa-solid fa-check text-[10px]"></i>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
-                    <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-                    <select v-model="selectedModel" class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3">
-                      <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-                    </select>
-                    <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
-                  </div>
-                  <button
-                    type="button"
-                    :class="[
-                      'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
-                      enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
-                    ]"
-                    :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
-                    :aria-pressed="enableDeepThinking"
-                    @click="enableDeepThinking = !enableDeepThinking"
-                  >
-                    <i class="fa-solid fa-brain text-[10px]"></i>
-                    <span class="toolbar-label">思考</span>
-                  </button>
-                  <div v-if="tokenUsageDisplay" class="relative">
-                    <button
-                      ref="tokenUsageButtonRef"
-                      type="button"
-                      class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border-none bg-transparent px-1.5 text-xs text-gray-500 cursor-pointer hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent"
-                      :disabled="!tokenUsageDisplay"
-                      :title="tokenUsageButtonTitle"
-                      @click="toggleTokenUsagePanel"
-                    >
-                      <span class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full" :style="tokenUsageRingStyle">
-                        <span class="flex h-4 w-4 items-center justify-center rounded-full bg-white text-[8px] font-semibold leading-none text-gray-500">
-                          {{ tokenUsagePercentageText }}
-                        </span>
-                      </span>
-                      <span class="toolbar-label">上下文</span>
-                    </button>
-                    <div
-                      v-if="tokenUsagePanelOpen"
-                      class="fixed z-[10000] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
-                      :style="tokenUsagePanelStyle"
-                    >
-                      <div class="flex items-center justify-between mb-2">
-                        <div class="font-semibold text-gray-800">输入预算明细</div>
-                        <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="tokenUsagePanelOpen = false">
-                          <i class="fa-solid fa-xmark"></i>
-                        </button>
-                      </div>
-                      <div class="grid grid-cols-2 gap-2 mb-2">
-                        <div v-for="row in tokenUsageDetailRows" :key="row.label" class="rounded bg-gray-50 px-2 py-1">
-                          <div class="text-[11px] text-gray-400">{{ row.label }}</div>
-                          <div class="font-medium text-gray-700">{{ formatTokenUsageDisplay({ used: row.value, total: 1 }).split(' / ')[0] }}</div>
-                        </div>
-                      </div>
-                      <div v-if="tokenUsageMessageRows.length" class="space-y-1.5">
-                        <div class="flex items-center justify-between">
-                          <span class="text-[11px] text-gray-400">本次输入内容</span>
-                          <div class="inline-flex rounded bg-gray-100 p-0.5">
-                            <button
-                              type="button"
-                              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-                              :class="tokenUsageSort === 'round' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-                              @click="tokenUsageSort = 'round'"
-                            >
-                              时序
-                            </button>
-                            <button
-                              type="button"
-                              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-                              :class="tokenUsageSort === 'desc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-                              @click="tokenUsageSort = 'desc'"
-                            >
-                              Token↓
-                            </button>
-                            <button
-                              type="button"
-                              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-                              :class="tokenUsageSort === 'asc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-                              @click="tokenUsageSort = 'asc'"
-                            >
-                              Token↑
-                            </button>
-                          </div>
-                        </div>
-                        <div class="max-h-[300px] overflow-auto pr-1 space-y-1.5">
-                          <div v-for="item in tokenUsageMessageRows" :key="item.key" class="rounded border border-gray-100 bg-white px-2 py-1">
-                            <button type="button" class="w-full border-none bg-transparent p-0 text-left cursor-pointer" @click="toggleTokenMessage(item.key)">
-                              <div class="flex items-center justify-between gap-2">
-                                <span class="text-gray-700">{{ item.label }}</span>
-                                <span class="font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
-                              </div>
-                              <div class="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                                <div class="h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></div>
-                              </div>
-                              <div v-if="item.description && !expandedTokenMessageKeys.has(item.key)" class="mt-1 truncate text-[11px] text-gray-400">{{ item.description }}</div>
-                            </button>
-                            <div v-if="expandedTokenMessageKeys.has(item.key) && item.children?.length" class="mt-2 space-y-1.5">
-                              <div v-for="child in item.children" :key="child.key" class="rounded bg-gray-50 p-2">
-                                <div class="flex items-center justify-between gap-2 text-[11px] text-gray-500">
-                                  <span>{{ child.label }}</span>
-                                  <span class="font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
-                                </div>
-                                <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-gray-600">{{ child.content || child.description || '' }}</pre>
-                              </div>
-                            </div>
-                            <pre v-else-if="expandedTokenMessageKeys.has(item.key)" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>
-                          </div>
-                        </div>
-                      </div>
-                      <div v-else class="text-gray-400">暂无可拆分明细。</div>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  v-if="isGenerating"
-                  type="button"
-                  class="relative w-8 h-8 flex items-center justify-center border-none rounded-full bg-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200 animate-breathe hover:scale-105 active:scale-95"
-                  @click="handleStop"
-                >
-                  <i class="fa-solid fa-stop relative z-10"></i>
-                  <span class="absolute inset-0 rounded-full bg-[#1677FF] opacity-40 animate-ping"></span>
-                </button>
-                <button
-                  v-else
-                  type="submit"
-                  :disabled="!input.trim() || !selectedDatasource"
-                  class="w-8 h-8 flex items-center justify-center border-none rounded-full bg-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none"
-                >
-                  <i class="fa-solid fa-arrow-up"></i>
-                </button>
-              </div>
-            </div>
-            <div
-              v-if="showSkillCommand"
-              class="absolute left-0 right-0 bottom-full z-20 mb-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
-            >
-              <div v-if="isCommandSkillLoading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
-              <div v-else-if="filteredCommandSkills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
-              <template v-else>
-                <button
-                  v-for="(skill, index) in filteredCommandSkills"
-                  :key="skill.name"
-                  type="button"
-                  :class="[
-                    'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
-                    index === highlightedSkillIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
-                  ]"
-                  @mousedown.prevent="selectCommandSkill(skill)"
-                >
-                  <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
-                    <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
-                  </span>
-                </button>
-              </template>
-            </div>
-          </form>
+          <ConversationInputBar
+            ref="inputBarRef"
+            v-model:input="input"
+            v-model:selected-agent="selectedAgent"
+            v-model:selected-model="selectedModel"
+            v-model:enable-deep-thinking="enableDeepThinking"
+            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入分析任务，输入 / 可选择技能' : '请输入分析任务，输入 / 可选择技能'"
+            :selected-skill-title="selectedSkillTitle"
+            :agent-options="agentOptions"
+            :model-options="modelOptions"
+            :is-generating="isGenerating"
+            :can-submit="Boolean(input.trim() && selectedDatasource)"
+            :input-focused="inputFocused"
+            :show-skill-button="selectedAgent === 'chat_data_data_analyze'"
+            :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
+            @submit="handleSubmit"
+            @stop="handleStop"
+            @clear-skill="clearSelectedSkill"
+            @open-skill-manager="isSkillManagerOpen = true"
+            @disabled-agent-click="handleDisabledAgentClick"
+            @keydown="handleKeyDown"
+            @focus="inputFocused = true"
+            @blur="inputFocused = false"
+          >
+            <template #toolbar-extra>
+              <ConversationTokenUsage ref="tokenUsagePanelRef" :usage="tokenUsage" />
+            </template>
+
+            <template #command-menu>
+              <SkillCommandMenu
+                :open="showSkillCommand"
+                :loading="isCommandSkillLoading"
+                :skills="displayedCommandSkills"
+                :highlighted-index="highlightedSkillIndex"
+                @select="selectCommandSkill"
+              />
+            </template>
+          </ConversationInputBar>
         </div>
       </div>
     </div>
 
-    <button
-      v-if="!sidePanelOpen"
-      type="button"
-      class="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center gap-1 rounded-l-xl border border-r-0 border-slate-200 bg-white px-2.5 py-3 text-xs font-medium text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] transition-colors hover:bg-blue-50 hover:text-blue-700"
-      @click="openConsolePanel"
+    <ConversationSidePanel
+      :open="sidePanelOpen"
+      :title="sidePanelTitle"
+      :subtitle="sidePanelSubtitle"
+      @open="openConsolePanel"
+      @close="sidePanelOpen = false"
     >
-      <span class="[writing-mode:vertical-rl] tracking-wider">控制台</span>
-    </button>
-
-    <aside v-if="sidePanelOpen" class="w-[40%] min-w-[380px] max-w-[580px] border-l border-slate-200 bg-white flex flex-col">
-      <div class="h-14 px-4 border-b border-slate-100 flex items-center justify-between">
-        <div class="min-w-0">
-          <div class="text-sm font-semibold text-slate-800">{{ sidePanelTab === 'console' ? '控制台' : '工具详情' }}</div>
-          <div class="mt-0.5 truncate font-mono text-xs text-slate-400">
-            {{ sidePanelTab === 'console' ? producedFileTree.root : (activeToolCall?.tool_name || '未选择工具') }}
-          </div>
-        </div>
-        <button
-          type="button"
-          class="h-8 w-8 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-          @click="sidePanelOpen = false"
-        >
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="flex-1 overflow-auto p-4">
         <template v-if="sidePanelTab === 'console'">
           <div class="mb-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
             <div class="mb-2 flex items-center justify-between">
@@ -2832,60 +2427,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
         </template>
 
         <template v-else>
-          <div v-if="activeToolCall" class="space-y-3">
-            <div class="rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <div class="mb-2 flex items-center justify-between gap-2">
-                <div class="text-xs font-medium text-slate-500">参数</div>
-                <div class="truncate font-mono text-[10px] text-slate-400">{{ activeToolCall.tool_name }}</div>
-              </div>
-              <pre class="m-0 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">{{ formatJson(activeToolCall.args) }}</pre>
-            </div>
-            <div class="rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <div class="mb-2 text-xs font-medium text-slate-500">结果</div>
-              <pre class="m-0 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">{{ selectedToolResult }}</pre>
-              <div v-if="hasActiveToolTablePreview" class="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <div class="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
-                  <div class="text-xs font-medium text-slate-600">结果预览</div>
-                  <div class="text-[11px] text-slate-400">
-                    展示前 {{ activeToolPreviewRows.length }} 行 / 共 {{ activeToolTotalRows }} 行
-                  </div>
-                </div>
-                <div class="max-h-80 overflow-auto">
-                  <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
-                    <thead class="sticky top-0 z-10 bg-slate-50">
-                      <tr>
-                        <th
-                          v-for="column in activeToolTableColumns"
-                          :key="column"
-                          class="border-b border-slate-100 px-3 py-2 font-medium text-slate-500"
-                        >
-                          {{ column }}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(row, rowIndex) in activeToolPreviewRows" :key="rowIndex" class="hover:bg-slate-50">
-                        <td
-                          v-for="column in activeToolTableColumns"
-                          :key="column"
-                          class="max-w-[220px] truncate border-b border-slate-50 px-3 py-2 text-slate-700"
-                          :title="formatToolTableCell(row[column])"
-                        >
-                          {{ formatToolTableCell(row[column]) }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-400">
-            从消息中选择一个工具调用查看参数和结果。
-          </div>
+          <ToolCallDetailPanel
+            :tool-call="activeToolCall"
+            :format-text="replaceVisiblePathsForDisplay"
+          />
         </template>
-      </div>
-    </aside>
+    </ConversationSidePanel>
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[640px] overflow-hidden">

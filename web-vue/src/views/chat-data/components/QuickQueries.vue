@@ -9,6 +9,7 @@ import { ElMessage } from 'element-plus'
 import { deleteQueryFavorite, getQueryFavorites, getSkills, updateQueryFavorite } from '../api'
 import queryWorkflowHintIcon from '../assets/icons/query-workflow-hint.svg'
 import type { SkillInfo } from '../types'
+import { getSkillCreatorLabel, getSkillCreatorShortLabel } from '../utils'
 
 // Builder 配置类型
 export interface BuilderConfig {
@@ -329,16 +330,6 @@ const displayedSkills = computed(() => {
   }
   return result
 })
-
-const getSkillCreatorLabel = (skill: SkillInfo) => {
-  if (skill.source === 'system') return '系统'
-  return skill.creator_name || skill.creator_id || skill.owner_user_id || '用户技能'
-}
-
-const getSkillCreatorShortLabel = (skill: SkillInfo) => {
-  const label = getSkillCreatorLabel(skill)
-  return label.length > 3 ? `${label.slice(0, 3)}...` : label
-}
 
 const activeContentType = computed<'skills' | 'queries'>(() => {
   if (props.mode !== 'conversation') return 'queries'

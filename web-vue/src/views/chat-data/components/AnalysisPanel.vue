@@ -192,7 +192,7 @@ const renderMarkdown = (content: string) => md.render(content)
               style="background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
             ></div>
           </div>
-          <div class="min-w-0 flex-1 pb-6">
+          <div class="min-w-0 flex-1 -mt-2.5 pb-6">
             <template v-if="entry.type === 'thinking'">
               <div class="min-w-0 max-w-full overflow-hidden rounded-xl border border-black/[0.04] bg-white/60">
                 <button

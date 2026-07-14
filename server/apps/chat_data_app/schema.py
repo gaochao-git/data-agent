@@ -62,10 +62,6 @@ class NL2SQLRequest(BaseModel):
         description="临时语义配置（用于测试，不会保存到数据库）"
     )
 
-
-# 注意：ContinueSQLRequest 已废弃，使用公共接口 /api/chatdata/conversations/{id}/resume
-
-
 # ============ SQL 编辑器相关模型 ============
 
 class QuickSqlRequest(BaseModel):

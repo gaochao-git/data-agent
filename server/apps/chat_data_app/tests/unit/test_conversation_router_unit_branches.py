@@ -3,8 +3,6 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -24,7 +22,6 @@ class FakeRequest:
 def router_state(monkeypatch):
     original_configs = dict(conversation_router._agent_configs)
     original_completion = dict(conversation_router._completion_handlers)
-    original_resume = dict(conversation_router._resume_handlers)
     original_availability = dict(conversation_router._agent_availability_checkers)
     original_db_path = conversation_router._default_db_path
 
@@ -32,7 +29,6 @@ def router_state(monkeypatch):
     monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
-    conversation_router._resume_handlers.clear()
     conversation_router._agent_availability_checkers.clear()
     conversation_router._default_db_path = "db"
     conversation_router._agent_configs.update({
@@ -58,8 +54,6 @@ def router_state(monkeypatch):
     conversation_router._agent_configs.update(original_configs)
     conversation_router._completion_handlers.clear()
     conversation_router._completion_handlers.update(original_completion)
-    conversation_router._resume_handlers.clear()
-    conversation_router._resume_handlers.update(original_resume)
     conversation_router._agent_availability_checkers.clear()
     conversation_router._agent_availability_checkers.update(original_availability)
     conversation_router._default_db_path = original_db_path
@@ -67,10 +61,8 @@ def router_state(monkeypatch):
 
 def test_registration_and_auth_helpers(router_state, monkeypatch):
     conversation_router.register_completion_handler("agent_b", lambda **_kwargs: None)
-    conversation_router.register_resume_handler("agent_b", lambda **_kwargs: None)
     conversation_router.register_agent_availability_checker("agent_b", lambda: False)
     assert "agent_b" in conversation_router._completion_handlers
-    assert "agent_b" in conversation_router._resume_handlers
     assert conversation_router.get_agent_availability("agent_b").enabled is False
     assert conversation_router.get_agent_config("agent_a")["db_path"] == "db"
 
@@ -103,73 +95,6 @@ async def test_get_agent_config_by_conversation_branches(router_state, monkeypat
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
     assert (await conversation_router.get_agent_config_by_conversation("conv"))["db_path"] == "db"
-
-
-@pytest.mark.asyncio
-async def test_generic_resume_stream_completed_interrupt_and_error():
-    class Checkpointer:
-        async def __aenter__(self):
-            return "checkpointer"
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        def __init__(self, state, events=()):
-            self.state = state
-            self.events = list(events)
-
-        async def astream(self, *_args, **_kwargs):
-            for event in self.events:
-                yield event
-
-        async def aget_state(self, _config):
-            return self.state
-
-    async def collect(state, events=()):
-        return [
-            chunk
-            async for chunk in conversation_router._generic_resume_stream(
-                "conv",
-                "approve",
-                {"ok": True},
-                lambda _cp: Graph(state, events),
-                lambda: Checkpointer(),
-            )
-        ]
-
-    completed = await collect(
-        SimpleNamespace(next=(), tasks=[], values={"messages": [HumanMessage(content="q"), AIMessage(content="done", id="ai1", additional_kwargs={"k": "v"})]}),
-        [("custom", {"event": "progress", "data": {"step": 1}}), ("messages", {"ignored": True})],
-    )
-    assert completed[0].startswith("event: progress")
-    assert "event: completed" in completed[-1]
-    assert "done" in completed[-1]
-
-    generic_done = await collect(SimpleNamespace(next=(), tasks=[], values={"messages": [HumanMessage(content="q")]}))
-    assert "操作成功" in generic_done[-1]
-
-    interrupted = await collect(SimpleNamespace(
-        next=("confirm",),
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"sql": "select 1"})])],
-        values={"messages": []},
-    ))
-    assert "event: interrupt" in interrupted[-1]
-    assert "select 1" in interrupted[-1]
-
-    missing_state = await collect(SimpleNamespace(next=(), tasks=[], values={}))
-    assert "未获取到最终状态" in missing_state[-1]
-
-    def bad_checkpointer():
-        raise RuntimeError("checkpoint down")
-
-    errored = [
-        chunk
-        async for chunk in conversation_router._generic_resume_stream(
-            "conv", "approve", None, lambda _cp: None, bad_checkpointer
-        )
-    ]
-    assert "恢复对话失败: checkpoint down" in errored[-1]
 
 
 @pytest.mark.asyncio
@@ -418,73 +343,6 @@ async def test_get_conversation_context_returns_checkpoint_datasource(router_sta
 
 
 @pytest.mark.asyncio
-async def test_resume_route_custom_and_generic(router_state, monkeypatch):
-    request = FakeRequest()
-
-    async def get_config(*_args, **_kwargs):
-        return conversation_router._agent_configs["agent_a"]
-
-    async def get_agent(*_args, **_kwargs):
-        return "agent_a"
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
-
-    async def custom_handler(conversation_id, action, data):
-        return {"conversation_id": conversation_id, "action": action, "data": data}
-
-    conversation_router._resume_handlers["agent_a"] = custom_handler
-    custom = await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(action="edit", data={"sql": "select 1"}), request)
-    assert custom["action"] == "edit"
-
-    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED})
-    disabled_resume = payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))
-    assert disabled_resume["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
-    conversation_router._agent_availability_checkers.pop("agent_a", None)
-
-    conversation_router._resume_handlers.clear()
-
-    class Checkpointer:
-        async def __aenter__(self):
-            return "cp"
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        async def astream(self, *_args, **_kwargs):
-            if False:
-                yield None
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(next=(), tasks=[], values={"messages": [AIMessage(content="done")]})
-
-    conversation_router._agent_configs["agent_a"]["get_graph"] = lambda _cp: Graph()
-    conversation_router._agent_configs["agent_a"]["get_checkpointer"] = lambda: Checkpointer()
-    response = await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request)
-    assert isinstance(response, StreamingResponse)
-    chunks = [chunk async for chunk in response.body_iterator]
-    assert "event: completed" in chunks[-1]
-
-    async def get_no_graph_config(*_args, **_kwargs):
-        return conversation_router._agent_configs["agent_nograph"]
-
-    async def get_no_graph_agent(*_args, **_kwargs):
-        return "agent_nograph"
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_no_graph_config)
-    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_no_graph_agent)
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
-
-    async def get_no_agent(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_no_agent)
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert payload(await conversation_router.resume_conversation("", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-
-@pytest.mark.asyncio
 async def test_file_and_artifact_routes(router_state, monkeypatch):
     request = FakeRequest()
     async def get_config(*_args, **_kwargs):
@@ -641,17 +499,6 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
     assert payload(await conversation_router.completion("conv", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED
 
-    async def get_agent_for_resume(*_args, **_kwargs):
-        return "agent_a"
-
-    async def resume_raises(*_args, **_kwargs):
-        raise RuntimeError("resume down")
-
-    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_for_resume)
-    conversation_router._resume_handlers["agent_a"] = resume_raises
-    assert payload(await conversation_router.resume_conversation("conv", conversation_router.ResumeRequest(), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_RESUME_FAILED
-
-
 @pytest.mark.asyncio
 async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeypatch):
     request = FakeRequest()
@@ -724,50 +571,3 @@ async def test_router_conversation_routes_return_not_found_when_config_missing(r
     ))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
-
-@pytest.mark.asyncio
-async def test_generic_resume_stream_additional_interrupt_shapes():
-    class Checkpointer:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        def __init__(self, state, events):
-            self.state = state
-            self.events = events
-
-        async def astream(self, *_args, **_kwargs):
-            for event in self.events:
-                yield event
-
-        async def aget_state(self, _config):
-            return self.state
-
-    async def collect(state, events):
-        return [
-            chunk
-            async for chunk in conversation_router._generic_resume_stream(
-                "conv",
-                "approve",
-                None,
-                lambda _cp: Graph(state, events),
-                lambda: Checkpointer(),
-            )
-        ]
-
-    events = [("custom", {"data": {"no_event": True}}), ("custom", "skip"), ("messages", {"ignored": True}), ("too", "long", "skip")]
-    no_task_interrupt = await collect(SimpleNamespace(next=("confirm",), tasks=[], values={"messages": []}), events)
-    assert "event: message" in no_task_interrupt[0]
-    assert '"no_event": true' in no_task_interrupt[0]
-    assert "event: interrupt" in no_task_interrupt[-1]
-    assert '"interrupt_data": null' in no_task_interrupt[-1]
-
-    non_interrupt_task = await collect(
-        SimpleNamespace(next=("confirm",), tasks=[SimpleNamespace(interrupts=[])], values={"messages": []}),
-        [],
-    )
-    assert '"interrupt_data": null' in non_interrupt_task[-1]

@@ -100,6 +100,7 @@ export interface SkillInfo {
   owner_user_id?: string
   creator_id?: string
   creator_name?: string
+  create_by_name?: string
   can_manage?: boolean
   favorite?: boolean
   enabled?: boolean
@@ -485,10 +486,10 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
 
 // 工具状态
-export type ToolStatus = 'pending' | 'running' | 'completed'
+export type ToolStatus = 'running' | 'completed'
 
 // 工具事件数据
 export interface ToolEventData {

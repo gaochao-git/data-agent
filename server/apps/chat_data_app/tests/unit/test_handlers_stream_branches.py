@@ -72,6 +72,26 @@ class FakeCheckpointer:
         return False
 
 
+def patch_data_analyze_workspace_session(monkeypatch):
+    session = SimpleNamespace(sandbox_id="sbx_test")
+    calls = {"created": [], "attached": [], "cleaned": []}
+
+    async def fake_get_workspace_execution_session(workspace_root, user_id):
+        calls["created"].append((workspace_root, user_id))
+        return session
+
+    async def fake_attach_workspace_execution_session(attached_session, user_id):
+        calls["attached"].append((attached_session, user_id))
+
+    async def fake_cleanup_workspace_execution_session(cleaned_session):
+        calls["cleaned"].append(cleaned_session)
+
+    monkeypatch.setattr(handlers, "get_workspace_execution_session", fake_get_workspace_execution_session)
+    monkeypatch.setattr(handlers, "attach_workspace_execution_session", fake_attach_workspace_execution_session)
+    monkeypatch.setattr(handlers, "cleanup_workspace_execution_session", fake_cleanup_workspace_execution_session)
+    return calls
+
+
 def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert handlers._resolve_active_tool_call_id(None, "active", []) == "active"
     assert handlers._resolve_active_tool_call_id(None, None, ["older", "latest"]) == "latest"
@@ -108,6 +128,18 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
         {"id": "reasoning-0", "content": "工具前继续", "tool_call_count": 0},
         {"id": "reasoning-1", "content": "工具后", "tool_call_count": 2},
     ]
+
+
+def test_data_analyze_visible_stream_message_accepts_single_agent_model_node():
+    ai_chunk = FakeChunk(content="分析")
+    tool_chunk = FakeChunk(content="工具", msg_type="tool")
+
+    assert handlers._is_data_analyze_visible_stream_message(ai_chunk, {"langgraph_node": "model"}) is True
+    assert handlers._is_data_analyze_visible_stream_message(ai_chunk, {"langgraph_node": "data_analyze_agent"}) is True
+    assert handlers._is_data_analyze_visible_stream_message(ai_chunk, {"langgraph_node": "other", "lc_agent_name": "data_analyze_agent"}) is True
+    assert handlers._is_data_analyze_visible_stream_message(tool_chunk, {"langgraph_node": "tools"}) is True
+    assert handlers._is_data_analyze_visible_stream_message(ai_chunk, {"langgraph_node": "__internal__"}) is False
+    assert handlers._is_data_analyze_visible_stream_message(ai_chunk, {"langgraph_node": "tools"}) is False
 
 
 @pytest.mark.asyncio
@@ -162,23 +194,35 @@ def test_message_end_payload_ignores_empty_latest_ai_timestamp():
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_tool_chunks_retrieval_and_interrupt(monkeypatch):
+async def test_persist_latest_ai_message_timestamp_uses_langchain_agent_model_node():
+    class Agent:
+        def __init__(self):
+            self.updated = []
+            self.state = SimpleNamespace(values={"messages": [
+                AIMessage(content="最终回复", id="ai_1", additional_kwargs={}),
+            ]})
+
+        async def aupdate_state(self, config, values, as_node=None):
+            self.updated.append((config, values, as_node))
+            self.state = SimpleNamespace(values={"messages": values["messages"]})
+
+        async def aget_state(self, _config):
+            return self.state
+
+    agent = Agent()
+    state = await handlers._persist_latest_ai_message_timestamp(agent, {"thread_id": "t"}, agent.state)
+
+    assert agent.updated[0][2] == "model"
+    assert state.values["messages"][0].additional_kwargs["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_stream_sql_generation_tool_chunks_retrieval_completes(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(
                 values={"token_usage": {"total_tokens": 7}},
-                tasks=[
-                    SimpleNamespace(
-                        interrupts=[
-                            SimpleNamespace(
-                                value={
-                                    "args": {"sql": "select 1"},
-                                    "message": "确认执行",
-                                }
-                            )
-                        ]
-                    )
-                ],
+                tasks=[],
             )
 
         async def astream(self, *_args, **_kwargs):
@@ -210,7 +254,7 @@ async def test_stream_sql_generation_tool_chunks_retrieval_and_interrupt(monkeyp
     assert "event: tool" in text
     assert "semantic_config_selected" not in text
     assert "semantic_config_select_required" not in text
-    assert "status" in text and "pending" in text
+    assert '"status": "pending"' not in text
     assert "message_end" in text
     assert text.rstrip().endswith("data: [DONE]")
 
@@ -390,7 +434,7 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
     text = "".join(chunks)
     assert "semantic_query_tool" in text
     assert "tool done" in text
-    assert "accumulated_args" not in text
+    assert '"accumulated_args": {}' in text
 
 
 @pytest.mark.asyncio
@@ -494,7 +538,7 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
 @pytest.mark.asyncio
 async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monkeypatch):
     class Agent:
-        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+        async def astream(self, initial_state, config=None, stream_mode=None):
             yield ("custom", {"type": "token_usage", "usage": {}})
             yield ("messages", (FakeChunk(additional_kwargs={"reasoning_content": "只思考"}), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (FakeChunk(content="思考后继续", additional_kwargs={"reasoning_content": "有内容思考"}), {"langgraph_node": "data_analyze_agent"}))
@@ -526,9 +570,10 @@ async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monk
     monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
-    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
     monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(
         conversation_id="conv_da",
@@ -554,7 +599,7 @@ async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monk
 @pytest.mark.asyncio
 async def test_data_analyze_stream_tool_selection_payload_empty_branch(monkeypatch):
     class Agent:
-        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+        async def astream(self, initial_state, config=None, stream_mode=None):
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_empty", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
@@ -573,9 +618,10 @@ async def test_data_analyze_stream_tool_selection_payload_empty_branch(monkeypat
     monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
-    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
     monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(
         conversation_id="conv_da_empty",
@@ -640,7 +686,7 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
+async def test_stream_sql_generation_message_end_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "agent"}
@@ -648,7 +694,7 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
         async def aget_state(self, _config):
             return SimpleNamespace(
                 values={},
-                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
+                tasks=[],
             )
 
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
@@ -661,7 +707,7 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
     ))
     text = "".join(chunks)
 
-    assert '"status": "pending"' in text
+    assert '"status": "pending"' not in text
     assert "message_end" in text
     assert '"timestamp":' in text
     assert '"usage"' not in text
@@ -670,7 +716,7 @@ async def test_stream_sql_generation_interrupt_without_token_usage(monkeypatch):
 @pytest.mark.asyncio
 async def test_data_analyze_stream_bad_selection_payload_branch(monkeypatch):
     class Agent:
-        async def astream(self, initial_state, config=None, stream_mode=None, subgraphs=False):
+        async def astream(self, initial_state, config=None, stream_mode=None):
             yield ("messages", (FakeChunk(tool_calls=[{"id": "tc_bad", "name": "select_semantic_config_tool"}]), {"langgraph_node": "data_analyze_agent"}))
             yield ("messages", (
                 FakeChunk(
@@ -689,9 +735,10 @@ async def test_data_analyze_stream_bad_selection_payload_branch(monkeypatch):
     monkeypatch.setattr(handlers.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(handlers.skill_service, "list_skills_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(handlers.data_analyze_graph, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
-    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_flow_graph", lambda **_kwargs: Agent())
+    monkeypatch.setattr(handlers.data_analyze_graph, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
     monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(
         conversation_id="conv_da_bad_selection",

@@ -100,6 +100,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 - 回复只展示：简短结论、关键数字、产物路径或预览状态。
 - 不在正文暴露：工具参数、JSON、DSL、SQL、patch、XML、YAML、工具返回原文或原始查询行。
 - 过程说明只写当前动作或发现，不展开指标、维度、SQL、卡片清单或工具结果明细。
+- `semantic_query_tool` 的查询结果会由前端自动渲染为表格/图表；最终回复不要再次输出 markdown 表格、逐行明细列表、完整结果清单或大段复述查询结果，只提炼关键结论或说明已完成查询。
 - `file_edit` 仅代表会话文件已生成，任何业务系统写入不能由模型自行宣称成功。
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。
 </workflow>

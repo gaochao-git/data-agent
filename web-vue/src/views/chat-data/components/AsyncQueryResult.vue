@@ -8,6 +8,7 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
+import { dedupeRepeatedErrorText } from '../utils'
 
 interface QueryResult {
   success: boolean
@@ -133,6 +134,7 @@ const parseResult = computed<{ result: QueryResult | null; error: string | null 
 
 const activeResult = computed(() => parseResult.value.result)
 const parseError = computed(() => parseResult.value.error)
+const activeErrorText = computed(() => dedupeRepeatedErrorText(activeResult.value?.error, '查询失败'))
 
 const normalizeColumnName = (value: string) => (value || '').replace(/`/g, '').trim().toLowerCase()
 
@@ -378,7 +380,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
       <!-- 查询失败 -->
       <div v-if="activeResult && !activeResult.success" class="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
         <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
-        <span>{{ activeResult.error || '查询失败' }}</span>
+        <span class="max-w-full whitespace-pre-wrap break-words text-center">{{ activeErrorText }}</span>
       </div>
 
       <!-- 内容区域 -->

@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 from types import SimpleNamespace
@@ -11,7 +10,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from apps.chat_data_app.agent import data_analyze_graph
 
@@ -37,27 +36,15 @@ def test_data_analyze_tool_metadata_and_dialect_sections():
 def test_data_analyze_agent_state_exposes_datasource_context():
     annotations = data_analyze_graph.DataAnalyzeAgentState.__annotations__
 
-    assert "messages" in annotations
     assert "datasource_id" in annotations
     assert "semantic_config_id" in annotations
     assert "conversation_id" in annotations
+    assert "reasoning_segments" in annotations
+    assert "token_usage" in annotations
+    assert "conversation_datasource_id" in annotations
 
 
-def test_merge_task_stages_updates_matching_run_id():
-    merged = data_analyze_graph.merge_task_stages(
-        [{"stage": "thinking", "run_id": "r1", "status": "running"}],
-        [{"stage": "thinking", "run_id": "r1", "status": "completed"}, {"stage": "", "status": "free"}],
-    )
-
-    assert merged[0]["status"] == "completed"
-    assert merged[1]["status"] == "free"
-
-
-def test_data_analyze_reasoning_merge_and_default_skill_prompt(monkeypatch, tmp_path):
-    assert data_analyze_graph.merge_reasoning_segments([{"id": "old"}], [{"id": "new"}]) == [{"id": "old"}, {"id": "new"}]
-    assert data_analyze_graph.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
-    assert data_analyze_graph.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
-
+def test_data_analyze_default_skill_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
     prompt = data_analyze_graph.build_data_analyze_system_prompt(
         skill={},
@@ -194,114 +181,17 @@ def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, t
     assert captured["agent_kwargs"]["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
 
 
-@pytest.mark.asyncio
-async def test_create_data_analyze_flow_graph_runs_single_agent_node(monkeypatch, tmp_path):
-    class FakeAgent:
-        async def ainvoke(self, state, config=None):
-            return {"messages": [AIMessage(content="执行完成")]}
-
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_agent", lambda **_kwargs: FakeAgent())
-    monkeypatch.setattr(data_analyze_graph, "invoke_with_token_usage", lambda **_kwargs: asyncio.sleep(0, result=({"messages": [AIMessage(content="执行完成")]}, {"total_tokens": 12})))
-    monkeypatch.setattr(data_analyze_graph, "get_stream_writer", lambda: lambda payload: None)
-    monkeypatch.setattr(data_analyze_graph, "get_workspace_execution_session", lambda workspace_root, user_id: asyncio.sleep(0, result=SimpleNamespace(sandbox_id="sbx_1")))
-    monkeypatch.setattr(data_analyze_graph, "attach_workspace_execution_session", lambda session, user_id: asyncio.sleep(0, result=None))
-    monkeypatch.setattr(data_analyze_graph, "cleanup_workspace_execution_session", lambda session: asyncio.sleep(0, result=None))
-
-    graph = data_analyze_graph.create_data_analyze_flow_graph(
-        workspace_root=str(tmp_path),
-        system_prompt="system",
-        user_id="u1",
-    )
-    result = await graph.ainvoke({
-        "messages": [HumanMessage(content="分析销售额")],
-        "task_stages": [],
-        "task_run_id": "run_1",
-    }, config={"configurable": {"thread_id": "conv_graph"}})
-
-    assert result["task_stages"] == []
-    assert result["messages"][-1].content == "执行完成"
-    assert result["token_usage"] == {"total_tokens": 12}
-
-
-@pytest.mark.asyncio
-async def test_flow_graph_reuses_existing_session(monkeypatch, tmp_path):
-    existing_session = SimpleNamespace(sandbox_id="existing")
-    attach_calls = []
-
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_agent", lambda **kwargs: SimpleNamespace(ref=kwargs["execution_session_ref"]))
-    monkeypatch.setattr(data_analyze_graph, "invoke_with_token_usage", lambda **_kwargs: asyncio.sleep(0, result=({"messages": [AIMessage(content="执行")]}, {})))
-    monkeypatch.setattr(data_analyze_graph, "get_stream_writer", lambda: lambda payload: None)
-    monkeypatch.setattr(data_analyze_graph, "get_workspace_execution_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cached session should be reused")))
-    monkeypatch.setattr(data_analyze_graph, "attach_workspace_execution_session", lambda session, user_id: asyncio.sleep(0, result=attach_calls.append((session, user_id))))
-    monkeypatch.setattr(data_analyze_graph, "cleanup_workspace_execution_session", lambda session: asyncio.sleep(0, result=None))
-
-    original_ref = data_analyze_graph.SandboxExecutionSessionRef
-
-    class SeededRef(original_ref):
-        def __init__(self):
-            super().__init__()
-            self.current = existing_session
-
-    monkeypatch.setattr(data_analyze_graph, "SandboxExecutionSessionRef", SeededRef)
-
-    graph = data_analyze_graph.create_data_analyze_flow_graph(workspace_root=str(tmp_path), system_prompt="system", user_id="u1")
-    await graph.ainvoke({
-        "messages": [HumanMessage(content="分析")],
-        "task_stages": [],
-        "task_run_id": "run-default",
-    }, config={"configurable": {"thread_id": "conv_default"}})
-
-    assert attach_calls == [(existing_session, "u1")]
-
-
-@pytest.mark.asyncio
-async def test_flow_graph_execute_exception_cleans_session(monkeypatch, tmp_path):
-    session = SimpleNamespace(sandbox_id="sbx")
-    cleaned = []
-
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_agent", lambda **_kwargs: object())
-    monkeypatch.setattr(data_analyze_graph, "invoke_with_token_usage", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("agent failed")))
-    monkeypatch.setattr(data_analyze_graph, "get_stream_writer", lambda: lambda payload: None)
-    monkeypatch.setattr(data_analyze_graph, "get_workspace_execution_session", lambda *_args, **_kwargs: asyncio.sleep(0, result=session))
-    monkeypatch.setattr(data_analyze_graph, "cleanup_workspace_execution_session", lambda session: asyncio.sleep(0, result=cleaned.append(session)))
-    monkeypatch.setattr(data_analyze_graph, "attach_workspace_execution_session", lambda session, user_id: asyncio.sleep(0, result=None))
-
-    graph = data_analyze_graph.create_data_analyze_flow_graph(workspace_root=str(tmp_path), system_prompt="system", user_id="u1")
-
-    with pytest.raises(RuntimeError, match="agent failed"):
-        await graph.ainvoke({
-            "messages": [HumanMessage(content="分析")],
-            "task_stages": [],
-            "task_run_id": "run-error",
-        }, config={"configurable": {"thread_id": "conv_error"}})
-
-    assert cleaned == [session]
-
-
-@pytest.mark.asyncio
-async def test_execute_data_analyze_agent_returns_message_for_non_dict(monkeypatch):
-    monkeypatch.setattr(data_analyze_graph, "invoke_with_token_usage", lambda **_kwargs: asyncio.sleep(0, result=(AIMessage(content="完成"), {"total_tokens": 3})))
-    emitted = []
-    monkeypatch.setattr(data_analyze_graph, "get_stream_writer", lambda: emitted.append)
-
-    result = await data_analyze_graph.execute_data_analyze_agent(agent=object(), state={"messages": []}, system_prompt="system", model_id=None)
-
-    assert result["messages"][0].content == "完成"
-    assert result["messages"][0].additional_kwargs["timestamp"]
-    assert emitted == [{"type": "token_usage", "usage": {"total_tokens": 3}}]
-
-
 def test_get_data_analyze_graph_builds_history_reader(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(data_analyze_graph, "ensure_data_analyze_workspace", lambda conversation_id: {"root": f"/tmp/{conversation_id}"})
     monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills />")
 
-    def fake_create_flow(**kwargs):
+    def fake_create_agent(**kwargs):
         captured["kwargs"] = kwargs
         return "graph"
 
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_flow_graph", fake_create_flow)
+    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_agent", fake_create_agent)
 
     graph = data_analyze_graph.get_data_analyze_graph(checkpointer="checkpoint")
 

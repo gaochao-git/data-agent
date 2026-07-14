@@ -427,52 +427,6 @@ async def sync_thread_to_db(
         logger.warning(f"同步会话到 user_threads 失败: {e}")
 
 
-def _get_interrupt_info(state) -> Optional[Dict[str, Any]]:
-    """
-    从状态中提取中断信息（由工具内部的 interrupt() 触发）
-
-    Returns:
-        如果有中断: {"tool_name", "tool_call_id", "args", "message", ...}
-        否则: None
-    """
-    if not state or not state.tasks:
-        return None
-
-    # 从 tasks 中找到第一个 interrupt
-    for task in state.tasks:
-        if not (hasattr(task, 'interrupts') and task.interrupts):
-            continue
-
-        interrupt = task.interrupts[0]  # 取第一个中断
-        if not hasattr(interrupt, 'value'):
-            continue
-
-        value = interrupt.value
-        if not isinstance(value, dict):
-            continue
-
-        # 从最后一条消息的 tool_calls 中获取 tool_call_id 和 tool_name
-        tool_call_id = None
-        tool_name = None
-        messages = state.values.get("messages", []) if state.values else []
-        if messages:
-            last_msg = messages[-1]
-            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-                tc = last_msg.tool_calls[0]
-                tool_call_id = tc.get("id")
-                tool_name = tc.get("name")
-
-        # 返回中断信息
-        return {
-            "tool_name": tool_name or "unknown_tool",
-            "tool_call_id": tool_call_id,
-            "args": value.get("args", {}),
-            "message": value.get("message"),
-        }
-
-    return None
-
-
 def _get_checkpoint_datasource_id(values: Dict[str, Any] | None) -> Optional[str]:
     """从 LangGraph state 读取会话首次绑定的数据源组。"""
     datasource_id = str((values or {}).get("conversation_datasource_id") or "").strip()
@@ -511,7 +465,7 @@ async def get_detail(
         get_checkpointer_fn: 获取checkpointer的函数
 
     Returns:
-        {"id": "...", "title": "...", "messages": [...], "is_favorited": bool, "pending_tool": {...} | null} 或 None
+        {"id": "...", "title": "...", "messages": [...], "is_favorited": bool} 或 None
     """
     # 从数据库获取会话元信息
     thread = await conversation_dao.get_thread(conversation_id, user_id)
@@ -525,7 +479,6 @@ async def get_detail(
     task_stages = []
     reasoning_segments = []
     token_usage = None
-    pending_tool = None
     state = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
@@ -543,8 +496,6 @@ async def get_detail(
                 raw_token_usage = state.values.get("token_usage")
                 if isinstance(raw_token_usage, dict):
                     token_usage = raw_token_usage
-                # 检查是否有待确认的工具
-                pending_tool = _get_interrupt_info(state)
 
     return {
         "id": conversation_id,
@@ -555,7 +506,6 @@ async def get_detail(
         "reasoning_segments": reasoning_segments,
         "token_usage": token_usage,
         "is_favorited": is_favorited,
-        "pending_tool": pending_tool
     }
 
 

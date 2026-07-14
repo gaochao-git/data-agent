@@ -202,34 +202,6 @@ def test_conversation_reasoning_serialization_and_timestamp_branches():
     ]
 
 
-def test_conversation_interrupt_info_branches():
-    assert conversation_module._get_interrupt_info(None) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[object()])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value="bad")])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"x": 1}})])],
-        values={"messages": []},
-    )) == {
-        "tool_name": "unknown_tool",
-        "tool_call_id": None,
-        "args": {"x": 1},
-        "message": None,
-    }
-
-    state = SimpleNamespace(
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
-        values={"messages": [AIMessage(content="", tool_calls=[{"id": "tc1", "name": "semantic_query_tool", "args": {}}])]},
-    )
-    assert conversation_module._get_interrupt_info(state) == {
-        "tool_name": "semantic_query_tool",
-        "tool_call_id": "tc1",
-        "args": {"sql": "select 1"},
-        "message": "确认执行",
-    }
-
-
 @pytest.mark.asyncio
 async def test_conversation_crud_and_list_branches(conversation_db):
     created = await conversation_module.create("", "agent_a", user_id="u1")
@@ -298,7 +270,6 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     detail = await conversation_module.get_detail("", "conv_sync", None, None, user_id="u1")
     assert detail["title"] == "更新标题"
     assert detail["messages"] == []
-    assert detail["pending_tool"] is None
 
     assert await conversation_module.generate_title("", "missing", None, None, user_id="u1") is None
     assert await conversation_module.generate_title("", "conv_sync", None, None, user_id="u1") == "更新标题"
@@ -340,7 +311,7 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                     "token_usage": {"used": 12, "total": 100},
                     "conversation_datasource_id": "ds_a",
                 },
-                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
+                tasks=[],
             )
 
     detail = await conversation_module.get_detail("", "conv_detail", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1")
@@ -351,7 +322,6 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"] == {"used": 12, "total": 100}
     assert detail["datasource_id"] == "ds_a"
-    assert detail["pending_tool"]["args"] == {"sql": "select 1"}
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
 
 
@@ -398,7 +368,6 @@ async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
     assert detail["task_stages"] == []
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"] is None
-    assert detail["pending_tool"] is None
 
 
 @pytest.mark.asyncio
