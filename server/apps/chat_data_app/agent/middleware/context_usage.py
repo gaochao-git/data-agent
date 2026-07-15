@@ -56,12 +56,13 @@ def create_context_usage_middleware(
 
         request_tools = list(getattr(request, "tools", None) or tools or [])
         effective_model_id = _request_model_name(request) or model_id
-        edited_messages, token_usage = _build_agent_context_usage(
+        effective_system_prompt, edited_messages, token_usage = _build_agent_context_usage(
             system_prompt=system_prompt,
             messages=list(getattr(request, "messages", None) or []),
             tools=request_tools,
             model_id=effective_model_id,
             request_budget=request_budget,
+            context_compression=_request_context_compression(request),
         )
         record = _build_llm_call_record(token_usage, model_id=effective_model_id, index=len(records) + 1)
         records.append(record)
@@ -69,7 +70,7 @@ def create_context_usage_middleware(
 
         response = await handler(_override_request(
             request,
-            system_message=SystemMessage(content=system_prompt),
+            system_message=SystemMessage(content=effective_system_prompt),
             messages=edited_messages,
         ))
         _merge_response_usage(record, response)
@@ -126,6 +127,7 @@ def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None,
         "estimated": True,
         "message_count": int(token_usage.get("message_count") or 0),
         "context_editing": token_usage.get("context_editing"),
+        "context_compression": token_usage.get("context_compression"),
         "breakdown": list(token_usage.get("breakdown") or []),
     }
 
@@ -354,6 +356,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         "estimated": True,
         "llm_calls": calls,
         "context_editing": current_call.get("context_editing"),
+        "context_compression": current_call.get("context_compression"),
         "breakdown": list(current_call.get("breakdown") or []),
     })
     return payload
@@ -379,7 +382,8 @@ def _build_agent_context_usage(
     tools: list[Any],
     model_id: str | None,
     request_budget: ToolResultBudget,
-) -> tuple[list[Any], dict[str, Any]]:
+    context_compression: dict[str, Any] | None = None,
+) -> tuple[str, list[Any], dict[str, Any]]:
     """裁剪消息并构造当前模型入口 token usage。"""
     budget = request_budget.configure(system_prompt, tools, model_id=model_id)
     edited_messages, context_edit = edit_messages_for_llm(
@@ -389,7 +393,8 @@ def _build_agent_context_usage(
         message_budget_tokens=request_budget.remaining_for_messages(),
     )
     _log_context_editing_if_triggered(context_edit, context_window=budget.context_window, model_id=model_id)
-    llm_messages = [SystemMessage(content=system_prompt), *edited_messages]
+    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(system_prompt, edited_messages)
+    llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)
     tool_tokens = count_tools_tokens(tools)
     input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
@@ -405,6 +410,10 @@ def _build_agent_context_usage(
         "total_tokens": input_tokens,
         "estimated": True,
         "context_editing": context_edit,
+        "context_compression": context_compression or _empty_context_compression_report(
+            context_window=budget.context_window,
+            message_budget_tokens=request_budget.remaining_for_messages(),
+        ),
         "breakdown": build_request_breakdown(
             messages=llm_messages,
             message_tokens=message_tokens,
@@ -413,7 +422,24 @@ def _build_agent_context_usage(
             overhead_tokens=REQUEST_OVERHEAD_TOKENS,
         ),
     })
-    return edited_messages, token_usage
+    return effective_system_prompt, request_messages, token_usage
+
+
+def _empty_context_compression_report(*, context_window: int, message_budget_tokens: int) -> dict[str, Any]:
+    config = get_context_edit_config()
+    trigger_ratio = float(config.get("trigger_ratio", 0.70))
+    return {
+        "enabled": bool(config.get("enabled", True)),
+        "triggered": False,
+        "estimated_tokens_before": 0,
+        "estimated_tokens_after": 0,
+        "estimated_cleared_tokens": 0,
+        "threshold_tokens": max(int(message_budget_tokens or int(max(context_window, 1) * trigger_ratio)), 1),
+        "trigger_ratio": trigger_ratio,
+        "compressed_messages": 0,
+        "summary_chars": 0,
+        "compression_skipped_reason": "",
+    }
 
 
 def _override_request(request: Any, **kwargs):
@@ -425,19 +451,31 @@ def _override_request(request: Any, **kwargs):
     return type(request)(**data)
 
 
+def _merge_compression_summary_into_system_prompt(system_prompt: str, messages: list[Any]) -> tuple[str, list[Any]]:
+    """将压缩摘要合并进唯一 system prompt，避免模型入口出现多个 system 消息。"""
+    if not messages:
+        return system_prompt, []
+    first = messages[0]
+    additional_kwargs = getattr(first, "additional_kwargs", None) or {}
+    if isinstance(first, SystemMessage) and additional_kwargs.get("context_compression"):
+        summary = str(getattr(first, "content", "") or "").strip()
+        if summary:
+            return f"{system_prompt}\n\n## 历史对话摘要\n{summary}", list(messages[1:])
+    return system_prompt, list(messages)
+
+
 def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_window: int, model_id: str | None) -> None:
-    """上下文编辑实际触发时打印一条摘要日志。"""
+    """工具结果裁剪实际触发时打印一条摘要日志。"""
     if not context_edit.get("triggered"):
         return
     logger.info(
-        "[agent] 上下文编辑已触发: model=%s context_window=%s before=%s after=%s cleared=%s tool_results=%s history_trimmed=%s",
+        "[agent] 工具结果裁剪已触发: model=%s context_window=%s before=%s after=%s cleared=%s tool_results=%s",
         model_id or "-",
         context_window,
         context_edit.get("estimated_tokens_before"),
         context_edit.get("estimated_tokens_after"),
         context_edit.get("estimated_cleared_tokens"),
         context_edit.get("cleared_tool_results"),
-        context_edit.get("history_trimmed"),
     )
 
 
@@ -467,6 +505,14 @@ def _request_model_name(request: Any) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _request_context_compression(request: Any) -> dict[str, Any] | None:
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return None
+    value = state.get("context_compression")
+    return value if isinstance(value, dict) else None
 
 
 def _merge_response_usage(record: dict[str, Any], response: Any) -> None:

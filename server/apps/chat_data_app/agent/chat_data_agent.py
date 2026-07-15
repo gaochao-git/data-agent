@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 
 from ..services.context_budget import ToolResultBudget
 from .agent_runtime import build_standard_agent_middleware, create_semantic_selection_tools_bundle, create_streaming_chat_model
+from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_chat_data_context_usage_middleware
 from .tools.calculator import calculator_tool
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
@@ -58,6 +59,7 @@ class ChatDataAgentState(AgentState, total=False):
     semantic_config_id: str | None
     semantic_config: dict[str, Any] | None
     token_usage: dict[str, Any] | None
+    context_compression: dict[str, Any] | None
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
 
 
@@ -82,6 +84,7 @@ def create_chat_data_agent(
         LangChain create_agent 返回的可流式执行 Agent
     """
     tool_result_budget = ToolResultBudget(model_id)
+    effective_system_prompt = system_prompt or "你是智能问数助手，请基于当前会话上下文和可用工具回答用户问题。"
     tools = [
         create_readonly_skill_load_tool(user_id=user_id or ""),
         *create_semantic_selection_tools_bundle(
@@ -101,8 +104,16 @@ def create_chat_data_agent(
         tool_result_budget=tool_result_budget,
         state_schema=ChatDataAgentState,
     )
+    context_compression_middleware = create_context_compression_middleware(
+        system_prompt=effective_system_prompt,
+        tools=tools,
+        model_id=model_id,
+        tool_result_budget=tool_result_budget,
+        state_schema=ChatDataAgentState,
+    )
     middleware = build_standard_agent_middleware(
         tools,
+        context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
         include_response_timestamp=True,
         include_tool_call_normalizer=True,
@@ -111,7 +122,7 @@ def create_chat_data_agent(
     return create_agent(
         model=create_streaming_chat_model(model_id=model_id, enable_thinking=enable_thinking),
         tools=tools,
-        system_prompt=system_prompt or "你是智能问数助手，请基于当前会话上下文和可用工具回答用户问题。",
+        system_prompt=effective_system_prompt,
         middleware=middleware,
         state_schema=ChatDataAgentState,
         checkpointer=checkpointer,

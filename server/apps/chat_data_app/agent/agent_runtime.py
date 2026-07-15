@@ -73,12 +73,15 @@ def create_response_timestamp_middleware():
 def build_standard_agent_middleware(
     tools: list[Any],
     *,
+    context_compression_middleware: Any | None = None,
     context_usage_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。"""
     middleware: list[Any] = []
+    if context_compression_middleware is not None:
+        middleware.append(context_compression_middleware)
     if context_usage_middleware is not None:
         middleware.append(context_usage_middleware)
     if include_response_timestamp:

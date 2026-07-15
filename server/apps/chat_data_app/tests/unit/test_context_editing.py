@@ -21,6 +21,7 @@ def _config(**overrides):
     config = {
         "enabled": True,
         "trigger_ratio": 0.01,
+        "tool_result_offload_size": 32000,
     }
     config.update(overrides)
     return config
@@ -39,7 +40,7 @@ def test_context_editing_disabled_or_not_triggered_keeps_original_messages():
     assert not_triggered_report["triggered"] is False
 
 
-def test_context_editing_summarizes_old_tool_results_until_budget_and_keeps_tool_args():
+def test_context_editing_summarizes_large_tool_results_and_keeps_tool_args():
     big_result = "<query_result>" + (
         '{"success":true,"total_count":10000,"columns":["订单ID","金额"],"sql":"select * from orders","data":['
         + '{"订单ID":1,"金额":2},' * 500
@@ -57,7 +58,7 @@ def test_context_editing_summarizes_old_tool_results_until_budget_and_keeps_tool
         HumanMessage(content="继续分析"),
     ]
 
-    edited, report = edit_messages_for_llm(messages, context_window=6000, config=_config(trigger_ratio=0.70))
+    edited, report = edit_messages_for_llm(messages, context_window=6000, config=_config(trigger_ratio=0.70, tool_result_offload_size=1000))
 
     assert report["triggered"] is True
     assert report["cleared_tool_results"] == 1
@@ -69,7 +70,23 @@ def test_context_editing_summarizes_old_tool_results_until_budget_and_keeps_tool
     assert messages[2].content == big_result
 
 
-def test_context_editing_does_not_clear_current_turn_tool_result():
+def test_context_editing_trims_large_tool_result_even_when_context_below_ratio():
+    messages = [
+        HumanMessage(content="查订单"),
+        _tool("x" * 2000, "call_large"),
+    ]
+
+    edited, report = edit_messages_for_llm(
+        messages,
+        context_window=100000,
+        config=_config(trigger_ratio=0.70, tool_result_offload_size=1000),
+    )
+
+    assert report["triggered"] is True
+    assert edited[1].content.startswith("[工具结果已移出模型上下文]")
+
+
+def test_context_editing_clears_large_current_turn_tool_result_by_size():
     messages = [
         HumanMessage(content="历史"),
         _tool("x" * 5000, "old"),
@@ -77,14 +94,18 @@ def test_context_editing_does_not_clear_current_turn_tool_result():
         _tool("y" * 5000, "current"),
     ]
 
-    edited, report = edit_messages_for_llm(messages, context_window=100, config=_config())
+    edited, report = edit_messages_for_llm(
+        messages,
+        context_window=100,
+        config=_config(tool_result_offload_size=1000),
+    )
 
     assert report["triggered"] is True
     assert edited[1].content.startswith("[工具结果已移出模型上下文]")
-    assert edited[-1].content == "y" * 5000
+    assert edited[-1].content.startswith("[工具结果已移出模型上下文]")
 
 
-def test_context_editing_trims_old_rounds_when_tool_summaries_are_not_enough():
+def test_context_editing_does_not_trim_history_when_no_large_tool_result():
     messages = []
     for index in range(12):
         messages.extend([
@@ -99,9 +120,7 @@ def test_context_editing_trims_old_rounds_when_tool_summaries_are_not_enough():
         config=_config(),
     )
 
-    assert report["triggered"] is True
-    assert report["history_trimmed"] is True
-    assert report["kept_recent_rounds"] == 1
-    assert edited[0].content.startswith("[历史消息已移出模型上下文]")
+    assert report["triggered"] is False
+    assert edited[0].content.startswith("历史问题0")
     assert edited[-1].content == "当前问题"
     assert any(getattr(message, "content", "").startswith("历史问题11") for message in edited)

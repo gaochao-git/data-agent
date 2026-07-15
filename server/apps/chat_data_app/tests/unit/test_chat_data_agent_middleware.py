@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
@@ -17,6 +18,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent import chat_data_agent, sql_assist_agent
 from apps.chat_data_app.agent.agent_runtime import format_current_time_for_prompt, normalize_response_tool_call_names
 from apps.chat_data_app.agent.middleware import context_usage
+from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.middleware import tool_error
 from apps.chat_data_app.agent.prompts import chat_data_builder
@@ -156,8 +158,94 @@ def test_log_context_editing_only_when_triggered(monkeypatch):
     )
 
     assert len(logs) == 1
-    assert "上下文编辑已触发" in logs[0][0]
+    assert "工具结果裁剪已触发" in logs[0][0]
     assert "qwen-test" in logs[0]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_compresses_completed_old_rounds_and_logs_tokens(monkeypatch):
+    logs = []
+
+    monkeypatch.setattr("apps.chat_data_app.agent.middleware.context_compression.logger.info", lambda *args, **kwargs: logs.append(args))
+    messages = []
+    for index in range(6):
+        messages.extend([
+            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
+            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
+        ])
+    messages.append(HumanMessage(content="当前问题"))
+
+    compressed, report = await compress_messages_for_state(
+        messages,
+        context_window=100,
+        message_budget_tokens=10,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=lambda _messages: _fake_summary("订单历史摘要"),
+    )
+
+    assert report["triggered"] is True
+    assert report["estimated_tokens_after"] < report["estimated_tokens_before"]
+    assert compressed[0].content.startswith("[历史对话摘要]")
+    assert compressed[-1].content == "当前问题"
+    assert len(logs) == 1
+    assert "上下文压缩已执行" in logs[0][0]
+    assert "before_tokens=%s after_tokens=%s" in logs[0][0]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_update_replaces_persisted_messages():
+    messages = []
+    for index in range(6):
+        messages.extend([
+            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300),
+            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300),
+        ])
+    messages.append(HumanMessage(content="当前问题"))
+
+    updates, report = await build_context_compression_update(
+        messages,
+        context_window=100,
+        message_budget_tokens=10,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=lambda _messages: _fake_summary("订单历史摘要"),
+    )
+
+    assert report["triggered"] is True
+    assert isinstance(updates[0], RemoveMessage)
+    assert updates[0].id == REMOVE_ALL_MESSAGES
+    assert updates[1].additional_kwargs["context_compression"] is True
+    assert updates[-1].content == "当前问题"
+    replaced = add_messages(messages, updates)
+    assert replaced == updates[1:]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_merges_existing_summary_when_threshold_exceeded():
+    messages = [
+        SystemMessage(
+            content="[历史对话摘要]\n1. 用户: 历史问题",
+            additional_kwargs={"context_compression": True, "compressed_message_count": 8},
+        ),
+        HumanMessage(content="保留问题"),
+        AIMessage(content="保留回答"),
+        HumanMessage(content="当前问题"),
+    ]
+
+    updates, report = await build_context_compression_update(
+        messages,
+        context_window=100,
+        message_budget_tokens=1,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=lambda _messages: _fake_summary("订单历史摘要"),
+    )
+
+    assert updates is not None
+    assert report["triggered"] is True
+    assert updates[1].additional_kwargs["compressed_message_count"] == 3
+
+
+async def _fake_summary(text: str) -> str:
+    return text
 
 
 @pytest.mark.asyncio
@@ -172,7 +260,7 @@ async def test_chat_data_context_usage_middleware_edits_messages_and_updates_sta
         ToolMessage(content=recent_tool_content, tool_call_id="call_recent", name="semantic_query_tool"),
         HumanMessage(content="当前问题"),
     ]
-    monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70})
+    monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70, "tool_result_offload_size": 10000})
     monkeypatch.setattr(
         context_usage.ToolResultBudget,
         "configure",
@@ -214,6 +302,52 @@ async def test_chat_data_context_usage_middleware_edits_messages_and_updates_sta
     token_usage = response.command.update["token_usage"]
     assert token_usage["context_editing"]["triggered"] is True
     assert token_usage["context_editing"]["cleared_tool_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_data_context_usage_middleware_merges_persisted_compression_summary(monkeypatch):
+    messages = []
+    messages.append(SystemMessage(
+        content="[历史对话摘要]\n1. 用户: 历史问题",
+        additional_kwargs={"context_compression": True, "compressed_message_count": 10},
+    ))
+    messages.append(HumanMessage(content="当前问题"))
+    monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70, "tool_result_offload_size": 10000})
+    monkeypatch.setattr(
+        context_usage.ToolResultBudget,
+        "configure",
+        lambda self, system_prompt, tools, model_id=None: ContextBudget(
+            context_window=1000,
+            max_output_tokens=200,
+            trigger_ratio=0.70,
+            input_budget_tokens=700,
+        ),
+    )
+    monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 100)
+    monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
+
+    middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")
+    captured = {}
+
+    async def handler(request):
+        captured["request"] = request
+        return ModelResponse(result=[AIMessage(content="完成")])
+
+    request = ModelRequest(
+        model=FakeChatModel(),
+        messages=messages,
+        tools=[],
+        system_message=SystemMessage(content="智能问数系统提示词"),
+        state={},
+    )
+
+    response = await middleware.awrap_model_call(request, handler)
+
+    sent_messages = captured["request"].messages
+    assert "历史对话摘要" in captured["request"].system_message.content
+    assert sent_messages[-1].content == "当前问题"
+    token_usage = response.command.update["token_usage"]
+    assert token_usage["context_compression"]["triggered"] is False
 
 
 @pytest.mark.asyncio
@@ -341,11 +475,12 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "semantic_query_tool",
         "calculator_tool",
     ]
-    assert len(captured["middleware"]) == 4
-    assert captured["middleware"][0].name == "ContextUsageMiddleware"
-    assert captured["middleware"][1].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][3].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 5
+    assert captured["middleware"][0].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][1].name == "ContextUsageMiddleware"
+    assert captured["middleware"][2].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][3].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][4].name == "ToolErrorMiddleware"
     assert chat_data_agent.get_chat_data_graph(model_id="m1").name == "agent"
     assert captured["system_prompt"] == "你是智能问数助手，请基于当前会话上下文和可用工具回答用户问题。"
 

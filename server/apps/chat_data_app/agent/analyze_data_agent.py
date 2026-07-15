@@ -28,6 +28,7 @@ from .agent_runtime import (
     create_streaming_chat_model,
     format_current_time_for_prompt,
 )
+from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import bind_context_usage_middleware, create_request_context_usage_middleware
 from .chat_data_agent import keep_conversation_datasource_id, merge_reasoning_segments
 from .skills import build_builtin_skills_prompt
@@ -57,6 +58,7 @@ class DataAnalyzeAgentState(AgentState, total=False):
     """DataAnalyze 单 Agent 状态，供工具、历史和前端恢复读取。"""
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     token_usage: NotRequired[dict[str, Any] | None]
+    context_compression: NotRequired[dict[str, Any] | None]
     conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]
@@ -216,8 +218,16 @@ def create_data_analyze_agent(
         tool_result_budget=tool_result_budget,
         state_schema=DataAnalyzeAgentState,
     )
+    context_compression_middleware = create_context_compression_middleware(
+        system_prompt=system_prompt,
+        tools=tools,
+        model_id=model_id,
+        tool_result_budget=tool_result_budget,
+        state_schema=DataAnalyzeAgentState,
+    )
     middleware = build_standard_agent_middleware(
         tools,
+        context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
         include_response_timestamp=True,
         include_tool_call_normalizer=True,

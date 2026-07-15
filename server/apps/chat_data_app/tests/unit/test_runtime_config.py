@@ -57,6 +57,7 @@ def test_get_context_edit_config_returns_runtime_values(monkeypatch):
     assert config == {
         "enabled": False,
         "trigger_ratio": 0.70,
+        "tool_result_offload_size": runtime_config.TOOL_RESULT_OFFLOAD_SIZE,
     }
 
 

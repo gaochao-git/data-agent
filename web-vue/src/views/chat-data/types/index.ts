@@ -189,6 +189,7 @@ export interface ChatDataTokenUsage {
   input_budget_trigger_ratio?: number
   estimated?: boolean
   context_editing?: ChatDataContextEditingInfo | null
+  context_compression?: ChatDataContextCompressionInfo | null
   llm_calls?: Array<{
     index: number
     model?: string | null
@@ -203,6 +204,7 @@ export interface ChatDataTokenUsage {
     estimated?: boolean
     message_count?: number
     context_editing?: ChatDataContextEditingInfo | null
+    context_compression?: ChatDataContextCompressionInfo | null
     breakdown?: ChatDataTokenUsageBreakdown[]
   }>
   breakdown?: ChatDataTokenUsageBreakdown[]
@@ -212,14 +214,25 @@ export interface ChatDataContextEditingInfo {
   enabled?: boolean
   triggered?: boolean
   cleared_tool_results?: number
-  history_trimmed?: boolean
   estimated_tokens_before?: number
   estimated_tokens_after?: number
   estimated_cleared_tokens?: number
   message_budget_tokens?: number
   trigger_ratio?: number
-  keep_recent_round_candidates?: number[]
-  kept_recent_rounds?: number | null
+  tool_result_offload_size?: number
+}
+
+export interface ChatDataContextCompressionInfo {
+  enabled?: boolean
+  triggered?: boolean
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  threshold_tokens?: number
+  trigger_ratio?: number
+  compressed_messages?: number
+  summary_chars?: number
+  compression_skipped_reason?: string
 }
 
 export interface ChatDataMessageEndPayload {

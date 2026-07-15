@@ -54,6 +54,7 @@ def get_context_edit_config() -> dict:
     return {
         "enabled": CONTEXT_EDIT_ENABLED,
         "trigger_ratio": CONTEXT_EDIT_TRIGGER_RATIO,
+        "tool_result_offload_size": TOOL_RESULT_OFFLOAD_SIZE,
     }
 
 

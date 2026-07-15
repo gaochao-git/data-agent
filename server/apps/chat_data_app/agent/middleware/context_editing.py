@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 
 from ...services.context_budget import count_messages_tokens, estimate_tokens
 
@@ -19,7 +19,7 @@ QUERY_RESULT_PATTERN = re.compile(r"<query_result>\s*(.*?)\s*</query_result>", r
 class ContextEditConfig:
     enabled: bool
     trigger_ratio: float
-    keep_recent_round_candidates: tuple[int, ...]
+    tool_result_offload_size: int
 
 
 def _config_from_mapping(config: dict[str, Any] | None) -> ContextEditConfig:
@@ -27,7 +27,7 @@ def _config_from_mapping(config: dict[str, Any] | None) -> ContextEditConfig:
     return ContextEditConfig(
         enabled=bool(data.get("enabled", True)),
         trigger_ratio=float(data.get("trigger_ratio", 0.70)),
-        keep_recent_round_candidates=(10, 8, 5, 3, 1),
+        tool_result_offload_size=max(int(data.get("tool_result_offload_size") or 32000), 1),
     )
 
 
@@ -38,7 +38,7 @@ def edit_messages_for_llm(
     config: dict[str, Any] | None = None,
     message_budget_tokens: int | None = None,
 ) -> tuple[list[BaseMessage], dict[str, Any]]:
-    """按上下文预算编辑发给模型的消息，不修改 checkpoint 中的原始消息。"""
+    """裁剪单条大工具结果，不修改 checkpoint 原始消息。"""
     cfg = _config_from_mapping(config)
     original_messages = list(messages or [])
     before_tokens = count_messages_tokens(original_messages)
@@ -55,29 +55,17 @@ def edit_messages_for_llm(
         triggered=False,
         message_budget_tokens=trigger_tokens,
     )
-    if not cfg.enabled or before_tokens <= trigger_tokens:
+    if not cfg.enabled:
         return original_messages, report
 
-    edited_messages, cleared_tool_results = _summarize_old_tool_results_until_budget(
+    edited_messages, cleared_tool_results = _summarize_large_tool_results(
         original_messages,
-        target_tokens=trigger_tokens,
+        max_content_chars=cfg.tool_result_offload_size,
     )
-    after_tool_tokens = count_messages_tokens(edited_messages)
-    history_trimmed = False
-    kept_recent_rounds = None
-    if after_tool_tokens > trigger_tokens:
-        edited_messages, history_trimmed, kept_recent_rounds = _trim_old_rounds_until_budget(
-            edited_messages,
-            target_tokens=trigger_tokens,
-            keep_round_candidates=cfg.keep_recent_round_candidates,
-        )
-
     after_tokens = count_messages_tokens(edited_messages)
     report.update({
-        "triggered": cleared_tool_results > 0 or history_trimmed,
+        "triggered": cleared_tool_results > 0,
         "cleared_tool_results": cleared_tool_results,
-        "history_trimmed": history_trimmed,
-        "kept_recent_rounds": kept_recent_rounds,
         "estimated_tokens_after": after_tokens,
         "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
     })
@@ -96,96 +84,30 @@ def _build_report(
         "enabled": cfg.enabled,
         "triggered": triggered,
         "cleared_tool_results": 0,
-        "history_trimmed": False,
         "estimated_tokens_before": before_tokens,
         "estimated_tokens_after": after_tokens,
         "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
         "message_budget_tokens": message_budget_tokens,
         "trigger_ratio": cfg.trigger_ratio,
-        "keep_recent_round_candidates": list(cfg.keep_recent_round_candidates),
-        "kept_recent_rounds": None,
+        "tool_result_offload_size": cfg.tool_result_offload_size,
     }
 
 
-def _current_turn_start_index(messages: list[BaseMessage]) -> int:
-    for index in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[index], HumanMessage):
-            return index
-    return len(messages)
-
-
-def _summarize_old_tool_results_until_budget(messages: list[BaseMessage], target_tokens: int) -> tuple[list[BaseMessage], int]:
-    current_turn_start = _current_turn_start_index(messages)
+def _summarize_large_tool_results(messages: list[BaseMessage], max_content_chars: int) -> tuple[list[BaseMessage], int]:
     tool_indexes = [
         index
-        for index, message in enumerate(messages[:current_turn_start])
+        for index, message in enumerate(messages)
         if isinstance(message, ToolMessage)
+        and len(str(getattr(message, "content", "") or "")) > max_content_chars
     ]
     if not tool_indexes:
         return list(messages), 0
     edited = list(messages)
-    cleared = 0
     for index in tool_indexes:
-        if count_messages_tokens(edited) <= target_tokens:
-            break
         message = edited[index]
         if isinstance(message, ToolMessage):
             edited[index] = _tool_result_placeholder(message)
-            cleared += 1
-    return edited, cleared
-
-
-def _trim_old_rounds_until_budget(
-    messages: list[BaseMessage],
-    *,
-    target_tokens: int,
-    keep_round_candidates: tuple[int, ...],
-) -> tuple[list[BaseMessage], bool, int | None]:
-    for keep_rounds in keep_round_candidates:
-        trimmed, trimmed_history = _trim_old_rounds(messages, keep_rounds)
-        if not trimmed_history:
-            continue
-        if count_messages_tokens(trimmed) <= target_tokens:
-            return trimmed, True, keep_rounds
-    trimmed, trimmed_history = _trim_old_rounds(messages, keep_round_candidates[-1])
-    return trimmed, trimmed_history, keep_round_candidates[-1] if trimmed_history else None
-
-
-def _trim_old_rounds(messages: list[BaseMessage], keep_recent_rounds: int) -> tuple[list[BaseMessage], bool]:
-    current_turn_start = _current_turn_start_index(messages)
-    historical_messages = messages[:current_turn_start]
-    protected_start = _recent_round_start_index(historical_messages, keep_recent_rounds)
-    if protected_start <= 0:
-        return messages, False
-    summary = _history_trim_placeholder(messages[:protected_start])
-    return [summary, *messages[protected_start:]], True
-
-
-def _recent_round_start_index(messages: list[BaseMessage], keep_recent_rounds: int) -> int:
-    if keep_recent_rounds < 1:
-        return len(messages)
-    human_indexes = [
-        index
-        for index, message in enumerate(messages)
-        if isinstance(message, HumanMessage)
-    ]
-    if len(human_indexes) <= keep_recent_rounds:
-        return 0
-    return human_indexes[-keep_recent_rounds]
-
-
-def _history_trim_placeholder(trimmed_messages: list[BaseMessage]) -> HumanMessage:
-    human_count = sum(1 for message in trimmed_messages if isinstance(message, HumanMessage))
-    assistant_count = sum(1 for message in trimmed_messages if isinstance(message, AIMessage))
-    tool_count = sum(1 for message in trimmed_messages if isinstance(message, ToolMessage))
-    return HumanMessage(
-        content=(
-            "[历史消息已移出模型上下文]\n"
-            f"移出消息数={len(trimmed_messages)}；用户消息={human_count}；助手消息={assistant_count}；工具结果={tool_count}。\n"
-            "完整历史仍保留在会话记录中；如需旧查询细节，请重新查询或打开历史结果。"
-        ),
-        additional_kwargs={"context_editing_placeholder": "trimmed_history"},
-    )
+    return edited, len(tool_indexes)
 
 
 def _tool_result_placeholder(message: ToolMessage) -> ToolMessage:
