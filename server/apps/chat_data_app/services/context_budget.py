@@ -12,12 +12,11 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from .llm_config import get_chat_data_max_tokens
-from .runtime_config import get_context_edit_config, get_context_window
+from .runtime_config import get_context_edit_config, get_context_window, is_context_usage_system_prompt_visible
 
 
 REQUEST_OVERHEAD_TOKENS = 3
 SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
-SYSTEM_PROMPT_REDACTION_ENABLED = True
 
 
 def estimate_tokens(text: str) -> int:
@@ -126,7 +125,7 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
 
 def sanitize_context_usage_for_response(usage: Any) -> Any:
     """返回给前端前隐藏 system prompt 明文，不改变原始 usage 对象。"""
-    if not SYSTEM_PROMPT_REDACTION_ENABLED or not isinstance(usage, dict):
+    if is_context_usage_system_prompt_visible() or not isinstance(usage, dict):
         return usage
     sanitized = copy.deepcopy(usage)
     _sanitize_breakdown(sanitized.get("breakdown"))

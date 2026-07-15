@@ -81,6 +81,26 @@ def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mu
     assert usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
 
 
+def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
+    usage = {
+        "breakdown": [{
+            "key": "system_prompt",
+            "content": "SECRET_SYSTEM_PROMPT",
+            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+    }
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.is_context_usage_system_prompt_visible",
+        lambda: True,
+    )
+
+    sanitized = sanitize_context_usage_for_response(usage)
+
+    assert sanitized is usage
+    assert sanitized["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+
+
 def test_count_tools_tokens_uses_tool_schema_text():
     tokens = count_tools_tokens([{
         "type": "function",
@@ -149,10 +169,20 @@ def test_build_message_breakdown_includes_message_metadata_and_content():
     assert rows[1]["content"] == "我来分析"
 
 
-def test_build_message_breakdown_redacts_system_message_content():
+def test_build_message_breakdown_keeps_system_message_content_by_default():
     rows = build_message_breakdown([
         SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
     ])
+
+    assert rows[0]["role"] == "system"
+    assert rows[0]["content"] == "# 角色 SECRET_SYSTEM_PROMPT"
+    assert rows[0].get("redacted") is None
+
+
+def test_build_message_breakdown_redacts_when_explicitly_requested():
+    rows = build_message_breakdown([
+        SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
+    ], hide_content=True)
 
     assert rows[0]["role"] == "system"
     assert rows[0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
@@ -276,9 +306,8 @@ def test_build_request_breakdown_includes_system_message_group():
 
     assert [item["key"] for item in breakdown] == ["system_prompt", "messages", "request_overhead"]
     assert breakdown[0]["children"][0]["role"] == "system"
-    assert breakdown[0]["children"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert breakdown[0]["children"][0]["content"] == system_prompt
     assert breakdown[0]["children"][0]["tokens"] == system_tokens
-    assert "SECRET_SYSTEM_PROMPT" not in json.dumps(breakdown, ensure_ascii=False)
     assert breakdown[1]["children"][0]["message_index"] == 1
     assert breakdown[2]["tokens"] == 3
 

@@ -198,7 +198,7 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
             "estimated_tokens": system_tokens,
             "estimated": True,
             "description": "按当前项目估算公式统计 system message。",
-            "children": build_message_breakdown(system_messages, hide_content=True),
+            "children": build_message_breakdown(system_messages),
         })
     if tools_tokens:
         items.append({
@@ -306,7 +306,7 @@ def build_message_breakdown(
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
         message_type = str(getattr(message, "type", "") or "message")
-        redacted = hide_content or message_type == "system"
+        redacted = hide_content
         content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
         if message_type == "human":
             round_index += 1

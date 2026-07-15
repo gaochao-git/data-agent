@@ -40,6 +40,7 @@ QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECON
 DEFAULT_CONTEXT_WINDOW = 128000
 CONTEXT_EDIT_ENABLED = read_bool_env("CHATDATA_CONTEXT_EDIT_ENABLED", True)
 CONTEXT_EDIT_TRIGGER_RATIO = 0.70
+CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHATDATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
 
 
 def get_context_window(model_id: str | None) -> int:
@@ -56,6 +57,11 @@ def get_context_edit_config() -> dict:
         "trigger_ratio": CONTEXT_EDIT_TRIGGER_RATIO,
         "tool_result_offload_size": TOOL_RESULT_OFFLOAD_SIZE,
     }
+
+
+def is_context_usage_system_prompt_visible() -> bool:
+    """是否在上下文预算明细中展示 system prompt 原文。"""
+    return CONTEXT_USAGE_SHOW_SYSTEM_PROMPT
 
 
 def get_chat_data_runtime_config() -> dict:

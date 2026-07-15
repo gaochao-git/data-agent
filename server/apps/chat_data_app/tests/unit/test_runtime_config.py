@@ -61,6 +61,14 @@ def test_get_context_edit_config_returns_runtime_values(monkeypatch):
     }
 
 
+def test_context_usage_system_prompt_visibility_flag(monkeypatch):
+    monkeypatch.setattr(runtime_config, "CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
+    assert runtime_config.is_context_usage_system_prompt_visible() is False
+
+    monkeypatch.setattr(runtime_config, "CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", True)
+    assert runtime_config.is_context_usage_system_prompt_visible() is True
+
+
 def test_normalize_row_limit_uses_default_and_rejects_invalid_or_too_large(monkeypatch):
     monkeypatch.setattr(runtime_config, "DEFAULT_ROW_LIMIT", 100)
 
