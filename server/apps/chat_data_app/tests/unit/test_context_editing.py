@@ -10,7 +10,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.context_editing import edit_messages_for_llm
+from apps.chat_data_app.agent.middleware.context_editing import edit_messages_for_llm
 
 
 def _tool(content: str, call_id: str) -> ToolMessage:

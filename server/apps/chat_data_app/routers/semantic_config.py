@@ -16,7 +16,7 @@ from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent import get_chat_data_graph
-from ..agent.data_analyze_graph import get_data_analyze_graph
+from ..agent.analyze_data_agent import get_data_analyze_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,

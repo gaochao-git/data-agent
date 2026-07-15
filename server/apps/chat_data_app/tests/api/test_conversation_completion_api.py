@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 from apps.chat_data_app import routes
-from apps.chat_data_app.agent import nodes
 from apps.chat_data_app.services import semantic_builder_compiler, semantic_tools
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from apps.chat_data_app.routers import conversations as conversation_router
@@ -75,7 +74,7 @@ def _patch_completion_dependencies(monkeypatch, graph):
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "get_chat_data_graph", lambda **_kwargs: graph)
+    monkeypatch.setattr(handler_module, "create_chat_data_agent", lambda **_kwargs: graph)
 
 
 def _post_completion(client, auth_headers, conversation_id, query, options=None):
@@ -115,7 +114,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
             FakeMessageChunk(
                 tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}],
             ),
-            {"langgraph_node": "agent"},
+            {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
@@ -127,7 +126,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
                     }
                 ],
             ),
-            {"langgraph_node": "agent"},
+            {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
@@ -140,7 +139,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
         ),
         (
             FakeMessageChunk(content="已分别查询订单金额和用户数。"),
-            {"langgraph_node": "agent"},
+            {"langgraph_node": "model"},
         ),
     ])
     _patch_completion_dependencies(monkeypatch, graph)
@@ -176,7 +175,7 @@ def test_completion_api_streams_single_semantic_retrieval_tool_result(client, au
     graph = FakeGraph([
         (
             FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]),
-            {"langgraph_node": "agent"},
+            {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
@@ -205,7 +204,7 @@ def test_completion_api_passes_explicit_skill_names_to_query_state(client, auth_
     graph = FakeGraph([
         (
             FakeMessageChunk(content="完成"),
-            {"langgraph_node": "agent"},
+            {"langgraph_node": "model"},
         ),
     ])
     _patch_completion_dependencies(monkeypatch, graph)
@@ -316,8 +315,8 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     for module in (semantic_builder_compiler, semantic_tools):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
     for module_name in (
-        "apps.chat_data_app.agent.nodes",
-        "server.apps.chat_data_app.agent.nodes",
+        "apps.chat_data_app.agent.chat_data_agent",
+        "server.apps.chat_data_app.agent.chat_data_agent",
     ):
         module = sys.modules.get(module_name)
         if module is not None:

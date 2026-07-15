@@ -24,7 +24,7 @@ from apps.chat_data_app.services.data_analyze_workspace import (
     to_visible_path,
     write_workspace_json,
 )
-from apps.chat_data_app.agent.data_analyze_graph import create_data_analyze_tools
+from apps.chat_data_app.agent.analyze_data_agent import create_data_analyze_tools
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
 

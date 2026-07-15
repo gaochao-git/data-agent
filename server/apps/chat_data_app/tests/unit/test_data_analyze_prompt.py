@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
-from apps.chat_data_app.agent.data_analyze_graph import build_data_analyze_system_prompt
+from apps.chat_data_app.agent.analyze_data_agent import build_data_analyze_system_prompt
 from apps.chat_data_app.chart_types import get_chart_type_prompt_text
 
 

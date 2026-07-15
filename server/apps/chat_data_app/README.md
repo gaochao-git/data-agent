@@ -14,7 +14,7 @@ ChatData App 是一个基于 LangGraph 实现的智能问数服务，当前主�
 - **SQL 自动生成**：根据语义配置和用户意图生成查询 SQL
 - **语义层支持**：通过配置指标/维度实现标准化查询
 - **多数据库支持**：支持 MySQL 和 Hive 语法
-- **LangGraph集成**：使用 LangGraph 框架进行工作流编排
+- **LangChain Agent 集成**：使用 `create_agent` 组织模型与工具循环
 - **RESTful API**：提供标准的HTTP接口供前端调用
 
 ---
@@ -158,14 +158,14 @@ dsl = {
 ```
 chat_data_app/
 ├── agent/
-│   ├── state.py           # LangGraph 状态定义
-│   ├── chat_data_graph.py # chat_data 主图定义
-│   ├── sql_assist_graph.py# SQL 辅助图定义
-│   ├── data_analyze_graph.py # 数据分析图定义
-│   ├── nodes.py           # Agent 节点
+│   ├── chat_data_agent.py # 智能问数 create_agent 组装和状态定义
+│   ├── analyze_data_agent.py # 智能分析 create_agent 组装和状态定义
+│   ├── sql_assist_agent.py# SQL 辅助 create_agent 组装和状态定义
+│   ├── agent_runtime.py   # 问数和分析共用运行时工具
+│   ├── middleware/        # create_agent middleware、上下文编辑和 token usage
 │   ├── tools/             # 工具包
 │   ├── config.py          # 模式配置
-│   ├── prompts/           # 提示词包
+│   ├── prompts/           # 提示词模板和 system prompt builder
 │   └── skills/            # 图表生成技能
 ├── services/
 │   ├── semantic_tools.py              # 语义工具处理器
@@ -189,12 +189,14 @@ chat_data_app/
 | `get_dialect` | semantic/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
 | `InputValidator` | semantic/input_validator.py | 校验指标、维度、过滤、排序和 limit |
 
-### LangGraph 工作流
+### create_agent 工作流
 
 ```
-START → [agent节点] → [tools_condition] → [tools执行] → [agent节点] → END
-              ↑                                    |
-              └────────────────────────────────────┘
+create_agent
+  ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
+  └─ tools 节点：执行 skill_load、select_semantic_config_tool、dsl2sql_tool、semantic_query_tool 等工具
+
+model → tools → model，直到模型不再发起工具调用后结束。
 ```
 
 ### 工具列表

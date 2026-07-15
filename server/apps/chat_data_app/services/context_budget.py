@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +16,8 @@ from .runtime_config import get_context_edit_config, get_context_window
 
 
 REQUEST_OVERHEAD_TOKENS = 3
+SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
+SYSTEM_PROMPT_REDACTION_ENABLED = True
 
 
 def estimate_tokens(text: str) -> int:
@@ -119,6 +122,34 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
         "input_budget_tokens": total,
         "input_budget_trigger_ratio": budget.trigger_ratio,
     }
+
+
+def sanitize_context_usage_for_response(usage: Any) -> Any:
+    """返回给前端前隐藏 system prompt 明文，不改变原始 usage 对象。"""
+    if not SYSTEM_PROMPT_REDACTION_ENABLED or not isinstance(usage, dict):
+        return usage
+    sanitized = copy.deepcopy(usage)
+    _sanitize_breakdown(sanitized.get("breakdown"))
+    llm_calls = sanitized.get("llm_calls")
+    if isinstance(llm_calls, list):
+        for call in llm_calls:
+            if isinstance(call, dict):
+                _sanitize_breakdown(call.get("breakdown"))
+    return sanitized
+
+
+def _sanitize_breakdown(items: Any) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        is_system_item = item.get("key") == "system_prompt" or item.get("role") == "system"
+        if is_system_item:
+            item["content"] = SYSTEM_PROMPT_PLACEHOLDER
+            item["description"] = SYSTEM_PROMPT_PLACEHOLDER
+            item["redacted"] = True
+        _sanitize_breakdown(item.get("children"))
 
 
 class ToolResultBudget:

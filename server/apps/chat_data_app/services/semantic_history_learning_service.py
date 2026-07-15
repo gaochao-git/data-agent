@@ -15,7 +15,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 
 from ..agent import get_chat_data_graph
-from ..agent.data_analyze_graph import get_data_analyze_graph
+from ..agent.analyze_data_agent import get_data_analyze_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from .semantic_common import AGENT_ID, DATA_ANALYZE_AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload

@@ -914,13 +914,13 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
 
     class FakeGraph:
         async def astream(self, initial_state, config=None, stream_mode=None):
-            assert initial_state["tables_ddl_info"] == "CREATE TABLE orders(id bigint)"
+            assert "tables_ddl_info" not in initial_state
             assert "datasource_id" not in initial_state
             assert "member_datasource_ids" not in initial_state
             assert config["configurable"]["thread_id"] == "conv_a"
             assert stream_mode == "messages"
             yield FakeChunk("忽略"), {"langgraph_node": "other"}
-            yield FakeChunk("```sql\nSELECT 1\n```"), {"langgraph_node": "sql_assist"}
+            yield FakeChunk("```sql\nSELECT 1\n```"), {"langgraph_node": "model"}
 
     class FakeCheckpointer:
         async def __aenter__(self):
@@ -939,11 +939,12 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(query_execution_routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
-    def fake_get_sql_assist_graph(*_args, **kwargs):
+    def fake_create_sql_assist_agent(*_args, **kwargs):
         captured["sql_dialect"] = kwargs.get("sql_dialect")
+        captured["tables_ddl_info"] = kwargs.get("tables_ddl_info")
         return FakeGraph()
 
-    monkeypatch.setattr(query_execution_routes, "get_sql_assist_graph", fake_get_sql_assist_graph)
+    monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", fake_create_sql_assist_agent)
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
 
     from apps.chat_data_app import agent as agent_module
@@ -964,6 +965,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     assert '"type": "complete"' in text
     assert '"sql": "SELECT 1"' in text
     assert captured["sql_dialect"] == "hive"
+    assert captured["tables_ddl_info"] == "CREATE TABLE orders(id bigint)"
 
 
 def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch):
@@ -973,7 +975,7 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
 
     class FakeGraph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk("SELECT 2"), {"langgraph_node": "sql_assist"}
+            yield FakeChunk("SELECT 2"), {"langgraph_node": "model"}
 
     class FakeCheckpointer:
         async def __aenter__(self):
@@ -990,7 +992,7 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda tables, names: "CREATE TABLE orders(id bigint)")
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(query_execution_routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
-    monkeypatch.setattr(query_execution_routes, "get_sql_assist_graph", lambda *_args, **_kwargs: FakeGraph())
+    monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", lambda *_args, **_kwargs: FakeGraph())
     from apps.chat_data_app import agent as agent_module
 
     monkeypatch.setattr(agent_module, "get_checkpointer", lambda: FakeCheckpointer())
@@ -1064,7 +1066,7 @@ def test_quick_sql_endpoint_creates_new_owned_conversation(monkeypatch):
 
     class FakeGraph:
         async def astream(self, *_args, **_kwargs):
-            yield FakeChunk("SELECT 3"), {"langgraph_node": "sql_assist"}
+            yield FakeChunk("SELECT 3"), {"langgraph_node": "model"}
 
     class FakeCheckpointer:
         async def __aenter__(self):
@@ -1082,7 +1084,7 @@ def test_quick_sql_endpoint_creates_new_owned_conversation(monkeypatch):
     monkeypatch.setattr(query_execution_routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
     created = []
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", lambda *args, **_kwargs: asyncio.sleep(0, result=created.append(args) or {}))
-    monkeypatch.setattr(query_execution_routes, "get_sql_assist_graph", lambda *_args, **_kwargs: FakeGraph())
+    monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", lambda *_args, **_kwargs: FakeGraph())
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
 
     from apps.chat_data_app import agent as agent_module
@@ -2821,7 +2823,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
             captured["initial_state"] = initial_state
             captured["config"] = config
             captured["stream_mode"] = stream_mode
-            yield _FakeChunk("```sql\nSELECT 1\n```"), {"langgraph_node": "sql_assist"}
+            yield _FakeChunk("```sql\nSELECT 1\n```"), {"langgraph_node": "model"}
 
     captured = {}
     manager = _FakeDatasourceManager()
@@ -2852,7 +2854,11 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", _fake_get_or_create_conversation)
     monkeypatch.setattr(query_execution_routes.conversation, "get_agent_id", lambda *_args, **_kwargs: asyncio.sleep(0, result=routes.SQL_ASSIST_AGENT_ID))
     monkeypatch.setattr("apps.chat_data_app.agent.get_checkpointer", lambda: _FakeCheckpointerContext())
-    monkeypatch.setattr(query_execution_routes, "get_sql_assist_graph", lambda *_args, **_kwargs: _FakeGraph())
+    def _fake_create_sql_assist_agent(*_args, **kwargs):
+        captured["tables_ddl_info"] = kwargs.get("tables_ddl_info")
+        return _FakeGraph()
+
+    monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", _fake_create_sql_assist_agent)
 
     response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
         query="有多少个用户",
@@ -2868,7 +2874,8 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
     assert captured["agent_id"] == routes.SQL_ASSIST_AGENT_ID
     assert captured["conversation_id"] == "conv_sql_assist"
     assert captured["config"]["configurable"]["thread_id"] == "conv_sql_assist"
-    assert captured["initial_state"]["tables_ddl_info"] == "CREATE TABLE users(id bigint);"
+    assert captured["tables_ddl_info"] == "CREATE TABLE users(id bigint);"
+    assert "tables_ddl_info" not in captured["initial_state"]
     assert "member_datasource_ids" not in captured["initial_state"]
     assert "datasource_id" not in captured["initial_state"]
 

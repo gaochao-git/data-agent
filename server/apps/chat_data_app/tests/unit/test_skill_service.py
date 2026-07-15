@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
-from apps.chat_data_app.agent.data_analyze_graph import build_data_analyze_system_prompt
+from apps.chat_data_app.agent.analyze_data_agent import build_data_analyze_system_prompt
 from apps.chat_data_app.services import skill_service as skill_service_module
 from apps.chat_data_app.services.skill_service import SkillService, skill_service
 

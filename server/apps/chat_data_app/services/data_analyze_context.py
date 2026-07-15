@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
-from ..agent.data_analyze_graph import get_data_analyze_tool_chain
+from ..agent.analyze_data_agent import get_data_analyze_tool_chain
 from .datasource_manager import get_datasource_manager
 
 logger = get_logger(__name__)

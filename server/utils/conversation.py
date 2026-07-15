@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
+from apps.chat_data_app.services.context_budget import sanitize_context_usage_for_response
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from .checkpoint import get_checkpointer
 from .database import get_session
@@ -495,7 +496,7 @@ async def get_detail(
                 reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
                 raw_token_usage = state.values.get("token_usage")
                 if isinstance(raw_token_usage, dict):
-                    token_usage = raw_token_usage
+                    token_usage = sanitize_context_usage_for_response(raw_token_usage)
 
     return {
         "id": conversation_id,

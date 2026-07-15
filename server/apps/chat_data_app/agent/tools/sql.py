@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
+from utils.artifact_store import ArtifactType, save_artifact
 from ...schema import SemanticQueryInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
@@ -20,10 +21,14 @@ from ...services.semantic_tools import load_runtime_semantic_config
 from ...services import query_runtime
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ...services.semantic_sql_generator import SemanticSQLGenerator
-from ..state import save_query_result
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
 logger = get_logger(__name__)
+
+
+def save_query_result(data: dict, conversation_id: str | None = None) -> str:
+    """保存查询结果，返回结果ID。"""
+    return save_artifact(ArtifactType.QUERY_RESULT, data, conversation_id=conversation_id)
 
 
 async def get_all_tables_async(datasource_id: str | None) -> list[dict[str, Any]]:

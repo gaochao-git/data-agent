@@ -1,4 +1,4 @@
-"""模型入口上下文编辑。"""
+"""Context editing strategies for model requests."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from ..services.context_budget import count_messages_tokens, estimate_tokens
+from ...services.context_budget import count_messages_tokens, estimate_tokens
 
 
 QUERY_RESULT_PATTERN = re.compile(r"<query_result>\s*(.*?)\s*</query_result>", re.DOTALL)

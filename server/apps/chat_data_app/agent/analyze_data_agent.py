@@ -4,9 +4,7 @@ import json
 from typing import Annotated, Any
 
 from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware, wrap_model_call
-from langchain_core.messages import AIMessage
-from langchain_core.language_models import BaseChatModel
+from langchain.agents.middleware import ModelFallbackMiddleware
 from typing_extensions import NotRequired
 
 from ..chart_types import get_chart_type_prompt_text
@@ -25,9 +23,14 @@ from .prompts.analyze_data import (
     DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT,
     DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE,
 )
-from .middleware.token_usage_middleware import bind_token_usage_middleware, create_request_token_usage_middleware
-from .nodes import format_current_time_for_prompt, normalize_response_tool_call_names
-from .state import keep_conversation_datasource_id, merge_reasoning_segments
+from .agent_runtime import (
+    build_standard_agent_middleware,
+    create_semantic_selection_tools_bundle,
+    create_streaming_chat_model,
+    format_current_time_for_prompt,
+)
+from .middleware.context_usage import bind_context_usage_middleware, create_request_context_usage_middleware
+from .chat_data_agent import keep_conversation_datasource_id, merge_reasoning_segments
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
@@ -38,7 +41,6 @@ from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.sandbox_run import create_sandbox_run_tool
 from .tools.retry_guard import create_tool_retry_guard
 from .tools.skill_load import create_skill_load_tool
-from ..services.semantic_tools import create_semantic_config_selection_tools
 
 DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "skill_load", "status": "available", "description": "加载技能说明，并将技能目录复制到当前会话 runtime-skills。"},
@@ -123,10 +125,10 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
-        *create_semantic_config_selection_tools(
+        *create_semantic_selection_tools_bundle(
             model_id=model_id,
-            include_query_tools=False,
             datasource_id=datasource_id,
+            include_query_tools=False,
             user_id=user_id,
             tool_result_budget=tool_result_budget,
         ),
@@ -174,26 +176,6 @@ def build_data_analyze_system_prompt(
     )
 
 
-def create_tool_call_name_normalizer_middleware(tools: list[Any]):
-    """创建模型工具调用名称归一化 middleware。"""
-    @wrap_model_call(name="ToolCallNameNormalizerMiddleware")
-    async def normalize_tool_call_name_middleware(request, handler):
-        response = await handler(request)
-        if isinstance(response, AIMessage):
-            return normalize_response_tool_call_names(response, tools)
-        result = list(getattr(response, "result", []) or [])
-        if not result:
-            return response
-        normalized_result = [
-            normalize_response_tool_call_names(message, tools)
-            for message in result
-        ]
-        response.result = normalized_result
-        return response
-
-    return normalize_tool_call_name_middleware
-
-
 def create_data_analyze_agent(
     *,
     workspace_root: str,
@@ -210,11 +192,11 @@ def create_data_analyze_agent(
     enable_thinking: bool | None = None,
 ):
     """创建 LangChain 通用分析 agent。"""
-    llm: BaseChatModel = get_chat_data_llm(
-        model=model_id,
-        streaming=True,
+    llm = create_streaming_chat_model(
+        model_id=model_id,
         stream_usage=True,
         enable_thinking=enable_thinking,
+        llm_factory=get_chat_data_llm,
     )
     tool_result_budget = ToolResultBudget(model_id)
     tools = create_data_analyze_tools(
@@ -229,18 +211,19 @@ def create_data_analyze_agent(
         model_id=model_id,
         tool_result_budget=tool_result_budget,
     )
-    token_usage_middleware = create_request_token_usage_middleware(model_id, tool_result_budget=tool_result_budget)
-    middleware = []
-    fallback_model = get_default_chat_data_model()
-    if model_id and fallback_model and fallback_model != model_id:
-        fallback_llm = get_chat_data_llm(
-            model=fallback_model,
-            streaming=True,
-            stream_usage=True,
-            enable_thinking=enable_thinking,
-        )
-        middleware.append(ModelFallbackMiddleware(fallback_llm))
-    middleware.extend([token_usage_middleware, create_tool_call_name_normalizer_middleware(tools)])
+    context_usage_middleware = create_request_context_usage_middleware(model_id, tool_result_budget=tool_result_budget)
+    middleware = build_standard_agent_middleware(
+        tools,
+        context_usage_middleware=context_usage_middleware,
+        model_id=model_id,
+        enable_thinking=enable_thinking,
+        stream_usage=True,
+        include_fallback=True,
+        include_tool_call_normalizer=True,
+        llm_factory=get_chat_data_llm,
+        default_model_factory=get_default_chat_data_model,
+        fallback_middleware_cls=ModelFallbackMiddleware,
+    )
     agent = create_agent(
         model=llm,
         tools=tools,
@@ -250,7 +233,7 @@ def create_data_analyze_agent(
         checkpointer=checkpointer,
         name="data_analyze_agent",
     )
-    bind_token_usage_middleware(agent, token_usage_middleware)
+    bind_context_usage_middleware(agent, context_usage_middleware)
     return agent
 
 

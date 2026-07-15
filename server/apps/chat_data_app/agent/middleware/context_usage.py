@@ -1,4 +1,4 @@
-"""Token usage tracking for DataAnalyze agent calls."""
+"""Context usage helpers and middleware for create_agent calls."""
 
 from __future__ import annotations
 
@@ -7,25 +7,37 @@ from typing import Any
 import weakref
 
 from langchain.agents.middleware import wrap_model_call
-from langgraph.config import get_stream_writer
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.config import get_stream_writer
+from langgraph.types import Command
 
+from utils.logger import get_logger
 from ...services.context_budget import (
     ContextBudget,
     REQUEST_OVERHEAD_TOKENS,
+    SYSTEM_PROMPT_PLACEHOLDER,
+    ToolResultBudget,
     build_context_usage_payload,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     estimate_tokens,
     get_model_context_budget,
+    sanitize_context_usage_for_response,
 )
+from ...services.llm_config import get_chat_data_llm, get_default_chat_data_model
+from ...services.runtime_config import get_context_edit_config
+from ..agent_runtime import normalize_response_tool_call_names, timestamp_message
+from .context_editing import edit_messages_for_llm
 
-_AGENT_TOKEN_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+logger = get_logger(__name__)
+
+_AGENT_CONTEXT_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 
 
-def create_request_token_usage_middleware(
+def create_request_context_usage_middleware(
     model_id: str | None = None,
     *,
     tool_result_budget: Any | None = None,
@@ -34,7 +46,7 @@ def create_request_token_usage_middleware(
     records: list[dict[str, Any]] = []
 
     @wrap_model_call
-    async def request_token_usage_middleware(request, handler):
+    async def request_context_usage_middleware(request, handler):
         final_messages = _build_request_messages(request)
         tools = list(getattr(request, "tools", None) or [])
         effective_model_id = _request_model_name(request) or model_id
@@ -65,27 +77,72 @@ def create_request_token_usage_middleware(
         records.append(record)
         response = await handler(request)
         _merge_response_usage(record, response)
-        _emit_token_usage(get_token_usage())
+        _emit_context_usage(get_context_usage())
         return response
 
-    def get_token_usage() -> dict[str, Any] | None:
+    def get_context_usage() -> dict[str, Any] | None:
         effective_model_id = str(records[-1].get("model") or model_id or "") if records else model_id
         budget = tool_result_budget.budget if tool_result_budget is not None else get_model_context_budget(effective_model_id)
         return build_usage_from_llm_calls(records, budget)
 
-    request_token_usage_middleware.get_token_usage = get_token_usage  # type: ignore[attr-defined]
-    request_token_usage_middleware.token_usage_records = records  # type: ignore[attr-defined]
-    return request_token_usage_middleware
+    request_context_usage_middleware.get_context_usage = get_context_usage  # type: ignore[attr-defined]
+    request_context_usage_middleware.context_usage_records = records  # type: ignore[attr-defined]
+    return request_context_usage_middleware
 
 
-def _emit_token_usage(usage: dict[str, Any] | None) -> None:
-    """通过 LangGraph custom stream 输出模型入口上下文占用。"""
-    if not usage:
-        return
-    try:
-        get_stream_writer()({"type": "token_usage", "usage": usage})
-    except RuntimeError:
-        return
+def create_chat_data_context_usage_middleware(
+    tools: list,
+    model_id: str | None = None,
+    enable_thinking: bool | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
+    state_schema: Any | None = None,
+) -> Any:
+    """创建智能问数上下文裁剪和 token usage middleware。"""
+    request_budget = tool_result_budget or ToolResultBudget(model_id)
+
+    @wrap_model_call(name="ChatDataContextUsageMiddleware", state_schema=state_schema)
+    async def chat_data_context_usage_middleware(request, handler):
+        logger.info("Agent 处理用户请求")
+        system_message = getattr(request, "system_message", None)
+        system_prompt = str(getattr(system_message, "content", "") or "")
+        logger.info("[agent] system_prompt 长度: %s 字符", len(system_prompt))
+
+        async def invoke_with_model(effective_model_id: str | None, model_override: Any | None = None):
+            request_tools = list(request.tools or tools or [])
+            edited_messages, token_usage = _build_chat_data_context_usage(
+                system_prompt=system_prompt,
+                messages=list(request.messages),
+                tools=request_tools,
+                model_id=effective_model_id,
+                request_budget=request_budget,
+            )
+            _emit_context_usage(token_usage)
+            effective_request = request.override(
+                model=model_override or request.model,
+                system_message=SystemMessage(content=system_prompt),
+                messages=edited_messages,
+            )
+            response = await handler(effective_request)
+            return _timestamp_model_response(response, request_tools), token_usage
+
+        try:
+            response, token_usage = await invoke_with_model(model_id)
+        except Exception as err:
+            if not model_id:
+                raise
+            fallback_model = get_default_chat_data_model()
+            logger.warning("[agent] 指定模型调用失败，回退默认模型: model_id=%s, fallback=%s, err=%s", model_id, fallback_model, err)
+            response, token_usage = await invoke_with_model(
+                fallback_model,
+                get_chat_data_llm(model=fallback_model, streaming=True, enable_thinking=enable_thinking),
+            )
+
+        return ExtendedModelResponse(
+            model_response=response,
+            command=Command(update={"token_usage": token_usage}),
+        )
+
+    return chat_data_context_usage_middleware
 
 
 def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
@@ -110,11 +167,11 @@ def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], mo
     return payload
 
 
-async def invoke_with_token_usage(*, agent: Any, state: dict[str, Any], system_prompt: str, model_id: str | None) -> tuple[Any, dict[str, Any]]:
-    """执行主 agent，并返回结果和本次 token usage。"""
+async def invoke_with_context_usage(*, agent: Any, state: dict[str, Any], system_prompt: str, model_id: str | None) -> tuple[Any, dict[str, Any]]:
+    """执行主 agent，并返回结果和本次上下文占用。"""
     result = await agent.ainvoke(state)
     transcript_messages = _extract_result_messages(result)
-    runtime_usage = _get_agent_token_usage(agent)
+    runtime_usage = _get_agent_context_usage(agent)
     if runtime_usage:
         return result, runtime_usage
     return result, estimate_prompt_usage(
@@ -139,7 +196,7 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
             "estimated_tokens": system_tokens,
             "estimated": True,
             "description": "按当前项目估算公式统计 system message。",
-            "children": build_message_breakdown(system_messages),
+            "children": build_message_breakdown(system_messages, hide_content=True),
         })
     if tools_tokens:
         items.append({
@@ -234,18 +291,25 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
     return items
 
 
-def build_message_breakdown(messages: list[BaseMessage], *, scale: float = 1.0, start_index: int = 0) -> list[dict[str, Any]]:
+def build_message_breakdown(
+    messages: list[BaseMessage],
+    *,
+    scale: float = 1.0,
+    start_index: int = 0,
+    hide_content: bool = False,
+) -> list[dict[str, Any]]:
     """按消息拆分估算 token。"""
     items = []
     round_index = 0
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
-        content = _message_debug_content(message)
         message_type = str(getattr(message, "type", "") or "message")
+        redacted = hide_content or message_type == "system"
+        content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
         if message_type == "human":
             round_index += 1
         estimated_tokens = count_messages_tokens([message])
-        items.append({
+        item = {
             "key": f"message_{index}",
             "label": _message_label(message_type, round_index or 1),
             "role": message_type,
@@ -256,12 +320,11 @@ def build_message_breakdown(messages: list[BaseMessage], *, scale: float = 1.0, 
             "estimated": True,
             "content": content,
             "description": content[:120],
-        })
+        }
+        if redacted:
+            item["redacted"] = True
+        items.append(item)
     return items
-
-
-def _scale_tokens(tokens: int, scale: float) -> int:
-    return max(int(round(max(int(tokens or 0), 0) * scale)), 0)
 
 
 def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudget | int) -> dict[str, Any] | None:
@@ -293,6 +356,97 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         "breakdown": list(current_call.get("breakdown") or []),
     })
     return payload
+
+
+def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
+    """关联 agent 与 context usage middleware。"""
+    try:
+        _AGENT_CONTEXT_USAGE_MIDDLEWARE[agent] = middleware
+        return
+    except TypeError:
+        pass
+    try:
+        setattr(agent, "_chat_data_context_usage_middleware", middleware)
+    except Exception:
+        return
+
+
+def _build_chat_data_context_usage(
+    *,
+    system_prompt: str,
+    messages: list[Any],
+    tools: list[Any],
+    model_id: str | None,
+    request_budget: ToolResultBudget,
+) -> tuple[list[Any], dict[str, Any]]:
+    """裁剪消息并构造当前模型入口 token usage。"""
+    budget = request_budget.configure(system_prompt, tools, model_id=model_id)
+    edited_messages, context_edit = edit_messages_for_llm(
+        messages,
+        context_window=budget.context_window,
+        config=get_context_edit_config(),
+        message_budget_tokens=request_budget.remaining_for_messages(),
+    )
+    _log_context_editing_if_triggered(context_edit, context_window=budget.context_window, model_id=model_id)
+    llm_messages = [SystemMessage(content=system_prompt), *edited_messages]
+    message_tokens = count_messages_tokens(llm_messages)
+    tool_tokens = count_tools_tokens(tools)
+    input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
+    token_usage = build_context_usage_payload(budget, input_tokens)
+    token_usage.update({
+        "input_tokens": input_tokens,
+        "current_input_tokens": input_tokens,
+        "output_tokens": 0,
+        "total_tokens": input_tokens,
+        "estimated": True,
+        "context_editing": context_edit,
+        "breakdown": build_request_breakdown(
+            messages=llm_messages,
+            message_tokens=message_tokens,
+            tools=tools,
+            tools_tokens=tool_tokens,
+            overhead_tokens=REQUEST_OVERHEAD_TOKENS,
+        ),
+    })
+    return edited_messages, token_usage
+
+
+def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_window: int, model_id: str | None) -> None:
+    """上下文编辑实际触发时打印一条摘要日志。"""
+    if not context_edit.get("triggered"):
+        return
+    logger.info(
+        "[agent] 上下文编辑已触发: model=%s context_window=%s before=%s after=%s cleared=%s tool_results=%s history_trimmed=%s",
+        model_id or "-",
+        context_window,
+        context_edit.get("estimated_tokens_before"),
+        context_edit.get("estimated_tokens_after"),
+        context_edit.get("estimated_cleared_tokens"),
+        context_edit.get("cleared_tool_results"),
+        context_edit.get("history_trimmed"),
+    )
+
+
+def _emit_context_usage(usage: dict[str, Any] | None) -> None:
+    """通过 LangGraph custom stream 输出模型入口上下文占用。"""
+    if not usage:
+        return
+    try:
+        get_stream_writer()({"type": "token_usage", "usage": sanitize_context_usage_for_response(usage)})
+    except Exception:
+        logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
+
+
+def _timestamp_model_response(response: ModelResponse, tools: list[Any]) -> ModelResponse:
+    """归一化模型响应并写入服务端时间戳。"""
+    normalized_result = [
+        timestamp_message(normalize_response_tool_call_names(message, tools))
+        for message in list(getattr(response, "result", []) or [])
+    ]
+    return ModelResponse(
+        result=normalized_result,
+        structured_response=response.structured_response,
+    )
 
 
 def _build_request_messages(request: Any) -> list[BaseMessage]:
@@ -328,30 +482,17 @@ def _merge_response_usage(record: dict[str, Any], response: Any) -> None:
         record["actual_total_tokens"] = int(usage.get("total_tokens") or (record["actual_input_tokens"] + record["output_tokens"]))
 
 
-def _get_agent_token_usage(agent: Any) -> dict[str, Any] | None:
+def _get_agent_context_usage(agent: Any) -> dict[str, Any] | None:
     try:
-        middleware = _AGENT_TOKEN_USAGE_MIDDLEWARE.get(agent)
+        middleware = _AGENT_CONTEXT_USAGE_MIDDLEWARE.get(agent)
     except TypeError:
         middleware = None
     if middleware is None:
-        middleware = getattr(agent, "_chat_data_token_usage_middleware", None)
-    getter = getattr(middleware, "get_token_usage", None)
+        middleware = getattr(agent, "_chat_data_context_usage_middleware", None)
+    getter = getattr(middleware, "get_context_usage", None)
     if callable(getter):
         return getter()
     return None
-
-
-def bind_token_usage_middleware(agent: Any, middleware: Any) -> None:
-    """关联 agent 与 token usage middleware。"""
-    try:
-        _AGENT_TOKEN_USAGE_MIDDLEWARE[agent] = middleware
-        return
-    except TypeError:
-        pass
-    try:
-        setattr(agent, "_chat_data_token_usage_middleware", middleware)
-    except Exception:
-        return
 
 
 def _extract_result_messages(result: Any) -> list[BaseMessage]:
@@ -384,3 +525,7 @@ def _message_label(message_type: str, round_index: int) -> str:
         "tool": "工具结果",
     }
     return f"第 {round_index} 轮 · {labels.get(message_type, message_type or '消息')}"
+
+
+def _scale_tokens(tokens: int, scale: float) -> int:
+    return max(int(round(max(int(tokens or 0), 0) * scale)), 0)

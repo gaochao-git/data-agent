@@ -19,12 +19,14 @@ from langchain_core.messages import HumanMessage, AIMessage
 from utils.logger import get_logger
 from utils import conversation
 from .agent import (
-    get_chat_data_graph,
+    create_chat_data_agent,
     get_checkpointer,
 )
-from .agent import data_analyze_graph
+from .agent import analyze_data_agent
+from .agent.prompts.chat_data_builder import build_chat_data_system_prompt
 from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
 from .services.datasource_manager import get_datasource_manager
+from .services.context_budget import sanitize_context_usage_for_response
 from .services.data_analyze_context import build_data_analyze_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
@@ -87,11 +89,42 @@ def _format_sse(event: str, data: dict | str) -> str:
     return f"event: {event}\ndata: {data_str}\n\n"
 
 
+def _build_user_message(content: str, semantic_selection_event: dict[str, Any] | None = None, **extra_kwargs: Any) -> HumanMessage:
+    """构造带服务端时间戳和前端选择留痕的用户消息。"""
+    additional_kwargs = {"timestamp": _get_timestamp()}
+    if semantic_selection_event:
+        additional_kwargs["semantic_config_selection"] = semantic_selection_event
+    additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
+    return HumanMessage(content=content, additional_kwargs=additional_kwargs)
+
+
+def _build_agent_context_state(
+    *,
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+    user_id: str | None,
+    operator_name: str | None,
+    conversation_id: str,
+    **extra_state: Any,
+) -> dict[str, Any]:
+    """构造问数和分析共享的 Agent 状态字段。"""
+    state = {
+        "conversation_datasource_id": datasource_id,
+        "datasource_id": datasource_id,
+        "semantic_config_id": semantic_config_id,
+        "user_id": user_id,
+        "operator_name": operator_name or "",
+        "conversation_id": conversation_id,
+    }
+    state.update(extra_state)
+    return state
+
+
 def _message_end_payload(usage: Any | None = None) -> dict[str, Any]:
     """构造消息结束事件，timestamp 表示服务端确认完成的时间。"""
     payload: dict[str, Any] = {"timestamp": _get_timestamp()}
     if usage:
-        payload["usage"] = usage
+        payload["usage"] = sanitize_context_usage_for_response(usage)
     return payload
 
 
@@ -206,17 +239,17 @@ def _normalize_enable_thinking(value: Any) -> bool | None:
 
 
 async def _persist_reasoning_segments(
-    graph: Any,
+    agent: Any,
     config: dict[str, Any],
     segments: list[dict[str, Any]],
     as_node: str,
     persisted_count: int = 0,
 ) -> int:
     pending_segments = segments[persisted_count:]
-    if not pending_segments or not hasattr(graph, "aupdate_state"):
+    if not pending_segments or not hasattr(agent, "aupdate_state"):
         return persisted_count
     try:
-        await graph.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
+        await agent.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
         return len(segments)
     except Exception as exc:
         logger.warning("保存模型思考分段失败: %s", exc)
@@ -483,6 +516,171 @@ class _ToolStreamState:
             status="running",
             args=args or {},
         )]
+
+
+class _AgentSseStreamAdapter:
+    """统一 create_agent 的 SSE 流处理，保留各 Agent 的可见消息过滤钩子。"""
+
+    def __init__(
+        self,
+        *,
+        agent: Any,
+        initial_state: dict[str, Any],
+        config: dict[str, Any],
+        request: Request | None = None,
+        visible_message_filter=None,
+        disconnect_log_message: str = "客户端已断开，停止流式输出: %s",
+        disconnect_log_id: str = "",
+        reasoning_as_node: str = "model",
+        include_empty_tool_messages: bool = False,
+        on_first_message=None,
+        debug_label: str | None = None,
+    ):
+        self.agent = agent
+        self.initial_state = initial_state
+        self.config = config
+        self.request = request
+        self.visible_message_filter = visible_message_filter
+        self.disconnect_log_message = disconnect_log_message
+        self.disconnect_log_id = disconnect_log_id
+        self.reasoning_as_node = reasoning_as_node
+        self.include_empty_tool_messages = include_empty_tool_messages
+        self.on_first_message = on_first_message
+        self.debug_label = debug_label
+        self.tool_stream_state = _ToolStreamState()
+        self.reasoning_segments: list[dict[str, Any]] = []
+        self.persisted_reasoning_count = 0
+        self.latest_token_usage: dict[str, Any] | None = None
+        self.state: Any | None = None
+        self.disconnected = False
+        self._first_message_seen = False
+
+    async def stream_events(self):
+        """输出 token_usage、thinking、tool、message 事件。"""
+        async for event in self.agent.astream(
+            self.initial_state,
+            config=self.config,
+            stream_mode=["messages", "custom"],
+        ):
+            if await self._handle_disconnect():
+                return
+
+            event_kind, payload = self._parse_stream_event(event)
+            if event_kind == "custom":
+                token_usage_event = self._handle_custom_payload(payload)
+                if token_usage_event:
+                    yield token_usage_event
+                continue
+            if event_kind != "messages":
+                continue
+
+            message_chunk, metadata = payload
+            if self.on_first_message and not self._first_message_seen:
+                self._first_message_seen = True
+                self.on_first_message()
+            if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
+                continue
+
+            async for sse_event in self._handle_message_chunk(message_chunk, metadata):
+                yield sse_event
+
+    async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
+        """持久化思考分段并构造 message_end payload。"""
+        self.persisted_reasoning_count = await _persist_reasoning_segments(
+            self.agent,
+            self.config,
+            self.reasoning_segments,
+            as_node=self.reasoning_as_node,
+            persisted_count=self.persisted_reasoning_count,
+        )
+        self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
+        if persist_latest_ai_timestamp:
+            self.state = await _persist_latest_ai_message_timestamp(self.agent, self.config, self.state)
+        usage = self._resolve_end_usage(prefer_latest_usage)
+        return _message_end_payload_from_state(self.state, usage)
+
+    async def _handle_disconnect(self) -> bool:
+        if not self.request or not await self.request.is_disconnected():
+            return False
+        logger.info(self.disconnect_log_message, self.disconnect_log_id)
+        self.persisted_reasoning_count = await _persist_reasoning_segments(
+            self.agent,
+            self.config,
+            self.reasoning_segments,
+            as_node=self.reasoning_as_node,
+            persisted_count=self.persisted_reasoning_count,
+        )
+        self.disconnected = True
+        return True
+
+    def _handle_custom_payload(self, payload: Any) -> str | None:
+        if not isinstance(payload, dict) or payload.get("type") != "token_usage" or not payload.get("usage"):
+            return None
+        self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
+        return _format_sse("token_usage", self.latest_token_usage)
+
+    async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]):
+        has_content = bool(getattr(message_chunk, "content", None))
+        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
+        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
+        msg_type = getattr(message_chunk, "type", None)
+        thinking_event = _format_thinking_event(message_chunk)
+        has_visible_payload = has_content or has_tool_calls or has_tool_call_chunks or thinking_event
+        if not has_visible_payload and not (self.include_empty_tool_messages and msg_type == "tool"):
+            return
+        if thinking_event:
+            _append_reasoning_segment(
+                self.reasoning_segments,
+                _extract_reasoning_content(message_chunk),
+                self.tool_stream_state.visible_tool_count(),
+            )
+            yield thinking_event
+            if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
+                return
+        if self.debug_label and msg_type == "ai" and has_content:
+            logger.debug("[%s] %s", self.debug_label, str(message_chunk.content)[:200])
+        if has_tool_calls:
+            for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
+                yield tool_event
+        if has_tool_call_chunks:
+            for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
+                yield tool_event
+        if msg_type == "tool":
+            yield _format_sse("tool", self.tool_stream_state.build_tool_message_payload(message_chunk))
+            return
+        msg_data = message_chunk.model_dump()
+        msg_data["timestamp"] = _get_timestamp()
+        yield _format_sse("message", msg_data)
+
+    def _resolve_end_usage(self, prefer_latest_usage: bool) -> Any | None:
+        state_usage = None
+        if self.state and getattr(self.state, "values", None):
+            state_usage = self.state.values.get("token_usage")
+        if prefer_latest_usage:
+            return self.latest_token_usage or state_usage
+        return state_usage if state_usage is not None else self.latest_token_usage
+
+    @staticmethod
+    def _parse_stream_event(event: Any) -> tuple[str, Any]:
+        if isinstance(event, tuple) and len(event) == 2:
+            stream_mode, payload = event
+            if stream_mode == "custom":
+                return "custom", payload
+            if stream_mode == "messages":
+                return "messages", payload
+            message_chunk, metadata = event
+            return "messages", (message_chunk, metadata)
+        return "unknown", event
+
+
+def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str, Any]) -> bool:
+    """过滤智能问数 create_agent 流，避免工具内部模型调用进入主对话。"""
+    node_name = str(metadata.get("langgraph_node") or "")
+    msg_type = getattr(message_chunk, "type", "ai")
+    if msg_type == "ai" and node_name != "model":
+        logger.debug("[过滤] 跳过来自 %s 节点的 AI 消息", node_name)
+        return False
+    return True
 
 
 async def _get_semantic_config_async(
@@ -773,27 +971,17 @@ async def _stream_sql_generation(
             "checkpoint_ns": ""
         }
     }
-    token_usage = None
 
     try:
         async with get_checkpointer() as checkpointer:
-            # 构建 graph，传入语义配置（如果有）
-            # 语义模式时，graph 会添加 semantic_to_sql_tool 工具
-            graph = get_chat_data_graph(
-                checkpointer=checkpointer,
-                semantic_config=semantic_config,
-                datasource_id=datasource_id,
-                model_id=model_id,
-                enable_thinking=enable_thinking,
-                user_id=user_id,
-                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names),
-            )
-
-            human_message_kwargs = {"timestamp": _get_timestamp()}
-            if semantic_selection_event:
-                human_message_kwargs["semantic_config_selection"] = semantic_selection_event
             if normalized_skill_names:
-                human_message_kwargs["skill_names"] = normalized_skill_names
+                user_message = _build_user_message(
+                    user_query,
+                    semantic_selection_event,
+                    skill_names=normalized_skill_names,
+                )
+            else:
+                user_message = _build_user_message(user_query, semantic_selection_event)
 
             semantic_config_directory_info = ""
             if not semantic_config:
@@ -823,131 +1011,60 @@ async def _stream_sql_generation(
                     all_execution_targets,
                     selected_member_datasource_ids,
                 )
-            initial_state = {
-                "messages": [HumanMessage(
-                    content=user_query,
-                    additional_kwargs=human_message_kwargs
-                )],
-                "execution_context": {
+            initial_state = _build_agent_context_state(
+                datasource_id=datasource_id,
+                semantic_config_id=semantic_config_id,
+                user_id=user_id,
+                operator_name=username,
+                conversation_id=thread_id,
+                messages=[user_message],
+                execution_context={
                     "datasource_id": datasource_id,
                     "available_member_datasource_ids": available_member_datasource_ids,
                     "matched_member_datasource_ids": matched_member_datasource_ids,
                 },
-                "conversation_datasource_id": datasource_id,
-                "semantic_config_id": semantic_config_id,
-                "semantic_config": semantic_config,
-                "user_id": user_id,
-                "operator_name": username or "",
-                "conversation_id": thread_id,
-                "prompt_context": {
+                semantic_config=semantic_config,
+                prompt_context={
                     "datasource_group_context": datasource_group_context,
                     "semantic_config_directory_info": semantic_config_directory_info,
                 },
-            }
-
-            tool_stream_state = _ToolStreamState()
-            reasoning_segments: list[dict[str, Any]] = []
-            persisted_reasoning_count = 0
-
-            # 流式执行
-            # 使用 messages 捕获 LLM 输出，custom 转发模型入口上下文占用等辅助事件。
-            # 通过 metadata["langgraph_node"] 区分来源，过滤工具内部的 LLM 调用。
-            async for event in graph.astream(
-                initial_state,
-                config=config,
-                stream_mode=["messages", "custom"],
-            ):
-                # 检测客户端断连，停止消费事件
-                if request and await request.is_disconnected():
-                    logger.info(f"客户端已断开，停止流式输出: {thread_id}")
-                    persisted_reasoning_count = await _persist_reasoning_segments(
-                        graph,
-                        config,
-                        reasoning_segments,
-                        as_node="agent",
-                        persisted_count=persisted_reasoning_count,
-                    )
-                    return
-
-                if isinstance(event, tuple) and len(event) == 2 and event[0] == "custom":
-                    payload = event[1]
-                    if isinstance(payload, dict) and payload.get("type") == "token_usage" and payload.get("usage"):
-                        token_usage = payload.get("usage")
-                        yield _format_sse("token_usage", token_usage)
-                    continue
-
-                if isinstance(event, tuple) and len(event) == 2 and event[0] == "messages":
-                    message_chunk, metadata = event[1]
-                else:
-                    message_chunk, metadata = event
-
-                # 过滤：只保留来自 agent 节点的消息（排除 tools 节点内部的 LLM 调用）
-                node_name = metadata.get("langgraph_node", "")
-                msg_type = getattr(message_chunk, 'type', 'ai')
-                # AI 消息：只接受来自 agent 节点的
-                # Tool 消息：来自 tools 节点，需要保留
-                if msg_type == 'ai' and node_name != "agent":
-                    logger.debug(f"[过滤] 跳过来自 {node_name} 节点的 AI 消息")
-                    continue
-
-                # 检查是否有内容或工具调用
-                has_content = hasattr(message_chunk, 'content') and message_chunk.content
-                has_tool_calls = hasattr(message_chunk, 'tool_calls') and message_chunk.tool_calls
-                has_tool_call_chunks = hasattr(message_chunk, 'tool_call_chunks') and message_chunk.tool_call_chunks
-                thinking_event = _format_thinking_event(message_chunk)
-                if not has_content and not has_tool_calls and not has_tool_call_chunks and not thinking_event:
-                    continue
-                if thinking_event:
-                    _append_reasoning_segment(
-                        reasoning_segments,
-                        _extract_reasoning_content(message_chunk),
-                        tool_stream_state.visible_tool_count(),
-                    )
-                    yield thinking_event
-                    if not has_content and not has_tool_calls and not has_tool_call_chunks:
-                        continue
-
-                # 调试：打印 AI 消息内容
-                if msg_type == 'ai' and has_content:
-                    logger.debug(f"[AI Content from {node_name}] {message_chunk.content[:200]}")
-
-                # 根据消息类型选择事件名
-                msg_type = getattr(message_chunk, 'type', 'ai')
-                if msg_type == 'tool':
-                    event_name = "tool"
-                else:
-                    event_name = "message"
-
-                if has_tool_calls:
-                    for tool_event in tool_stream_state.handle_tool_calls(message_chunk.tool_calls):
-                        yield tool_event
-
-                if has_tool_call_chunks:
-                    for tool_event in tool_stream_state.handle_tool_call_chunks(message_chunk.tool_call_chunks):
-                        yield tool_event
-
-                # ToolMessage: 工具执行完成，发送带有完整 args 的消息
-                if msg_type == 'tool':
-                    msg_data = tool_stream_state.build_tool_message_payload(message_chunk)
-                    yield _format_sse(event_name, msg_data)
-                else:
-                    # AI 消息添加时间戳
-                    msg_data = message_chunk.model_dump()
-                    msg_data["timestamp"] = _get_timestamp()
-                    yield _format_sse(event_name, msg_data)
-
-            persisted_reasoning_count = await _persist_reasoning_segments(
-                graph,
-                config,
-                reasoning_segments,
-                as_node="agent",
-                persisted_count=persisted_reasoning_count,
             )
-            state = await graph.aget_state(config)
-            token_usage = state.values.get("token_usage") if state and state.values else None
+            system_prompt = build_chat_data_system_prompt(
+                initial_state,
+                semantic_config=semantic_config,
+                available_skills_context=await _build_query_skills_context(
+                    user_id=user_id,
+                    skill_names=normalized_skill_names,
+                ),
+            )
 
-        # 正常结束
-        end_payload = _message_end_payload_from_state(state, token_usage)
+            # 创建智能问数 agent，传入语义配置（如果有）
+            agent = create_chat_data_agent(
+                checkpointer=checkpointer,
+                semantic_config=semantic_config,
+                datasource_id=datasource_id,
+                system_prompt=system_prompt,
+                model_id=model_id,
+                enable_thinking=enable_thinking,
+                user_id=user_id,
+            )
+
+            stream_adapter = _AgentSseStreamAdapter(
+                agent=agent,
+                initial_state=initial_state,
+                config=config,
+                request=request,
+                visible_message_filter=_is_chat_data_visible_stream_message,
+                disconnect_log_id=thread_id,
+                debug_label="AI Content from model",
+            )
+            async for sse_event in stream_adapter.stream_events():
+                yield sse_event
+            if stream_adapter.disconnected:
+                return
+
+            end_payload = await stream_adapter.finish()
+
         yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
@@ -983,7 +1100,7 @@ async def sql_completion_handler(
     else:
         skill_names = []
 
-    # 保持懒创建会话的既有行为；数据源组由下方 graph state 首次绑定。
+    # 保持懒创建会话的既有行为；数据源组由下方 agent state 首次绑定。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
 
     return StreamingResponse(
@@ -1058,7 +1175,7 @@ async def data_analyze_completion_handler(
             except Exception as err:
                 logger.warning("DataAnalyze 技能列表加载失败，回退代码目录: %s", err)
                 available_skills_xml = build_builtin_skills_prompt()
-            system_prompt = data_analyze_graph.build_data_analyze_system_prompt(
+            system_prompt = analyze_data_agent.build_data_analyze_system_prompt(
                 skill=None,
                 data_context=data_context,
                 workspace_root=workspace_paths["root"],
@@ -1067,23 +1184,19 @@ async def data_analyze_completion_handler(
             )
             log_phase("build_system_prompt")
             config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-            human_message_kwargs = {"timestamp": _get_timestamp()}
-            if semantic_selection_event:
-                human_message_kwargs["semantic_config_selection"] = semantic_selection_event
-            initial_state = {
-                "messages": [HumanMessage(content=query, additional_kwargs=human_message_kwargs)],
-                "conversation_datasource_id": datasource_id,
-                "datasource_id": datasource_id,
-                "semantic_config_id": semantic_config_id,
-                "member_datasource_ids": member_datasource_ids or [],
-                "user_id": user_id,
-                "operator_name": username or "",
-                "conversation_id": conversation_id,
-            }
+            initial_state = _build_agent_context_state(
+                datasource_id=datasource_id,
+                semantic_config_id=semantic_config_id,
+                user_id=user_id,
+                operator_name=username,
+                conversation_id=conversation_id,
+                messages=[_build_user_message(query, semantic_selection_event)],
+                member_datasource_ids=member_datasource_ids or [],
+            )
 
             async with get_checkpointer() as checkpointer:
                 execution_session_ref = SandboxExecutionSessionRef()
-                agent = data_analyze_graph.create_data_analyze_agent(
+                agent = analyze_data_agent.create_data_analyze_agent(
                     workspace_root=workspace_paths["root"],
                     system_prompt=system_prompt,
                     model_id=model_id,
@@ -1103,67 +1216,24 @@ async def data_analyze_completion_handler(
                     return
                 execution_session_ref.current = await get_workspace_execution_session(workspace_paths["root"], user_id)
                 log_phase("get_workspace_execution_session")
-                tool_stream_state = _ToolStreamState()
-                reasoning_segments: list[dict[str, Any]] = []
-                persisted_reasoning_count = 0
-                first_chunk_logged = False
-                latest_token_usage: dict[str, Any] | None = None
                 session_success = False
+                stream_adapter = _AgentSseStreamAdapter(
+                    agent=agent,
+                    initial_state=initial_state,
+                    config=config,
+                    request=request,
+                    visible_message_filter=_is_data_analyze_visible_stream_message,
+                    disconnect_log_message="DataAnalyze 客户端已断开，停止流式输出: %s",
+                    disconnect_log_id=conversation_id,
+                    include_empty_tool_messages=True,
+                    on_first_message=lambda: log_phase("first_model_chunk"),
+                )
                 try:
-                    async for stream_mode, payload in agent.astream(initial_state, config=config, stream_mode=["messages", "custom"]):
-                        if stream_mode == "custom":
-                            if isinstance(payload, dict) and payload.get("type") == "token_usage":
-                                usage = payload.get("usage")
-                                if usage:
-                                    latest_token_usage = usage
-                                    yield _format_sse("token_usage", usage)
-                            continue
-                        message_chunk, metadata = payload
-                        if not first_chunk_logged:
-                            first_chunk_logged = True
-                            log_phase("first_model_chunk")
-                        if request and await request.is_disconnected():
-                            logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
-                            persisted_reasoning_count = await _persist_reasoning_segments(
-                                agent,
-                                config,
-                                reasoning_segments,
-                                as_node="model",
-                                persisted_count=persisted_reasoning_count,
-                            )
-                            session_success = True
-                            return
-                        if not _is_data_analyze_visible_stream_message(message_chunk, metadata):
-                            continue
-                        has_content = bool(getattr(message_chunk, "content", None))
-                        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
-                        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-                        msg_type = getattr(message_chunk, "type", None)
-                        thinking_event = _format_thinking_event(message_chunk)
-                        if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool" and not thinking_event:
-                            continue
-                        if thinking_event:
-                            _append_reasoning_segment(
-                                reasoning_segments,
-                                _extract_reasoning_content(message_chunk),
-                                tool_stream_state.visible_tool_count(),
-                            )
-                            yield thinking_event
-                            if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
-                                continue
-                        if has_tool_calls:
-                            for tool_event in tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
-                                yield tool_event
-                        if has_tool_call_chunks:
-                            for tool_event in tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
-                                yield tool_event
-                        msg_data = message_chunk.model_dump()
-                        msg_data["timestamp"] = _get_timestamp()
-                        if msg_type == "tool":
-                            msg_data = tool_stream_state.build_tool_message_payload(message_chunk)
-                            yield _format_sse("tool", msg_data)
-                        else:
-                            yield _format_sse("message", msg_data)
+                    async for sse_event in stream_adapter.stream_events():
+                        yield sse_event
+                    if stream_adapter.disconnected:
+                        session_success = True
+                        return
                     session_success = True
                 except asyncio.CancelledError:
                     session_success = True
@@ -1173,17 +1243,10 @@ async def data_analyze_completion_handler(
                 finally:
                     await _finish_workspace_execution_session(execution_session_ref, user_id, success=session_success)
                 log_phase("agent_stream_done")
-                persisted_reasoning_count = await _persist_reasoning_segments(
-                    agent,
-                    config,
-                    reasoning_segments,
-                    as_node="model",
-                    persisted_count=persisted_reasoning_count,
+                end_payload = await stream_adapter.finish(
+                    persist_latest_ai_timestamp=True,
+                    prefer_latest_usage=True,
                 )
-                state = await agent.aget_state(config) if hasattr(agent, "aget_state") else None
-                state = await _persist_latest_ai_message_timestamp(agent, config, state)
-                state_token_usage = state.values.get("token_usage") if state and state.values else None
-                end_payload = _message_end_payload_from_state(state, latest_token_usage or state_token_usage)
                 yield _format_sse("message_end", end_payload)
             yield _format_sse("done", "[DONE]")
         except Exception as e:

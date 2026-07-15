@@ -13,11 +13,8 @@ from .sql import (
 )
 from ...services.semantic_tools import create_semantic_config_selection_tools
 
-TOOLS = [semantic_query_tool, calculator_tool]
-
 __all__ = [
     "SemanticToolNames",
-    "TOOLS",
     "build_semantic_prompt",
     "calculator_tool",
     "create_semantic_config_selection_tools",

@@ -18,7 +18,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 from .. import agent as agent_module
 from ..agent import get_all_tables_async, get_tables_create_format
-from ..agent.sql_assist_graph import get_sql_assist_graph
+from ..agent.sql_assist_agent import create_sql_assist_agent
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
     ExecuteSqlRequest,
@@ -91,7 +91,7 @@ async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Req
     return None
 
 
-def _quick_sql_initial_state(payload: QuickSqlRequest, tables_ddl_info: str) -> dict[str, Any]:
+def _quick_sql_initial_state(payload: QuickSqlRequest) -> dict[str, Any]:
     return {
         "messages": [
             HumanMessage(
@@ -99,7 +99,6 @@ def _quick_sql_initial_state(payload: QuickSqlRequest, tables_ddl_info: str) -> 
                 additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             )
         ],
-        "tables_ddl_info": tables_ddl_info,
     }
 
 
@@ -116,13 +115,17 @@ async def _stream_sql_assist_chunks(
 ):
     config = {"configurable": {"thread_id": payload.conversation_id, "checkpoint_ns": ""}}
     async with agent_module.get_checkpointer() as checkpointer:
-        graph = get_sql_assist_graph(checkpointer, sql_dialect=source_type)
-        async for chunk, metadata in graph.astream(
-            _quick_sql_initial_state(payload, tables_ddl_info),
+        agent = create_sql_assist_agent(
+            checkpointer,
+            sql_dialect=source_type,
+            tables_ddl_info=tables_ddl_info,
+        )
+        async for chunk, metadata in agent.astream(
+            _quick_sql_initial_state(payload),
             config=config,
             stream_mode="messages",
         ):
-            if metadata.get("langgraph_node") == "sql_assist" and getattr(chunk, "content", None):
+            if metadata.get("langgraph_node") == "model" and getattr(chunk, "content", None):
                 yield chunk.content
 
 

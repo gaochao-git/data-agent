@@ -297,6 +297,16 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
         async def __aexit__(self, *_args):
             return False
 
+    raw_token_usage = {
+        "used": 12,
+        "total": 100,
+        "breakdown": [{
+            "key": "system_prompt",
+            "content": "SECRET_SYSTEM_PROMPT",
+            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+    }
+
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -308,7 +318,7 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                     "task_stages": [
                         {"run_id": "run1", "stage": "thinking", "status": "completed", "content": "理解"}
                     ],
-                    "token_usage": {"used": 12, "total": 100},
+                    "token_usage": raw_token_usage,
                     "conversation_datasource_id": "ds_a",
                 },
                 tasks=[],
@@ -320,7 +330,10 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
     assert detail["task_stages"][0]["stage"] == "thinking"
     assert detail["reasoning_segments"] == []
-    assert detail["token_usage"] == {"used": 12, "total": 100}
+    assert detail["token_usage"]["used"] == 12
+    assert detail["token_usage"]["breakdown"][0]["content"] == "[系统提示词已隐藏]"
+    assert detail["token_usage"]["breakdown"][0]["children"][0]["content"] == "[系统提示词已隐藏]"
+    assert raw_token_usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
     assert detail["datasource_id"] == "ds_a"
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
 

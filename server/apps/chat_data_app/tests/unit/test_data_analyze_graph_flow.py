@@ -12,11 +12,12 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 import pytest
 from langchain_core.messages import AIMessage
 
-from apps.chat_data_app.agent import data_analyze_graph
+from apps.chat_data_app.agent import analyze_data_agent
+from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 
 
 def test_data_analyze_tool_metadata_and_dialect_sections():
-    assert [item["name"] for item in data_analyze_graph.get_data_analyze_tool_chain()] == [
+    assert [item["name"] for item in analyze_data_agent.get_data_analyze_tool_chain()] == [
         "skill_load",
         "file_read",
         "file_edit",
@@ -26,15 +27,15 @@ def test_data_analyze_tool_metadata_and_dialect_sections():
         "dsl2sql_tool",
         "semantic_query_tool",
     ]
-    assert "`skill_load`" in data_analyze_graph.get_data_analyze_allowed_tool_names_text()
-    assert "Hive" in data_analyze_graph.build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
-    assert "MySQL" in data_analyze_graph.build_dialect_prompt_sections({"semantic_configs": [{"source_type": "mysql"}]})[0]
-    assert "Hive" in data_analyze_graph.build_dialect_prompt_sections({"semantic_configs": ["bad", {"source_type": "hive"}]})[0]
-    assert "当前数据库方言未明确" in data_analyze_graph.build_dialect_prompt_sections({})[0]
+    assert "`skill_load`" in analyze_data_agent.get_data_analyze_allowed_tool_names_text()
+    assert "Hive" in analyze_data_agent.build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
+    assert "MySQL" in analyze_data_agent.build_dialect_prompt_sections({"semantic_configs": [{"source_type": "mysql"}]})[0]
+    assert "Hive" in analyze_data_agent.build_dialect_prompt_sections({"semantic_configs": ["bad", {"source_type": "hive"}]})[0]
+    assert "当前数据库方言未明确" in analyze_data_agent.build_dialect_prompt_sections({})[0]
 
 
 def test_data_analyze_agent_state_exposes_datasource_context():
-    annotations = data_analyze_graph.DataAnalyzeAgentState.__annotations__
+    annotations = analyze_data_agent.DataAnalyzeAgentState.__annotations__
 
     assert "datasource_id" in annotations
     assert "semantic_config_id" in annotations
@@ -45,8 +46,8 @@ def test_data_analyze_agent_state_exposes_datasource_context():
 
 
 def test_data_analyze_default_skill_prompt(monkeypatch, tmp_path):
-    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
-    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+    monkeypatch.setattr(analyze_data_agent, "build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
+    prompt = analyze_data_agent.build_data_analyze_system_prompt(
         skill={},
         data_context={},
         workspace_root=str(tmp_path),
@@ -57,10 +58,10 @@ def test_data_analyze_default_skill_prompt(monkeypatch, tmp_path):
 
 
 def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
-    assert data_analyze_graph._extract_source_type({"semantic_configs": ["bad", {}]}) == ""
+    assert analyze_data_agent._extract_source_type({"semantic_configs": ["bad", {}]}) == ""
 
-    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills />")
-    prompt = data_analyze_graph.build_data_analyze_system_prompt(
+    monkeypatch.setattr(analyze_data_agent, "build_builtin_skills_prompt", lambda: "<skills />")
+    prompt = analyze_data_agent.build_data_analyze_system_prompt(
         skill=None,
         data_context={},
         workspace_root=str(tmp_path),
@@ -71,8 +72,8 @@ def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
 
 
 def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_path):
-    monkeypatch.setattr(data_analyze_graph, "create_tool_retry_guard", lambda tools: tools)
-    tools = data_analyze_graph.create_data_analyze_tools(
+    monkeypatch.setattr(analyze_data_agent, "create_tool_retry_guard", lambda tools: tools)
+    tools = analyze_data_agent.create_data_analyze_tools(
         str(tmp_path),
         datasource_id="ds_a",
         semantic_config_id="cfg_a",
@@ -109,15 +110,15 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
         captured.update(kwargs)
         return SimpleNamespace(name="agent")
 
-    monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
-    monkeypatch.setattr(data_analyze_graph, "get_default_chat_data_model", lambda: "fallback-model")
-    monkeypatch.setattr(data_analyze_graph, "ModelFallbackMiddleware", FakeFallbackMiddleware)
-    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id, **_kwargs: {"token_model": model_id})
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(data_analyze_graph, "create_agent", fake_create_agent)
-    monkeypatch.setattr(data_analyze_graph, "bind_token_usage_middleware", lambda agent, middleware: bound.append((agent, middleware)))
+    monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
+    monkeypatch.setattr(analyze_data_agent, "get_default_chat_data_model", lambda: "fallback-model")
+    monkeypatch.setattr(analyze_data_agent, "ModelFallbackMiddleware", FakeFallbackMiddleware)
+    monkeypatch.setattr(analyze_data_agent, "create_request_context_usage_middleware", lambda model_id, **_kwargs: {"context_model": model_id})
+    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
+    monkeypatch.setattr(analyze_data_agent, "bind_context_usage_middleware", lambda agent, middleware: bound.append((agent, middleware)))
 
-    agent = data_analyze_graph.create_data_analyze_agent(
+    agent = analyze_data_agent.create_data_analyze_agent(
         workspace_root=str(tmp_path),
         system_prompt="system",
         model_id="primary-model",
@@ -126,15 +127,16 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 3
+    assert len(captured["middleware"]) == 4
     assert isinstance(captured["middleware"][0], FakeFallbackMiddleware)
     assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
-    assert bound == [(agent, {"token_model": "primary-model"})]
+    assert captured["middleware"][3].name == "ToolErrorMiddleware"
+    assert bound == [(agent, {"context_model": "primary-model"})]
 
 
 @pytest.mark.asyncio
 async def test_data_analyze_tool_call_name_normalizer_middleware():
-    middleware = data_analyze_graph.create_tool_call_name_normalizer_middleware([
+    middleware = create_tool_call_name_normalizer_middleware([
         SimpleNamespace(name="select_semantic_config_tool"),
     ])
 
@@ -159,41 +161,42 @@ async def test_data_analyze_tool_call_name_normalizer_middleware():
 def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, tmp_path):
     captured = {}
 
-    monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", lambda **_kwargs: object())
-    monkeypatch.setattr(data_analyze_graph, "get_default_chat_data_model", lambda: "same-model")
-    monkeypatch.setattr(data_analyze_graph, "create_request_token_usage_middleware", lambda model_id, **_kwargs: {"token_model": model_id})
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", lambda **_kwargs: object())
+    monkeypatch.setattr(analyze_data_agent, "get_default_chat_data_model", lambda: "same-model")
+    monkeypatch.setattr(analyze_data_agent, "create_request_context_usage_middleware", lambda model_id, **_kwargs: {"context_model": model_id})
+    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
 
     def fake_create_agent(**kwargs):
         captured["agent_kwargs"] = kwargs
         return SimpleNamespace(name="agent")
 
-    monkeypatch.setattr(data_analyze_graph, "create_agent", fake_create_agent)
-    monkeypatch.setattr(data_analyze_graph, "bind_token_usage_middleware", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
+    monkeypatch.setattr(analyze_data_agent, "bind_context_usage_middleware", lambda *_args, **_kwargs: None)
 
-    data_analyze_graph.create_data_analyze_agent(
+    analyze_data_agent.create_data_analyze_agent(
         workspace_root=str(tmp_path),
         system_prompt="system",
         model_id="same-model",
     )
 
-    assert len(captured["agent_kwargs"]["middleware"]) == 2
+    assert len(captured["agent_kwargs"]["middleware"]) == 3
     assert captured["agent_kwargs"]["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["agent_kwargs"]["middleware"][2].name == "ToolErrorMiddleware"
 
 
 def test_get_data_analyze_graph_builds_history_reader(monkeypatch):
     captured = {}
 
-    monkeypatch.setattr(data_analyze_graph, "ensure_data_analyze_workspace", lambda conversation_id: {"root": f"/tmp/{conversation_id}"})
-    monkeypatch.setattr(data_analyze_graph, "build_builtin_skills_prompt", lambda: "<skills />")
+    monkeypatch.setattr(analyze_data_agent, "ensure_data_analyze_workspace", lambda conversation_id: {"root": f"/tmp/{conversation_id}"})
+    monkeypatch.setattr(analyze_data_agent, "build_builtin_skills_prompt", lambda: "<skills />")
 
     def fake_create_agent(**kwargs):
         captured["kwargs"] = kwargs
         return "graph"
 
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_agent", fake_create_agent)
+    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_agent", fake_create_agent)
 
-    graph = data_analyze_graph.get_data_analyze_graph(checkpointer="checkpoint")
+    graph = analyze_data_agent.get_data_analyze_graph(checkpointer="checkpoint")
 
     assert graph == "graph"
     assert captured["kwargs"]["workspace_root"] == "/tmp/_history_reader"
