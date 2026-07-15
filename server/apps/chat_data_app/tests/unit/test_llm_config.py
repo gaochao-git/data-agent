@@ -179,7 +179,7 @@ def test_chat_data_model_config_rejects_invalid_format(monkeypatch):
         raise AssertionError(f"invalid CHAT_DATA_MODEL was accepted: {value}")
 
 
-def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
+def test_data_analyze_agent_uses_configured_model_without_fallback(monkeypatch):
     from apps.chat_data_app.agent import analyze_data_agent
 
     created_models = []
@@ -209,10 +209,9 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
         model_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
     )
 
-    assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507", "qwen3.6-35b-a3b"]
-    assert created_temperatures == [None, None]
+    assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507"]
+    assert created_temperatures == [None]
     middleware_names = [getattr(item, "name", "") for item in captured["middleware"]]
     assert "ToolCallNameNormalizerMiddleware" in middleware_names
     assert "ToolErrorMiddleware" in middleware_names
     assert captured["state_schema"] is analyze_data_agent.DataAnalyzeAgentState
-    assert any(isinstance(item, analyze_data_agent.ModelFallbackMiddleware) for item in captured["middleware"])

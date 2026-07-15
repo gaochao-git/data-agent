@@ -95,25 +95,25 @@ def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_pa
     ]
 
 
-def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_path):
+def test_create_data_analyze_agent_uses_standard_middleware_without_model_fallback(monkeypatch, tmp_path):
     captured = {}
     bound = []
 
     class FakeLLM:
         pass
 
-    class FakeFallbackMiddleware:
-        def __init__(self, model):
-            self.model = model
-
     def fake_create_agent(**kwargs):
         captured.update(kwargs)
         return SimpleNamespace(name="agent")
 
     monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
-    monkeypatch.setattr(analyze_data_agent, "get_default_chat_data_model", lambda: "fallback-model")
-    monkeypatch.setattr(analyze_data_agent, "ModelFallbackMiddleware", FakeFallbackMiddleware)
-    monkeypatch.setattr(analyze_data_agent, "create_request_context_usage_middleware", lambda model_id, **_kwargs: {"context_model": model_id})
+    context_kwargs = {}
+
+    def fake_context_usage_middleware(model_id, **kwargs):
+        context_kwargs.update(kwargs)
+        return {"context_model": model_id}
+
+    monkeypatch.setattr(analyze_data_agent, "create_request_context_usage_middleware", fake_context_usage_middleware)
     monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
     monkeypatch.setattr(analyze_data_agent, "bind_context_usage_middleware", lambda agent, middleware: bound.append((agent, middleware)))
@@ -128,9 +128,12 @@ def test_create_data_analyze_agent_adds_fallback_middleware(monkeypatch, tmp_pat
 
     assert agent.name == "agent"
     assert len(captured["middleware"]) == 4
-    assert isinstance(captured["middleware"][0], FakeFallbackMiddleware)
+    assert captured["middleware"][0] == {"context_model": "primary-model"}
+    assert captured["middleware"][1].name == "ResponseTimestampMiddleware"
     assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
     assert captured["middleware"][3].name == "ToolErrorMiddleware"
+    assert context_kwargs["tools"] == []
+    assert context_kwargs["state_schema"] is analyze_data_agent.DataAnalyzeAgentState
     assert bound == [(agent, {"context_model": "primary-model"})]
 
 
@@ -156,32 +159,6 @@ async def test_data_analyze_tool_call_name_normalizer_middleware():
 
     assert response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
     assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
-
-
-def test_create_data_analyze_agent_skips_fallback_when_same_model(monkeypatch, tmp_path):
-    captured = {}
-
-    monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", lambda **_kwargs: object())
-    monkeypatch.setattr(analyze_data_agent, "get_default_chat_data_model", lambda: "same-model")
-    monkeypatch.setattr(analyze_data_agent, "create_request_context_usage_middleware", lambda model_id, **_kwargs: {"context_model": model_id})
-    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *_args, **_kwargs: [])
-
-    def fake_create_agent(**kwargs):
-        captured["agent_kwargs"] = kwargs
-        return SimpleNamespace(name="agent")
-
-    monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
-    monkeypatch.setattr(analyze_data_agent, "bind_context_usage_middleware", lambda *_args, **_kwargs: None)
-
-    analyze_data_agent.create_data_analyze_agent(
-        workspace_root=str(tmp_path),
-        system_prompt="system",
-        model_id="same-model",
-    )
-
-    assert len(captured["agent_kwargs"]["middleware"]) == 3
-    assert captured["agent_kwargs"]["middleware"][1].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["agent_kwargs"]["middleware"][2].name == "ToolErrorMiddleware"
 
 
 def test_get_data_analyze_graph_builds_history_reader(monkeypatch):

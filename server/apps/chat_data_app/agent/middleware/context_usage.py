@@ -27,9 +27,7 @@ from ...services.context_budget import (
     get_model_context_budget,
     sanitize_context_usage_for_response,
 )
-from ...services.llm_config import get_chat_data_llm, get_default_chat_data_model
 from ...services.runtime_config import get_context_edit_config
-from ..agent_runtime import normalize_response_tool_call_names, timestamp_message
 from .context_editing import edit_messages_for_llm
 
 logger = get_logger(__name__)
@@ -37,112 +35,114 @@ logger = get_logger(__name__)
 _AGENT_CONTEXT_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 
 
-def create_request_context_usage_middleware(
+def create_context_usage_middleware(
     model_id: str | None = None,
     *,
-    tool_result_budget: Any | None = None,
-):
-    """创建每次模型请求前的当前上下文估算 middleware。"""
-    records: list[dict[str, Any]] = []
-
-    @wrap_model_call
-    async def request_context_usage_middleware(request, handler):
-        final_messages = _build_request_messages(request)
-        tools = list(getattr(request, "tools", None) or [])
-        effective_model_id = _request_model_name(request) or model_id
-        if tool_result_budget is not None:
-            system_message = getattr(request, "system_message", None)
-            system_prompt = str(getattr(system_message, "content", "") or "")
-            tool_result_budget.configure(system_prompt, tools, model_id=effective_model_id)
-        message_tokens = count_messages_tokens(final_messages)
-        tool_tokens = count_tools_tokens(tools)
-        input_tokens = message_tokens + tool_tokens + REQUEST_OVERHEAD_TOKENS
-        record = {
-            "index": len(records) + 1,
-            "model": effective_model_id,
-            "input_tokens": input_tokens,
-            "message_tokens": message_tokens,
-            "tool_schema_tokens": tool_tokens,
-            "overhead_tokens": REQUEST_OVERHEAD_TOKENS,
-            "estimated": True,
-            "message_count": len(final_messages),
-            "breakdown": build_request_breakdown(
-                messages=final_messages,
-                message_tokens=message_tokens,
-                tools=tools,
-                tools_tokens=tool_tokens,
-                overhead_tokens=REQUEST_OVERHEAD_TOKENS,
-            ),
-        }
-        records.append(record)
-        response = await handler(request)
-        _merge_response_usage(record, response)
-        _emit_context_usage(get_context_usage())
-        return response
-
-    def get_context_usage() -> dict[str, Any] | None:
-        effective_model_id = str(records[-1].get("model") or model_id or "") if records else model_id
-        budget = tool_result_budget.budget if tool_result_budget is not None else get_model_context_budget(effective_model_id)
-        return build_usage_from_llm_calls(records, budget)
-
-    request_context_usage_middleware.get_context_usage = get_context_usage  # type: ignore[attr-defined]
-    request_context_usage_middleware.context_usage_records = records  # type: ignore[attr-defined]
-    return request_context_usage_middleware
-
-
-def create_chat_data_context_usage_middleware(
-    tools: list,
-    model_id: str | None = None,
-    enable_thinking: bool | None = None,
+    tools: list[Any] | None = None,
     tool_result_budget: ToolResultBudget | None = None,
     state_schema: Any | None = None,
+    name: str = "ContextUsageMiddleware",
 ) -> Any:
-    """创建智能问数上下文裁剪和 token usage middleware。"""
+    """创建统一的上下文裁剪和 token usage middleware。"""
+    records: list[dict[str, Any]] = []
     request_budget = tool_result_budget or ToolResultBudget(model_id)
 
-    @wrap_model_call(name="ChatDataContextUsageMiddleware", state_schema=state_schema)
-    async def chat_data_context_usage_middleware(request, handler):
+    @wrap_model_call(name=name, state_schema=state_schema)
+    async def context_usage_middleware(request, handler):
         logger.info("Agent 处理用户请求")
         system_message = getattr(request, "system_message", None)
         system_prompt = str(getattr(system_message, "content", "") or "")
         logger.info("[agent] system_prompt 长度: %s 字符", len(system_prompt))
 
-        async def invoke_with_model(effective_model_id: str | None, model_override: Any | None = None):
-            request_tools = list(request.tools or tools or [])
-            edited_messages, token_usage = _build_chat_data_context_usage(
-                system_prompt=system_prompt,
-                messages=list(request.messages),
-                tools=request_tools,
-                model_id=effective_model_id,
-                request_budget=request_budget,
-            )
-            _emit_context_usage(token_usage)
-            effective_request = request.override(
-                model=model_override or request.model,
-                system_message=SystemMessage(content=system_prompt),
-                messages=edited_messages,
-            )
-            response = await handler(effective_request)
-            return _timestamp_model_response(response, request_tools), token_usage
+        request_tools = list(getattr(request, "tools", None) or tools or [])
+        effective_model_id = _request_model_name(request) or model_id
+        edited_messages, token_usage = _build_agent_context_usage(
+            system_prompt=system_prompt,
+            messages=list(getattr(request, "messages", None) or []),
+            tools=request_tools,
+            model_id=effective_model_id,
+            request_budget=request_budget,
+        )
+        record = _build_llm_call_record(token_usage, model_id=effective_model_id, index=len(records) + 1)
+        records.append(record)
+        _emit_context_usage(get_context_usage())
 
-        try:
-            response, token_usage = await invoke_with_model(model_id)
-        except Exception as err:
-            if not model_id:
-                raise
-            fallback_model = get_default_chat_data_model()
-            logger.warning("[agent] 指定模型调用失败，回退默认模型: model_id=%s, fallback=%s, err=%s", model_id, fallback_model, err)
-            response, token_usage = await invoke_with_model(
-                fallback_model,
-                get_chat_data_llm(model=fallback_model, streaming=True, enable_thinking=enable_thinking),
-            )
-
+        response = await handler(_override_request(
+            request,
+            system_message=SystemMessage(content=system_prompt),
+            messages=edited_messages,
+        ))
+        _merge_response_usage(record, response)
+        usage = get_context_usage()
+        _emit_context_usage(usage)
         return ExtendedModelResponse(
-            model_response=response,
-            command=Command(update={"token_usage": token_usage}),
+            model_response=_ensure_model_response(response),
+            command=Command(update={"token_usage": usage}),
         )
 
-    return chat_data_context_usage_middleware
+    def get_context_usage() -> dict[str, Any] | None:
+        return build_usage_from_llm_calls(records, request_budget.budget)
+
+    context_usage_middleware.get_context_usage = get_context_usage  # type: ignore[attr-defined]
+    context_usage_middleware.context_usage_records = records  # type: ignore[attr-defined]
+    return context_usage_middleware
+
+
+def create_request_context_usage_middleware(
+    model_id: str | None = None,
+    *,
+    tools: list[Any] | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
+    state_schema: Any | None = None,
+):
+    """创建每次模型请求前的当前上下文裁剪和 token usage middleware。"""
+    return create_context_usage_middleware(
+        model_id=model_id,
+        tools=tools,
+        tool_result_budget=tool_result_budget,
+        state_schema=state_schema,
+    )
+
+
+def _ensure_model_response(response: Any) -> ModelResponse:
+    if isinstance(response, ModelResponse):
+        return response
+    if isinstance(response, AIMessage):
+        return ModelResponse(result=[response])
+    result = getattr(response, "result", None)
+    if isinstance(result, list):
+        return ModelResponse(result=result)
+    return ModelResponse(result=[])
+
+
+def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None, index: int) -> dict[str, Any]:
+    return {
+        "index": index,
+        "model": model_id,
+        "input_tokens": int(token_usage.get("input_tokens") or 0),
+        "message_tokens": int(token_usage.get("message_tokens") or 0),
+        "tool_schema_tokens": int(token_usage.get("tool_schema_tokens") or 0),
+        "overhead_tokens": int(token_usage.get("overhead_tokens") or REQUEST_OVERHEAD_TOKENS),
+        "estimated": True,
+        "message_count": int(token_usage.get("message_count") or 0),
+        "context_editing": token_usage.get("context_editing"),
+        "breakdown": list(token_usage.get("breakdown") or []),
+    }
+
+
+def create_chat_data_context_usage_middleware(
+    tools: list,
+    model_id: str | None = None,
+    tool_result_budget: ToolResultBudget | None = None,
+    state_schema: Any | None = None,
+) -> Any:
+    """创建智能问数上下文裁剪和 token usage middleware。"""
+    return create_context_usage_middleware(
+        model_id=model_id,
+        tools=tools,
+        tool_result_budget=tool_result_budget,
+        state_schema=state_schema,
+    )
 
 
 def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
@@ -353,6 +353,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         "total_tokens": total_tokens,
         "estimated": True,
         "llm_calls": calls,
+        "context_editing": current_call.get("context_editing"),
         "breakdown": list(current_call.get("breakdown") or []),
     })
     return payload
@@ -371,7 +372,7 @@ def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
         return
 
 
-def _build_chat_data_context_usage(
+def _build_agent_context_usage(
     *,
     system_prompt: str,
     messages: list[Any],
@@ -396,6 +397,10 @@ def _build_chat_data_context_usage(
     token_usage.update({
         "input_tokens": input_tokens,
         "current_input_tokens": input_tokens,
+        "message_tokens": message_tokens,
+        "tool_schema_tokens": tool_tokens,
+        "overhead_tokens": REQUEST_OVERHEAD_TOKENS,
+        "message_count": len(llm_messages),
         "output_tokens": 0,
         "total_tokens": input_tokens,
         "estimated": True,
@@ -409,6 +414,15 @@ def _build_chat_data_context_usage(
         ),
     })
     return edited_messages, token_usage
+
+
+def _override_request(request: Any, **kwargs):
+    """兼容 LangChain ModelRequest 和单测中的轻量对象。"""
+    if hasattr(request, "override"):
+        return request.override(**kwargs)
+    data = dict(getattr(request, "__dict__", {}) or {})
+    data.update(kwargs)
+    return type(request)(**data)
 
 
 def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_window: int, model_id: str | None) -> None:
@@ -435,18 +449,6 @@ def _emit_context_usage(usage: dict[str, Any] | None) -> None:
         get_stream_writer()({"type": "token_usage", "usage": sanitize_context_usage_for_response(usage)})
     except Exception:
         logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
-
-
-def _timestamp_model_response(response: ModelResponse, tools: list[Any]) -> ModelResponse:
-    """归一化模型响应并写入服务端时间戳。"""
-    normalized_result = [
-        timestamp_message(normalize_response_tool_call_names(message, tools))
-        for message in list(getattr(response, "result", []) or [])
-    ]
-    return ModelResponse(
-        result=normalized_result,
-        structured_response=response.structured_response,
-    )
 
 
 def _build_request_messages(request: Any) -> list[BaseMessage]:

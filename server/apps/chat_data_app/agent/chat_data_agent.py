@@ -14,9 +14,8 @@ from langchain.agents import AgentState, create_agent
 from typing_extensions import TypedDict
 
 from ..services.context_budget import ToolResultBudget
-from .agent_runtime import create_semantic_selection_tools_bundle, create_streaming_chat_model
+from .agent_runtime import build_standard_agent_middleware, create_semantic_selection_tools_bundle, create_streaming_chat_model
 from .middleware.context_usage import create_chat_data_context_usage_middleware
-from .middleware.tool_error import create_tool_error_middleware
 from .tools.calculator import calculator_tool
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
 from .tools.sql import semantic_query_tool
@@ -96,16 +95,18 @@ def create_chat_data_agent(
         calculator_tool,
     ]
 
-    middleware = [
-        create_chat_data_context_usage_middleware(
-            tools,
-            model_id=model_id,
-            enable_thinking=enable_thinking,
-            tool_result_budget=tool_result_budget,
-            state_schema=ChatDataAgentState,
-        ),
-        create_tool_error_middleware(),
-    ]
+    context_usage_middleware = create_chat_data_context_usage_middleware(
+        tools,
+        model_id=model_id,
+        tool_result_budget=tool_result_budget,
+        state_schema=ChatDataAgentState,
+    )
+    middleware = build_standard_agent_middleware(
+        tools,
+        context_usage_middleware=context_usage_middleware,
+        include_response_timestamp=True,
+        include_tool_call_normalizer=True,
+    )
 
     return create_agent(
         model=create_streaming_chat_model(model_id=model_id, enable_thinking=enable_thinking),

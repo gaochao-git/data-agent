@@ -17,6 +17,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent import chat_data_agent, sql_assist_agent
 from apps.chat_data_app.agent.agent_runtime import format_current_time_for_prompt, normalize_response_tool_call_names
 from apps.chat_data_app.agent.middleware import context_usage
+from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.middleware import tool_error
 from apps.chat_data_app.agent.prompts import chat_data_builder
 from apps.chat_data_app.services.context_budget import ContextBudget
@@ -210,14 +211,35 @@ async def test_chat_data_context_usage_middleware_edits_messages_and_updates_sta
     assert sent_messages[5].content == "当前问题"
     assert messages[1].content == original_tool_content
     assert response.model_response.result[0].content == "完成"
-    assert response.model_response.result[0].additional_kwargs["timestamp"]
     token_usage = response.command.update["token_usage"]
     assert token_usage["context_editing"]["triggered"] is True
     assert token_usage["context_editing"]["cleared_tool_results"] == 1
 
 
 @pytest.mark.asyncio
-async def test_chat_data_context_usage_middleware_normalizes_tool_call_name(monkeypatch):
+async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
+    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="select_semantic_config_tool")])
+
+    async def handler(_request):
+        return ModelResponse(result=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": "call_select",
+                    "name": "select_semantic_config_toolselect_semantic_config_tool",
+                    "args": {"query": "查询入金金额"},
+                }],
+            )
+        ])
+
+    response = await middleware.awrap_model_call(SimpleNamespace(), handler)
+
+    assert response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
+
+
+@pytest.mark.asyncio
+async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standard_normalizer(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
     tool = SimpleNamespace(name="select_semantic_config_tool")
     middleware = context_usage.create_chat_data_context_usage_middleware([tool])
@@ -244,32 +266,17 @@ async def test_chat_data_context_usage_middleware_normalizes_tool_call_name(monk
 
     response = await middleware.awrap_model_call(request, handler)
 
-    assert response.model_response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert response.model_response.result[0].tool_calls[0]["name"] == "select_semantic_config_toolselect_semantic_config_tool"
     assert response.model_response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
 @pytest.mark.asyncio
-async def test_chat_data_context_usage_middleware_falls_back_when_explicit_model_fails(monkeypatch):
-    calls = []
-    fallback_model = FakeChatModel("default_model")
-
-    def fake_get_chat_data_llm(model=None, **_kwargs):
-        calls.append(model)
-        return fallback_model
-
-    monkeypatch.setattr(context_usage, "get_chat_data_llm", fake_get_chat_data_llm)
-    monkeypatch.setattr(context_usage, "get_default_chat_data_model", lambda: "default_model")
+async def test_chat_data_context_usage_middleware_raises_when_model_fails(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
     middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="bad_model")
-    call_count = 0
 
-    async def handler(request):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise RuntimeError("模型不可用")
-        assert request.model is fallback_model
-        return ModelResponse(result=[AIMessage(content="默认模型完成")])
+    async def handler(_request):
+        raise RuntimeError("模型不可用")
 
     request = ModelRequest(
         model=FakeChatModel("bad_model"),
@@ -279,10 +286,8 @@ async def test_chat_data_context_usage_middleware_falls_back_when_explicit_model
         state={},
     )
 
-    response = await middleware.awrap_model_call(request, handler)
-
-    assert response.model_response.result[0].content == "默认模型完成"
-    assert calls == ["default_model"]
+    with pytest.raises(RuntimeError, match="模型不可用"):
+        await middleware.awrap_model_call(request, handler)
 
 
 def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
@@ -336,9 +341,11 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "semantic_query_tool",
         "calculator_tool",
     ]
-    assert len(captured["middleware"]) == 2
-    assert captured["middleware"][0].name == "ChatDataContextUsageMiddleware"
-    assert captured["middleware"][1].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 4
+    assert captured["middleware"][0].name == "ContextUsageMiddleware"
+    assert captured["middleware"][1].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][3].name == "ToolErrorMiddleware"
     assert chat_data_agent.get_chat_data_graph(model_id="m1").name == "agent"
     assert captured["system_prompt"] == "你是智能问数助手，请基于当前会话上下文和可用工具回答用户问题。"
 

@@ -4,12 +4,11 @@ import json
 from typing import Annotated, Any
 
 from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware
 from typing_extensions import NotRequired
 
 from ..chart_types import get_chart_type_prompt_text
 from ..services.data_analyze_workspace import ensure_data_analyze_workspace
-from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
+from ..services.llm_config import get_chat_data_llm
 from ..services.context_budget import ToolResultBudget
 from ..services.workspace_execution import SandboxExecutionSessionRef
 from .prompts.analyze_data import (
@@ -211,18 +210,17 @@ def create_data_analyze_agent(
         model_id=model_id,
         tool_result_budget=tool_result_budget,
     )
-    context_usage_middleware = create_request_context_usage_middleware(model_id, tool_result_budget=tool_result_budget)
+    context_usage_middleware = create_request_context_usage_middleware(
+        model_id,
+        tools=tools,
+        tool_result_budget=tool_result_budget,
+        state_schema=DataAnalyzeAgentState,
+    )
     middleware = build_standard_agent_middleware(
         tools,
         context_usage_middleware=context_usage_middleware,
-        model_id=model_id,
-        enable_thinking=enable_thinking,
-        stream_usage=True,
-        include_fallback=True,
+        include_response_timestamp=True,
         include_tool_call_normalizer=True,
-        llm_factory=get_chat_data_llm,
-        default_model_factory=get_default_chat_data_model,
-        fallback_middleware_cls=ModelFallbackMiddleware,
     )
     agent = create_agent(
         model=llm,

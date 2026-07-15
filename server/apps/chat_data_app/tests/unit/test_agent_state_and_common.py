@@ -43,10 +43,6 @@ def test_agent_runtime_helpers_build_shared_agent_bits():
     model_calls = []
     selection_kwargs = {}
 
-    class FakeFallback:
-        def __init__(self, model):
-            self.model = model
-
     def fake_llm_factory(**kwargs):
         model_calls.append(kwargs)
         return {"llm": kwargs.get("model")}
@@ -64,20 +60,6 @@ def test_agent_runtime_helpers_build_shared_agent_bits():
     assert model_calls[-1]["streaming"] is True
     assert model_calls[-1]["stream_usage"] is True
     assert model_calls[-1]["enable_thinking"] is True
-
-    fallback = agent_runtime.create_model_fallback_middleware(
-        model_id="m1",
-        llm_factory=fake_llm_factory,
-        default_model_factory=lambda: "fallback",
-        fallback_middleware_cls=FakeFallback,
-    )
-    assert isinstance(fallback, FakeFallback)
-    assert fallback.model == {"llm": "fallback"}
-    assert agent_runtime.create_model_fallback_middleware(
-        model_id="same",
-        default_model_factory=lambda: "same",
-        fallback_middleware_cls=FakeFallback,
-    ) is None
 
     tools = agent_runtime.create_semantic_selection_tools_bundle(
         model_id="m1",

@@ -3,12 +3,13 @@
 from datetime import datetime
 from typing import Any, Callable
 
-from langchain.agents.middleware import ModelFallbackMiddleware
+from langchain.agents.middleware import wrap_model_call
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
 from ..services.context_budget import ToolResultBudget
-from ..services.llm_config import get_chat_data_llm, get_default_chat_data_model
+from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_tools import create_semantic_config_selection_tools
 from .middleware.tool_error import create_tool_error_middleware
 
@@ -54,56 +55,34 @@ def create_streaming_chat_model(
     return llm_factory(**kwargs)
 
 
-def create_model_fallback_middleware(
-    *,
-    model_id: str | None,
-    enable_thinking: bool | None = None,
-    stream_usage: bool = False,
-    llm_factory: Callable[..., BaseChatModel] = get_chat_data_llm,
-    default_model_factory: Callable[[], str | None] = get_default_chat_data_model,
-    fallback_middleware_cls=ModelFallbackMiddleware,
-) -> Any | None:
-    """按当前模型和默认模型创建 fallback middleware。"""
-    fallback_model = default_model_factory()
-    if not model_id or not fallback_model or fallback_model == model_id:
-        return None
-    fallback_llm = create_streaming_chat_model(
-        model_id=fallback_model,
-        enable_thinking=enable_thinking,
-        stream_usage=stream_usage,
-        llm_factory=llm_factory,
-    )
-    return fallback_middleware_cls(fallback_llm)
+def create_response_timestamp_middleware():
+    """创建模型响应时间戳 middleware，确保 checkpoint 中助手消息有服务端时间。"""
+    @wrap_model_call(name="ResponseTimestampMiddleware")
+    async def response_timestamp_middleware(request, handler):
+        response = await handler(request)
+        if isinstance(response, AIMessage):
+            return timestamp_message(response)
+        result = list(getattr(response, "result", []) or [])
+        if result:
+            response.result = [timestamp_message(message) for message in result]
+        return response
+
+    return response_timestamp_middleware
 
 
 def build_standard_agent_middleware(
     tools: list[Any],
     *,
     context_usage_middleware: Any | None = None,
-    model_id: str | None = None,
-    enable_thinking: bool | None = None,
-    stream_usage: bool = False,
-    include_fallback: bool = False,
+    include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
-    llm_factory: Callable[..., BaseChatModel] = get_chat_data_llm,
-    default_model_factory: Callable[[], str | None] = get_default_chat_data_model,
-    fallback_middleware_cls=ModelFallbackMiddleware,
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。"""
     middleware: list[Any] = []
-    if include_fallback:
-        fallback = create_model_fallback_middleware(
-            model_id=model_id,
-            enable_thinking=enable_thinking,
-            stream_usage=stream_usage,
-            llm_factory=llm_factory,
-            default_model_factory=default_model_factory,
-            fallback_middleware_cls=fallback_middleware_cls,
-        )
-        if fallback is not None:
-            middleware.append(fallback)
     if context_usage_middleware is not None:
         middleware.append(context_usage_middleware)
+    if include_response_timestamp:
+        middleware.append(create_response_timestamp_middleware())
     if include_tool_call_normalizer:
         from .middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
         middleware.append(create_tool_call_name_normalizer_middleware(tools))

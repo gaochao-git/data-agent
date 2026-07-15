@@ -416,13 +416,62 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     import asyncio
 
     middleware, response = asyncio.run(run())
-    assert response.content == "ok"
+    assert response.model_response.result[0].content == "ok"
     assert len(middleware.context_usage_records) == 1
     record = middleware.context_usage_records[0]
     assert record["model"] == "qwen3.5-35b-a3b"
     assert record["actual_input_tokens"] == 100
     assert record["output_tokens"] == 20
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
+
+
+def test_create_request_context_usage_middleware_edits_old_tool_results(monkeypatch):
+    async def run():
+        from apps.chat_data_app.agent.middleware import context_usage
+
+        monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70})
+        monkeypatch.setattr(
+            context_usage.ToolResultBudget,
+            "configure",
+            lambda self, system_prompt, tools, model_id=None: ContextBudget(
+                context_window=10000,
+                max_output_tokens=2000,
+                trigger_ratio=0.70,
+                input_budget_tokens=7000,
+            ),
+        )
+        monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
+        monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
+        middleware = create_request_context_usage_middleware("qwen-test", state_schema=dict)
+        captured = {}
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="分析系统提示"),
+            messages=[
+                HumanMessage(content="历史问题"),
+                ToolMessage(content="历史工具结果 " * 5000, tool_call_id="call_old", name="semantic_query_tool"),
+                AIMessage(content="历史回答"),
+                HumanMessage(content="当前问题"),
+            ],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen-test"),
+        )
+
+        async def handler(inner_request):
+            captured["request"] = inner_request
+            return AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
+
+        response = await middleware.awrap_model_call(request, handler)
+        return middleware, response, captured
+
+    import asyncio
+
+    middleware, response, captured = asyncio.run(run())
+    sent_messages = captured["request"].messages
+    assert sent_messages[1].content.startswith("[工具结果已移出模型上下文]")
+    assert response.model_response.result[0].content == "ok"
+    usage = response.command.update["token_usage"]
+    assert usage["context_editing"]["triggered"] is True
+    assert middleware.get_context_usage()["context_editing"]["triggered"] is True
 
 
 def test_invoke_with_context_usage_prefers_runtime_usage_and_falls_back_to_estimate():
