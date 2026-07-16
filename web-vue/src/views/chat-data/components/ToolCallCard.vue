@@ -9,7 +9,8 @@ import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { extractGeneratedSqlFromToolCall, extractSemanticDslFromArgs } from '../utils/semanticTool'
+import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs } from '../utils/semanticTool'
+import { getToolDisplayName } from '../utils/toolDisplay'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -17,6 +18,7 @@ interface Props {
   compact?: boolean
   active?: boolean
   showRunningIndicator?: boolean
+  renderQueryResultPreview?: boolean
   datasourceId?: string
   executionTargets?: ExecutionTargetOption[]
   onViewAnalysis?: () => void
@@ -27,7 +29,8 @@ const props = withDefaults(defineProps<Props>(), {
   isExpanded: false,
   compact: false,
   active: false,
-  showRunningIndicator: true
+  showRunningIndicator: true,
+  renderQueryResultPreview: true
 })
 
 const emit = defineEmits<{
@@ -56,26 +59,6 @@ const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceI
 // 折叠状态
 const paramsExpanded = ref(true)
 const resultsExpanded = ref(true)
-
-// 工具元数据
-const TOOL_META: Record<string, { label: string }> = {
-  skill_load: { label: '加载技能' },
-  file_read: { label: '读取文件' },
-  file_glob: { label: '查找文件' },
-  file_grep: { label: '搜索文件' },
-  file_edit: { label: '写入文件' },
-  sandbox_run: { label: '沙箱执行' },
-  semantic_dsl_to_sql: { label: 'DSL转SQL' },
-  dashboard_spec_validate: { label: '校验看板' },
-  dashboard_write: { label: '写入看板' },
-  // 普通对话
-  load_skill_tool: { label: '普通对话' },
-  // SQL 阶段
-  select_semantic_config_tool: { label: '选择指标集' },
-  dsl2sql_tool: { label: '语义转SQL' },
-  generate_chart_tool: { label: '聚合查询' },
-  semantic_query_tool: { label: '语义查询' }
-}
 
 // 参数标签
 const PARAM_LABELS: Record<string, string> = {
@@ -132,12 +115,7 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
 
-// 获取工具元数据
-const meta = computed(() => {
-  return TOOL_META[props.toolCall.tool_name] || {
-    label: '工具调用'
-  }
-})
+const displayName = computed(() => getToolDisplayName(props.toolCall.tool_name))
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')
@@ -353,12 +331,23 @@ const semanticSelectionHeader = computed(() => {
     : '未检索到相关指标集'
 })
 
-// 解析结果内容，将 SQL 代码块与普通文本分离
-function parseResultContent(result: string): Array<{ type: 'text' | 'sql'; content: string }> {
+type ResultPart = { type: 'text' | 'sql' | 'json'; content: string }
+
+function formatQueryResultJson(result: string): string {
+  const payload = extractQueryResultPayload(result)
+  return payload ? JSON.stringify(payload, null, 2) : ''
+}
+
+// 解析结果内容，将 SQL 代码块、JSON 与普通文本分离
+function parseResultContent(result: string): ResultPart[] {
   if (props.toolCall.tool_name === 'select_semantic_config_tool' && semanticSelectionResult.value) return []
+  if (props.toolCall.tool_name === 'semantic_query_tool' && !props.renderQueryResultPreview) {
+    const jsonText = formatQueryResultJson(result)
+    if (jsonText) return [{ type: 'json', content: jsonText }]
+  }
   const cleaned = cleanResult(result)
   if (!cleaned) return []
-  const parts: Array<{ type: 'text' | 'sql'; content: string }> = []
+  const parts: ResultPart[] = []
   const regex = /```(?:sql)?\s*\n?([\s\S]*?)```/g
   let lastIndex = 0
   let match
@@ -475,8 +464,8 @@ function getSqlTokenClass(type: string): string {
     @click="emit('select')"
   >
     <i class="fa-solid fa-wrench"></i>
-    <span class="min-w-0 truncate">
-      <span class="font-mono font-semibold">{{ toolCall.tool_name }}</span>
+    <span class="min-w-0 truncate" :title="toolCall.tool_name">
+      <span class="font-semibold">{{ displayName }}</span>
       <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400">{{ compactDescription }}</span>
     </span>
     <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
@@ -498,7 +487,7 @@ function getSqlTokenClass(type: string): string {
         <div class="w-6 h-6 flex items-center justify-center rounded-lg bg-black/5 text-[11px] text-gray-500">
           <i class="fa-solid fa-wrench"></i>
         </div>
-        <span class="min-w-0 truncate text-sm font-medium text-gray-700">{{ meta.label }}</span>
+        <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
         <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-xs text-[#1f82d9]"></i>
       </div>
       <div class="flex shrink-0 items-center gap-2">
@@ -624,11 +613,12 @@ function getSqlTokenClass(type: string): string {
                 </div>
                 <pre class="max-h-64 max-w-full overflow-auto px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed m-0"><div v-for="(lineTokens, lineIdx) in parseSqlTokens(formatSql(part.content))" :key="lineIdx" class="min-h-[1.4em]"><template v-for="(token, tokenIdx) in lineTokens" :key="tokenIdx"><span :class="getSqlTokenClass(token.type)">{{ token.value }}</span></template><template v-if="lineTokens.length === 0">&nbsp;</template></div></pre>
               </div>
+              <pre v-else-if="part.type === 'json'" class="max-h-[46vh] max-w-full overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono leading-relaxed text-slate-700 m-0">{{ part.content }}</pre>
               <div v-else class="text-sm text-gray-600 whitespace-pre-wrap mb-2 last:mb-0">{{ part.content }}</div>
             </template>
           </div>
           <!-- 渲染结果（表格/图表） -->
-          <div v-if="toolCall.renderId && toolCall.renderType === 'queryResult'" class="min-w-0 max-w-full overflow-hidden">
+          <div v-if="renderQueryResultPreview && toolCall.renderId && toolCall.renderType === 'queryResult'" class="min-w-0 max-w-full overflow-hidden">
             <QueryResultPanel
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"

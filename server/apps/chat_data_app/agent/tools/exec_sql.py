@@ -108,12 +108,6 @@ def create_exec_sql_tool(
                 conversation_id=bound_conversation_id,
                 operator_name=bound_operator_name,
             )
-            query_result["datasource_id"] = bound_datasource_id
-            query_result["member_datasource_ids"] = requested_member_datasource_ids
-            query_result["semantic_config_id"] = str(semantic_config.get("id") or effective_semantic_config_id).strip()
-            query_result["semantic_config_name"] = str(
-                semantic_config.get("name") or semantic_config.get("semantic_config_name") or query_result["semantic_config_id"]
-            ).strip()
             if save_path:
                 write_result = await sandbox_write_text_file(
                     session_ref=execution_session_ref,
@@ -124,27 +118,21 @@ def create_exec_sql_tool(
                 result_summary = {
                     "success": bool(query_result.get("success")),
                     "result_path": write_result.get("file_path") or save_path,
-                    "datasource_id": query_result.get("datasource_id"),
-                    "member_datasource_ids": query_result.get("member_datasource_ids", []),
-                    "semantic_config_id": query_result.get("semantic_config_id"),
-                    "semantic_config_name": query_result.get("semantic_config_name"),
                     "columns": query_result.get("columns", []),
                     "row_count": len(query_result.get("data", []) or []),
                     "total_count": query_result.get("total_count"),
                     "execution_time_ms": query_result.get("execution_time_ms"),
                     "error": query_result.get("error"),
                     "sql": query_result.get("sql") or sql,
-                    "dsl": payload,
                     "warnings": warnings,
                     "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
                 }
-                return "[semantic_query_tool]\n" + json_dumps(result_summary)
+                return json_dumps(result_summary)
             result_payload = dict(query_result)
             result_payload.setdefault("sql", sql)
-            result_payload["dsl"] = payload
             if warnings:
                 result_payload["warnings"] = warnings
-            return "[semantic_query_tool]\n" + json_dumps(result_payload)
+            return json_dumps(result_payload)
         except Exception as exc:
             logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
             return f"semantic_query_tool 执行失败: {exc}"

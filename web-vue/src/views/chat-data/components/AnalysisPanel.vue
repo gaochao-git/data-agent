@@ -228,6 +228,7 @@ const renderMarkdown = (content: string) => md.render(content)
                 :execution-targets="executionTargets"
                 :default-expanded="false"
                 :show-running-indicator="false"
+                :render-query-result-preview="false"
               />
             </template>
           </div>

@@ -385,11 +385,7 @@ async def semantic_query_tool(
     )
     conversation_id = str(state.get("conversation_id") or "").strip() or None
     query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
-    query_result["datasource_id"] = datasource_id
-    query_result["member_datasource_ids"] = effective_member_datasource_ids
     query_result["sql"] = query_result.get("sql") or sql
-    query_result["semantic_config_id"] = str(config.get("id") or semantic_config_id or "").strip()
-    query_result["semantic_config_name"] = str(config.get("name") or config.get("semantic_config_name") or query_result["semantic_config_id"]).strip()
     query_result["query_mode"] = query_mode
     query_result["confidence"] = confidence
     if query_result["success"]:
@@ -399,13 +395,9 @@ async def semantic_query_tool(
             result_summary = {
                 "success": True,
                 "artifact_id": artifact_id,
-                "datasource_id": query_result.get("datasource_id"),
-                "member_datasource_ids": query_result.get("member_datasource_ids", []),
                 "columns": query_result.get("columns", []),
                 "total_count": query_result.get("total_count", 0),
                 "execution_time_ms": query_result.get("execution_time_ms"),
-                "semantic_config_id": query_result.get("semantic_config_id"),
-                "semantic_config_name": query_result.get("semantic_config_name"),
                 "result_size_chars": len(result_json),
                 "llm_analysis_skipped": True,
                 "query_mode": query_mode,

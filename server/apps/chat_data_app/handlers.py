@@ -47,10 +47,17 @@ AGENT_ID = "chat_data"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
 REASONING_TOOL_DISPLAY_NAMES = {
     "select_semantic_config_tool": "选择指标集",
-    "dsl2sql_tool": "生成SQL",
+    "dsl2sql_tool": "生成 SQL",
     "semantic_query_tool": "查询数据",
-    "calculator_tool": "计算",
+    "calculator_tool": "精确计算",
     "skill_load": "加载技能",
+    "file_read": "读取文件",
+    "file_glob": "查找文件",
+    "file_grep": "搜索文件",
+    "file_edit": "写入文件",
+    "sandbox_run": "运行脚本",
+    "present_artifacts": "展示文件",
+    "output_artifact": "生成文件",
 }
 
 

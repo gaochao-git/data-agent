@@ -908,16 +908,16 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         "user_query": "统计销售额",
     })
 
-    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
+    payload = json.loads(result)
     assert payload["success"] is True
     assert payload["result_path"] == "/mnt/user-data/workspace/current.json"
     assert payload["columns"] == ["month", "sales"]
     assert payload["row_count"] == 1
     assert payload["sql"] == "select month, sales from t"
-    assert payload["dsl"] == input_dsl
     assert payload["warnings"] == ["warn_a"]
-    assert payload["datasource_id"] == "ds_1"
-    assert payload["member_datasource_ids"] == ["m1"]
+    assert "dsl" not in payload
+    assert "datasource_id" not in payload
+    assert "member_datasource_ids" not in payload
     assert not (Path(paths["workspace"]) / "current.json").exists()
     assert writes[0]["file_path"] == "workspace/current.json"
     assert writes[0]["mode"] == "overwrite"
@@ -968,12 +968,11 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         "dsl": input_dsl,
     })
 
-    payload = json.loads(result.replace("[semantic_query_tool]\n", "", 1))
+    payload = json.loads(result)
     assert "result_path" not in payload
     assert payload["data"] == [{"cnt": 3}]
     assert payload["sql"] == "select count(*) cnt from t"
-    assert payload["dsl"]["metrics"] == input_dsl["metrics"]
-    assert payload["dsl"]["dimensions"] == []
+    assert "dsl" not in payload
 
     blank_save_result = await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
@@ -981,7 +980,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         "dsl": input_dsl,
         "save_as": "   ",
     })
-    blank_save_payload = json.loads(blank_save_result.replace("[semantic_query_tool]\n", "", 1))
+    blank_save_payload = json.loads(blank_save_result)
     assert "result_path" not in blank_save_payload
     assert blank_save_payload["data"] == [{"cnt": 3}]
 
@@ -1094,7 +1093,7 @@ async def test_semantic_query_tool_returns_compile_errors_and_warning_payload(mo
     empty_sql = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["empty"]}})
     compare_error = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"compare": {"type": "yoy"}, "metrics": ["ok"]}})
     warning_result = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"mixed": True, "metrics": ["raw"]}})
-    payload = json.loads(warning_result.replace("[semantic_query_tool]\n", "", 1))
+    payload = json.loads(warning_result)
 
     assert compile_error == "semantic_query_tool 执行失败: 指标不存在"
     assert empty_sql == "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
