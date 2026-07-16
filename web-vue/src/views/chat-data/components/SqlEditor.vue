@@ -16,7 +16,7 @@ import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
-import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog } from '../utils'
+import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded } from '../utils'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
@@ -479,7 +479,7 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
     title: result.title || result.memberName || result.sql || `结果${index + 1}`,
     resultData: JSON.stringify({
-      success: !result.error,
+      status: result.error ? 'failed' : 'succeeded',
       columns: result.columns,
       data: result.data,
       total_count: result.total_count,
@@ -838,7 +838,7 @@ const handleViewHistoryResult = async (item: SqlHistoryItem) => {
     ElMessage.warning('该查询暂无可查看结果')
     return
   }
-  if (payload.success === false) {
+  if (!isQuerySucceeded(payload)) {
     ElMessage.warning(payload.error || response.data?.error_message || '历史结果已不可用')
     return
   }
@@ -1520,7 +1520,7 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
             data: result.data || [],
             total_count: result.total_count || 0,
             execution_time_ms: result.execution_time_ms ?? elapsed,
-            error: result.success ? undefined : (result.error || '执行失败'),
+            error: isQuerySucceeded(result) ? undefined : (result.error || '执行失败'),
             title,
             memberDatasourceId: result.member_datasource_id,
             memberName: result.member_name,

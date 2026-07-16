@@ -4,7 +4,7 @@ import AsyncQueryResult from './AsyncQueryResult.vue'
 import ResultTabs from './ResultTabs.vue'
 import { getConversationArtifact } from '../api'
 import type { ChartType } from '../chartTypes'
-import { dedupeRepeatedErrorText, normalizeErrorKey } from '../utils'
+import { dedupeRepeatedErrorText, isQuerySucceeded, normalizeErrorKey } from '../utils'
 
 interface SemanticParams {
   metrics?: string[]
@@ -24,7 +24,8 @@ interface VisualizationConfig {
 }
 
 interface QueryResult {
-  success: boolean
+  status?: string | null
+  success?: boolean
   sql?: string
   query_mode?: string
   confidence?: number | string
@@ -160,7 +161,7 @@ const buildMergedErrorItem = (
   const detailText = `影响执行对象：${memberNames.join('、')}`
   const resultData = resultToData({
     ...firstResult,
-    success: false,
+    status: 'failed',
     columns: [],
     data: [],
     total_count: 0,
@@ -180,7 +181,7 @@ const mergeRepeatedErrorItems = (items: QueryResultPanelItem[]) => {
   const errorGroups = new Map<string, { items: QueryResultPanelItem[]; parsedResults: QueryResult[] }>()
   items.forEach((item) => {
     const parsed = parseItemResult(item)
-    if (parsed?.success !== false) {
+    if (!parsed || isQuerySucceeded(parsed)) {
       result.push(item)
       return
     }
@@ -230,7 +231,7 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
       sql: item.sql || result.sql || props.sql,
       memberDatasourceId: item.member_datasource_id,
       memberName: item.member_name,
-      status: item.success === false ? 'error' : 'success',
+      status: isQuerySucceeded(item) ? 'success' : 'error',
     }))
   }
   return [{
@@ -240,7 +241,7 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
     sql: result.sql || props.sql,
     memberDatasourceId: result.member_datasource_id,
     memberName: result.member_name,
-    status: result.success === false ? 'error' : 'success',
+    status: isQuerySucceeded(result) ? 'success' : 'error',
   }]
 })
 

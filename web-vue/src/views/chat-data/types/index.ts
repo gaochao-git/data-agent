@@ -3,6 +3,7 @@
  */
 
 import type { ChartType } from '../chartTypes'
+export type { MemberQueryResult, QueryResult } from './query'
 
 // 表信息
 export interface TableInfo {
@@ -386,35 +387,6 @@ export type MessageSegment =
   | { type: 'text'; content: string }
   | { type: 'toolCall'; toolCallId: string }
   | { type: 'taskStage'; stageIndex: number }
-
-// 查询结果
-export interface QueryResult {
-  success: boolean
-  sql?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-}
-
-export interface MemberQueryResult {
-  member_datasource_id?: string
-  member_name?: string
-  success: boolean
-  status?: string | null
-  sql?: string
-  columns: string[]
-  data: Record<string, unknown>[]
-  total_count: number
-  execution_time_ms?: number
-  started_time?: string | null
-  finished_time?: string | null
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-}
 
 export interface SqlHistoryItem {
   id: number | string

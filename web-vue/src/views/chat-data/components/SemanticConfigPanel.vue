@@ -28,6 +28,7 @@ import {
   buildSqlFunctionExpression,
   getSqlFunctionOptions,
   formatSemanticConfigOptionLabel,
+  isQuerySucceeded,
 } from '../utils'
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
@@ -2227,7 +2228,7 @@ const previewTableData = async (tableName: string) => {
     const firstResult = Array.isArray(res.data.results) && res.data.results.length > 0
       ? res.data.results[0]
       : res.data
-    if (firstResult && firstResult.success === false) {
+    if (firstResult && !isQuerySucceeded(firstResult)) {
       tablePreviewError.value = firstResult.error || '查询失败'
       return
     }

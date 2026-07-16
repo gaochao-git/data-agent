@@ -1,5 +1,5 @@
 from utils.error_codes import ErrorCode
-from apps.chat_data_app.services import query_providers, query_runtime
+from apps.chat_data_app.services import query_cache, query_providers, query_runtime
 from apps.chat_data_app.services.sql_executor import build_effective_sql, validate_sql
 
 
@@ -103,7 +103,7 @@ def _patch_execute_sql_runtime(monkeypatch):
         captured["task_updates"].append({"task_id": task_id, **kwargs})
         return {"task_id": task_id}
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", False)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", False)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: FakeRuntimeDatasourceManager())
     monkeypatch.setattr(query_runtime, "get_executor", lambda execution_target: FakeExecutor(execution_target))
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", fake_create_task_for_execute_request)
@@ -567,7 +567,25 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
         return sample_query_task if task_id == "task_a" else None
 
     async def fake_get_query_executions(task_id):
-        return []
+        return [{
+            "execution_id": "exec_1",
+            "task_id": task_id,
+            "datasource_id": "ds_a",
+            "member_datasource_id": "m1",
+            "member_name": "杭州库",
+            "executor_type": "http",
+            "sql_status": "running",
+            "remote_task_id": "remote_1",
+            "db_connection_id": "",
+            "query": "select * from orders",
+            "result_payload": {"columns": ["id"], "data": [{"id": 1}]},
+            "error_message": None,
+            "execution_time_ms": 123,
+            "result_row_count": 1,
+            "started_time": None,
+            "finished_time": None,
+            "operator_name": "测试用户",
+        }]
 
     monkeypatch.setattr(query_runtime, "get_query_task", fake_get_query_task)
     monkeypatch.setattr(query_runtime, "get_query_executions", fake_get_query_executions)
@@ -580,8 +598,22 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
     assert payload["data"]["task_id"] == "task_a"
     assert payload["data"]["task_type"] == "sql"
     assert payload["data"]["datasource_id"] == "ds_a"
+    assert "result" not in payload["data"]
     assert payload["data"]["results"] is None
-    assert payload["data"]["executions"] == []
+    assert payload["data"]["executions"] == [{
+        "execution_id": "exec_1",
+        "task_id": "task_a",
+        "datasource_id": "ds_a",
+        "member_datasource_id": "m1",
+        "member_name": "杭州库",
+        "executor_type": "http",
+        "sql_status": "running",
+        "remote_task_id": "remote_1",
+        "db_connection_id": "",
+        "started_time": None,
+        "finished_time": None,
+        "operator_name": "测试用户",
+    }]
 
 
 def test_get_query_task_returns_not_found(client, auth_headers, monkeypatch):
@@ -690,19 +722,26 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
     payload = response.json()
     assert payload["status"] == "success"
     assert payload["data"]["status"] == "succeeded"
+    assert "result" not in payload["data"]
     assert payload["data"]["results"] == [{"member_datasource_id": "m1", "success": True}]
     assert payload["data"]["remote_tasks"][0]["remote_task_id"] == "remote_1"
 
 
 def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monkeypatch):
     captured = {}
-    result_data = {
-        "success": True,
-        "columns": ["id"],
-        "data": [{"id": 1}],
-        "total_count": 1,
-        "results": [],
-    }
+    result_data = query_runtime.build_query_result_payload(
+        sql="select * from orders",
+        member_results=[{
+            "member_datasource_id": "",
+            "member_name": "",
+            "status": "succeeded",
+            "columns": ["id"],
+            "data": [{"id": 1}],
+            "total_count": 1,
+            "execution_time_ms": 1,
+            "error": None,
+        }],
+    )
 
     async def fake_create_task_for_execute_request(body, query_type=None, operator_name=None):
         captured["body"] = body
@@ -743,8 +782,8 @@ def test_execute_sql_api_contract(client, auth_headers, sample_query_task, monke
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "success"
-    assert payload["data"]["success"] is True
-    assert payload["data"]["columns"] == ["id"]
+    assert payload["data"]["status"] == "succeeded"
+    assert payload["data"]["results"][0]["columns"] == ["id"]
     assert captured["body"].user_id == "user_a"
     assert captured["body"].skip_query_cache is True
     assert captured["operator_name"] == "测试用户"
@@ -775,7 +814,7 @@ def test_execute_sql_api_runs_sql_through_query_runtime(client, auth_headers, mo
     assert captured["closed_targets"] == ["member_a"]
     assert captured["task_updates"][0]["status"] == "running"
     assert captured["task_updates"][1]["status"] == "succeeded"
-    assert sql_payload["data"]["data"][0]["sql_text"] == "select * from orders LIMIT 5"
+    assert sql_payload["data"]["results"][0]["data"][0]["sql_text"] == "select * from orders LIMIT 5"
 
 
 def test_execute_sql_api_rejects_builder_without_semantic_config(client, auth_headers, monkeypatch):

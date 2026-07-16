@@ -14,6 +14,7 @@ import type { DataSource, ExecutionTargetOption } from '../../../types'
 import { CHART_TYPE_HELP_TEXT } from '../../../chartTypes'
 import type { ThemeConfig } from '../constants'
 import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
+import { flattenQueryResultForDisplay, QUERY_MEMBER_ID_COLUMN, QUERY_MEMBER_NAME_COLUMN } from '../../../utils'
 import { registerChinaMap, normalizeProvinceName, isChinaMapRegistered } from '../../../utils/mapRegistry'
 import ExecutionTargetPicker from '../../ExecutionTargetPicker.vue'
 
@@ -483,8 +484,8 @@ const currentChartTypeMeta = computed(() => {
 const currentChartTypeHelp = computed(() => {
   return CHART_TYPE_HELP_TEXT[editState.chartType] ?? CHART_TYPE_HELP_TEXT.table
 })
-const DASHBOARD_MEMBER_COLUMN = '执行对象'
-const DASHBOARD_MEMBER_ID_COLUMN = '__member_datasource_id'
+const DASHBOARD_MEMBER_COLUMN = QUERY_MEMBER_NAME_COLUMN
+const DASHBOARD_MEMBER_ID_COLUMN = QUERY_MEMBER_ID_COLUMN
 
 const parseNumericValue = (value: unknown): number | null => {
   if (typeof value === 'number') {
@@ -506,9 +507,11 @@ const parseNumericValue = (value: unknown): number | null => {
 }
 
 // 可用列（分类列 & 数值列）
+const displayResult = computed(() => flattenQueryResultForDisplay(props.data?.result, { includeMemberColumn: true }))
+
 const availableColumns = computed(() => {
-  const result = props.data?.result
-  if (!result?.columns || !result?.data?.length) {
+  const result = displayResult.value
+  if (!result.columns.length || !result.data.length) {
     return { all: [] as string[], categoryColumns: [] as string[], numericColumns: [] as string[] }
   }
   const columns = result.columns.filter(col => col !== DASHBOARD_MEMBER_ID_COLUMN)
@@ -661,8 +664,8 @@ const buildSeriesByField = (
 
 // 生成图表配置
 const chartOption = computed(() => {
-  const result = props.data?.result
-  if (!result?.data?.length) return null
+  const result = displayResult.value
+  if (!result.data.length) return null
 
   const { xField, yFields, seriesField } = inferredFields.value
   if (!xField || yFields.length === 0) return null
@@ -1131,8 +1134,8 @@ const formatRawNumber = (num: number): { value: string } => {
 
 // KPI 原始值
 const kpiRawValue = computed(() => {
-  const result = props.data?.result
-  if (!result?.data?.length) return null
+  const result = displayResult.value
+  if (!result.data.length) return null
   const firstRow = result.data[0]
   const { yFields } = inferredFields.value
   const primaryYField = yFields[0]
@@ -1155,8 +1158,8 @@ const kpiFullValue = computed(() => {
 })
 
 const kpiItems = computed(() => {
-  const result = props.data?.result
-  if (!result?.data?.length || !result.columns?.includes(DASHBOARD_MEMBER_COLUMN)) return []
+  const result = displayResult.value
+  if (!result.data.length || !result.columns.includes(DASHBOARD_MEMBER_COLUMN)) return []
   const { yFields } = inferredFields.value
   const primaryYField = yFields[0]
   if (!primaryYField) return []
@@ -1258,7 +1261,7 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
       </div>
 
       <!-- 无数据 -->
-      <div v-else-if="!data?.result?.data?.length" class="flex-1 flex flex-col items-center justify-center gap-2 text-[13px] [&>i]:text-2xl [&>i]:opacity-50" :style="{ color: theme.textMuted }">
+      <div v-else-if="!displayResult.data.length" class="flex-1 flex flex-col items-center justify-center gap-2 text-[13px] [&>i]:text-2xl [&>i]:opacity-50" :style="{ color: theme.textMuted }">
         <i class="fa-solid fa-inbox"></i>
         <span>暂无数据</span>
       </div>
@@ -1310,18 +1313,18 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
           <table class="w-full border-collapse border-spacing-0 text-[13px]" :style="{ color: theme.textColor }">
             <thead class="sticky top-0 z-[1]" :style="{ background: theme.tableHeaderBg, borderColor: theme.tableBorder }">
               <tr>
-                <th v-for="col in data.result.columns" :key="col" class="px-4 py-3 text-left font-semibold whitespace-nowrap" :style="{ borderBottom: `1px solid ${theme.tableBorder}` }">{{ col }}</th>
+                <th v-for="col in displayResult.columns" :key="col" class="px-4 py-3 text-left font-semibold whitespace-nowrap" :style="{ borderBottom: `1px solid ${theme.tableBorder}` }">{{ col }}</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(row, idx) in data.result.data.slice(0, 10)"
+                v-for="(row, idx) in displayResult.data.slice(0, 10)"
                 :key="idx"
                 class="transition-colors duration-200 hover:bg-[var(--row-hover)]"
                 :style="{ '--row-hover': theme.tableRowHover }"
               >
                 <td
-                  v-for="col in data.result.columns"
+                  v-for="col in displayResult.columns"
                   :key="col"
                   class="px-4 py-2.5 text-left"
                   :class="{ 'font-semibold tabular-nums': typeof row[col] === 'number' }"

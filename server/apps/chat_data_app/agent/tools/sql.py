@@ -18,8 +18,15 @@ from ...schema import SemanticQueryInput
 from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
 from ...services.semantic_tools import load_runtime_semantic_config
-from ...services import query_runtime
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
+from ...services.query_result import query_result_succeeded
+from ...services.semantic_query_service import (
+    build_member_query_result,
+    build_multi_member_query_result,
+    compile_semantic_query_dsl,
+    execute_semantic_query_sql,
+    normalize_member_datasource_ids,
+)
 from ...services.semantic_sql_generator import SemanticSQLGenerator
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
@@ -329,15 +336,11 @@ async def semantic_query_tool(
     query_mode = "nl2sql" if has_sql else "dsl2sql"
     confidence = 0.6 if has_sql else 0.9
     if has_dsl:
-        compile_result = SemanticSQLGenerator(config).generate_sql(
-            metrics=dsl.get("metrics") or [],
-            dimensions=dsl.get("dimensions") or [],
-            filters=dsl.get("filters") or [],
-            having=dsl.get("having") or [],
-            order_by=dsl.get("order_by") or [],
-            limit=dsl.get("limit"),
-            offset=dsl.get("offset"),
+        compile_result = compile_semantic_query_dsl(
+            config,
+            dsl,
             user_query=query_text or None,
+            generator_cls=SemanticSQLGenerator,
         )
         if not compile_result.get("success"):
             return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
@@ -388,14 +391,13 @@ async def semantic_query_tool(
     query_result["sql"] = query_result.get("sql") or sql
     query_result["query_mode"] = query_mode
     query_result["confidence"] = confidence
-    if query_result["success"]:
+    if query_result_succeeded(query_result):
         result_json = json.dumps(query_result, ensure_ascii=False)
         if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
             artifact_id = save_query_result(query_result, conversation_id=conversation_id)
             result_summary = {
-                "success": True,
+                "status": query_result.get("status") or "succeeded",
                 "artifact_id": artifact_id,
-                "columns": query_result.get("columns", []),
                 "total_count": query_result.get("total_count", 0),
                 "execution_time_ms": query_result.get("execution_time_ms"),
                 "result_size_chars": len(result_json),
@@ -420,48 +422,17 @@ async def semantic_query_tool(
 
 def _normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:
     """标准化成员数据源ID列表。"""
-    normalized_ids: list[str] = []
-    for item in member_datasource_ids or []:
-        member_id = str(item or "").strip()
-        if member_id and member_id not in normalized_ids:
-            normalized_ids.append(member_id)
-    return normalized_ids
+    return normalize_member_datasource_ids(member_datasource_ids)
 
 
 def _build_member_query_result(base_result: dict, sql: str, member_datasource_id: str | None = None, member_name: str | None = None) -> dict:
     """构造成员执行结果。"""
-    return {
-        "success": bool(base_result.get("success")),
-        "sql": sql,
-        "columns": base_result.get("columns", []),
-        "data": base_result.get("data", []),
-        "total_count": base_result.get("total_count", 0),
-        "execution_time_ms": base_result.get("execution_time_ms"),
-        "error": base_result.get("error"),
-        "member_datasource_id": member_datasource_id,
-        "member_name": member_name,
-    }
+    return build_member_query_result(base_result, sql, member_datasource_id, member_name)
 
 
 def _build_multi_member_query_result(sql: str, member_results: list[dict]) -> dict:
     """构造多成员查询结果。"""
-    primary_result = next((item for item in member_results if item.get("success")), None)
-    if primary_result is None:
-        primary_result = member_results[0] if member_results else {}
-    has_success = any(item.get("success") for item in member_results)
-    has_running = any(str(item.get("status") or "").strip().lower() in {"pending", "running"} for item in member_results)
-    return {
-        "success": has_success and not has_running,
-        "sql": sql,
-        "columns": primary_result.get("columns", []),
-        "data": primary_result.get("data", []),
-        "total_count": primary_result.get("total_count", 0),
-        "execution_time_ms": primary_result.get("execution_time_ms"),
-        "error": "部分执行对象仍在查询中" if has_running else (None if has_success else (primary_result.get("error") or "查询失败")),
-        "member_datasource_id": primary_result.get("member_datasource_id"),
-        "member_name": primary_result.get("member_name"),
-        "results": member_results,
-    }
+    return build_multi_member_query_result(sql, member_results)
 
 
 async def _execute_sql_real(
@@ -485,7 +456,7 @@ async def _execute_sql_real(
     Returns:
         查询结果字典
     """
-    return await query_runtime.execute_agent_sql(
+    return await execute_semantic_query_sql(
         sql=sql,
         datasource_id=datasource_id,
         member_datasource_ids=member_datasource_ids,
@@ -741,7 +712,7 @@ async def execute_sql_direct(sql: str, datasource_id: str = None) -> dict:
         datasource_id: 数据源ID
 
     Returns:
-        查询结果 {"success": bool, "columns": [...], "data": [...], "total_count": int}
+        查询结果 {"status": str, "results": [...]}
     """
     logger.info(f"直接执行 SQL: {sql[:100]}... (datasource_id={datasource_id}, mode=真实)")
     return await _execute_sql_real(sql, datasource_id)

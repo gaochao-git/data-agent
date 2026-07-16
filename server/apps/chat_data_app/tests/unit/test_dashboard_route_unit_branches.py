@@ -272,24 +272,24 @@ async def test_dashboard_panel_execution_helpers(dashboard_context, monkeypatch)
 
     monkeypatch.setattr(dashboard_runtime, "execute_sql_direct_runner", fake_execute_sql_direct)
     local_result = await dashboard_runtime.execute_dashboard_panel_sql(local_panel)
-    assert local_result["success"] is True
-    assert local_result["member_datasource_id"] is None
+    assert local_result["status"] == "succeeded"
+    assert local_result["results"][0]["member_datasource_id"] is None
 
     remote_result = await dashboard_runtime.execute_dashboard_panel_sql(remote_panel, member_datasource_id="member_b", user_id="u1", operator_name="用户一")
-    assert remote_result["member_datasource_id"] == "member_b"
+    assert remote_result["results"][0]["member_datasource_id"] == "member_b"
     assert runtime.executions[-1]["username"] == "用户一"
 
     explicit_target_result = await dashboard_runtime.execute_dashboard_panel_sql_with_target(remote_panel, execution_target={"member_datasource_id": "m2", "member_name": "M2", "source_type": "hive"})
-    assert explicit_target_result["member_name"] == "M2"
+    assert explicit_target_result["results"][0]["member_name"] == "M2"
 
     payload = await dashboard_runtime.build_dashboard_panel_execution_result(remote_panel, execution_target={"member_datasource_id": "m3", "source_type": "mysql"})
     assert payload["panel_id"] == "panel_a"
-    assert payload["result"]["success"] is True
+    assert payload["result"]["status"] == "succeeded"
     dashboard_runtime.raise_if_dashboard_panel_execution_failed(payload)
     with pytest.raises(RuntimeError, match="boom"):
-        dashboard_runtime.raise_if_dashboard_panel_execution_failed({"panel_id": "p", "result": {"success": False, "error": "boom"}})
+        dashboard_runtime.raise_if_dashboard_panel_execution_failed({"panel_id": "p", "result": {"status": "failed", "error": "boom"}})
     with pytest.raises(RuntimeError, match="面板执行失败"):
-        dashboard_runtime.raise_if_dashboard_panel_execution_failed({"panel_id": "p", "result": {"success": False}})
+        dashboard_runtime.raise_if_dashboard_panel_execution_failed({"panel_id": "p", "result": {"status": "failed"}})
 
 
 @pytest.mark.asyncio
@@ -528,8 +528,15 @@ async def test_dashboard_run_panel_and_batch_failure_statuses(dashboard_context,
             "chart_type": panel["chart_type"],
             "chart_config": {},
             "result": {
-                "success": True,
-                "member_datasource_id": kwargs.get("member_datasource_id") or "",
+                "status": "succeeded",
+                "results": [{
+                    "member_datasource_id": kwargs.get("member_datasource_id") or "",
+                    "member_name": "",
+                    "status": "succeeded",
+                    "columns": [],
+                    "data": [],
+                    "total_count": 0,
+                }],
             },
         }
 
@@ -539,7 +546,7 @@ async def test_dashboard_run_panel_and_batch_failure_statuses(dashboard_context,
         {"request_payload": json.dumps({"dashboard_id": "dash_a", "panel_id": "panel_a", "user_id": "u1"})},
     )
     assert runtime.updates[-1]["status"] == "succeeded"
-    assert runtime.updates[-1]["result_payload"]["result"]["member_datasource_id"] == ""
+    assert runtime.updates[-1]["result_payload"]["result"]["results"][0]["member_datasource_id"] == ""
 
     service.dashboard["panels"][0]["member_datasource_id"] = "member_b"
     await dashboard_runtime.run_dashboard_panel_task(
@@ -547,12 +554,12 @@ async def test_dashboard_run_panel_and_batch_failure_statuses(dashboard_context,
         {"request_payload": json.dumps({"dashboard_id": "dash_a", "panel_id": "panel_a", "user_id": "u1"})},
     )
     assert runtime.updates[-1]["status"] == "succeeded"
-    assert runtime.updates[-1]["result_payload"]["result"]["member_datasource_id"] == "member_b"
+    assert runtime.updates[-1]["result_payload"]["result"]["results"][0]["member_datasource_id"] == "member_b"
     service.dashboard["panels"][0]["member_datasource_id"] = ""
 
     async def failed_result(**kwargs):
         panel = kwargs["panel"]
-        return {"panel_id": panel["id"], "name": panel["name"], "chart_type": panel["chart_type"], "chart_config": {}, "result": {"success": False, "error": "boom"}}
+        return {"panel_id": panel["id"], "name": panel["name"], "chart_type": panel["chart_type"], "chart_config": {}, "result": {"status": "failed", "error": "boom", "results": []}}
 
     monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", failed_result)
     await dashboard_runtime.run_dashboard_panel_task(

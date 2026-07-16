@@ -9,6 +9,8 @@ from langchain_core.tools import tool
 from utils.logger import get_logger
 from ...services.dashboard_spec_service import get_dashboard_spec_semantic_config, remove_mixed_raw_metrics_for_aggregate_dsl
 from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
+from ...services.query_result import query_result_status
+from ...services.semantic_query_service import compile_semantic_query_dsl
 from ...services.semantic_sql_generator import SemanticSQLGenerator
 from .common import json_dumps, normalize_json_like_payload
 from .sql import _execute_sql_real, _normalize_member_datasource_ids
@@ -83,15 +85,11 @@ def create_exec_sql_tool(
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl_payload or {}, semantic_config)
             if payload.get("compare"):
                 return "semantic_query_tool 执行失败: DSL2SQL 不支持 compare，请拆成基础 DSL 查询"
-            compile_result = SemanticSQLGenerator(semantic_config).generate_sql(
-                metrics=payload.get("metrics") or [],
-                dimensions=payload.get("dimensions") or [],
-                filters=payload.get("filters") or [],
-                having=payload.get("having") or [],
-                order_by=payload.get("order_by") or [],
-                limit=payload.get("limit"),
-                offset=payload.get("offset"),
+            compile_result = compile_semantic_query_dsl(
+                semantic_config,
+                payload,
                 user_query=user_query or None,
+                generator_cls=SemanticSQLGenerator,
             )
             if not compile_result.get("success"):
                 return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
@@ -116,10 +114,8 @@ def create_exec_sql_tool(
                     mode="overwrite",
                 )
                 result_summary = {
-                    "success": bool(query_result.get("success")),
+                    "status": query_result_status(query_result),
                     "result_path": write_result.get("file_path") or save_path,
-                    "columns": query_result.get("columns", []),
-                    "row_count": len(query_result.get("data", []) or []),
                     "total_count": query_result.get("total_count"),
                     "execution_time_ms": query_result.get("execution_time_ms"),
                     "error": query_result.get("error"),

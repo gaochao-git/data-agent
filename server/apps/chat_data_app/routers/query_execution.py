@@ -27,6 +27,7 @@ from ..schema import (
 )
 from ..services import query_runtime
 from ..services.datasource_manager import get_datasource_manager
+from ..services.query_result import query_result_succeeded
 from ..services.query_task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,
@@ -255,7 +256,7 @@ async def execute_sql_direct(
             query_type=body.query_type or "sql",
             operator_name=current_user.username,
         )
-        if not result_data.get("success"):
+        if not query_result_succeeded(result_data):
             return business_response(
                 data=result_data,
                 msg=result_data.get("error") or "SQL 执行失败，请稍后重试或联系管理员",

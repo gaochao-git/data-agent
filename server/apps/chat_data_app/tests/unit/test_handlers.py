@@ -498,8 +498,7 @@ def test_agent_sql_member_result_helpers():
 
     assert success["member_name"] == "杭州库"
     assert failed["error"] == "表不存在"
-    assert merged["success"] is True
-    assert merged["member_datasource_id"] == "m1"
+    assert merged["status"] == "succeeded"
     assert merged["results"] == [failed, success]
 
 

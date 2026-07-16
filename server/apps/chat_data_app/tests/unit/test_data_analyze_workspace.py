@@ -875,10 +875,16 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         assert sql == "select month, sales from t"
         assert kwargs["query_text"] == "统计销售额"
         return {
-            "success": True,
+            "status": "succeeded",
             "sql": sql,
-            "columns": ["month", "sales"],
-            "data": [{"month": "2026-01", "sales": 120}],
+            "results": [{
+                "status": "succeeded",
+                "member_datasource_id": "m1",
+                "member_name": "机构1",
+                "columns": ["month", "sales"],
+                "data": [{"month": "2026-01", "sales": 120}],
+                "total_count": 1,
+            }],
             "total_count": 1,
             "execution_time_ms": 12,
         }
@@ -909,10 +915,10 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     })
 
     payload = json.loads(result)
-    assert payload["success"] is True
+    assert payload["status"] == "succeeded"
     assert payload["result_path"] == "/mnt/user-data/workspace/current.json"
-    assert payload["columns"] == ["month", "sales"]
-    assert payload["row_count"] == 1
+    assert "columns" not in payload
+    assert "row_count" not in payload
     assert payload["sql"] == "select month, sales from t"
     assert payload["warnings"] == ["warn_a"]
     assert "dsl" not in payload
@@ -922,7 +928,7 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     assert writes[0]["file_path"] == "workspace/current.json"
     assert writes[0]["mode"] == "overwrite"
     saved = json.loads(writes[0]["content"])
-    assert saved["data"][0]["sales"] == 120
+    assert saved["results"][0]["data"][0]["sales"] == 120
 
 
 @pytest.mark.asyncio
@@ -944,10 +950,16 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
         assert sql == "select count(*) cnt from t"
         return {
-            "success": True,
+            "status": "succeeded",
             "sql": sql,
-            "columns": ["cnt"],
-            "data": [{"cnt": 3}],
+            "results": [{
+                "status": "succeeded",
+                "member_datasource_id": "m1",
+                "member_name": "机构1",
+                "columns": ["cnt"],
+                "data": [{"cnt": 3}],
+                "total_count": 1,
+            }],
             "total_count": 1,
         }
 
@@ -970,7 +982,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
 
     payload = json.loads(result)
     assert "result_path" not in payload
-    assert payload["data"] == [{"cnt": 3}]
+    assert payload["results"][0]["data"] == [{"cnt": 3}]
     assert payload["sql"] == "select count(*) cnt from t"
     assert "dsl" not in payload
 
@@ -982,7 +994,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
     })
     blank_save_payload = json.loads(blank_save_result)
     assert "result_path" not in blank_save_payload
-    assert blank_save_payload["data"] == [{"cnt": 3}]
+    assert blank_save_payload["results"][0]["data"] == [{"cnt": 3}]
 
 
 @pytest.mark.asyncio

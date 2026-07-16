@@ -19,7 +19,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from utils.error_codes import ErrorCode
 from apps.chat_data_app import routes
 from apps.chat_data_app.routers import dashboard as dashboard_routes
-from apps.chat_data_app.services import dashboard_runtime
 from apps.chat_data_app.routers import dependencies as dependencies_routes
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes
 from apps.chat_data_app.routers import datasource_helpers as datasource_helper_routes
@@ -27,8 +26,7 @@ from apps.chat_data_app.routers import datasource_public as datasource_public_ro
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
-from apps.chat_data_app.services import dashboard_spec_service
-from apps.chat_data_app.services import query_providers, query_runtime
+from apps.chat_data_app.services import dashboard_runtime, dashboard_spec_service, query_cache, query_providers, query_runtime
 from apps.chat_data_app.services.query_history_service import QueryHistoryService
 from apps.chat_data_app.routers.datasource_admin import (
     clear_default_datasource,
@@ -1393,7 +1391,7 @@ def test_execute_sql_direct_returns_selected_member_results(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "success"
-    assert data["data"]["member_datasource_id"] == "phy_b"
+    assert data["data"]["results"][0]["member_datasource_id"] == "phy_b"
     assert len(data["data"]["results"]) == 1
     assert data["data"]["results"][0]["member_name"] == "成员B"
 
@@ -1418,7 +1416,7 @@ def test_execute_sql_direct_returns_multi_member_results(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "success"
-    assert data["data"]["member_datasource_id"] == "phy_a"
+    assert data["data"]["results"][0]["member_datasource_id"] == "phy_a"
     assert len(data["data"]["results"]) == 2
     assert data["data"]["results"][0]["member_name"] == "成员A"
     assert data["data"]["results"][1]["member_name"] == "成员B"
@@ -1443,7 +1441,7 @@ def test_execute_sql_direct_does_not_persist_http_result_payload(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "success"
-    assert data["data"]["member_datasource_id"] == "phy_http"
+    assert data["data"]["results"][0]["member_datasource_id"] == "phy_http"
     assert updates[-1][1]["status"] == "succeeded"
     assert updates[-1][1]["result_payload"] is None
 
@@ -1542,7 +1540,8 @@ def test_get_query_task_returns_task_status(monkeypatch):
     assert data["data"]["task_id"] == "task_001"
     assert data["data"]["status"] == "succeeded"
     assert data["data"]["remote_tasks"] == [{"member_datasource_id": "phy_a", "member_name": "成员A", "remote_task_id": "remote_001", "source_type": "hive"}]
-    assert data["data"]["result"] is None
+    assert "result" not in data["data"]
+    assert data["data"]["executions"] == []
     assert data["data"]["results"] == [{
         "member_datasource_id": "phy_a",
         "member_name": "成员A",
@@ -1611,7 +1610,7 @@ def test_live_remote_sql_result_keeps_local_cancelled_status(monkeypatch):
 
     assert result["status"] == "cancelled"
     assert result["progress_text"] == "已停止"
-    assert result["result_payload"]["success"] is False
+    assert result["result_payload"]["status"] == "cancelled"
     assert result["result_payload"]["results"][0]["error"] == "已人工取消"
 
 
@@ -1997,7 +1996,7 @@ def test_execute_sql_direct_keeps_failed_member_result(monkeypatch):
     data = _payload(resp)
     assert data["status"] == "success"
     assert len(data["data"]["results"]) == 2
-    assert data["data"]["results"][1]["success"] is False
+    assert data["data"]["results"][1]["status"] == "failed"
     assert "执行失败" in data["data"]["results"][1]["error"]
 
 
@@ -2006,7 +2005,7 @@ def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
 
@@ -2025,7 +2024,7 @@ def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
     def raise_get_executor(_datasource):
         raise AssertionError("cache hit should not execute datasource")
 
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", fake_get_cache)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
 
     resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -2034,8 +2033,8 @@ def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "success"
-    assert data["data"]["cache_hit"] is True
-    assert data["data"]["columns"] == ["cached_col"]
+    assert data["data"]["results"][0]["cache_hit"] is True
+    assert data["data"]["results"][0]["columns"] == ["cached_col"]
 
 
 def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
@@ -2077,10 +2076,10 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
         yield session
 
     perf_values = iter([100.0, 100.007])
-    monkeypatch.setattr(query_runtime, "get_session", fake_session)
-    monkeypatch.setattr(query_runtime.time, "perf_counter", lambda: next(perf_values))
+    monkeypatch.setattr(query_cache, "get_session", fake_session)
+    monkeypatch.setattr(query_cache.time, "perf_counter", lambda: next(perf_values))
 
-    result = asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "cache_a"}))
+    result = asyncio.run(query_cache.get_sql_result_cache({"cache_key": "cache_a"}))
 
     assert result["cache_hit"] is True
     assert result["execution_time_ms"] == 7
@@ -2094,7 +2093,7 @@ def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
@@ -2105,8 +2104,8 @@ def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
     async def raise_save_cache(_cache_identity, _result, operator_id=None):
         raise AssertionError("skip_query_cache should not write cache")
 
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", raise_get_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", raise_save_cache)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", raise_get_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", raise_save_cache)
 
     resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -2116,8 +2115,8 @@ def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "success"
-    assert data["data"]["cache_hit"] is False
-    assert data["data"]["columns"] == ["member_name", "sql_text"]
+    assert data["data"]["results"][0]["cache_hit"] is False
+    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
 
 
 def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypatch):
@@ -2125,7 +2124,7 @@ def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypat
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
@@ -2133,8 +2132,8 @@ def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypat
     async def raise_get_cache(_cache_identity):
         raise RuntimeError("cache db down")
 
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", raise_get_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", lambda *_args, **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", raise_get_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", lambda *_args, **_kwargs: asyncio.sleep(0))
 
     resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -2144,8 +2143,8 @@ def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypat
     data = _payload(resp)
 
     assert data["status"] == "success"
-    assert data["data"]["cache_hit"] is False
-    assert data["data"]["columns"] == ["member_name", "sql_text"]
+    assert data["data"]["results"][0]["cache_hit"] is False
+    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
 
 
 def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
@@ -2153,7 +2152,7 @@ def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
     _mock_authenticated_user(monkeypatch)
     _mock_query_tracking(monkeypatch)
@@ -2164,8 +2163,8 @@ def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
     async def raise_save_cache(_cache_identity, _result, operator_id=None):
         raise RuntimeError("duplicate cache key")
 
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", fake_get_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", raise_save_cache)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", raise_save_cache)
 
     resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
         sql="select 1",
@@ -2175,8 +2174,8 @@ def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
     data = _payload(resp)
 
     assert data["status"] == "success"
-    assert data["data"]["cache_hit"] is False
-    assert data["data"]["columns"] == ["member_name", "sql_text"]
+    assert data["data"]["results"][0]["cache_hit"] is False
+    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
 
 
 def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
@@ -2186,17 +2185,17 @@ def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
         "query_executor_type": "direct",
         "source_type": "mysql",
     }
-    same_sql_a = query_runtime.build_sql_result_cache_identity(target, "select *   from orders LIMIT 10", datasource_id="ds_a")
-    same_sql_b = query_runtime.build_sql_result_cache_identity(
+    same_sql_a = query_cache.build_sql_result_cache_identity(target, "select *   from orders LIMIT 10", datasource_id="ds_a")
+    same_sql_b = query_cache.build_sql_result_cache_identity(
         {**target, "query_executor_type": "http", "source_type": "hive"},
         "select *   from orders LIMIT 10",
         datasource_id="ds_a",
     )
-    whitespace_changed = query_runtime.build_sql_result_cache_identity(target, "select * from orders LIMIT 10", datasource_id="ds_a")
-    string_literal_changed = query_runtime.build_sql_result_cache_identity(target, "select * from orders where name = 'A B' LIMIT 10", datasource_id="ds_a")
-    string_literal_with_double_space = query_runtime.build_sql_result_cache_identity(target, "select * from orders where name = 'A  B' LIMIT 10", datasource_id="ds_a")
-    other_limit = query_runtime.build_sql_result_cache_identity(target, "select * from orders LIMIT 100", datasource_id="ds_a")
-    other_member = query_runtime.build_sql_result_cache_identity(target, "select * from orders LIMIT 100", datasource_id="ds_b")
+    whitespace_changed = query_cache.build_sql_result_cache_identity(target, "select * from orders LIMIT 10", datasource_id="ds_a")
+    string_literal_changed = query_cache.build_sql_result_cache_identity(target, "select * from orders where name = 'A B' LIMIT 10", datasource_id="ds_a")
+    string_literal_with_double_space = query_cache.build_sql_result_cache_identity(target, "select * from orders where name = 'A  B' LIMIT 10", datasource_id="ds_a")
+    other_limit = query_cache.build_sql_result_cache_identity(target, "select * from orders LIMIT 100", datasource_id="ds_a")
+    other_member = query_cache.build_sql_result_cache_identity(target, "select * from orders LIMIT 100", datasource_id="ds_b")
 
     assert same_sql_a["cache_key"] == same_sql_b["cache_key"]
     assert same_sql_a["cache_key"] != whitespace_changed["cache_key"]
@@ -2224,7 +2223,7 @@ def test_execute_sql_direct_returns_error_when_all_members_fail(monkeypatch):
     )))
     data = _payload(resp)
     assert data["status"] == "error"
-    assert data["data"]["success"] is False
+    assert data["data"]["status"] == "failed"
     assert data["data"]["error"] == "成员失败 执行失败"
 
 
@@ -2333,7 +2332,7 @@ def test_execute_panel_uses_selected_member_datasource(monkeypatch):
     data = _payload(resp)
     assert data["status"] == "success"
     assert data["data"]["member_datasource_id"] == "phy_b"
-    assert data["data"]["result"]["member_name"] == "成员B"
+    assert data["data"]["result"]["results"][0]["member_name"] == "成员B"
 
 
 def test_add_panel_persists_member_datasource_id(monkeypatch):
@@ -2384,7 +2383,7 @@ def test_execute_panel_uses_saved_member_datasource_when_not_overridden(monkeypa
     data = _payload(resp)
     assert data["status"] == "success"
     assert data["data"]["member_datasource_id"] == "phy_b"
-    assert data["data"]["result"]["member_name"] == "成员B"
+    assert data["data"]["result"]["results"][0]["member_name"] == "成员B"
 
 
 def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
@@ -2538,7 +2537,7 @@ def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
     result = json.loads(payload[len("data: "):].strip())
     assert result["panel_id"] == "panel_a"
     assert result["member_datasource_id"] == "phy_b"
-    assert result["result"]["member_name"] == "成员B"
+    assert result["result"]["results"][0]["member_name"] == "成员B"
 
 
 def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypatch):
@@ -3171,7 +3170,7 @@ def test_remote_history_payload_handles_missing_id_failure_and_task_operator(mon
         "user_id": "user_a",
         "username": "任务操作人",
     }
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
     assert failed["remote_result_status"] == "unavailable"
 
 
@@ -3711,14 +3710,14 @@ def test_execute_sql_direct_value_error_and_runtime_error(monkeypatch):
 def test_query_runtime_helper_functions(monkeypatch):
     calls = []
 
-    monkeypatch.setattr(query_runtime, "normalize_sql_cache_text", lambda sql: calls.append(("normalize", sql)) or "select 1")
-    assert query_runtime.normalize_sql_cache_text(" SELECT 1 ") == "select 1"
+    assert query_cache.normalize_sql_cache_text(" SELECT 1 ") == "SELECT 1"
 
-    monkeypatch.setattr(query_runtime, "build_sql_result_cache_identity", lambda target, sql, datasource_id=None: calls.append(("identity", target, sql, datasource_id)) or {"cache_key": "k"})
-    assert query_runtime.build_sql_result_cache_identity({"id": "m1"}, "select 1", datasource_id="ds") == {"cache_key": "k"}
+    identity = query_cache.build_sql_result_cache_identity({"id": "m1"}, "select 1", datasource_id="ds")
+    assert identity["datasource_id"] == "ds"
+    assert identity["cache_key"]
 
-    monkeypatch.setattr(query_runtime, "is_sql_result_cache_enabled", lambda skip: calls.append(("enabled", skip)) or (not skip))
-    assert query_runtime.is_sql_result_cache_enabled(False) is True
+    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", lambda skip: calls.append(("enabled", skip)) or (not skip))
+    assert query_cache.is_sql_result_cache_enabled(False) is True
 
     monkeypatch.setattr(query_runtime, "get_execution_id_by_member", lambda execution_map, target: calls.append(("execution_id", execution_map, target)) or "exec_1")
     assert query_runtime.get_execution_id_by_member({"m1": "exec_1"}, {"member_datasource_id": "m1"}) == "exec_1"
@@ -3768,8 +3767,8 @@ def test_query_runtime_helper_functions(monkeypatch):
         return {"task_id": "task_1"}
 
     monkeypatch.setattr(query_runtime, "execute_sql_for_member", fake_execute_sql_for_member)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", fake_get_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", fake_save_cache)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", fake_save_cache)
     monkeypatch.setattr(query_runtime, "create_query_executions_for_task", fake_create_executions)
     monkeypatch.setattr(query_runtime, "update_query_execution", fake_update_execution)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", fake_update_execution_from_result)
@@ -3781,8 +3780,8 @@ def test_query_runtime_helper_functions(monkeypatch):
 
     sql_request = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
     assert asyncio.run(query_providers.query_task_service.execute_sql_for_member({"member_datasource_id": "m1"}, "select 1", 10, 5)) == {"success": True}
-    assert asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "k"})) == {"hit": True}
-    asyncio.run(query_runtime.save_sql_result_cache({"cache_key": "k"}, {"success": True}, operator_id="u1", operator_name="用户"))
+    assert asyncio.run(query_cache.get_sql_result_cache({"cache_key": "k"})) == {"hit": True}
+    asyncio.run(query_cache.save_sql_result_cache({"cache_key": "k"}, {"success": True}, operator_id="u1", operator_name="用户"))
     assert asyncio.run(query_runtime.create_query_executions_for_task("task_1", sql_request, operator_name="用户")) == {"m1": "exec_1"}
     asyncio.run(query_providers.query_task_service.update_query_execution("exec_1", sql_status="succeeded"))
     asyncio.run(query_runtime.update_query_execution_from_result("exec_1", {"success": True}, store_result_payload=False))
@@ -4668,10 +4667,10 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
         finished_time=finished,
     ), task, fetch_remote_result=fake_fetch))
 
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
     assert success["total_count"] == 1
     assert success["execution_time_ms"] == 5000
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
     assert failed["execution_time_ms"] == 11
     assert failed["remote_result_status"] == "failed"
     assert "历史结果已不可用" in failed["error"]

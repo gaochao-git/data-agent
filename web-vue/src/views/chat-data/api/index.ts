@@ -10,7 +10,6 @@ import type {
   ApiResponse,
   DataSource,
   ConversationItem,
-  MemberQueryResult,
   SemanticConfigItem,
   ChatDataModelOption,
   SkillInfo,
@@ -19,6 +18,8 @@ import type {
   DashboardSpecPayload,
 } from '../types'
 import type { Dashboard } from './dashboard'
+
+export * from './query'
 
 // 看板 API 统一复用 ./dashboard 实现，避免重复维护
 export {
@@ -1064,209 +1065,10 @@ export function learnSemanticConfigFromHistory(
   })
 }
 
-// ============ 查询 API ============
-
-/** SQL 执行结果类型 */
-export interface SqlExecuteResult {
-  success?: boolean
-  error?: string | null
-  sql?: string
-  columns: string[]
-  data: Record<string, unknown>[]
-  total_count: number
-  execution_time_ms?: number
-  member_datasource_id?: string
-  member_name?: string
-  results?: MemberQueryResult[]
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-}
-
 export function getConversationArtifact<T = unknown>(artifactId: string): Promise<ApiResponse<T>> {
   return request({
     url: `/agents/api/chatdata/conversations/artifacts/${artifactId}`,
     method: 'get',
-  })
-}
-
-export interface QueryTaskCreateResult {
-  task_id: string
-  task_type: 'sql'
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'partial_success'
-  poll_interval_ms: number
-}
-
-export interface QueryTaskStatusResult {
-  task_id: string
-  task_type: 'sql'
-  datasource_id: string
-  query_type: string
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'partial_success'
-  progress_text?: string
-  executions?: SqlHistoryItem[] | null
-  results?: MemberQueryResult[] | null
-  error_message?: string | null
-  started_time?: string | null
-  finished_time?: string | null
-  create_time?: string | null
-  update_time?: string | null
-}
-
-export interface CancelQueryTaskResult {
-  task_id: string
-  status: string
-  executions?: Array<{
-    execution_id?: string
-    status?: string
-    success?: boolean
-    message?: string | null
-  }>
-}
-
-export interface CancelRunningQueryHistoryResult {
-  total: number
-  cancelled: number
-  failed: number
-  executions?: Array<{
-    execution_id?: string
-    status?: string
-    success?: boolean
-    message?: string | null
-  }>
-}
-
-export interface QueryHistoryResult {
-  execution_id: string
-  query: string
-  member_datasource_id?: string
-  member_name?: string
-  execution_time_ms?: number | null
-  error_message?: string | null
-  result_payload?: {
-    success?: boolean
-    columns?: string[]
-    data?: Record<string, unknown>[]
-    total_count?: number
-    execution_time_ms?: number | null
-    error?: string | null
-  } | null
-}
-
-/** 执行 SQL 查询 */
-export function executeSql(params: {
-  sql: string
-  datasource_id: string
-  member_datasource_ids?: string[]
-  limit?: number
-  timeout?: number
-  skip_query_cache?: boolean
-}): Promise<ApiResponse<SqlExecuteResult>> {
-  return request({
-    url: `/agents/api/chatdata/execute-sql`,
-    method: 'post',
-    data: {
-      sql: params.sql,
-      datasource_id: params.datasource_id,
-      member_datasource_ids: params.member_datasource_ids || [],
-      ...(params.limit !== undefined ? { limit: params.limit } : {}),
-      timeout: params.timeout,
-      skip_query_cache: params.skip_query_cache ?? false,
-    }
-  })
-}
-
-/** 创建异步 SQL 查询任务 */
-export function createQueryTask(params: {
-  sql: string
-  datasource_id: string
-  member_datasource_ids?: string[]
-  limit?: number
-  timeout?: number
-  query_type?: string
-  builder_config?: Record<string, unknown>
-  semantic_builder_config?: Record<string, unknown>
-  semantic_config_id?: string
-  query_text?: string
-  skip_query_cache?: boolean
-}): Promise<ApiResponse<QueryTaskCreateResult>> {
-  const data: Record<string, unknown> = {
-    task_type: 'sql',
-    sql: params.sql,
-    datasource_id: params.datasource_id,
-    member_datasource_ids: params.member_datasource_ids || [],
-    ...(params.limit !== undefined ? { limit: params.limit } : {}),
-    timeout: params.timeout,
-    query_type: params.query_type ?? 'sql',
-    semantic_config_id: params.semantic_config_id,
-    query_text: params.query_text,
-    skip_query_cache: params.skip_query_cache ?? false,
-  }
-  if (params.builder_config !== undefined) {
-    data.builder_config = params.builder_config
-  }
-  if (params.semantic_builder_config !== undefined) {
-    data.semantic_builder_config = params.semantic_builder_config
-  }
-  return request({
-    url: `/agents/api/chatdata/query-tasks`,
-    method: 'post',
-    data
-  })
-}
-
-/** 查询异步 SQL 任务状态 */
-export function getQueryTask(taskId: string): Promise<ApiResponse<QueryTaskStatusResult>> {
-  return request({
-    url: `/agents/api/chatdata/query-tasks/${taskId}`,
-    method: 'get',
-  })
-}
-
-/** 停止异步 SQL 查询任务 */
-export function cancelQueryTask(taskId: string): Promise<ApiResponse<CancelQueryTaskResult>> {
-  return request({
-    url: `/agents/api/chatdata/query-tasks/${taskId}/cancel`,
-    method: 'post',
-  })
-}
-
-/** 停止当前用户所有执行中的 SQL */
-export function cancelRunningQueryHistory(params?: { datasource_id?: string }): Promise<ApiResponse<CancelRunningQueryHistoryResult>> {
-  return request({
-    url: '/agents/api/chatdata/query-history/cancel-running',
-    method: 'post',
-    params
-  })
-}
-
-/** 停止全局所有执行中的 SQL */
-export function cancelGlobalRunningQueryHistory(params?: { datasource_id?: string }): Promise<ApiResponse<CancelRunningQueryHistoryResult>> {
-  return request({
-    url: '/agents/api/chatdata/admin/query-history/cancel-running',
-    method: 'post',
-    params
-  })
-}
-
-/** 获取单条 SQL 查询历史结果 */
-export function getQueryHistoryResult(executionId: string): Promise<ApiResponse<QueryHistoryResult>> {
-  return request({
-    url: `/agents/api/chatdata/query-history/${executionId}/result`,
-    method: 'get',
-  })
-}
-
-/** 编译语义可视化查询 DSL 为 SQL（不执行） */
-export function compileSemanticBuilderSql(params: {
-  datasource_id: string
-  semantic_config_id: string
-  semantic_builder_config: Record<string, unknown>
-}): Promise<ApiResponse<{ sql: string; builder_config?: Record<string, unknown> }>> {
-  return request({
-    url: `/agents/api/chatdata/compile-semantic-builder-sql`,
-    method: 'post',
-    data: params
   })
 }
 

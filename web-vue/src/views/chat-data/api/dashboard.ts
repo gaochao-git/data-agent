@@ -6,6 +6,7 @@
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
 import type { ChartType } from '../chartTypes'
+import type { MemberQueryResult } from '../types'
 
 // ============ 类型定义 ============
 
@@ -62,10 +63,12 @@ export interface PanelData {
   member_datasource_id?: string
   member_name?: string
   result: {
-    success: boolean
-    columns: string[]
-    data: Record<string, unknown>[]
+    status?: string | null
+    sql?: string
     total_count: number
+    execution_time_ms?: number | null
+    error?: string | null
+    results?: MemberQueryResult[]
   }
 }
 

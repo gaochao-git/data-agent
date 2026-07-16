@@ -13,6 +13,7 @@ from utils.models import ChatDataQueryExecution
 
 from ..schema import QueryTaskCreateRequest
 from . import dashboard_runtime, query_runtime
+from .query_result import build_query_result_payload, query_result_succeeded
 from .query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 
 logger = get_logger(__name__)
@@ -193,7 +194,7 @@ class QueryTaskService:
         response_data = await self.merge_live_remote_sql_result(response_data, executions)
         result_payload = response_data["result_payload"]
         task_type = response_data["task_type"]
-        return {
+        task_response = {
             "task_id": response_data["task_id"],
             "task_type": task_type,
             "datasource_id": response_data["datasource_id"],
@@ -201,15 +202,41 @@ class QueryTaskService:
             "status": response_data["status"],
             "progress_text": response_data["progress_text"],
             "remote_tasks": response_data["remote_tasks"],
-            "executions": executions,
-            "result": result_payload if task_type != "sql" else None,
-            "results": (result_payload or {}).get("results") if task_type == "sql" and isinstance(result_payload, dict) else None,
+            "executions": self.build_query_task_execution_views(executions),
             "error_message": response_data["error_message"],
             "started_time": response_data["started_time"],
             "finished_time": response_data["finished_time"],
             "create_time": response_data["create_time"],
             "update_time": response_data["update_time"],
         }
+        if task_type == "sql":
+            task_response["results"] = (result_payload or {}).get("results") if isinstance(result_payload, dict) else None
+        else:
+            task_response["result"] = result_payload
+        return task_response
+
+    @staticmethod
+    def build_query_task_execution_views(executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """构造任务状态接口使用的轻量执行视图，避免和 results[] 重复返回业务结果。"""
+        view_fields = (
+            "execution_id",
+            "task_id",
+            "datasource_id",
+            "member_datasource_id",
+            "member_name",
+            "executor_type",
+            "sql_status",
+            "remote_task_id",
+            "db_connection_id",
+            "started_time",
+            "finished_time",
+            "operator_name",
+        )
+        views: List[Dict[str, Any]] = []
+        for execution in executions or []:
+            source = execution if isinstance(execution, dict) else execution.to_dict()
+            views.append({field: source.get(field) for field in view_fields if field in source})
+        return views
 
     async def cancel_query_task_for_user(
         self,
@@ -236,7 +263,7 @@ class QueryTaskService:
                 data={
                     "task_id": task_id,
                     "status": task_data.get("status"),
-                    "executions": [item.to_dict() for item in executions],
+                    "executions": self.build_query_task_execution_views(executions),
                 },
                 message="任务已结束",
             )
@@ -311,23 +338,15 @@ class QueryTaskService:
         remote_results = await self.fetch_remote_member_results(response_data, remote_tasks, executions or [])
         merged_results = self.merge_direct_and_remote_results(response_data, remote_tasks, remote_results)
         task_status, progress_text, error_message = self.resolve_live_result_status(remote_results, merged_results)
-        primary_result = next((item for item in merged_results if item.get("success")), merged_results[0] if merged_results else {})
         return {
             "status": task_status,
             "progress_text": progress_text,
             "error_message": error_message,
-            "result_payload": {
-                "success": bool([item for item in merged_results if item.get("success")]) and task_status != "running",
-                "sql": primary_result.get("sql") or ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "columns": primary_result.get("columns") or [],
-                "data": primary_result.get("data") or [],
-                "total_count": int(primary_result.get("total_count") or 0),
-                "execution_time_ms": primary_result.get("execution_time_ms"),
-                "member_datasource_id": primary_result.get("member_datasource_id"),
-                "member_name": primary_result.get("member_name"),
-                "error": error_message,
-                "results": merged_results,
-            },
+            "result_payload": build_query_result_payload(
+                sql=((response_data.get("request_payload") or {}).get("sql") or ""),
+                member_results=merged_results,
+                fallback_error=error_message,
+            ),
         }
 
     async def fetch_remote_member_results(
@@ -433,14 +452,14 @@ class QueryTaskService:
             return "running", "SQL 执行中", None
         if statuses and statuses <= {"cancelled"}:
             return "cancelled", "已停止", self.resolve_live_error_message("cancelled", merged_results)
-        if any(item.get("success") for item in merged_results):
+        if any(query_result_succeeded(item) for item in merged_results):
             return "succeeded", "执行完成", None
         return "failed", "执行失败", self.resolve_live_error_message("failed", merged_results)
 
     @staticmethod
     def resolve_live_error_message(task_status: str, merged_results: List[Dict[str, Any]]) -> Optional[str]:
         """汇总远端实时结果错误信息。"""
-        if task_status == "running" or any(item.get("success") for item in merged_results):
+        if task_status == "running" or any(query_result_succeeded(item) for item in merged_results):
             return None
         error_messages = [
             str(item.get("error") or "").strip()

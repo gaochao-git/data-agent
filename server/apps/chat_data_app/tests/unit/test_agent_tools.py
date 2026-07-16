@@ -328,7 +328,7 @@ def test_execute_sql_real_returns_multi_member_results(monkeypatch):
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["sql"] == "select 1"
     assert len(result["results"]) == 2
     assert result["results"][0]["member_name"] == "杭州库"
@@ -369,10 +369,10 @@ def test_execute_sql_real_uses_first_successful_member_as_primary(monkeypatch):
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
-    assert result["member_name"] == "宁波库"
-    assert result["columns"] == ["member_id", "sql_text"]
-    assert result["data"][0]["member_id"] == "member_b"
+    assert result["status"] == "succeeded"
+    assert result["results"][1]["member_name"] == "宁波库"
+    assert result["results"][1]["columns"] == ["member_id", "sql_text"]
+    assert result["results"][1]["data"][0]["member_id"] == "member_b"
 
 
 async def _fake_execute_sql_on_target_with_delay(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
@@ -403,7 +403,7 @@ def test_execute_sql_real_runs_members_concurrently(monkeypatch):
     ))
     elapsed = time.perf_counter() - start
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert len(result["results"]) == 2
     assert result["results"][0]["member_datasource_id"] == "member_a"
     assert result["results"][1]["member_datasource_id"] == "member_b"
@@ -437,11 +437,11 @@ def test_execute_sql_real_keeps_other_members_when_one_member_raises(monkeypatch
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
-    assert result["member_name"] == "宁波库"
-    assert result["results"][0]["success"] is False
+    assert result["status"] == "succeeded"
+    assert result["results"][1]["member_name"] == "宁波库"
+    assert result["results"][0]["status"] == "failed"
     assert result["results"][0]["error"] == "执行失败: boom"
-    assert result["results"][1]["success"] is True
+    assert result["results"][1]["status"] == "succeeded"
 
 
 def test_execute_sql_real_returns_errors_for_missing_datasource(monkeypatch):
@@ -504,10 +504,10 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
     monkeypatch.setattr(query_runtime, "execute_sql_for_member", fake_runtime_execute_error)
     failed = asyncio.run(agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"]))
 
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
     assert updates[0]["status"] == "running"
     assert updates[1]["status"] == "succeeded"
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
     assert failed["error"] == "不支持的数据源类型"
     assert updates[-1]["status"] == "failed"
 
@@ -1306,15 +1306,11 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
 
 def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch():
     assert agent_tools._build_multi_member_query_result("select 1", []) == {
-        "success": False,
+        "status": "failed",
         "sql": "select 1",
-        "columns": [],
-        "data": [],
         "total_count": 0,
         "execution_time_ms": None,
         "error": "查询失败",
-        "member_datasource_id": None,
-        "member_name": None,
         "results": [],
     }
 

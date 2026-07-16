@@ -9,6 +9,14 @@ export { parseStructuredContent } from './parseContent'
 export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export { getSkillCreatorLabel, getSkillCreatorShortLabel } from './skill'
 export { getToolDisplayName } from './toolDisplay'
+export {
+  QUERY_MEMBER_ID_COLUMN,
+  QUERY_MEMBER_NAME_COLUMN,
+  flattenQueryResultForDisplay,
+  isQueryFailed,
+  isQuerySucceeded,
+  normalizeQueryStatus,
+} from './queryResult'
 export { buildRecentDaysDateTimeRange, formatDateTimeValue, formatLocalDateTime, parseDateTimeValue } from './dateTime'
 export {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,

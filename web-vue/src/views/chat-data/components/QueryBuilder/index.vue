@@ -21,6 +21,7 @@ import IconClose from '../icons/IconClose.vue'
 import IconCaretDown from '../icons/IconCaretDown.vue'
 import type { ChartType } from '../../chartTypes'
 import type { ChatDataSqlChangePayload, SemanticConfigItem, SemanticRelationship, ExecutionTargetOption } from '../../types'
+import { isQuerySucceeded } from '../../utils'
 
 interface ColumnInfo {
   name: string
@@ -166,6 +167,8 @@ interface DataSource {
 }
 
 interface BuilderQueryResultPayload {
+  status?: string | null
+  success?: boolean
   sql?: string
   columns?: string[]
   data?: Record<string, unknown>[]
@@ -644,6 +647,7 @@ const parseResultEnvelope = (result: string | null) => {
   if (!result) return null
   try {
     return JSON.parse(result) as {
+      status?: string | null
       success?: boolean
       error?: string
       sql?: string
@@ -2948,7 +2952,7 @@ const buildAnalyzedResultEnvelope = (
   payload: BuilderQueryResultPayload
 ) => {
   analyzedResultData.value = JSON.stringify({
-    success: true,
+    status: 'succeeded',
     sql: parsed.sql,
     columns: payload.columns,
     data: payload.data,
@@ -2963,7 +2967,7 @@ const ensureResultReadyForAnalysis = () => {
     return null
   }
   const parsed = parseResultEnvelope(resultData.value)
-  if (!parsed?.success || parsed.error) {
+  if (!parsed || !isQuerySucceeded(parsed) || parsed.error) {
     ElMessage.warning('当前原始结果不可分析')
     return null
   }
@@ -3454,9 +3458,9 @@ const executeQuery = async () => {
     if (memberResults.length > 0) {
       resultTabs.value = memberResults.map((result, index) => {
         const memberLabel = result.member_name || result.member_datasource_id || `成员${index + 1}`
-        const payload = result.success
+        const payload = isQuerySucceeded(result)
           ? {
-              success: true,
+              status: 'succeeded',
               sql: result.sql || sqlText,
               columns: result.columns || [],
               data: result.data || [],
@@ -3469,7 +3473,7 @@ const executeQuery = async () => {
               member_name: result.member_name,
             }
           : {
-              success: false,
+              status: result.status || 'failed',
               sql: result.sql || sqlText,
               columns: result.columns || [],
               data: result.data || [],
@@ -3485,7 +3489,7 @@ const executeQuery = async () => {
           executedSql: result.sql || sqlText,
           memberDatasourceId: result.member_datasource_id,
           memberName: result.member_name,
-          status: result.success === false ? 'error' : 'success',
+          status: isQuerySucceeded(result) ? 'success' : 'error',
         }
       })
       activateResultTab(0)
@@ -3493,7 +3497,7 @@ const executeQuery = async () => {
       quickQueryRefresh.value++
     } else {
       rawResultData.value = JSON.stringify({
-        success: false,
+        status: 'failed',
         error: task.error_message || '查询失败'
       })
       resultTabs.value = [{
@@ -3509,7 +3513,7 @@ const executeQuery = async () => {
     const rawMessage = apiMsg || apiDetail || (err instanceof Error ? err.message : '')
     const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
     rawResultData.value = JSON.stringify({
-      success: false,
+      status: 'failed',
       error: message
     })
     resultTabs.value = [{

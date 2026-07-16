@@ -274,7 +274,7 @@ class QueryHistoryService:
     @classmethod
     def _remote_unavailable_payload(cls, execution: ChatDataQueryExecution) -> Dict[str, Any]:
         return {
-            "success": False,
+            "status": "failed",
             "columns": [],
             "data": [],
             "total_count": 0,
@@ -292,7 +292,7 @@ class QueryHistoryService:
     ) -> Dict[str, Any]:
         error_message = str((remote_result or {}).get("error") or "").strip() or "历史结果已不可用或仍在处理中"
         return {
-            "success": False,
+            "status": status or "failed",
             "columns": [],
             "data": [],
             "total_count": 0,
@@ -309,7 +309,7 @@ class QueryHistoryService:
         status: str,
     ) -> Dict[str, Any]:
         return {
-            "success": True,
+            "status": "succeeded",
             "columns": (remote_result or {}).get("columns") or [],
             "data": (remote_result or {}).get("data") or [],
             "total_count": int((remote_result or {}).get("total_count") or 0),
