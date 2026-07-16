@@ -147,11 +147,18 @@ class FakeDatasourceManager:
         datasource = self.datasources.get(datasource_id)
         return dict(datasource) if datasource else None
 
+    async def get_datasource_meta_async(self, datasource_id: str):
+        datasource = self.datasources.get(datasource_id)
+        return dict(datasource) if datasource else None
+
     async def get_datasource_by_group_name_async(self, name: str):
         for datasource in self.datasources.values():
             if datasource.get("group_name") == name:
                 return dict(datasource)
         return None
+
+    async def get_datasource_meta_by_group_name_async(self, name: str):
+        return await self.get_datasource_by_group_name_async(name)
 
     async def get_schema_async(self, datasource_id: str, source: str = "cache", table_names=None):
         datasource = self.datasources[datasource_id]

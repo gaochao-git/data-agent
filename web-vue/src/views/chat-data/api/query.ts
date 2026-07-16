@@ -14,7 +14,6 @@ export type {
   CancelRunningQueryHistoryResult,
   QueryHistoryResult,
   QueryTaskCreateResult,
-  QueryTaskExecutionView,
   QueryTaskStatusResult,
   SqlExecuteResult,
 } from '../types/query'

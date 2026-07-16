@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from utils.error_codes import ErrorCode
@@ -14,7 +13,7 @@ def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, t
     async def can_access(_conversation_id, _user_id):
         return True
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
     monkeypatch.setattr(workspace_routes, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path)})
 
     async def fake_list_files(workspace_root, user_id):
@@ -50,7 +49,7 @@ def test_data_analyze_workspace_rejects_inaccessible_conversation(client, auth_h
     async def can_access(_conversation_id, _user_id):
         return False
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
 
     response = client.get("/api/chatdata/data-analyze/conversations/missing/workspace-files", headers=auth_headers)
 
@@ -64,7 +63,7 @@ def test_data_analyze_workspace_file_error_mapping(client, auth_headers, monkeyp
     async def can_access(_conversation_id, _user_id):
         return True
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
     monkeypatch.setattr(workspace_routes, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path)})
 
     async def fake_missing_file(**_kwargs):
@@ -128,7 +127,7 @@ def test_data_analyze_workspace_import_skill_route(client, auth_headers, monkeyp
     async def can_access(_conversation_id, _user_id):
         return True
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
     monkeypatch.setattr(workspace_routes, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path)})
 
     async def fake_import_user_skill_from_directory_async(path: Path, user_id: str, operator_name: str = ""):
@@ -164,7 +163,7 @@ def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monke
     async def can_access(_conversation_id, _user_id):
         return True
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
     monkeypatch.setattr(workspace_routes, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path)})
 
     async def fake_import_value_error(_path: Path, _user_id: str, operator_name: str = ""):
@@ -192,7 +191,7 @@ def test_data_analyze_workspace_import_error_mapping(client, auth_headers, monke
     async def cannot_access(_conversation_id, _user_id):
         return False
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", cannot_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", cannot_access)
     inaccessible_response = client.post(
         "/api/chatdata/data-analyze/conversations/conv_a/workspace-skills/import",
         json={"skill_dir_path": "workspace/generated-skill"},
@@ -218,7 +217,7 @@ def test_data_analyze_workspace_rejects_when_feature_disabled(client, auth_heade
     async def can_access(_conversation_id, _user_id):
         raise AssertionError("disabled feature should be rejected before conversation access check")
 
-    monkeypatch.setattr(workspace_routes, "_can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
 
     list_response = client.get("/api/chatdata/data-analyze/conversations/conv_a/workspace-files", headers=auth_headers)
     read_response = client.get(
@@ -238,35 +237,19 @@ def test_data_analyze_workspace_rejects_when_feature_disabled(client, auth_heade
 
 
 def test_can_access_data_analyze_conversation_queries_user_thread(monkeypatch):
-    class FakeResult:
-        def __init__(self, value):
-            self.value = value
+    assert asyncio.run(workspace_routes.can_access_data_analyze_conversation("", "u1")) is False
+    assert asyncio.run(workspace_routes.can_access_data_analyze_conversation("conv_a", "")) is False
 
-        def scalar_one_or_none(self):
-            return self.value
+    async def exists_hit(**kwargs):
+        assert kwargs["conversation_id"] == "conv_a"
+        assert kwargs["user_id"] == "u1"
+        return True
 
-    class FakeSession:
-        def __init__(self, value):
-            self.value = value
-            self.executed = False
+    async def exists_miss(**_kwargs):
+        return False
 
-        async def execute(self, _stmt):
-            self.executed = True
-            return FakeResult(self.value)
+    monkeypatch.setattr(workspace_routes.can_access_data_analyze_conversation.__globals__["conversation_dao"], "exists_user_agent_thread", exists_hit)
+    assert asyncio.run(workspace_routes.can_access_data_analyze_conversation("conv_a", "u1")) is True
 
-    @asynccontextmanager
-    async def fake_get_session_hit():
-        yield FakeSession(1)
-
-    @asynccontextmanager
-    async def fake_get_session_miss():
-        yield FakeSession(None)
-
-    assert asyncio.run(workspace_routes._can_access_data_analyze_conversation("", "u1")) is False
-    assert asyncio.run(workspace_routes._can_access_data_analyze_conversation("conv_a", "")) is False
-
-    monkeypatch.setattr(workspace_routes, "get_session", fake_get_session_hit)
-    assert asyncio.run(workspace_routes._can_access_data_analyze_conversation("conv_a", "u1")) is True
-
-    monkeypatch.setattr(workspace_routes, "get_session", fake_get_session_miss)
-    assert asyncio.run(workspace_routes._can_access_data_analyze_conversation("conv_a", "u1")) is False
+    monkeypatch.setattr(workspace_routes.can_access_data_analyze_conversation.__globals__["conversation_dao"], "exists_user_agent_thread", exists_miss)
+    assert asyncio.run(workspace_routes.can_access_data_analyze_conversation("conv_a", "u1")) is False

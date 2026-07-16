@@ -440,13 +440,31 @@ async def get_checkpoint_datasource_id(
     get_checkpointer_fn: Callable,
 ) -> Optional[str]:
     """读取会话 checkpoint 中绑定的数据源组。"""
-    if get_graph is None:
+    if get_checkpointer_fn is None:
         return None
     config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
     async with get_checkpointer_fn() as checkpointer:
+        tuple_read, datasource_id = await _get_checkpoint_datasource_id_from_tuple(checkpointer, config)
+        if tuple_read or get_graph is None:
+            return datasource_id
         graph = get_graph(checkpointer)
         state = await graph.aget_state(config)
     return _get_checkpoint_datasource_id(state.values if state and state.values else None)
+
+
+async def _get_checkpoint_datasource_id_from_tuple(checkpointer: Any, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """直接读取 checkpoint channel_values，避免仅查绑定数据源时创建完整 agent。"""
+    getter = getattr(checkpointer, "aget_tuple", None)
+    if not callable(getter):
+        return False, None
+    try:
+        checkpoint_tuple = await getter(config)
+    except Exception as err:
+        logger.warning("直接读取 checkpoint 绑定数据源失败，回退 graph state: %s", err)
+        return False, None
+    checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple else None
+    values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+    return True, _get_checkpoint_datasource_id(values if isinstance(values, dict) else None)
 
 
 async def get_detail(

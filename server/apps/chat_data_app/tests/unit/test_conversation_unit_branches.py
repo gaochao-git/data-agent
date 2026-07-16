@@ -203,6 +203,49 @@ def test_conversation_reasoning_serialization_and_timestamp_branches():
 
 
 @pytest.mark.asyncio
+async def test_get_checkpoint_datasource_id_reads_tuple_without_building_graph():
+    class Checkpointer:
+        async def aget_tuple(self, config):
+            assert config["configurable"]["thread_id"] == "conv_ds"
+            return SimpleNamespace(checkpoint={"channel_values": {"conversation_datasource_id": "ds_a"}})
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def get_graph(_checkpointer):
+        raise AssertionError("只读取绑定数据源时不应创建完整 agent")
+
+    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
+
+    assert datasource_id == "ds_a"
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_datasource_id_skips_graph_when_tuple_has_no_binding():
+    class Checkpointer:
+        async def aget_tuple(self, _config):
+            return SimpleNamespace(checkpoint={"channel_values": {"messages": []}})
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def get_graph(_checkpointer):
+        raise AssertionError("checkpoint 可直接读取时不应创建完整 agent")
+
+    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
+
+    assert datasource_id is None
+
+
+@pytest.mark.asyncio
 async def test_conversation_crud_and_list_branches(conversation_db):
     created = await conversation_module.create("", "agent_a", user_id="u1")
     conv_id = created["id"]

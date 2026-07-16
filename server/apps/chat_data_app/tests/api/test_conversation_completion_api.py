@@ -233,7 +233,7 @@ class ToolCallingLLM:
         self.calls = 0
         self.bound_tools = None
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, **_kwargs):
         self.bound_tools = tools
         return self
 
@@ -317,10 +317,12 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     for module_name in (
         "apps.chat_data_app.agent.chat_data_agent",
         "server.apps.chat_data_app.agent.chat_data_agent",
+        "apps.chat_data_app.agent.agent_runtime",
+        "server.apps.chat_data_app.agent.agent_runtime",
     ):
         module = sys.modules.get(module_name)
         if module is not None:
-            monkeypatch.setattr(module, "get_chat_data_llm", lambda **_kwargs: fake_llm)
+            monkeypatch.setattr(module, "create_streaming_chat_model", lambda **_kwargs: fake_llm)
 
     response = _post_completion(
         client,

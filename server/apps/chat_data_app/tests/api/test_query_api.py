@@ -599,20 +599,23 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
     assert payload["data"]["task_type"] == "sql"
     assert payload["data"]["datasource_id"] == "ds_a"
     assert "result" not in payload["data"]
-    assert payload["data"]["results"] is None
-    assert payload["data"]["executions"] == [{
+    assert "executions" not in payload["data"]
+    assert payload["data"]["results"] == [{
         "execution_id": "exec_1",
-        "task_id": "task_a",
-        "datasource_id": "ds_a",
         "member_datasource_id": "m1",
         "member_name": "杭州库",
         "executor_type": "http",
-        "sql_status": "running",
+        "status": "running",
+        "sql": "select * from orders",
         "remote_task_id": "remote_1",
         "db_connection_id": "",
+        "columns": ["id"],
+        "data": [{"id": 1}],
+        "total_count": 1,
+        "execution_time_ms": 123,
+        "error": None,
         "started_time": None,
         "finished_time": None,
-        "operator_name": "测试用户",
     }]
 
 
@@ -723,7 +726,16 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
     assert payload["status"] == "success"
     assert payload["data"]["status"] == "succeeded"
     assert "result" not in payload["data"]
-    assert payload["data"]["results"] == [{"member_datasource_id": "m1", "success": True}]
+    assert "executions" not in payload["data"]
+    assert payload["data"]["results"] == [{
+        "member_datasource_id": "m1",
+        "status": "succeeded",
+        "sql": "select * from orders",
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "error": None,
+    }]
     assert payload["data"]["remote_tasks"][0]["remote_task_id"] == "remote_1"
 
 

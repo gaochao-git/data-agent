@@ -358,7 +358,8 @@ def test_execute_panel_success_and_failure(fake_dashboard_service, monkeypatch):
     )))
 
     assert success["status"] == "success"
-    assert success["data"]["result"]["success"] is True
+    assert success["data"]["result"]["status"] == "succeeded"
+    assert success["data"]["result"]["results"][0]["status"] == "succeeded"
     assert failure["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
     assert any(update[1].get("status") == "failed" for update in runtime.updated_tasks)
 
@@ -390,7 +391,7 @@ def test_execute_panel_without_datasource_uses_tool_direct(monkeypatch):
     payload = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
 
     assert payload["status"] == "success"
-    assert payload["data"]["result"]["columns"] == ["x"]
+    assert payload["data"]["result"]["results"][0]["columns"] == ["x"]
 
 
 def test_create_dashboard_query_task_and_panel_alias(fake_dashboard_service, monkeypatch):

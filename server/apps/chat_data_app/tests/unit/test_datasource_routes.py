@@ -1541,11 +1541,12 @@ def test_get_query_task_returns_task_status(monkeypatch):
     assert data["data"]["status"] == "succeeded"
     assert data["data"]["remote_tasks"] == [{"member_datasource_id": "phy_a", "member_name": "成员A", "remote_task_id": "remote_001", "source_type": "hive"}]
     assert "result" not in data["data"]
-    assert data["data"]["executions"] == []
+    assert "executions" not in data["data"]
     assert data["data"]["results"] == [{
         "member_datasource_id": "phy_a",
         "member_name": "成员A",
-        "success": True,
+        "status": "succeeded",
+        "sql": "select 1",
         "columns": ["col_a"],
         "data": [{"col_a": 1}],
         "total_count": 1,
