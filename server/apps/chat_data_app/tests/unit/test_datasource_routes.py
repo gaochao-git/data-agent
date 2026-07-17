@@ -165,6 +165,9 @@ class _FakeDatasourceManager:
     async def get_all_datasources_async(self, include_tables: bool = True):
         return self.get_all_datasources(include_tables=include_tables)
 
+    async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+        return self.get_all_datasources(include_tables=include_tables)
+
     def get_datasource(self, datasource_id: str):
         item = self.datasources.get(datasource_id)
         return copy.deepcopy(item) if item else None
@@ -448,6 +451,15 @@ class _FakeDatasourceManager:
         return result
 
     async def get_execution_datasources_async(self, datasource_id: str, member_datasource_ids: list[str] | None = None):
+        return self.get_execution_datasources(datasource_id, member_datasource_ids)
+
+    async def get_authorized_execution_datasources_async(
+        self,
+        datasource_id: str,
+        member_datasource_ids: list[str] | None = None,
+        user_id: str = "",
+        username: str = "",
+    ):
         return self.get_execution_datasources(datasource_id, member_datasource_ids)
 
     def create_datasource_group_from_sources(
@@ -841,6 +853,7 @@ def test_get_datasources_returns_group_datasource_list(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
 
     resp = asyncio.run(get_datasources(SimpleNamespace()))
     data = _payload(resp)
@@ -854,6 +867,7 @@ def test_get_datasources_supports_lightweight_mode(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
 
     resp = asyncio.run(get_datasources(SimpleNamespace(), include_tables=False))
     data = _payload(resp)
@@ -867,6 +881,7 @@ def test_get_datasources_does_not_build_display_name_from_current_user(monkeypat
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(datasource_helper_routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="10001", username="测试用户"))
 
     resp = asyncio.run(get_datasources(request=SimpleNamespace()))
@@ -3284,6 +3299,9 @@ def test_semantic_health_helper_branches():
 
 def test_datasource_route_error_branches(monkeypatch):
     class RaisingManager:
+        async def get_authorized_datasources_async(self, include_tables=True, user_id="", username=""):
+            raise RuntimeError("list failed")
+
         async def get_all_datasources_async(self, _include_tables=True):
             raise RuntimeError("list failed")
 

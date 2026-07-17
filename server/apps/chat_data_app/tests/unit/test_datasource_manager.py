@@ -11,6 +11,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from apps.chat_data_app.services import datasource_manager as datasource_manager_module
+from apps.chat_data_app.services import execution_permission
 from apps.chat_data_app.services.datasource_manager import (
     _build_member_source_identity,
     _build_member_source_text_line,
@@ -214,6 +216,190 @@ def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager.base_dir = None
     manager.datasource_dao = fake_store
     return manager
+
+
+def test_normalize_org_codes_accepts_provider_payload_shapes():
+    assert execution_permission.normalize_org_codes([
+        " ORG_A ",
+        {"orgCode": "ORG_B"},
+        {"org_code": "ORG_C"},
+        {"code": "ORG_D"},
+        {"missing": "ORG_E"},
+        None,
+        "",
+    ]) == {"ORG_A", "ORG_B", "ORG_C", "ORG_D"}
+    assert execution_permission.normalize_org_codes({"data": ["ORG_A"]}) == set()
+
+
+def test_authorized_datasources_filter_http_missing_permission_and_direct_allowlist(monkeypatch):
+    store = _FakeStore()
+    store.datasources["ds_a"].update({
+        "template_datasource_id": "m_direct_allowed",
+        "member_datasource_ids": ["m_direct_allowed", "m_direct_denied", "m_http_allowed", "m_http_denied"],
+        "member_sources": [
+            {"member_datasource_id": "m_direct_allowed", "org_code": "ORG_CODE1", "query_executor_type": "direct"},
+            {"member_datasource_id": "m_direct_denied", "org_code": "ORG_DENIED", "query_executor_type": "direct"},
+            {"member_datasource_id": "m_http_allowed", "org_code": "ORG_HTTP_ALLOWED", "query_executor_type": "http"},
+            {"member_datasource_id": "m_http_denied", "org_code": "ORG_HTTP_DENIED", "query_executor_type": "http"},
+        ],
+    })
+    manager = _build_manager(store)
+
+    async def allowed_without_http(_user_id=None, _username=None):
+        return {"direct": {"ORG_CODE1"}, "http": set()}
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", allowed_without_http)
+    datasources = asyncio.run(manager.get_authorized_datasources_async(user_id="u1", username="用户1"))
+    assert [item["id"] for item in datasources] == ["ds_a"]
+    assert [item["member_datasource_id"] for item in datasources[0]["member_sources"]] == ["m_direct_allowed"]
+    assert datasources[0]["member_datasource_ids"] == ["m_direct_allowed"]
+    assert datasources[0]["template_datasource_id"] == "m_direct_allowed"
+
+
+def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
+    store = _FakeStore()
+    store.datasources["ds_a"].update({
+        "template_datasource_id": "m_http_allowed",
+        "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
+        "member_sources": [
+            {
+                "member_datasource_id": "m_http_allowed",
+                "org_code": "ORG_HTTP_ALLOWED",
+                "org_name": "HTTP机构A",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+            {
+                "member_datasource_id": "m_http_denied",
+                "org_code": "ORG_HTTP_DENIED",
+                "org_name": "HTTP机构B",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+        ],
+    })
+    manager = _build_manager(store)
+
+    async def allowed_http(_user_id=None, _username=None):
+        return {"direct": set(), "http": {"ORG_HTTP_ALLOWED"}}
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", allowed_http)
+    targets = asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", user_id="u1", username="用户1"))
+    assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
+    assert targets[0]["member_name"] == "HTTP机构A"
+    with pytest.raises(ValueError, match="成员数据源不存在或不属于当前组"):
+        asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", ["m_http_denied"], user_id="u1", username="用户1"))
+
+
+def test_execution_permission_http_provider_success_and_failure(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            if self.payload == "raise_status":
+                raise RuntimeError("status error")
+
+        def json(self):
+            if self.payload == "bad_json":
+                raise ValueError("bad json")
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            calls.append(("init", timeout))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json):
+            calls.append(("post", url, json))
+            return FakeResponse({"code": 20000, "data": ["ORG_A", {"orgCode": "ORG_B"}]})
+
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", FakeClient)
+
+    result = asyncio.run(execution_permission.get_http_permission_org_codes(" user_a ", " 用户A "))
+    assert result == {"ORG_A", "ORG_B"}
+    assert calls == [
+        ("init", 9),
+        ("post", "http://permission.local", {"userId": "user_a", "username": "用户A"}),
+    ]
+
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "")
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("", "用户A")) == set()
+
+    class ErrorClient(FakeClient):
+        async def post(self, url, json):
+            raise RuntimeError("network error")
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", ErrorClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+
+    class BadCodeClient(FakeClient):
+        async def post(self, url, json):
+            return FakeResponse({"code": 50000, "data": ["ORG_A"]})
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", BadCodeClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+
+    class MissingCodeClient(FakeClient):
+        async def post(self, url, json):
+            return FakeResponse({"data": ["ORG_A"]})
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", MissingCodeClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+
+
+def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
+    async def fake_http_codes(user_id, username):
+        assert user_id == "u1"
+        assert username == "用户1"
+        return {"ORG_HTTP"}
+
+    monkeypatch.setattr(execution_permission, "get_http_permission_org_codes", fake_http_codes)
+    allowed = asyncio.run(execution_permission.get_allowed_org_codes_by_executor("u1", "用户1"))
+    assert "ORG_CODE1" in allowed["direct"]
+    assert allowed["http"] == {"ORG_HTTP"}
+
+    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
+        {"member_sources": []},
+        {"direct": {"ORG_A"}, "http": set()},
+    ) is None
+
+    datasource = {
+        "source_type": " mysql ",
+        "query_executor_type": "unknown",
+        "template_datasource_id": "missing_template",
+        "member_datasource_ids": ["m1", "m2"],
+        "member_sources": [
+            {"member_datasource_id": "m1", "org_code": "ORG_A", "query_executor_type": "unknown"},
+            {"member_datasource_id": "m2", "org_code": "ORG_B", "query_executor_type": "direct"},
+            {"member_datasource_id": "m3", "org_code": "", "query_executor_type": "direct"},
+        ],
+    }
+    filtered = execution_permission.filter_datasource_members_by_allowed_org_codes(
+        datasource,
+        {"direct": {"ORG_A"}, "http": set()},
+    )
+    assert filtered is not None
+    assert filtered["source_type"] == "mysql"
+    assert [item["member_datasource_id"] for item in filtered["member_sources"]] == ["m1"]
+    assert filtered["member_datasource_ids"] == ["m1"]
+    assert filtered["template_datasource_id"] == "m1"
+
+    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
+        datasource,
+        {"direct": {"ORG_MISSING"}, "http": set()},
+    ) is None
 
 
 def test_create_semantic_config_rejects_active_duplicate_name():

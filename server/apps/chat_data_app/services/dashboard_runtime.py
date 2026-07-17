@@ -97,7 +97,12 @@ async def execute_dashboard_panel_sql(
     ds_manager = dashboard_runtime().get_datasource_manager()
     effective_member_ids = resolve_panel_member_datasource_ids(panel, member_datasource_id)
     selected_member_ids = effective_member_ids or None
-    execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, selected_member_ids)
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+        datasource_id,
+        selected_member_ids,
+        user_id=user_id,
+        username=operator_name,
+    )
     if len(execution_targets) > 1:
         return await execute_dashboard_panel_sql_for_targets(
             panel=panel,
@@ -461,6 +466,7 @@ async def prepare_dashboard_batch_context(
     panel_member_datasource_ids: Dict[str, str],
     preloaded_dashboard: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
+    operator_name: Optional[str] = None,
     include_public: bool = True,
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
     """预加载批量执行需要的面板与执行对象，减少每个卡片的重复查库。"""
@@ -492,7 +498,12 @@ async def prepare_dashboard_batch_context(
         if cache_key in execution_target_map:
             continue
         selected_member_ids = [member_datasource_id] if member_datasource_id else None
-        execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, selected_member_ids)
+        execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+            datasource_id,
+            selected_member_ids,
+            user_id=user_id,
+            username=operator_name,
+        )
         execution_target_map[cache_key] = execution_targets[0]
 
     return panel_map, execution_target_map
@@ -657,6 +668,7 @@ async def run_dashboard_batch_task(task_id: str, task: Dict[str, Any]) -> None:
         panel_member_datasource_ids,
         preloaded_dashboard=dashboard,
         user_id=user_id,
+        operator_name=operator_name,
         include_public=True,
     )
     effective_panel_member_datasource_ids = build_effective_panel_member_datasource_ids(

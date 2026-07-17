@@ -144,11 +144,13 @@ async def build_data_analyze_context(
     datasource_id: Optional[str],
     semantic_config_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    username: Optional[str] = None,
     member_datasource_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """构建 DataAnalyze 可用工具和数据上下文。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
+    normalized_username = str(username or "").strip()
     if not normalized_datasource_id:
         return {
             "datasource": None,
@@ -178,7 +180,12 @@ async def build_data_analyze_context(
         semantic_config_context = _summarize_semantic_configs(semantic_configs or [], semantic_config_id)
         has_selected_semantic_config = any(bool(item.get("selected")) for item in semantic_config_context)
         selected_member_ids = normalize_member_datasource_ids(member_datasource_ids)
-        execution_targets = await ds_manager.get_execution_datasources_async(normalized_datasource_id, selected_member_ids) if selected_member_ids else []
+        execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+            normalized_datasource_id,
+            selected_member_ids,
+            user_id=normalized_user_id,
+            username=normalized_username,
+        ) if selected_member_ids else []
         execution_target_context = append_selected_execution_targets_to_context("", execution_targets, selected_member_ids)
         semantic_config_directory_info = ""
         if not has_selected_semantic_config:

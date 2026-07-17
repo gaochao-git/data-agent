@@ -102,6 +102,15 @@ async def test_build_data_analyze_context_uses_directory_only_before_semantic_se
                 {"member_datasource_id": "m2", "member_name": "支付宝", "source_config": {"org_code": "ORG_CODE2"}},
             ]
 
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: FakeManager())
 
     context = await data_analyze_context.build_data_analyze_context("ds_1", member_datasource_ids=["m1", "m2"])

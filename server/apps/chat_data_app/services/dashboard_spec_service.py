@@ -360,7 +360,12 @@ def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGene
 async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, user_id: str = "system", username: Optional[str] = None) -> tuple[bool, str]:
     """写入看板前实际执行 SQL，避免不可执行面板进入看板。"""
     ds_manager = get_datasource_manager()
-    execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, None)
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+        datasource_id,
+        None,
+        user_id=user_id,
+        username=username,
+    )
     if not execution_targets:
         return False, "当前数据源组下没有可执行的数据源"
     execution_target = execution_targets[0]

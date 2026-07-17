@@ -279,6 +279,15 @@ def test_execution_target_context_uses_only_requested_targets(monkeypatch):
                 for member_id in member_datasource_ids or []
             ]
 
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
 
     selected_targets = asyncio.run(_get_execution_targets_async("ds_a", ["m1"]))
@@ -307,6 +316,15 @@ def test_get_execution_targets_async_does_not_expand_all_members(monkeypatch):
                 {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
                 for member_id in member_datasource_ids or []
             ]
+
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
 
@@ -355,9 +373,15 @@ def test_get_execution_targets_async_empty_and_error(monkeypatch):
         async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
             return []
 
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     class ErrorManager:
         async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
             raise RuntimeError("manager failed")
+
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: EmptyManager())
     assert asyncio.run(_get_execution_targets_async("ds_a", None)) == []
@@ -1066,6 +1090,15 @@ def test_stream_sql_generation_query_mode_uses_only_request_visible_members(monk
                 if member_id in target_map
             ]
 
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
@@ -1116,6 +1149,15 @@ def test_stream_sql_generation_query_mode_does_not_expand_empty_member_scope(mon
                 {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
                 {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
             ][:len(member_datasource_ids or [])]
+
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
@@ -1172,6 +1214,15 @@ def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatc
                 for member_id in member_datasource_ids or []
                 if member_id in target_map
             ]
+
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
@@ -1231,7 +1282,7 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     fake_graph = _FakeGraph(events=[(_FakeMessageChunk(content="语义查询完成"), {"langgraph_node": "model"})])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    async def fake_get_execution_targets(_datasource_id, member_datasource_ids=None):
+    async def fake_get_execution_targets(_datasource_id, member_datasource_ids=None, **_kwargs):
         if not member_datasource_ids:
             return []
         return [
@@ -1398,7 +1449,7 @@ def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch)
             yield ("messages", (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
 
-    async def fake_build_context(datasource_id, semantic_config_id, user_id=None):
+    async def fake_build_context(datasource_id, semantic_config_id, user_id=None, **_kwargs):
         captured["context_args"] = (datasource_id, semantic_config_id, user_id)
         return {"datasource": {"source_type": "mysql"}}
 

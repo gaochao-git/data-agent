@@ -152,6 +152,15 @@ class FakeDatasourceManager:
             "query_executor_type": "direct",
         }]
 
+    async def get_authorized_execution_datasources_async(
+        self,
+        datasource_id,
+        selected_member_ids=None,
+        user_id=None,
+        username=None,
+    ):
+        return await self.get_execution_datasources_async(datasource_id, selected_member_ids)
+
 
 class FakeRuntime:
     def __init__(self):
@@ -437,6 +446,9 @@ async def test_dashboard_batch_shared_sql_semaphore_caps_panel_and_member_querie
                 for member_id in selected_member_ids or []
             ]
 
+        async def get_authorized_execution_datasources_async(self, datasource_id, selected_member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, selected_member_ids)
+
     runtime.ds_manager = MultiMemberDatasourceManager()
     task = {
         "request_payload": json.dumps({
@@ -467,6 +479,9 @@ async def test_dashboard_batch_context_reuses_execution_target_cache(dashboard_c
                 "member_name": "成员A",
                 "source_type": "mysql",
             }]
+
+        async def get_authorized_execution_datasources_async(self, datasource_id, selected_member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, selected_member_ids)
 
     runtime.ds_manager = CountingDatasourceManager()
     dashboard = {

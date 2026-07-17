@@ -956,6 +956,9 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
                 },
             ]
 
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     class FixedUuid:
         def __init__(self, value):
             self.hex = value
@@ -1296,6 +1299,9 @@ def test_build_execute_sql_result_data_edge_cases(monkeypatch):
 
         async def get_execution_datasources_async(self, _datasource_id, _member_ids=None):
             return []
+
+        async def get_authorized_execution_datasources_async(self, _datasource_id, _member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(_datasource_id, _member_ids)
 
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: EmptyTargetManager())
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: EmptyTargetManager())

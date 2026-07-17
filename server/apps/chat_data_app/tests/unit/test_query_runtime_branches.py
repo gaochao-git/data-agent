@@ -281,16 +281,16 @@ def test_build_persistent_query_task_result_for_request_branches(monkeypatch):
         ],
     }
 
-    async def all_http_true(_request):
+    async def all_http_true(_request, **_kwargs):
         return True
 
-    async def all_http_raise(_request):
+    async def all_http_raise(_request, **_kwargs):
         raise RuntimeError("all http failed")
 
-    async def member_ids_raise(_request):
+    async def member_ids_raise(_request, **_kwargs):
         raise RuntimeError("member failed")
 
-    async def member_ids_ok(_request):
+    async def member_ids_ok(_request, **_kwargs):
         return {"http_1"}
 
     monkeypatch.setattr(query_runtime, "are_all_sql_execution_targets_http", all_http_true)
@@ -308,7 +308,13 @@ def test_build_persistent_query_task_result_for_request_branches(monkeypatch):
 
 def test_execution_target_queries_use_manager(monkeypatch):
     class Manager:
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             assert datasource_id == "ds_a"
             return [
                 {"member_datasource_id": "m1", "query_executor_type": "http"},
@@ -1222,7 +1228,13 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id}
 
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             return [{"member_datasource_id": "m1", "member_name": "成员1"}]
 
     async def execute_sql_for_member(**_kwargs):
@@ -1263,7 +1275,13 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     assert updates[-1][1]["result_payload"] is None
 
     class ValueErrorManager(Manager):
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             raise ValueError("unsupported")
 
     async def update_raises(*_args, **_kwargs):
@@ -1276,7 +1294,13 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     assert value_error_result["error"] == "unsupported"
 
     class RuntimeErrorManager(Manager):
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())

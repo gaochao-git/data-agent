@@ -2,10 +2,10 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config as semantic_routes
 
 
-def test_list_datasources_api_contract(client, fake_datasource_manager, patch_datasource_manager):
+def test_list_datasources_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
     patch_datasource_manager(fake_datasource_manager)
 
-    response = client.get("/api/chatdata/datasources")
+    response = client.get("/api/chatdata/datasources", headers=auth_headers)
 
     assert response.status_code == 200
     payload = response.json()

@@ -27,12 +27,19 @@ async def get_datasources(request: Request, include_tables: bool = True):
         数据源列表
     """
     try:
+        current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasources = await ds_manager.get_all_datasources_async(include_tables)
+        datasources = await ds_manager.get_authorized_datasources_async(
+            include_tables=include_tables,
+            user_id=str(current_user.user_id),
+            username=str(current_user.username or ""),
+        )
         return business_response(
             data={"datasources": datasources},
             msg="获取成功"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取数据源列表失败: {str(e)}", exc_info=True)
         return business_response(

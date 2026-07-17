@@ -258,6 +258,15 @@ class _FakeDatasourceManager:
         }
         return [all_targets[item] for item in member_ids]
 
+    async def get_authorized_execution_datasources_async(
+        self,
+        datasource_id: str,
+        member_datasource_ids: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ):
+        return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
 
 async def _fake_execute_sql_on_target(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
     member_id = target_datasource.get("member_datasource_id")

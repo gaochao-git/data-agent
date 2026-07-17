@@ -386,6 +386,9 @@ async def test_semantic_config_fallback_and_execution_target_name_branches(monke
                 {"member_name": "具名执行对象"},
             ]
 
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     monkeypatch.setattr(handlers, "get_datasource_manager", lambda: NamelessManager())
     targets = await handlers._get_execution_targets_async("ds_a", ["m1", "m2", "m3"])
     info = handlers._append_user_selected_execution_targets_to_context("", targets, ["m1", "m2", "m3"])

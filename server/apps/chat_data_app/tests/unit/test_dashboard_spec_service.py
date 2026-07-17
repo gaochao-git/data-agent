@@ -619,6 +619,9 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
                 return []
             return [{"source_type": "mysql", "mode": datasource_id}]
 
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_ids)
+
     class FakeExecutor:
         def __init__(self, target):
             self.target = target
@@ -997,6 +1000,9 @@ def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
     class FakeManager:
         async def get_execution_datasources_async(self, datasource_id, member_ids):
             return [{"source_type": "mysql", "source_config": {"host": "h"}}]
+
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_ids)
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_executor", lambda _target: FakeExecutor())

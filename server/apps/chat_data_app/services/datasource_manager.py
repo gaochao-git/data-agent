@@ -17,6 +17,11 @@ from utils.logger import get_logger
 from utils.storage_paths import NL2SQL_BASE_DIR
 from ..daos.datasource_dao import DataSourceDao
 from .datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials, sanitize_source_config
+from .execution_permission import (
+    filter_datasource_members_by_allowed_org_codes,
+    filter_datasources_by_allowed_org_codes,
+    get_allowed_org_codes_by_executor,
+)
 from .hive_meta_http import get_hive_meta_schema_async
 from .semantic_common import ensure_dimension_logical_type
 
@@ -560,6 +565,17 @@ class DataSourceManager:
         """异步获取所有数据源。"""
         return await self.datasource_dao.get_all_datasources_async(include_tables=include_tables)
 
+    async def get_authorized_datasources_async(
+        self,
+        include_tables: bool = True,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """异步获取当前用户有机构权限的数据源。"""
+        datasources = await self.get_all_datasources_async(include_tables=include_tables)
+        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        return filter_datasources_by_allowed_org_codes(datasources, allowed_org_codes)
+
     async def has_datasource_async(self, datasource_id: str) -> bool:
         """异步判断数据源是否存在。"""
         return await self.datasource_dao.has_datasource_async(datasource_id)
@@ -653,6 +669,21 @@ class DataSourceManager:
         """异步解析逻辑数据源下可执行的成员数据源列表。"""
         datasource = await self._get_datasource_or_raise_async(datasource_id)
         return self._build_execution_datasource_targets(datasource, member_datasource_ids)
+
+    async def get_authorized_execution_datasources_async(
+        self,
+        datasource_id: str,
+        member_datasource_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """异步解析当前用户有机构权限的可执行成员数据源列表。"""
+        datasource = await self._get_datasource_or_raise_async(datasource_id)
+        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        filtered_datasource = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
+        if not filtered_datasource:
+            raise ValueError("当前用户无可用执行对象权限")
+        return self._build_execution_datasource_targets(filtered_datasource, member_datasource_ids)
 
     async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
         """异步根据数据源组名称获取数据源。"""

@@ -642,7 +642,12 @@ async def execute_panel(
         if panel.get("datasource_id"):
             ds_manager = dashboard_runtime.dashboard_runtime().get_datasource_manager()
             selected_member_ids = [effective_member_datasource_id] if effective_member_datasource_id else None
-            execution_targets = await ds_manager.get_execution_datasources_async(panel.get("datasource_id"), selected_member_ids)
+            execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+                panel.get("datasource_id"),
+                selected_member_ids,
+                user_id=str(current_user.user_id),
+                username=str(current_user.username or ""),
+            )
             execution_target = execution_targets[0] if execution_targets else None
         execution_id = await dashboard_runtime.create_dashboard_panel_execution(
             task_id=task_info["task_id"],
@@ -796,6 +801,7 @@ async def execute_panels_batch(
             panel_member_datasource_ids,
             preloaded_dashboard=dashboard,
             user_id=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
             include_public=True,
         )
     except ValueError as e:

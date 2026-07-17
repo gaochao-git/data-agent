@@ -845,6 +845,8 @@ def _append_user_selected_execution_targets_to_context(
 async def _get_execution_targets_async(
     datasource_id: str | None,
     member_datasource_ids: list[str] | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
 ) -> list[dict]:
     if not datasource_id:
         return []
@@ -853,9 +855,11 @@ async def _get_execution_targets_async(
         return []
     try:
         ds_manager = get_datasource_manager()
-        return await ds_manager.get_execution_datasources_async(
+        return await ds_manager.get_authorized_execution_datasources_async(
             datasource_id,
             normalized_member_ids,
+            user_id=user_id,
+            username=username,
         )
     except Exception as err:
         logger.warning(f"构造执行对象说明失败: {err}")
@@ -976,6 +980,8 @@ async def _stream_sql_generation(
             all_execution_targets = await _get_execution_targets_async(
                 datasource_id,
                 explicit_member_datasource_ids,
+                user_id=user_id,
+                username=username,
             )
             available_member_datasource_ids = [
                 _execution_target_member_id(target)
@@ -1141,7 +1147,7 @@ async def data_analyze_completion_handler(
             log_phase("get_or_create_conversation")
             log_phase("skip_preload_skill")
             semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-            data_context_kwargs = {"user_id": user_id}
+            data_context_kwargs = {"user_id": user_id, "username": username}
             if member_datasource_ids:
                 data_context_kwargs["member_datasource_ids"] = member_datasource_ids
             data_context = await build_data_analyze_context(datasource_id, semantic_config_id, **data_context_kwargs)

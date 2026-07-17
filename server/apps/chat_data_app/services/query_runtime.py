@@ -111,9 +111,11 @@ def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: Opt
 async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Dict[str, str]:
     """为任务预创建每个成员数据源的 SQL 执行记录。"""
     ds_manager = get_datasource_manager()
-    execution_targets = await ds_manager.get_execution_datasources_async(
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
         request.datasource_id,
         request.member_datasource_ids,
+        user_id=request.user_id,
+        username=operator_name,
     )
     operator_user_id = str(request.user_id or "").strip()
     now = datetime.now()
@@ -465,9 +467,11 @@ async def build_execute_sql_result_data(
     if not datasource:
         raise ValueError(f"数据源不存在: {request.datasource_id}")
 
-    execution_targets = await ds_manager.get_execution_datasources_async(
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
         request.datasource_id,
         request.member_datasource_ids,
+        user_id=request.user_id,
+        username=username,
     )
     results = await asyncio.gather(*[
         execute_sql_for_member(
@@ -551,12 +555,14 @@ def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
     return result
 
 
-async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest) -> bool:
+async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> bool:
     """判断 SQL 任务选中的执行对象是否全部为 HTTP 执行。"""
     ds_manager = get_datasource_manager()
-    execution_targets = await ds_manager.get_execution_datasources_async(
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
         request.datasource_id,
         request.member_datasource_ids,
+        user_id=request.user_id,
+        username=operator_name,
     )
     return bool(execution_targets) and all(
         str((target or {}).get("query_executor_type") or "").strip().lower() == "http"
@@ -564,12 +570,14 @@ async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest) -> bool
     )
 
 
-async def get_http_execution_member_ids(request: ExecuteSqlRequest) -> Set[str]:
+async def get_http_execution_member_ids(request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Set[str]:
     """读取本次 SQL 任务中走 HTTP 的成员数据源 ID。"""
     ds_manager = get_datasource_manager()
-    execution_targets = await ds_manager.get_execution_datasources_async(
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
         request.datasource_id,
         request.member_datasource_ids,
+        user_id=request.user_id,
+        username=operator_name,
     )
     return {
         str((target or {}).get("member_datasource_id") or "").strip()
@@ -578,16 +586,16 @@ async def get_http_execution_member_ids(request: ExecuteSqlRequest) -> Set[str]:
     }
 
 
-async def build_persistent_query_task_result_for_request(request: ExecuteSqlRequest, result_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def build_persistent_query_task_result_for_request(request: ExecuteSqlRequest, result_data: Dict[str, Any], operator_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """按执行配置构建任务落库结果，HTTP 结果不落库。"""
     try:
-        all_http_targets = await are_all_sql_execution_targets_http(request)
+        all_http_targets = await are_all_sql_execution_targets_http(request, operator_name=operator_name)
     except Exception:
         all_http_targets = False
     if all_http_targets:
         return None
     try:
-        http_member_ids = await get_http_execution_member_ids(request)
+        http_member_ids = await get_http_execution_member_ids(request, operator_name=operator_name)
     except Exception:
         http_member_ids = set()
     return build_persistent_query_task_result_payload(result_data, http_member_ids)
@@ -859,7 +867,7 @@ async def run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
         return
     if await is_query_task_cancelled(task_id):
         return
-    persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, result_data)
+    persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, result_data, operator_name=operator_name)
     if not query_result_succeeded(result_data):
         await update_query_task(
             task_id,
@@ -902,7 +910,7 @@ async def execute_sql_request_with_task(
             finished_time=datetime.now(),
         )
         raise
-    persistent_result_payload = await build_persistent_query_task_result_for_request(request, result_data)
+    persistent_result_payload = await build_persistent_query_task_result_for_request(request, result_data, operator_name=operator_name)
     if not query_result_succeeded(result_data):
         await update_query_task(
             task_info["task_id"],
@@ -966,7 +974,12 @@ async def execute_agent_sql(
         logger.warning("创建智能体 SQL 查询任务失败，将直接执行查询: %s", task_err, exc_info=True)
 
     try:
-        execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, member_datasource_ids)
+        execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+            datasource_id,
+            member_datasource_ids,
+            user_id=user_id,
+            username=operator_name,
+        )
         member_results = await asyncio.gather(*[
             execute_sql_for_member(
                 execution_target=target,
@@ -989,7 +1002,7 @@ async def execute_agent_sql(
         if task_info:
             persistent_result_payload = final_result
             try:
-                persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, final_result)
+                persistent_result_payload = await build_persistent_query_task_result_for_request(execute_request, final_result, operator_name=operator_name)
             except Exception as persist_err:
                 logger.warning("构建智能体 SQL 查询任务落库结果失败，跳过结果落库: %s", persist_err, exc_info=True)
                 persistent_result_payload = None

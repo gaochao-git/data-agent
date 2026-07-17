@@ -140,6 +140,9 @@ class FakeDatasourceManager:
             result.append(item)
         return result
 
+    async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+        return await self.get_all_datasources_async(include_tables=include_tables)
+
     async def has_datasource_async(self, datasource_id: str):
         return datasource_id in self.datasources
 

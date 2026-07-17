@@ -32,6 +32,15 @@ def _patch_execute_sql_runtime(monkeypatch):
                 for member_id in member_ids
             ]
 
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id: str,
+            member_datasource_ids=None,
+            user_id=None,
+            username=None,
+        ):
+            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
+
     class FakeExecutor:
         def __init__(self, execution_target):
             self.execution_target = execution_target

@@ -8,7 +8,6 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
-import { getUserOrgList } from '@/api/psoss/records'
 import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
@@ -91,31 +90,18 @@ const datasources = ref<DataSource[]>([])
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
-const userOrgCodePermissions = ref<string[]>([])
 const CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY = 'chat-data:conversation-semantic-config'
 const CONVERSATION_MODEL_STORAGE_KEY = 'chat-data:conversation-model'
 
-const hasMappedDatasource = computed(() => {
-  const parentName = parentComponentName.value
-  if (!parentName) return false
-  return allDatasources.value.some(ds => ds.mapped_modules?.includes(parentName))
-})
-
 const noMatchedDatasourceTitle = computed(() => {
-  if (hasMappedDatasource.value && userOrgCodePermissions.value.length === 0) {
-    return '当前用户无可用机构权限'
-  }
   if (parentComponentName.value) {
-    return `当前模块（${parentComponentName.value}）未配置数据源`
+    return `当前模块（${parentComponentName.value}）无可用数据源`
   }
   return '当前配置未匹配到数据源'
 })
 const noMatchedDatasourceDesc = computed(() => {
-  if (hasMappedDatasource.value && userOrgCodePermissions.value.length === 0) {
-    return '请确认当前用户已授权可访问的机构编码'
-  }
   if (parentComponentName.value) {
-    return '请在数据源管理中配置模块映射'
+    return '请确认已配置模块映射，且当前用户有可访问的机构权限'
   }
   return '请在数据源管理中添加可用数据源'
 })
@@ -131,30 +117,6 @@ const getDatasourceOrgCode = (datasource: DataSource) => {
   return normalizeOrgCode(sourceConfig.org_code)
 }
 
-const normalizeOrgCodePermissions = (items: unknown): string[] => {
-  const rawItems = Array.isArray(items) ? items : []
-  const result: string[] = []
-  rawItems.forEach((item) => {
-    const value = typeof item === 'string'
-      ? item
-      : (item as Record<string, unknown> | null)?.orgCode
-    const orgCode = normalizeOrgCode(value)
-    if (orgCode && !result.includes(orgCode)) {
-      result.push(orgCode)
-    }
-  })
-  return result
-}
-
-const loadUserOrgCodePermissions = async () => {
-  try {
-    const res = await getUserOrgList()
-    userOrgCodePermissions.value = normalizeOrgCodePermissions((res as { data?: unknown }).data)
-  } catch (error) {
-    console.error('加载用户机构权限失败:', error)
-    userOrgCodePermissions.value = []
-  }
-}
 // 后台管理弹窗
 const showAdminModal = ref(false)
 const canManageAdmin = computed(() => {
@@ -215,35 +177,7 @@ const handleDatasourcesChange = (newDatasources: DataSource[]) => {
 const applyDatasourceFilters = (allDatasources: DataSource[]): DataSource[] => {
   const parentName = parentComponentName.value
   if (!parentName) return []
-  const allowedOrgCodes = userOrgCodePermissions.value
-
-  return allDatasources.flatMap((ds) => {
-    const parentMatched = ds.mapped_modules?.includes(parentName)
-    if (!parentMatched) return []
-
-    const members = ds.member_sources || []
-    if (members.length === 0) {
-      const orgCode = getDatasourceOrgCode(ds)
-      return orgCode && allowedOrgCodes.includes(orgCode) ? [ds] : []
-    }
-
-    const allowedMembers = members.filter((member) => {
-      if (allowedOrgCodes.length === 0) return false
-      const orgCode = getMemberOrgCode(member)
-      return orgCode && allowedOrgCodes.includes(orgCode)
-    })
-    if (allowedMembers.length === 0) return []
-
-    const allowedMemberIds = new Set(allowedMembers.map(member => String(member.member_datasource_id || '').trim()).filter(Boolean))
-    return [{
-      ...ds,
-      member_sources: allowedMembers,
-      member_datasource_ids: (ds.member_datasource_ids || []).filter(memberId => allowedMemberIds.has(String(memberId || '').trim())),
-      template_datasource_id: allowedMemberIds.has(String(ds.template_datasource_id || '').trim())
-        ? ds.template_datasource_id
-        : allowedMembers[0]?.member_datasource_id,
-    }]
-  })
+  return allDatasources.filter(ds => ds.mapped_modules?.includes(parentName))
 }
 
 const shouldShowNoMatchedDatasource = (filtered: DataSource[]): boolean => {
@@ -1550,7 +1484,6 @@ onMounted(async () => {
     ElMessage.error('未获取到当前登录用户')
     return
   }
-  await loadUserOrgCodePermissions()
   await loadDatasources()
   void ensureConversationsLoaded()
   // 不立即创建会话，等发送第一条消息时才创建
