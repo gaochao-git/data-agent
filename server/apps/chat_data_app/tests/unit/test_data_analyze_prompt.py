@@ -65,3 +65,26 @@ def test_data_analyze_prompt_uses_single_agent_tool_chain():
     assert "analysis_plan" not in prompt
     assert "理解节点" not in prompt
     assert "规划节点" not in prompt
+
+
+def test_data_analyze_prompt_uses_chat_data_directory_format_before_semantic_selected():
+    prompt = build_data_analyze_system_prompt(
+        skill=None,
+        data_context={
+            "datasource": {"source_type": "mysql"},
+            "tables": [],
+            "semantic_config_directory_info": "## 当前用户已选择的执行对象数据源\n本次查询必须只使用以下 member_datasource_ids：\n- 财付通（member_datasource_id: ORG_CODE1）；编码：ORG_CODE1\n\n## 当前可见指标集目录\n1. 名称：订单分析\n   描述：订单域\n   指标数：2；维度数：3",
+            "semantic_configs": [],
+        },
+        workspace_root="/tmp/workspace",
+    )
+
+    data_context_text = prompt[prompt.index("<data_context>"):prompt.index("</data_context>")]
+    assert "## 当前用户已选择的执行对象数据源" in data_context_text
+    assert "财付通（member_datasource_id: ORG_CODE1）" in data_context_text
+    assert "## 当前可见指标集目录" in data_context_text
+    assert "1. 名称：订单分析" in data_context_text
+    assert data_context_text.index("## 当前用户已选择的执行对象数据源") < data_context_text.index("## 当前可见指标集目录")
+    assert "## 当前指标集" in data_context_text
+    assert '"semantic_config_directory_info"' not in data_context_text
+    assert '"tables"' not in data_context_text

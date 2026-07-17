@@ -28,6 +28,7 @@ from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
 from .services.datasource_manager import get_datasource_manager
 from .services.context_budget import sanitize_context_usage_for_response
 from .services.data_analyze_context import build_data_analyze_context
+from .services.execution_target_context import append_selected_execution_targets_to_context
 from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
 from .services.skill_service import skill_service
 from .services.semantic_tools import (
@@ -838,36 +839,7 @@ def _append_user_selected_execution_targets_to_context(
     member_datasource_ids: list[str],
 ) -> str:
     """用户显式选择执行对象时，追加到数据源组智能问数说明末尾。"""
-    selected_member_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    if not selected_member_ids:
-        return str(query_context or "").strip()
-
-    selected_id_set = set(selected_member_ids)
-    selected_targets = [
-        (index, target)
-        for index, target in enumerate(execution_targets, start=1)
-        if _execution_target_member_id(target) in selected_id_set
-    ]
-    if not selected_targets:
-        return str(query_context or "").strip()
-
-    lines: list[str] = []
-    base_context = str(query_context or "").strip()
-    if base_context:
-        lines.extend([base_context, ""])
-    lines.append("## 当前用户已选择的执行对象数据源")
-    lines.append("本次查询必须只使用以下 member_datasource_ids：")
-    for index, target in selected_targets:
-        member_name = _execution_target_name(target, index)
-        member_id = _execution_target_member_id(target)
-        org_code = _execution_target_org_code(target)
-        line = f"- {member_name}"
-        if member_id:
-            line += f"（member_datasource_id: {member_id}）"
-        if org_code and org_code != member_name:
-            line += f"；编码：{org_code}"
-        lines.append(line)
-    return "\n".join(lines)
+    return append_selected_execution_targets_to_context(query_context, execution_targets, member_datasource_ids)
 
 
 async def _get_execution_targets_async(

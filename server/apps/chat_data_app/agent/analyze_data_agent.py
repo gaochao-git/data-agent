@@ -105,6 +105,22 @@ def build_dialect_prompt_sections(data_context: dict[str, Any]) -> tuple[str, st
     return DATA_ANALYZE_GENERIC_DIALECT_CONTEXT, DATA_ANALYZE_GENERIC_DIALECT_FEWSHOT_PROMPT
 
 
+def _format_data_context_for_prompt(data_context: dict[str, Any]) -> str:
+    """格式化注入系统提示词的数据上下文。"""
+    if not isinstance(data_context, dict):
+        return "{}"
+    semantic_config_directory_info = str(data_context.get("semantic_config_directory_info") or "").strip()
+    semantic_configs = data_context.get("semantic_configs")
+    if semantic_config_directory_info and not semantic_configs:
+        return "\n".join([
+            semantic_config_directory_info,
+            "",
+            "## 当前指标集",
+            "本轮未提供完整指标集。业务数据分析或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。",
+        ])
+    return json.dumps(data_context or {}, ensure_ascii=False, indent=2)
+
+
 def create_data_analyze_tools(
     workspace_root: str,
     *,
@@ -157,7 +173,7 @@ def build_data_analyze_system_prompt(
     available_skills_xml: str | None = None,
 ) -> str:
     """构造通用分析智能体系统提示词。"""
-    data_context_text = json.dumps(data_context or {}, ensure_ascii=False, indent=2)
+    data_context_text = _format_data_context_for_prompt(data_context or {})
     if available_skills_xml is None:
         available_skills_xml = build_builtin_skills_prompt()
     dialect_context_text, dialect_fewshot = build_dialect_prompt_sections(data_context or {})

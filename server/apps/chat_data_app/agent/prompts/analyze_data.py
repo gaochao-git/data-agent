@@ -47,8 +47,8 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 
 <workflow>
 ## 数据上下文
-- `data_context` 是本次运行的数据源、表结构、语义指标和维度体系，直接作为事实依据。
-- `data_context.datasource.source_type` 和 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
+- 未手动选择指标集时，`data_context` 只注入“当前可见指标集目录”和“当前指标集”说明，不包含表结构、完整指标和维度口径。
+- `data_context.datasource.source_type` 和已选中 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
 - 如果 `semantic_configs` 中存在 `selected=true` 的配置，表示用户已手动选择指标集，后续只使用该指标集的指标和维度。
 - 如果没有 `selected=true` 的指标集，业务数据分析必须先调用 `select_semantic_config_tool`；工具返回相关 `semantic_config_ids` 和指标集配置后，由你依据用户原问题、维度暴露的表列、指标口径和关联关系自行决定后续使用哪个指标集、是否澄清或是否执行查询。每次 `dsl2sql_tool` 和 `semantic_query_tool` 都必须传入一个明确的 `semantic_config_id`；每次 `semantic_query_tool` 还必须传入 `data_context.execution_targets` 中的一个或多个 `member_datasource_ids`。
 - 正文不得输出、复述或用 Markdown 代码块展示工具返回的 JSON、指标集 ID 或语义配置。

@@ -1,5 +1,5 @@
 <template>
   <span class="whitespace-nowrap text-[11px] leading-5 text-red-500">
-    当前内容为AI生成，请复核验证
+    本回答由 AI 生成，内容仅供参考，请仔细甄别
   </span>
 </template>

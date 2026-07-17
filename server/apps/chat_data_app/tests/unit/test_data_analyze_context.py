@@ -51,8 +51,10 @@ async def test_build_data_analyze_context_summarizes_datasource(monkeypatch):
                         "id": "sem_1",
                         "name": "风险语义层",
                         "source_type": "hive",
-                        "metrics": [{"name": "风险事件数", "table": "risk_event"}],
+                        "ontology_rules": "风险分析业务口径",
+                        "metrics": [{"name": "风险事件数", "table": "risk_event", "expression": "COUNT(*)"}],
                         "dimensions": [{"name": "风险等级", "table": "risk_event", "logical_type": "text"}],
+                        "relationships": [{"left_table": "risk_event", "right_table": "risk_user"}],
                     }
                 ],
             }
@@ -64,9 +66,87 @@ async def test_build_data_analyze_context_summarizes_datasource(monkeypatch):
     assert context["datasource"]["name"] == "风险数据源"
     assert context["tables"][0]["table_name"] == "risk_event"
     assert context["tables"][0]["columns"][1]["name"] == "risk_level"
+    assert context["semantic_config_directory_info"] == ""
     assert context["semantic_configs"][0]["selected"] is True
     assert context["semantic_configs"][0]["source_type"] == "hive"
     assert context["semantic_configs"][0]["metrics"][0]["name"] == "风险事件数"
+    assert context["semantic_configs"][0]["relationships"][0]["right_table"] == "risk_user"
+
+
+@pytest.mark.asyncio
+async def test_build_data_analyze_context_uses_directory_only_before_semantic_selected(monkeypatch):
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "id": datasource_id,
+                "name": "订单数据源",
+                "source_type": "mysql",
+                "ds_tables": [],
+                "semantic_configs": [
+                    {
+                        "id": "sem_order",
+                        "name": "订单指标集",
+                        "source_type": "mysql",
+                        "description": "订单分析",
+                        "ontology_rules": "不应在未选中时注入",
+                        "metrics": [{"name": "订单金额", "expression": "SUM(amount)"}],
+                        "dimensions": [{"name": "订单状态", "column": "status"}],
+                        "relationships": [{"left_table": "orders", "right_table": "users"}],
+                    }
+                ],
+            }
+
+        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
+            return [
+                {"member_datasource_id": "m1", "member_name": "财付通", "org_code": "ORG_CODE1"},
+                {"member_datasource_id": "m2", "member_name": "支付宝", "source_config": {"org_code": "ORG_CODE2"}},
+            ]
+
+    monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: FakeManager())
+
+    context = await data_analyze_context.build_data_analyze_context("ds_1", member_datasource_ids=["m1", "m2"])
+
+    assert context["tables"] == []
+    assert context["semantic_configs"] == []
+    assert "## 当前用户已选择的执行对象数据源" in context["semantic_config_directory_info"]
+    assert "财付通（member_datasource_id: m1）；编码：ORG_CODE1" in context["semantic_config_directory_info"]
+    assert "支付宝（member_datasource_id: m2）；编码：ORG_CODE2" in context["semantic_config_directory_info"]
+    assert "## 当前可见指标集目录" in context["semantic_config_directory_info"]
+    assert context["semantic_config_directory_info"].index("## 当前用户已选择的执行对象数据源") < context["semantic_config_directory_info"].index("## 当前可见指标集目录")
+    assert "名称：订单指标集" in context["semantic_config_directory_info"]
+    assert "指标数：1；维度数：1" in context["semantic_config_directory_info"]
+    assert "semantic_config_id" not in context["semantic_config_directory_info"]
+    assert any("仅注入指标集轻量目录" in note for note in context["notes"])
+
+
+@pytest.mark.asyncio
+async def test_build_data_analyze_context_keeps_directory_when_selected_id_missing(monkeypatch):
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "id": datasource_id,
+                "name": "订单数据源",
+                "source_type": "mysql",
+                "ds_tables": [],
+                "semantic_configs": [
+                    {
+                        "id": "sem_order",
+                        "name": "订单指标集",
+                        "metrics": [{"name": "订单金额"}],
+                        "dimensions": [{"name": "订单状态"}],
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: FakeManager())
+
+    context = await data_analyze_context.build_data_analyze_context("ds_1", "missing_semantic")
+
+    assert context["tables"] == []
+    assert context["semantic_configs"] == []
+    assert "## 当前可见指标集目录" in context["semantic_config_directory_info"]
+    assert "名称：订单指标集" in context["semantic_config_directory_info"]
+    assert any("仅注入指标集轻量目录" in note for note in context["notes"])
 
 
 def test_data_analyze_context_truncate_short_and_long_text():
@@ -101,4 +181,6 @@ async def test_build_data_analyze_context_missing_datasource_and_fallback_config
     monkeypatch.setattr(data_analyze_context, "get_datasource_manager", lambda: FallbackManager())
     fallback = await data_analyze_context.build_data_analyze_context("ds_a")
     assert fallback["datasource"]["name"] == "普通数据源"
-    assert fallback["semantic_configs"][0]["id"] == "cfg_a"
+    assert fallback["tables"] == []
+    assert "名称：指标集A" in fallback["semantic_config_directory_info"]
+    assert fallback["semantic_configs"] == []

@@ -4,7 +4,12 @@ from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 from ..agent.analyze_data_agent import get_data_analyze_tool_chain
+from .semantic_tools import format_semantic_config_directory_for_prompt
 from .datasource_manager import get_datasource_manager
+from .execution_target_context import (
+    append_selected_execution_targets_to_context,
+    normalize_member_datasource_ids,
+)
 
 logger = get_logger(__name__)
 
@@ -36,6 +41,89 @@ def _summarize_tables(tables: List[Dict[str, Any]], max_tables: int = 12, max_co
     return result
 
 
+def _semantic_config_directory_item(
+    config: Dict[str, Any],
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """构造未选中指标集的轻量目录项。"""
+    return {
+        "name": config.get("name") or config.get("semantic_config_name") or "",
+        "description": _truncate(config.get("description") or config.get("semantic_config_desc") or "", 120),
+        "selected": False,
+        "metrics_total": len(metrics),
+        "dimensions_total": len(dimensions),
+    }
+
+
+def _selected_semantic_config_item(
+    config: Dict[str, Any],
+    config_id: str,
+    metrics: List[Dict[str, Any]],
+    dimensions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """构造已选中指标集的完整语义上下文。"""
+    return {
+        **_semantic_config_directory_item(config, metrics, dimensions),
+        "id": config_id,
+        "selected": True,
+        "source_type": config.get("source_type") or "",
+        "business_description": _truncate(config.get("ontology_rules") or "", 300),
+        "metrics": [
+            {
+                "name": item.get("name") or "",
+                "description": _truncate(item.get("description") or "", 80),
+                "table": item.get("table") or "",
+                "column": item.get("column") or "",
+                "expression": _truncate(item.get("expression") or "", 120),
+                "aggregation": item.get("aggregation") or item.get("agg_func") or "",
+            }
+            for item in metrics
+        ],
+        "dimensions": [
+            {
+                "name": item.get("name") or "",
+                "description": _truncate(item.get("description") or "", 80),
+                "table": item.get("table") or "",
+                "column": item.get("column") or "",
+                "logical_type": item.get("logical_type") or "",
+                "allowed_values": item.get("allowed_values") or [],
+                "mapping": item.get("mapping") or {},
+            }
+            for item in dimensions
+        ],
+        "relationships": config.get("relationships") or [],
+    }
+
+
+def _build_data_context_notes(has_selected_semantic_config: bool) -> List[str]:
+    """构造与指标集注入状态一致的上下文说明。"""
+    notes = [
+        "每次语义查询必须在工具参数中明确传入 execution_targets 里的 member_datasource_ids。",
+    ]
+    if has_selected_semantic_config:
+        return [
+            "当前已手动选择指标集，完整指标、维度和关联关系已注入提示词。",
+            *notes,
+            "后续只使用当前选中指标集；口径不清时先澄清。",
+        ]
+    return [
+        "未手动选择指标集时仅注入指标集轻量目录；业务数据分析必须先选择指标集，再使用工具返回的完整指标和维度。",
+        *notes,
+        "用户没有明确口径时，先选择最匹配的指标集；候选不唯一或口径不清时先澄清。",
+    ]
+
+
+def _build_data_analyze_tables(
+    datasource: Dict[str, Any],
+    has_selected_semantic_config: bool,
+) -> List[Dict[str, Any]]:
+    """仅在已选择指标集后注入表结构摘要。"""
+    if not has_selected_semantic_config:
+        return []
+    return _summarize_tables(datasource.get("ds_tables") or [])
+
+
 def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_id: Optional[str]) -> List[Dict[str, Any]]:
     """提取语义配置摘要。"""
     result: List[Dict[str, Any]] = []
@@ -45,39 +133,10 @@ def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_i
         metrics = config.get("metrics") or []
         dimensions = config.get("dimensions") or []
         is_selected = bool(normalized_selected_id and config_id == normalized_selected_id)
-        metric_items = metrics if is_selected else metrics[:20]
-        dimension_items = dimensions if is_selected else dimensions[:20]
-        result.append({
-            "id": config_id,
-            "name": config.get("name") or config.get("semantic_config_name") or "",
-            "source_type": config.get("source_type") or "",
-            "description": _truncate(config.get("description") or config.get("semantic_config_desc") or "", 120),
-            "business_description": _truncate(config.get("ontology_rules") or "", 300),
-            "selected": is_selected,
-            "metrics_total": len(metrics),
-            "dimensions_total": len(dimensions),
-            "metrics": [
-                {
-                    "name": item.get("name") or "",
-                    "description": _truncate(item.get("description") or "", 80),
-                    "table": item.get("table") or "",
-                    "expression": _truncate(item.get("expression") or "", 120),
-                }
-                for item in metric_items
-            ],
-            "dimensions": [
-                {
-                    "name": item.get("name") or "",
-                    "description": _truncate(item.get("description") or "", 80),
-                    "table": item.get("table") or "",
-                    "column": item.get("column") or "",
-                    "logical_type": item.get("logical_type") or "",
-                    "allowed_values": item.get("allowed_values") or [],
-                    "mapping": item.get("mapping") or {},
-                }
-                for item in dimension_items
-            ],
-        })
+        if is_selected:
+            result.append(_selected_semantic_config_item(config, config_id, metrics, dimensions))
+        else:
+            result.append(_semantic_config_directory_item(config, metrics, dimensions))
     return result
 
 
@@ -116,8 +175,20 @@ async def build_data_analyze_context(
             semantic_configs = datasource.get("semantic_configs")
             if semantic_configs is None:
                 semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
-        selected_member_ids = [str(item or "").strip() for item in member_datasource_ids or [] if str(item or "").strip()]
+        semantic_config_context = _summarize_semantic_configs(semantic_configs or [], semantic_config_id)
+        has_selected_semantic_config = any(bool(item.get("selected")) for item in semantic_config_context)
+        selected_member_ids = normalize_member_datasource_ids(member_datasource_ids)
         execution_targets = await ds_manager.get_execution_datasources_async(normalized_datasource_id, selected_member_ids) if selected_member_ids else []
+        execution_target_context = append_selected_execution_targets_to_context("", execution_targets, selected_member_ids)
+        semantic_config_directory_info = ""
+        if not has_selected_semantic_config:
+            semantic_config_directory_info = format_semantic_config_directory_for_prompt(semantic_config_context)
+            if execution_target_context:
+                semantic_config_directory_info = "\n\n".join([
+                    execution_target_context,
+                    semantic_config_directory_info,
+                ]).strip()
+            semantic_config_context = []
         return {
             "datasource": {
                 "id": normalized_datasource_id,
@@ -134,14 +205,11 @@ async def build_data_analyze_context(
                 for item in execution_targets
                 if str(item.get("member_datasource_id") or "").strip()
             ],
-            "tables": _summarize_tables(datasource.get("ds_tables") or []),
-            "semantic_configs": _summarize_semantic_configs(semantic_configs or [], semantic_config_id),
+            "tables": _build_data_analyze_tables(datasource, has_selected_semantic_config),
+            "semantic_config_directory_info": semantic_config_directory_info,
+            "semantic_configs": semantic_config_context,
             "tool_chain": get_data_analyze_tool_chain(),
-            "notes": [
-                "数据源、表字段、语义指标和维度已注入提示词，可作为默认分析口径。",
-                "每次语义查询必须在工具参数中明确传入 execution_targets 里的 member_datasource_ids。",
-                "用户没有明确口径时，优先从已有指标和维度中选择最匹配项并继续推进，在结果中说明默认口径和可调整参数。",
-            ],
+            "notes": _build_data_context_notes(has_selected_semantic_config),
         }
     except Exception as err:
         logger.error("构建 DataAnalyze 上下文失败: datasource_id=%s error=%s", normalized_datasource_id, err, exc_info=True)
