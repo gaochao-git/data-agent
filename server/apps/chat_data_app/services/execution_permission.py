@@ -19,10 +19,9 @@ def normalize_org_codes(items: Any) -> Set[str]:
     raw_items = items if isinstance(items, list) else []
     result: Set[str] = set()
     for item in raw_items:
-        value = item
-        if isinstance(item, dict):
-            value = item.get("orgCode") or item.get("org_code") or item.get("code")
-        org_code = str(value or "").strip()
+        if not isinstance(item, str):
+            continue
+        org_code = item.strip()
         if org_code:
             result.add(org_code)
     return result

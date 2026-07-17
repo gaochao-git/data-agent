@@ -218,16 +218,14 @@ def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     return manager
 
 
-def test_normalize_org_codes_accepts_provider_payload_shapes():
+def test_normalize_org_codes_accepts_string_list_only():
     assert execution_permission.normalize_org_codes([
         " ORG_A ",
-        {"orgCode": "ORG_B"},
-        {"org_code": "ORG_C"},
-        {"code": "ORG_D"},
-        {"missing": "ORG_E"},
+        "ORG_B",
+        {"orgCode": "ORG_C"},
         None,
         "",
-    ]) == {"ORG_A", "ORG_B", "ORG_C", "ORG_D"}
+    ]) == {"ORG_A", "ORG_B"}
     assert execution_permission.normalize_org_codes({"data": ["ORG_A"]}) == set()
 
 
@@ -319,7 +317,7 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
 
         async def post(self, url, json):
             calls.append(("post", url, json))
-            return FakeResponse({"code": 20000, "data": ["ORG_A", {"orgCode": "ORG_B"}]})
+            return FakeResponse({"code": 20000, "data": ["ORG_A", "ORG_B"]})
 
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
