@@ -686,6 +686,7 @@ async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request
 @router.post("/admin/evaluations/accuracy/run")
 async def run_admin_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
     """后台运行公共指标集准确率评测。"""
+    _get_current_user(request)
     return await _run_accuracy_evaluation_route(payload, request, admin_manage=True)
 
 
@@ -698,6 +699,11 @@ async def run_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, 
 @router.post("/admin/evaluations/accuracy/run-stream")
 async def run_admin_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
     """后台流式运行公共指标集准确率评测，逐条返回用例结果。"""
+    try:
+        _get_current_user(request)
+    except (HTTPException, ValueError) as e:
+        message = str(getattr(e, "detail", None) or e)
+        return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")
     return await _run_accuracy_evaluation_stream_route(payload, request, admin_manage=True)
 
 
@@ -729,6 +735,7 @@ async def list_admin_accuracy_evaluation_runs(
     page_size: int = 20,
 ):
     """后台查询公共指标集评测历史批次。"""
+    _get_current_user(request)
     return await _list_accuracy_evaluation_runs_route(
         request,
         datasource_id=datasource_id,
@@ -748,6 +755,7 @@ async def get_accuracy_evaluation_run_detail(run_id: str, request: Request):
 @router.get("/admin/evaluations/accuracy/runs/{run_id}")
 async def get_admin_accuracy_evaluation_run_detail(run_id: str, request: Request):
     """后台查询公共指标集评测历史详情。"""
+    _get_current_user(request)
     return await _get_accuracy_evaluation_run_detail_route(run_id, request, admin_manage=True)
 
 
@@ -888,6 +896,7 @@ async def get_scene_evaluation_cases(datasource_id: str, config_id: str, request
 @router.get("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def get_admin_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
     """后台读取公共指标集场景的评测测试集。"""
+    _get_current_user(request)
     return await _get_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=True)
 
 
@@ -900,6 +909,7 @@ async def save_scene_evaluation_cases(datasource_id: str, config_id: str, payloa
 @router.put("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")
 async def save_admin_scene_evaluation_cases(datasource_id: str, config_id: str, payload: AccuracyEvaluationCasesUpsertRequest, request: Request):
     """后台保存公共指标集场景的评测测试集。"""
+    _get_current_user(request)
     return await _save_scene_evaluation_cases_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -912,6 +922,7 @@ async def generate_scene_evaluation_cases(datasource_id: str, config_id: str, re
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/generate")
 async def generate_admin_scene_evaluation_cases(datasource_id: str, config_id: str, request: Request):
     """后台按公共指标集生成场景评测测试集草稿，不直接保存。"""
+    _get_current_user(request)
     return await _generate_scene_evaluation_cases_route(datasource_id, config_id, request, admin_manage=True)
 
 
@@ -924,4 +935,5 @@ async def draft_scene_evaluation_case(datasource_id: str, config_id: str, payloa
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases/draft-case")
 async def draft_admin_scene_evaluation_case(datasource_id: str, config_id: str, payload: AccuracyEvaluationDraftCaseRequest, request: Request):
     """后台用 LLM 生成公共指标集评测用例草稿。"""
+    _get_current_user(request)
     return await _draft_scene_evaluation_case_route(datasource_id, config_id, payload, request, admin_manage=True)

@@ -82,7 +82,7 @@ async def get_admin_query_history(
 ):
     """获取后台全局 SQL 查询历史。"""
     try:
-        _resolve_current_user(request, None)
+        _get_current_user(request)
         data = await (history_service or get_query_history_service()).list_admin_history(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
@@ -138,7 +138,7 @@ async def cancel_admin_running_query_history(
 ):
     """停止全局所有执行中的 SQL。"""
     try:
-        current_user = _resolve_current_user(request, None)
+        current_user = _get_current_user(request)
         result = await (task_service or get_query_task_service()).cancel_running_query_history(
             datasource_id=datasource_id,
             operator_name=str(getattr(current_user, "username", "") or "").strip(),

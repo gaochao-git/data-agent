@@ -1183,8 +1183,9 @@ def test_datasource_semantic_health_reports_missing_fields(monkeypatch):
             "issues": [],
         }
     monkeypatch.setattr(datasource_admin_routes, "_build_datasource_schema_health", _fake_schema_health)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     data = _payload(resp)
     issue_types = {item["type"] for item in data["data"]["issues"]}
 
@@ -1219,8 +1220,9 @@ def test_datasource_semantic_health_allows_count_all_metric(monkeypatch):
             "issues": [],
         }
     monkeypatch.setattr(datasource_admin_routes, "_build_datasource_schema_health", _fake_schema_health)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     data = _payload(resp)
 
     assert data["status"] == "success"
@@ -1264,8 +1266,9 @@ def test_datasource_semantic_health_allows_common_sql_expressions(monkeypatch):
             "issues": [],
         }
     monkeypatch.setattr(datasource_admin_routes, "_build_datasource_schema_health", _fake_schema_health)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     data = _payload(resp)
 
     assert data["status"] == "success"
@@ -1306,8 +1309,9 @@ def test_datasource_semantic_health_reports_physical_schema_drift(monkeypatch):
         ]
 
     monkeypatch.setattr(datasource_helper_routes, "_load_tables_from_source", _fake_load_tables)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     data = _payload(resp)
     schema_issue_types = {item["type"] for item in data["data"]["schema"]["issues"]}
 
@@ -2953,8 +2957,9 @@ def test_get_datasource_table_groups(monkeypatch):
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(get_datasource_table_groups("ds_a"))
+    resp = asyncio.run(get_datasource_table_groups("ds_a", SimpleNamespace()))
     data = _payload(resp)
     assert data["status"] == "success"
     assert data["data"]["groups"] == [{"table_group_name": "核心表", "table_names": ["t_a"]}]
@@ -3313,8 +3318,8 @@ def test_datasource_route_error_branches(monkeypatch):
     _mock_authenticated_user(monkeypatch)
 
     assert _payload(asyncio.run(datasource_public_routes.get_datasources(SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED
-    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_table_groups("ds_a")))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
-    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a")))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_table_groups("ds_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
 
 def test_datasource_update_missing_and_exception_branches(monkeypatch):
@@ -3498,6 +3503,7 @@ def test_get_schema_and_db_tables_error_branches(monkeypatch):
 
     _mock_datasource_manager(monkeypatch, SchemaManager())
     monkeypatch.setattr(datasource_helper_routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
+    _mock_authenticated_user(monkeypatch, user_id="u1", username="用户1")
     ok = _payload(asyncio.run(datasource_public_routes.get_schema("ok", source="live", tables=" orders, ,users ", request=SimpleNamespace())))
     assert ok["data"]["count"] == 1
     assert _payload(asyncio.run(datasource_public_routes.get_schema("value", request=SimpleNamespace())))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
@@ -3519,7 +3525,7 @@ def test_get_schema_and_db_tables_error_branches(monkeypatch):
         database="db",
         org_code="o",
         org_name="机构",
-    )))
+    ), SimpleNamespace()))
     assert _payload(timeout_response)["code"] == ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED
 
     class ValueMySQLService:
@@ -3536,7 +3542,7 @@ def test_get_schema_and_db_tables_error_branches(monkeypatch):
         database="db",
         org_code="o",
         org_name="机构",
-    ))))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+    ), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
 
 def test_query_favorite_exception_branches(monkeypatch):
@@ -4115,7 +4121,7 @@ def test_datasource_table_group_and_default_error_branches(monkeypatch):
     _mock_authenticated_user(monkeypatch)
     _mock_datasource_manager(monkeypatch, manager)
 
-    missing_groups_resp = asyncio.run(get_datasource_table_groups("missing_ds"))
+    missing_groups_resp = asyncio.run(get_datasource_table_groups("missing_ds", SimpleNamespace()))
     assert _payload(missing_groups_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     update_missing_resp = asyncio.run(update_datasource_table_groups("missing_ds", DatasourceTableGroupsUpdateRequest(groups=[]), SimpleNamespace()))
@@ -4192,12 +4198,13 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
     monkeypatch.setattr(datasource_admin_routes, "HiveSyncService", RecordingHiveSyncService)
     monkeypatch.setattr(datasource_admin_routes, "resolve_mysql_credentials", lambda _cfg: {"user": "mysql_user", "password": "mysql_pwd"})
     monkeypatch.setattr(datasource_admin_routes, "resolve_hive_credentials", lambda _cfg: {"username": "hive_user", "password": "hive_pwd"})
+    _mock_authenticated_user(monkeypatch, user_id="user_a", username="测试用户")
 
     mysql_response = asyncio.run(datasource_admin_routes.get_db_tables(DbConnectionRequest(
         source_type="mysql",
         host="127.0.0.1",
         database="demo",
-    )))
+    ), SimpleNamespace()))
     mysql_body = _payload(mysql_response)
     assert mysql_body["status"] == "success"
     assert mysql_body["data"]["total"] == 1
@@ -4209,7 +4216,6 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
         return ["http_orders"]
 
     monkeypatch.setattr(datasource_admin_routes, "get_hive_meta_tables_async", fake_get_hive_meta_tables_async)
-    _mock_authenticated_user(monkeypatch, user_id="user_a", username="测试用户")
     hive_http_response = asyncio.run(datasource_admin_routes.get_db_tables(DbConnectionRequest(
         source_type="hive",
         query_executor_type="http",
@@ -4235,7 +4241,7 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
         host="127.0.0.1",
         port=10001,
         database="default",
-    )))
+    ), SimpleNamespace()))
     hive_direct_body = _payload(hive_direct_response)
     assert hive_direct_body["status"] == "success"
     assert hive_direct_body["data"]["tables"][0]["table_name"] == "hive_orders"
@@ -4247,7 +4253,7 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
         source_type="mysql",
         host="127.0.0.1",
         database="demo",
-    ))))
+    ), SimpleNamespace())))
     assert value_error_body["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert value_error_body["msg"] == "缺少账号"
 
@@ -4261,7 +4267,7 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
         source_type="mysql",
         host="127.0.0.1",
         database="demo",
-    ))))
+    ), SimpleNamespace())))
     assert timeout_body["code"] == ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED
     assert "连接超时" in timeout_body["msg"]
 
@@ -4274,7 +4280,7 @@ def test_get_db_tables_supports_mysql_hive_http_direct_and_error_branches(monkey
         source_type="mysql",
         host="127.0.0.1",
         database="demo",
-    ))))
+    ), SimpleNamespace())))
     assert failed_body["code"] == ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED
     assert "连接失败" in failed_body["msg"]
 
@@ -4331,8 +4337,9 @@ def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypat
         ]
 
     monkeypatch.setattr(datasource_helper_routes, "_load_tables_from_source", fake_load_tables)
+    _mock_authenticated_user(monkeypatch)
 
-    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     body = _payload(resp)
     issue_types = {item["type"] for item in body["data"]["issues"]}
 
@@ -4358,7 +4365,8 @@ def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
         "semantic_configs": [],
     }
     _mock_datasource_manager(monkeypatch, manager)
-    unsupported_resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("unsupported"))
+    _mock_authenticated_user(monkeypatch)
+    unsupported_resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("unsupported", SimpleNamespace()))
     unsupported_body = _payload(unsupported_resp)
     assert unsupported_body["data"]["status"] == "warning"
     assert unsupported_body["data"]["schema"]["issues"][0]["type"] == "physical_schema_unsupported"
@@ -4367,7 +4375,7 @@ def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
         raise RuntimeError("connect failed")
 
     monkeypatch.setattr(datasource_helper_routes, "_load_tables_from_source", raise_load_error)
-    failed_resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a"))
+    failed_resp = asyncio.run(datasource_admin_routes.get_datasource_semantic_health("ds_a", SimpleNamespace()))
     failed_body = _payload(failed_resp)
     assert failed_body["data"]["status"] == "invalid"
     assert failed_body["data"]["schema"]["issues"][0]["type"] == "physical_schema_check_failed"
@@ -4838,7 +4846,7 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
             return None
 
     _mock_datasource_manager(monkeypatch, MissingHealthManager())
-    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_semantic_health("missing")))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_semantic_health("missing", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     class DictCrashManager(_FakeDatasourceManager):
         async def get_column_dict_async(self, *_args, **_kwargs):

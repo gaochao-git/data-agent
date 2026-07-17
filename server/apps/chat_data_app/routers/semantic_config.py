@@ -692,6 +692,7 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
 @router.post("/admin/datasources/{datasource_id}/semantic-configs")
 async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
     """创建公共指标集。"""
+    _get_current_user(request)
     return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
 
 
@@ -743,6 +744,7 @@ async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, paylo
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
 async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
     """后台按公共指标集自动预填维度/指标/表达式。"""
+    _get_current_user(request)
     return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -811,6 +813,7 @@ async def semantic_prefill(payload: SemanticPrefillRequest, request: Request):
 @router.post("/admin/semantic/prefill")
 async def admin_semantic_prefill(payload: SemanticPrefillRequest, request: Request):
     """后台按公共指标集预填语义字段。"""
+    _get_current_user(request)
     return await _semantic_prefill_route(payload, request, admin_manage=True)
 
 
@@ -876,6 +879,7 @@ async def learn_admin_semantic_config_from_history(
     request: Request,
 ):
     """后台基于公共指标集的查询历史生成维护建议。"""
+    _get_current_user(request)
     return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -1015,6 +1019,7 @@ async def update_admin_semantic_config(
     request: Request,
 ):
     """后台更新公共指标集。"""
+    _get_current_user(request)
     return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -1027,6 +1032,7 @@ async def delete_semantic_config(datasource_id: str, config_id: str, request: Re
 @router.delete("/admin/datasources/{datasource_id}/semantic-configs/{config_id}")
 async def delete_admin_semantic_config(datasource_id: str, config_id: str, request: Request):
     """后台删除公共指标集。"""
+    _get_current_user(request)
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
 
 
@@ -1039,4 +1045,5 @@ async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bo
 @router.patch("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
 async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
     """后台切换公共指标集启用状态。"""
+    _get_current_user(request)
     return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=True)

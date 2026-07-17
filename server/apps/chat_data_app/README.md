@@ -19,6 +19,19 @@ ChatData App 是一个基于 LangGraph 实现的智能问数服务，当前主�
 
 ---
 
+## 权限边界
+
+ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单、页面入口和角色授权。`/api/chatdata/admin/**` 是否允许访问由上层 controller/BFF 基于登录态和权限点统一拦截。
+
+本模块仍负责服务层身份和业务数据权限：
+
+- 所有 `/api/chatdata/admin/**` 路由入口至少调用 `_get_current_user(request)`，保证服务 token、当前用户和审计身份一致。
+- 用户侧数据按 `user_id`、owner、public/global 状态隔离。
+- 数据源执行对象权限在 service 层校验；HTTP 执行对象通过权限接口获取当前用户可用机构编码，direct 执行对象使用服务端固定允许编码。
+- 上层 controller 负责 admin 角色权限，本模块不重复实现菜单/角色授权，避免两套权限口径漂移。
+
+---
+
 ## 语义层架构
 
 ### 核心流程：NL → DSL → SQL

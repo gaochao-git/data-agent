@@ -95,6 +95,17 @@ kill -9 $(lsof -ti :5001)
 - `CHATDATA_TOOL_RESULT_OFFLOAD_SIZE`：大结果转 artifact 阈值，默认 32000 字符
 - `CHATDATA_CONTEXT_EDIT_ENABLED`：智能问数模型入口上下文编辑总开关，仅影响发给大模型的上下文，不影响页面历史、checkpoint 和审计记录
 
+## 权限边界
+
+`data-agent` 按 service 层运行，不直接承担前端菜单和后台角色授权。`/api/chatdata/admin/**` 是否允许访问由上层 controller/BFF 基于登录态和权限点统一拦截，例如 `chatdata:admin:manage`。
+
+`data-agent` 仍然必须校验服务间调用身份和业务数据权限：
+
+- 只信任带有正确 `X-Service-Token`、`X-User-Id`、`X-Username` 的请求。
+- 所有 `/api/chatdata/admin/**` 接口至少解析当前用户，用于身份确认、审计字段和下游 HTTP 元数据服务透传。
+- 会话、收藏、查询历史、看板、用户技能等按 `user_id`、owner 或 public/global 状态做业务数据隔离。
+- 数据源执行对象权限在 service 层强制校验。HTTP 执行对象通过 `CHAT_DATA_HTTP_PERMISSION_URL` 获取当前用户可用机构编码；direct 执行对象使用服务端固定允许编码。未配置或无权限的执行对象不可见、不可执行。
+
 ## 主要接口
 
 智能问数：
