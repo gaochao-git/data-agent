@@ -75,8 +75,30 @@ index.vue
 
 - 前端只发起 `streamCompletion()` SSE，不拿 `task_id` 轮询。
 - `semantic_query_tool` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
-- SQL 执行在当前工具调用内等待完成，结果通过 `<query_result>...</query_result>` 回到智能体和 SSE 流。
+- SQL 执行在当前工具调用内等待完成，结果通过结构化 JSON 工具结果回到智能体和 SSE 流。
 - 如果任务记录创建失败，当前逻辑会降级直接执行查询；因此智能问数的用户交互主口径不是“前端异步任务”，而是“对话流内同步等待工具结果”。
+
+`semantic_query_tool` 的查询结果返回协议固定为 JSON 字符串，不再使用 XML 标签：
+
+```json
+{
+  "type": "query_result",
+  "version": 1,
+  "status": "succeeded",
+  "data": {
+    "sql": "SELECT ...",
+    "results": []
+  },
+  "error": null,
+  "meta": {
+    "query_mode": "dsl2sql",
+    "confidence": 0.9,
+    "artifact_id": null
+  }
+}
+```
+
+前端先根据 SSE `tool` 事件的 `tool_name=semantic_query_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、artifact、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
 
 ### 2. 可视化查询
 
@@ -145,7 +167,7 @@ SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成单条语句，逐条
 - 每条 SQL 创建一个 `task_type=sql`、`query_type=sql` 的异步任务。
 - 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态和 `results[]`。
 - 任务取消走 `POST /query-tasks/{task_id}/cancel`；HTTP Hive 通过远端 `remote_task_id` 停止，MySQL direct 通过连接 ID `KILL QUERY`，Hive direct 当前没有真实 kill 能力。
-- SQL 查询页面不消费智能体 `<query_result>`，也不直接调用 `execute_agent_sql()`。
+- SQL 查询页面不消费智能体 `semantic_query_tool` 工具结果，也不直接调用 `execute_agent_sql()`。
 
 ### 4. 看板查询
 

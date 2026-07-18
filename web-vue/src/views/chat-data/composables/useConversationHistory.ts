@@ -5,7 +5,7 @@
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
 import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
-import { extractSemanticParamsFromArgs } from '../utils/semanticTool'
+import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
 
@@ -353,9 +353,9 @@ export function useConversationHistory({
                 let semanticParams: SemanticParams | undefined
 
                 if (tc.tool_name === 'semantic_query_tool') {
-                  const queryResultMatch = result.match(/<query_result>([\s\S]*?)<\/query_result>/)
-                  if (queryResultMatch?.[1]) {
-                    renderId = queryResultMatch[1].trim()
+                  const queryResultData = getRenderableQueryResultData(result)
+                  if (queryResultData) {
+                    renderId = queryResultData
                     renderType = 'queryResult'
                   }
                   semanticParams = extractSemanticParamsFromArgs(tc.args)

@@ -13,7 +13,7 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs } from '../utils/semanticTool'
+import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs, getRenderableQueryResultData, parseQueryResultEnvelope } from '../utils/semanticTool'
 import StructuredMessage from './StructuredMessage.vue'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -761,10 +761,9 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
       }
 
       if (toolInfo.tool_name === 'semantic_query_tool') {
-        const queryResultMatch = msg.content.match(/<query_result>([\s\S]*?)<\/query_result>/)
-        const queryResultId = queryResultMatch?.[1]
-        if (queryResultId) {
-          renderId = queryResultId.trim()
+        const queryResultData = getRenderableQueryResultData(msg.content)
+        if (queryResultData) {
+          renderId = queryResultData
           renderType = 'queryResult'
         }
 
@@ -1258,8 +1257,9 @@ const syncAnalysisPanelFromMessage = (msg: Message, autoOpen: boolean) => {
 }
 
 const stripTechnicalContent = (content: string): string => {
-  return hideSemanticConfigSelectionPayloads(String(content || '').trim())
-    .replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
+  const cleaned = hideSemanticConfigSelectionPayloads(String(content || '').trim())
+  if (parseQueryResultEnvelope(cleaned)) return ''
+  return cleaned
     .replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
     .trim()
 }
@@ -1360,8 +1360,8 @@ const shouldShowCompactMode = (msg: Message): boolean => {
 const getSummaryText = (content: string): string => {
   if (!content) return ''
   let text = getConversationDisplayContent(content)
+  if (parseQueryResultEnvelope(text)) return ''
   // 移除所有技术标签和内容
-  text = text.replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
   text = text.replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
   // text = text.replace(/查询结果已生成[。.]?/g, '') // 已改为输出简要说明
   return text.trim()

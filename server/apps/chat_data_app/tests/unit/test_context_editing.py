@@ -41,11 +41,12 @@ def test_context_editing_disabled_or_not_triggered_keeps_original_messages():
 
 
 def test_context_editing_summarizes_large_tool_results_and_keeps_tool_args():
-    big_result = "<query_result>" + (
-        '{"success":true,"total_count":10000,"columns":["订单ID","金额"],"sql":"select * from orders","data":['
+    big_result = (
+        '{"type":"query_result","version":1,"status":"succeeded","error":null,"meta":{},'
+        '"data":{"success":true,"total_count":10000,"columns":["订单ID","金额"],"sql":"select * from orders","data":['
         + '{"订单ID":1,"金额":2},' * 500
-        + "{}]}"
-    ) + "</query_result>"
+        + "{}]}}"
+    )
     messages = [
         HumanMessage(content="查订单1"),
         AIMessage(content="", tool_calls=[{"id": "call_1", "name": "semantic_query_tool", "args": {"sql": "select * from orders"}}]),

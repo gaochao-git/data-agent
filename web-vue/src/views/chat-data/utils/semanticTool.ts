@@ -7,6 +7,15 @@ type QueryToolPayload = {
   dsl?: unknown
 }
 
+export type QueryToolResultEnvelope = {
+  type: 'query_result'
+  version?: number
+  status?: string
+  data?: Record<string, unknown> | null
+  error?: string | null
+  meta?: Record<string, unknown>
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
 )
@@ -24,13 +33,26 @@ export const extractQueryResultPayload = (result?: string): QueryToolPayload | n
   const text = String(result || '').trim()
   if (!text) return null
 
-  const queryResultMatch = text.match(/<query_result>([\s\S]*?)<\/query_result>/)
-  if (queryResultMatch?.[1]) {
-    return parseJsonObject(queryResultMatch[1].trim())
-  }
-
   const semanticToolText = text.replace(/^\[semantic_query_tool\]\s*/, '').trim()
-  return parseJsonObject(semanticToolText)
+  const parsed = parseJsonObject(semanticToolText)
+  if (!parsed) return null
+  if (parsed.type !== 'query_result') return parsed
+  return isRecord(parsed.data) ? parsed.data : parsed
+}
+
+export const parseQueryResultEnvelope = (result?: string): QueryToolResultEnvelope | null => {
+  const text = String(result || '').replace(/^\[semantic_query_tool\]\s*/, '').trim()
+  if (!text) return null
+  const parsed = parseJsonObject(text)
+  if (!parsed || parsed.type !== 'query_result') return null
+  return parsed as QueryToolResultEnvelope
+}
+
+export const getRenderableQueryResultData = (result?: string): string => {
+  const envelope = parseQueryResultEnvelope(result)
+  if (!envelope) return ''
+  if (isRecord(envelope.data)) return JSON.stringify(envelope.data)
+  return JSON.stringify(envelope)
 }
 
 export const extractGeneratedSqlFromToolCall = (toolCall?: Pick<ToolCallInfo, 'result'> | null): string => {
@@ -72,4 +94,3 @@ export const buildSemanticParamsFromDsl = (dsl: unknown): SemanticParams | undef
 export const extractSemanticParamsFromArgs = (args?: Record<string, unknown>): SemanticParams | undefined => (
   buildSemanticParamsFromDsl(extractSemanticDslFromArgs(args))
 )
-

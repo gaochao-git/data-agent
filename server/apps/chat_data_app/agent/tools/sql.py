@@ -33,6 +33,27 @@ from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 logger = get_logger(__name__)
 
 
+def _query_result_tool_payload(
+    *,
+    status: str,
+    data: dict | None = None,
+    error: str | None = None,
+    meta: dict | None = None,
+) -> str:
+    """构造 semantic_query_tool 的结构化返回协议。"""
+    return json.dumps(
+        {
+            "type": "query_result",
+            "version": 1,
+            "status": status,
+            "data": data,
+            "error": error,
+            "meta": meta or {},
+        },
+        ensure_ascii=False,
+    )
+
+
 def save_query_result(data: dict, conversation_id: str | None = None) -> str:
     """保存查询结果，返回结果ID。"""
     return save_artifact(ArtifactType.QUERY_RESULT, data, conversation_id=conversation_id)
@@ -414,10 +435,30 @@ async def semantic_query_tool(
                 len(result_json),
                 query_result.get("total_count", 0),
             )
-            return f"<query_result>{json.dumps(result_summary, ensure_ascii=False)}</query_result>"
-        return f"<query_result>{result_json}</query_result>"
+            return _query_result_tool_payload(
+                status=str(result_summary.get("status") or "succeeded"),
+                data=None,
+                meta=result_summary,
+            )
+        return _query_result_tool_payload(
+            status=str(query_result.get("status") or "succeeded"),
+            data=query_result,
+            meta={
+                "query_mode": query_mode,
+                "confidence": confidence,
+            },
+        )
     else:
-        return f"查询失败: {query_result.get('error', '未知错误')}"
+        return _query_result_tool_payload(
+            status=str(query_result.get("status") or "failed"),
+            data=None,
+            error=str(query_result.get("error") or "未知错误"),
+            meta={
+                "sql": query_result.get("sql") or sql,
+                "query_mode": query_mode,
+                "confidence": confidence,
+            },
+        )
 
 
 def _normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:

@@ -14,7 +14,7 @@ Artifact Store - 上下文卸载存储
 
 使用方式：
 1. 工具执行时调用 save_artifact() 保存大数据，返回 artifact_id
-2. 工具返回给 LLM 的只有 artifact_id（如 <query_result>{id}</query_result>）
+2. 工具通过结构化 JSON 的 meta.artifact_id 返回引用，不把完整大结果送入 LLM 上下文
 3. 前端通过 API 调用 load_artifact() 获取完整数据
 
 支持的 Artifact 类型：

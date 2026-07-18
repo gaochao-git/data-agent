@@ -9,7 +9,7 @@ import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs } from '../utils/semanticTool'
+import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, parseQueryResultEnvelope } from '../utils/semanticTool'
 import { getToolDisplayName } from '../utils/toolDisplay'
 
 interface Props {
@@ -284,8 +284,9 @@ function getDslTagItems(key: string, value: unknown[]): string[] {
 
 // 清理结果内容
 function cleanResult(result: string): string {
-  return result
-    .replace(/<query_result>[\s\S]*?<\/query_result>/g, '')
+  const text = String(result || '').trim()
+  if (parseQueryResultEnvelope(text)) return ''
+  return text
     .replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
     .trim()
 }

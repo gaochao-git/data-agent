@@ -16,6 +16,13 @@ from apps.chat_data_app.agent.tools import sql as agent_tools
 from apps.chat_data_app.services import query_runtime
 
 
+def _query_result_payload(result: str) -> dict:
+    payload = json.loads(result)
+    assert payload["type"] == "query_result"
+    assert payload["version"] == 1
+    return payload
+
+
 def test_calculator_tool_calculates_decimal_expression_and_rounds():
     result = asyncio.run(calculator_tool.ainvoke({
         "calculations": [
@@ -581,12 +588,15 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "state": state,
     }))
 
-    assert success.startswith("<query_result>")
-    assert '"data": [{"id": 1}]' in success
-    assert '"sql": "select 1"' in success
-    assert '"query_mode": "dsl2sql"' in success
-    assert '"confidence": 0.9' in success
-    assert failed == "查询失败: 表不存在"
+    success_payload = _query_result_payload(success)
+    assert success_payload["status"] == "succeeded"
+    assert success_payload["data"]["data"] == [{"id": 1}]
+    assert success_payload["data"]["sql"] == "select 1"
+    assert success_payload["meta"]["query_mode"] == "dsl2sql"
+    assert success_payload["meta"]["confidence"] == 0.9
+    failed_payload = _query_result_payload(failed)
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["error"] == "表不存在"
 
 
 def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
@@ -628,7 +638,7 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
+    assert _query_result_payload(result)["status"] == "succeeded"
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
 
 
@@ -670,7 +680,7 @@ def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch)
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
+    assert _query_result_payload(result)["status"] == "succeeded"
     assert captured["member_datasource_ids"] == ["org_b"]
 
 
@@ -1000,7 +1010,7 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "member_datasource_ids": ["org_a"],
         "state": state,
     }))
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+    payload = _query_result_payload(result)
 
     assert captured == {
         "sql": "with t as (select 1 as v) select * from t",
@@ -1012,9 +1022,9 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "conversation_id": "conv_a",
         "operator_name": "测试用户",
     }
-    assert payload["query_mode"] == "nl2sql"
-    assert payload["confidence"] == 0.6
-    assert payload["sql"] == "with t as (select 1 as v) select * from t"
+    assert payload["meta"]["query_mode"] == "nl2sql"
+    assert payload["meta"]["confidence"] == 0.6
+    assert payload["data"]["sql"] == "with t as (select 1 as v) select * from t"
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
@@ -1122,10 +1132,10 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
         "member_datasource_ids": ["m1"],
         "state": {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]},
     }))
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+    payload = _query_result_payload(result)
 
-    assert payload["artifact_id"] == "artifact_blank_sql"
-    assert payload["sql"] == "select generated"
+    assert payload["meta"]["artifact_id"] == "artifact_blank_sql"
+    assert payload["meta"]["sql"] == "select generated"
 
 
 def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
@@ -1197,9 +1207,9 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
-    assert '"artifact_id": "artifact_large"' in result
-    assert '"llm_analysis_skipped": true' in result
+    payload = _query_result_payload(result)
+    assert payload["meta"]["artifact_id"] == "artifact_large"
+    assert payload["meta"]["llm_analysis_skipped"] is True
     assert "查询结果已超过限制，仅返回工具结果，不进行分析" in result
     assert "x" * 120 not in result
     assert captured["result"]["data"][0]["content"] == "x" * 200
@@ -1244,9 +1254,9 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
         "state": state,
     }))
 
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
-    assert payload["artifact_id"] == "artifact_no_sql"
-    assert payload["sql"] == "select compiled from temp_config"
+    payload = _query_result_payload(result)
+    assert payload["meta"]["artifact_id"] == "artifact_no_sql"
+    assert payload["meta"]["sql"] == "select compiled from temp_config"
 
 
 def test_semantic_query_tool_injects_explicit_id_into_temp_semantic_config(monkeypatch):

@@ -26,7 +26,7 @@ import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import { formatDateTimeValue, parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
-import { extractQueryResultPayload, extractSemanticParamsFromArgs } from '../utils/semanticTool'
+import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
 interface Props {
@@ -244,14 +244,12 @@ const allToolCalls = computed(() => Array.from(toolCallsMap.value.values()))
 const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
   if (toolInfo.tool_name !== 'semantic_query_tool') return toolInfo
   const result = String(toolInfo.result || '')
-  const queryResultMatch = result.match(/<query_result>([\s\S]*?)<\/query_result>/)
-  const queryResultId = queryResultMatch?.[1]?.trim()
-    || (extractQueryResultPayload(result) ? result.replace(/^\[semantic_query_tool\]\s*/, '').trim() : '')
+  const queryResultData = getRenderableQueryResultData(result)
   const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
   return {
     ...toolInfo,
-    renderId: queryResultId || toolInfo.renderId,
-    renderType: queryResultId ? 'queryResult' : toolInfo.renderType,
+    renderId: queryResultData || toolInfo.renderId,
+    renderType: queryResultData ? 'queryResult' : toolInfo.renderType,
     semanticParams,
   }
 }

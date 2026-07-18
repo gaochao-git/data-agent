@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
 from ...services.context_budget import count_messages_tokens, estimate_tokens
-
-
-QUERY_RESULT_PATTERN = re.compile(r"<query_result>\s*(.*?)\s*</query_result>", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -146,10 +142,7 @@ def _summarize_tool_result(message: ToolMessage) -> str:
 
 def _parse_tool_payload(content: str) -> Any:
     text = str(content or "").strip()
-    match = QUERY_RESULT_PATTERN.search(text)
-    if match:
-        text = match.group(1).strip()
-    elif text.startswith("[semantic_query_tool]"):
+    if text.startswith("[semantic_query_tool]"):
         text = text[len("[semantic_query_tool]"):].strip()
     try:
         return json.loads(text)
@@ -160,6 +153,13 @@ def _parse_tool_payload(content: str) -> Any:
 def _query_payload_summary(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
+    if payload.get("type") == "query_result":
+        payload = {
+            **(payload.get("data") if isinstance(payload.get("data"), dict) else {}),
+            **(payload.get("meta") if isinstance(payload.get("meta"), dict) else {}),
+            "status": payload.get("status"),
+            "error": payload.get("error"),
+        }
     fields: list[str] = []
     for key in ("success", "artifact_id", "total_count", "execution_time_ms", "query_mode", "confidence", "error"):
         value = payload.get(key)
