@@ -71,6 +71,13 @@ index.vue
 
 问数主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径。智能分析也复用同一套 `dsl2sql_tool` 和 `semantic_query_tool`，区别主要在工作区、技能和分析产物处理。
 
+执行模式：
+
+- 前端只发起 `streamCompletion()` SSE，不拿 `task_id` 轮询。
+- `semantic_query_tool` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
+- SQL 执行在当前工具调用内等待完成，结果通过 `<query_result>...</query_result>` 回到智能体和 SSE 流。
+- 如果任务记录创建失败，当前逻辑会降级直接执行查询；因此智能问数的用户交互主口径不是“前端异步任务”，而是“对话流内同步等待工具结果”。
+
 ### 2. 可视化查询
 
 可视化查询先把页面 Builder 配置编译成 SQL，再使用统一异步查询任务执行。
@@ -99,6 +106,14 @@ QueryBuilder/index.vue
 
 前端通过 `getQueryTask()` 轮询 `/agents/api/chatdata/query-tasks/{task_id}`，结果只消费任务返回的 `results[]`。取消执行走 `cancelQueryTask()`，后端入口是 `/query-tasks/{task_id}/cancel`。
 
+执行模式：
+
+- `compileSemanticBuilderSql()` 只做 DSL 编译预览，不执行 SQL，不写查询任务。
+- 点击执行后调用 `createQueryTask()` 创建 `task_type=sql`、`query_type=builder` 的异步任务。
+- 后端 `create_query_task_for_user()` 创建任务后立即 `schedule_query_task()` 后台执行。
+- 前端 `useQueryTask.waitForTask()` 轮询 `GET /query-tasks/{task_id}`，只在任务进入 `succeeded`、`partial_success`、`failed`、`cancelled` 等终态后更新页面结果。
+- 可视化查询和 SQL 查询共用 `query_runtime.run_sql_query_task()`、`build_execute_sql_result_data()`、`execute_sql_for_member()`，区别在请求中额外带 `semantic_builder_config`、`semantic_config_id` 和 `query_type=builder`。
+
 ### 3. SQL 查询
 
 SQL 查询页面不再使用同步 `/execute-sql` 旧入口，主链路只有异步任务。
@@ -124,6 +139,13 @@ index.vue
 ```
 
 SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成单条语句，逐条创建任务。`prepare_sql_request_for_execution()` 在任务创建时做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
+
+执行模式：
+
+- 每条 SQL 创建一个 `task_type=sql`、`query_type=sql` 的异步任务。
+- 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态和 `results[]`。
+- 任务取消走 `POST /query-tasks/{task_id}/cancel`；HTTP Hive 通过远端 `remote_task_id` 停止，MySQL direct 通过连接 ID `KILL QUERY`，Hive direct 当前没有真实 kill 能力。
+- SQL 查询页面不消费智能体 `<query_result>`，也不直接调用 `execute_agent_sql()`。
 
 ### 4. 看板查询
 
@@ -165,6 +187,15 @@ DashboardEditor.vue
 ```
 
 `services/query_providers.py` 初始化 `QueryTaskService` 后会调用 `query_task_service.configure_dashboard_runtime()`，把 `execute_sql_for_member`、任务创建、任务更新和调度函数注入 `dashboard_runtime.py`，避免看板 runtime 反向导入查询 router。
+
+执行模式：
+
+- 看板配置 CRUD 不执行 SQL，只维护 `dashboard` 和 `panel` 配置。
+- 单面板刷新当前前端走 `executePanel()`：先 `POST /dashboards/{dashboard_id}/query-tasks` 创建 `task_type=dashboard_batch` 任务，再轮询通用 `GET /query-tasks/{task_id}`，最后从 `task.result.results[panel_id].payload` 取面板数据。
+- 批量加载当前前端走 `executePanelsBatch()`：调用 `POST /dashboards/{dashboard_id}/panels/execute-batch`，后端立即创建 `task_type=dashboard_batch` 记录并返回 SSE；每个面板完成后推送一个 `PanelData`。
+- 批量 SSE 失败时，前端 `useDashboard.loadAllPanelData()` 会回退到多个单面板 `executePanel()`。
+- 两种看板执行最终都进入 `dashboard_runtime.build_dashboard_panel_execution_result()`，再复用 `execute_sql_for_member()` 做成员数据源权限、limit、安全校验、缓存和真实执行。
+- 看板任务返回结构不同于 SQL 任务：`GET /query-tasks/{task_id}` 对 `dashboard_batch` 返回 `result`，其中 `result.results` 是按 `panel_id` 索引的面板结果；SQL/Builder 查询返回顶层 `results[]` 成员结果。
 
 ### 统一结果口径
 
