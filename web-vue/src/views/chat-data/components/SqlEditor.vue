@@ -25,6 +25,13 @@ const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
 const renderMarkdown = (text: string) => md.render(text)
 const { submitSqlTask } = useQueryTask()
 const SQL_ASSIST_AGENT_ID = 'chat_data_sql_assist'
+const isMacPlatform = /Mac|iPhone|iPad|iPod/i.test(globalThis.navigator?.platform || '')
+const primaryShortcutLabel = isMacPlatform ? '⌘' : 'Ctrl'
+const optionShortcutLabel = isMacPlatform ? 'Option' : 'Alt'
+const executeShortcutLabel = `${primaryShortcutLabel}+Enter`
+const executeAllShortcutLabel = `${primaryShortcutLabel}+Shift+Enter`
+const formatShortcutLabel = `Shift+${optionShortcutLabel}+F`
+const clearShortcutLabel = `${primaryShortcutLabel}+K`
 
 // CodeMirror
 import { Codemirror } from 'vue-codemirror'
@@ -1616,14 +1623,82 @@ const handleClear = () => {
 }
 
 // 快捷键
-const handleKeydown = (e: KeyboardEvent) => {
-  if (e.key === 'Escape' && sqlContextMenu.value.visible) {
+const isPrimaryShortcut = (e: KeyboardEvent) => e.ctrlKey || e.metaKey
+
+const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.closest('.cm-editor')) return false
+  const tagName = target.tagName.toLowerCase()
+  return (
+    tagName === 'input' ||
+    tagName === 'textarea' ||
+    tagName === 'select' ||
+    target.isContentEditable ||
+    Boolean(target.closest('.el-dialog, .el-popper, .ai-history-popover'))
+  )
+}
+
+const isSqlEditorShortcutScope = (target: EventTarget | null): boolean => {
+  if (!containerRef.value || !(target instanceof Node)) return false
+  return containerRef.value.contains(target)
+}
+
+const closeTopOverlay = (): boolean => {
+  if (sqlContextMenu.value.visible) {
     closeSqlContextMenu()
+    return true
+  }
+  if (showAiConversationHistoryPopover.value) {
+    showAiConversationHistoryPopover.value = false
+    return true
+  }
+  if (showHistoryDialog.value) {
+    showHistoryDialog.value = false
+    return true
+  }
+  if (showFavoriteModal.value) {
+    showFavoriteModal.value = false
+    return true
+  }
+  if (showSaveModal.value) {
+    showSaveModal.value = false
+    return true
+  }
+  if (showAiPanel.value) {
+    showAiPanel.value = false
+    return true
+  }
+  return false
+}
+
+const handleKeydown = (e: KeyboardEvent) => {
+  const key = e.key.toLowerCase()
+  const code = e.code
+  if (key === 'escape' && closeTopOverlay()) {
+    e.preventDefault()
     return
   }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+
+  if (!isSqlEditorShortcutScope(e.target)) return
+  if (isEditableShortcutTarget(e.target)) return
+
+  if (isPrimaryShortcut(e) && code === 'Enter') {
     e.preventDefault()
-    handleExecute()
+    if (!executing.value) {
+      handleExecute({ ignoreSelection: e.shiftKey })
+    }
+    return
+  }
+
+  if (e.shiftKey && e.altKey && code === 'KeyF') {
+    e.preventDefault()
+    handleFormat()
+    return
+  }
+
+  if (isPrimaryShortcut(e) && code === 'KeyK') {
+    e.preventDefault()
+    handleClear()
   }
 }
 
@@ -2080,6 +2155,7 @@ defineExpose({
             class="flex items-center gap-1 h-[24px] px-3 border rounded text-[12px] font-semibold cursor-pointer transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             :class="executing ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100' : 'border-[#e3e5eb] bg-white text-[#21252C] hover:bg-[#f0f1f3]'"
             :disabled="executing && (!executingTaskId || cancellingTask)"
+            :title="executing ? '暂停当前查询' : `查询（${executeShortcutLabel}）`"
             @click="executing ? handleCancelExecutingTask() : handleExecute()"
           >
             <i v-if="executing" :class="['fa-solid text-[12px]', cancellingTask ? 'fa-spinner fa-spin' : 'fa-stop']"></i>
@@ -2096,7 +2172,7 @@ defineExpose({
             <input v-model="skipQueryCache" type="checkbox" class="m-0">
             <span>跳过缓存</span>
           </label>
-          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="handleFormat">
+          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" :title="`格式化（${formatShortcutLabel}）`" @click="handleFormat">
             <i class="fa-solid fa-indent"></i>
             <span>格式化</span>
           </button>
@@ -2121,7 +2197,7 @@ defineExpose({
             <i class="fa-regular fa-floppy-disk"></i>
             <span>保存SQL</span>
           </button>
-          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="handleClear">
+          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" :title="`重置（${clearShortcutLabel}）`" @click="handleClear">
             <i class="fa-regular fa-file"></i>
             <span>重置</span>
           </button>
@@ -2140,7 +2216,7 @@ defineExpose({
             ref="codemirrorRef"
             v-model="sqlCode"
             :extensions="extensions"
-            placeholder="输入 SQL 语句... (⌘+Enter 查询，输入表名或字段名触发自动补全)"
+            :placeholder="`输入 SQL 语句...（${executeShortcutLabel} 查询，${executeAllShortcutLabel} 查询全部）`"
             :style="{ height: '100%' }"
             :autofocus="true"
             :indent-with-tab="true"
