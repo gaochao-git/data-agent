@@ -2,11 +2,11 @@ export type QueryStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canc
 
 export interface QueryResultLike {
   status?: QueryStatus | null
-  success?: boolean
   error?: string | null
 }
 
 export interface QueryMemberResultLike extends QueryResultLike {
+  success?: boolean
   member_datasource_id?: string | null
   member_name?: string | null
   columns?: string[] | null
@@ -16,8 +16,6 @@ export interface QueryMemberResultLike extends QueryResultLike {
 }
 
 export interface QueryPayloadLike extends QueryResultLike {
-  columns?: string[] | null
-  data?: Record<string, unknown>[] | null
   total_count?: number | null
   execution_time_ms?: number | null
   results?: QueryMemberResultLike[] | null
@@ -35,8 +33,6 @@ export const QUERY_MEMBER_ID_COLUMN = '__member_datasource_id'
 export const normalizeQueryStatus = (result?: QueryResultLike | null): QueryStatus => {
   const status = String(result?.status || '').trim().toLowerCase()
   if (status) return status
-  if (result?.success === true) return 'succeeded'
-  if (result?.success === false) return 'failed'
   return 'failed'
 }
 
@@ -81,13 +77,10 @@ export const flattenQueryResultForDisplay = (
 
   const memberResults = Array.isArray(result.results) ? result.results : []
   if (!memberResults.length) {
-    const data = Array.isArray(result.data) ? result.data : []
-    const normalizedColumns = normalizeColumns(result.columns)
-    const columns = normalizedColumns.length ? normalizedColumns : buildRowColumns(data)
     return {
-      columns,
-      data,
-      total_count: Number(result.total_count ?? data.length) || 0,
+      columns: [],
+      data: [],
+      total_count: Number(result.total_count ?? 0) || 0,
     }
   }
 

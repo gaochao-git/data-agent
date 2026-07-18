@@ -25,7 +25,7 @@ from .datasource_manager import get_datasource_manager
 from .runtime_config import DEFAULT_ROW_LIMIT
 from .semantic_builder_compiler import compile_semantic_builder_sql
 from .sql_concurrency_limiter import run_with_sql_user_datasource_limit
-from .sql_executor import build_effective_sql, fetch_http_query_task_result, get_executor
+from .sql_executor import build_effective_sql, fetch_http_query_task_result, get_executor, validate_sql
 from .query_result import (
     QUERY_SUCCEEDED_STATUS,
     build_query_result_payload,
@@ -34,6 +34,30 @@ from .query_result import (
 )
 
 logger = get_logger(__name__)
+
+
+def _datasource_source_type(datasource: Optional[Dict[str, Any]]) -> Optional[str]:
+    """读取数据源组方言，用于任务创建阶段的快速 SQL 预校验。"""
+    source_type = str((datasource or {}).get("source_type") or "").strip().lower()
+    return source_type or None
+
+
+def _validate_sql_before_task_submit(
+    request: ExecuteSqlRequest | QueryTaskCreateRequest,
+    datasource: Optional[Dict[str, Any]],
+) -> None:
+    """在创建异步任务前做快速失败校验；执行器边界仍会按成员数据源复检。"""
+    if datasource is None:
+        return
+    sql = str(getattr(request, "sql", "") or "").strip()
+    if not sql:
+        return
+    source_type = _datasource_source_type(datasource)
+    is_valid, error_msg = validate_sql(sql, source_type=source_type)
+    if not is_valid:
+        raise ValueError(error_msg)
+    build_effective_sql(sql, getattr(request, "limit", None) or DEFAULT_ROW_LIMIT, source_type=source_type)
+
 
 async def fetch_http_remote_ref_cache_result(cached_result: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
     """按 HTTP 远端任务引用读取结果，并保留本次缓存命中元信息。"""
@@ -730,13 +754,14 @@ async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
 
 
 async def prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None):
-    """保留 SQL 原文；语义可视化查询在服务端重新编译，安全校验统一在执行器边界完成。"""
+    """保留 SQL 原文；创建任务前快速校验，执行器边界按成员数据源复检。"""
     query_type = str(getattr(request, "query_type", "") or "").strip().lower()
     semantic_builder_config = getattr(request, "semantic_builder_config", None)
     semantic_config_id = str(getattr(request, "semantic_config_id", "") or "").strip()
     if query_type == "builder" and not semantic_builder_config:
         raise ValueError("可视化查询必须基于指标集，请先选择指标集")
     if not semantic_builder_config:
+        _validate_sql_before_task_submit(request, datasource)
         return request
     if not semantic_config_id:
         raise ValueError("语义可视化查询缺少 semantic_config_id")
@@ -754,7 +779,9 @@ async def prepare_sql_request_for_execution(request: ExecuteSqlRequest | QueryTa
             semantic_config_id=semantic_config_id,
             semantic_builder_config=semantic_builder_config,
         )
-    return request.model_copy(update={"sql": compiled["sql"], "builder_config": None})
+    prepared_request = request.model_copy(update={"sql": compiled["sql"], "builder_config": None})
+    _validate_sql_before_task_submit(prepared_request, datasource)
+    return prepared_request
 
 
 async def create_task_for_execute_request(
@@ -889,50 +916,6 @@ async def run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
     )
 
 
-async def execute_sql_request_with_task(
-    request: ExecuteSqlRequest,
-    *,
-    query_type: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """创建任务并同步执行 SQL，供直接执行和智能体执行复用。"""
-    task_info = await create_task_for_execute_request(request, query_type=query_type or request.query_type or "sql", operator_name=operator_name)
-    try:
-        execution_map = await create_query_executions_for_task(task_info["task_id"], request, operator_name=operator_name)
-        await update_query_task(task_info["task_id"], status="running", progress_text="SQL 执行中", started_time=datetime.now(), error_message=None)
-        result_data = await build_execute_sql_result_data(request, query_task_id=task_info["task_id"], execution_map=execution_map, username=operator_name)
-    except Exception as e:
-        await update_query_task(
-            task_info["task_id"],
-            status="failed",
-            progress_text="执行失败",
-            error_message=str(e) or "SQL 执行失败",
-            finished_time=datetime.now(),
-        )
-        raise
-    persistent_result_payload = await build_persistent_query_task_result_for_request(request, result_data, operator_name=operator_name)
-    if not query_result_succeeded(result_data):
-        await update_query_task(
-            task_info["task_id"],
-            status="failed",
-            progress_text="执行失败",
-            result_payload=persistent_result_payload,
-            error_message=result_data.get("error") or "SQL 执行失败",
-            finished_time=datetime.now(),
-        )
-        return result_data
-
-    await update_query_task(
-        task_info["task_id"],
-        status="succeeded",
-        progress_text="执行完成",
-        result_payload=persistent_result_payload,
-        error_message=None,
-        finished_time=datetime.now(),
-    )
-    return result_data
-
-
 async def execute_agent_sql(
     sql: str,
     datasource_id: Optional[str],
@@ -964,6 +947,12 @@ async def execute_agent_sql(
         semantic_config_id=semantic_config_id,
         query_type="agent",
     )
+    try:
+        execute_request = await prepare_sql_request_for_execution(execute_request, datasource)
+    except ValueError as e:
+        logger.error("智能体 SQL 预校验失败: %s", e)
+        return build_query_result_payload(sql=sql, member_results=[], fallback_error=str(e))
+
     task_info = None
     execution_map: Dict[str, str] = {}
     try:

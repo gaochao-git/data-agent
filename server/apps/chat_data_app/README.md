@@ -32,6 +32,182 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ---
 
+## 核心查询链路
+
+### 统一入口
+
+前端 ChatData 主页面入口是 `web-vue/src/views/chat-data/pages/index.vue`，按 `viewMode` 分成四个用户入口：
+
+| `viewMode` | 页面能力 | 前端主组件 |
+|---|---|---|
+| `conversation` | 数据智能体 | `SqlConversation.vue` / `AnalysisConversation.vue` |
+| `builder` | 可视化查询 | `QueryBuilder/index.vue` |
+| `editor` | SQL 查询 | `SqlEditor.vue` |
+| `dashboard` | 看板查询 | `Dashboard/DashboardEditor.vue` |
+
+前端接口统一从 `web-vue/src/views/chat-data/api/` 发起。代码中 URL 写为 `/agents/api/chatdata/...`；开发环境通常由 `VITE_APP_BASE_API=/dev-api` 拼成 `/dev-api/agents/api/chatdata/...`，再经 `web-vue/vite.config.ts` 代理转发到后端。后端实际挂载入口是 `server/main.py -> apps.chat_data_app.router`，路由总前缀是 `/api/chatdata`，聚合文件是 `server/apps/chat_data_app/routes.py`。
+
+### 1. 数据智能体
+
+数据智能体包含问数和分析两个 agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。
+
+```text
+index.vue
+  -> SqlConversation.vue / AnalysisConversation.vue
+  -> composables/useSqlGenerator.ts
+  -> api/index.ts: streamCompletion()
+  -> POST /agents/api/chatdata/conversations/{conversation_id}/completion
+  -> routers/conversations.py: completion()
+  -> handlers.py:
+       agent_id=chat_data              -> sql_completion_handler()
+       agent_id=chat_data_data_analyze -> data_analyze_completion_handler()
+  -> agent/chat_data_agent.py 或 agent/analyze_data_agent.py
+  -> dsl2sql_tool / semantic_query_tool
+  -> services/semantic_query_service.py
+  -> services/query_runtime.py: execute_agent_sql()
+  -> execute_sql_for_member()
+  -> services/sql_executor.py
+```
+
+问数主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径。智能分析也复用同一套 `dsl2sql_tool` 和 `semantic_query_tool`，区别主要在工作区、技能和分析产物处理。
+
+### 2. 可视化查询
+
+可视化查询先把页面 Builder 配置编译成 SQL，再使用统一异步查询任务执行。
+
+```text
+index.vue
+  -> QueryBuilder/index.vue
+  -> compileCurrentBuilderSql()
+  -> api/query.ts: compileSemanticBuilderSql()
+  -> POST /agents/api/chatdata/compile-semantic-builder-sql
+  -> routers/query_execution.py: compile_semantic_builder_sql_endpoint()
+  -> services/semantic_builder_compiler.py
+
+QueryBuilder/index.vue
+  -> useQueryTask.submitSqlTask(query_type='builder')
+  -> api/query.ts: createQueryTask()
+  -> POST /agents/api/chatdata/query-tasks
+  -> routers/query_execution.py: create_query_task()
+  -> services/query_task_service.py: create_query_task_for_user()
+  -> services/query_runtime.py: prepare_sql_request_for_execution() / create_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> query_runtime.run_sql_query_task()
+  -> build_execute_sql_result_data()
+  -> execute_sql_for_member()
+```
+
+前端通过 `getQueryTask()` 轮询 `/agents/api/chatdata/query-tasks/{task_id}`，结果只消费任务返回的 `results[]`。取消执行走 `cancelQueryTask()`，后端入口是 `/query-tasks/{task_id}/cancel`。
+
+### 3. SQL 查询
+
+SQL 查询页面不再使用同步 `/execute-sql` 旧入口，主链路只有异步任务。
+
+```text
+index.vue
+  -> SqlEditor.vue
+  -> handleExecute()
+  -> parseSQLStatements()
+  -> useQueryTask.submitSqlTask(query_type='sql')
+  -> api/query.ts: createQueryTask()
+  -> POST /agents/api/chatdata/query-tasks
+  -> routers/query_execution.py: create_query_task()
+  -> services/query_task_service.py: create_query_task_for_user()
+  -> services/query_runtime.py: prepare_sql_request_for_execution()
+  -> create_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> query_runtime.run_sql_query_task()
+  -> create_query_executions_for_task()
+  -> build_execute_sql_result_data()
+  -> execute_sql_for_member()
+  -> services/sql_executor.py
+```
+
+SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成单条语句，逐条创建任务。`prepare_sql_request_for_execution()` 在任务创建时做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
+
+### 4. 看板查询
+
+看板配置和看板查询分开：配置类接口在 `routers/dashboard.py` / `services/dashboard_service.py`，面板刷新复用查询运行时。
+
+```text
+DashboardEditor.vue
+  -> composables/useDashboard.ts
+  -> api/dashboard.ts: getDashboard() / updateDashboard() / addPanel() / updatePanel()
+  -> /agents/api/chatdata/dashboards...
+  -> routers/dashboard.py
+  -> services/dashboard_service.py
+```
+
+看板面板执行有两种前端调用：
+
+```text
+单面板刷新:
+DashboardEditor.vue
+  -> useDashboard.loadPanelData()
+  -> api/dashboard.ts: executePanel()
+  -> POST /agents/api/chatdata/dashboards/{dashboard_id}/query-tasks
+  -> 轮询 GET /agents/api/chatdata/query-tasks/{task_id}
+  -> routers/dashboard.py: create_dashboard_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> dashboard_runtime.run_dashboard_batch_task()
+  -> build_dashboard_panel_execution_result()
+  -> execute_dashboard_panel_sql_with_target()
+  -> execute_sql_for_member()
+
+批量加载:
+DashboardEditor.vue
+  -> useDashboard.loadDashboardPanelsInBackground()
+  -> api/dashboard.ts: executePanelsBatch()
+  -> POST /agents/api/chatdata/dashboards/{dashboard_id}/panels/execute-batch
+  -> routers/dashboard.py: execute_panels_batch()
+  -> dashboard_runtime.stream_dashboard_batch_execution()
+  -> execute_sql_for_member()
+```
+
+`services/query_providers.py` 初始化 `QueryTaskService` 后会调用 `query_task_service.configure_dashboard_runtime()`，把 `execute_sql_for_member`、任务创建、任务更新和调度函数注入 `dashboard_runtime.py`，避免看板 runtime 反向导入查询 router。
+
+### 统一结果口径
+
+智能体、可视化查询、SQL 查询和看板查询只要涉及多个执行对象，成员结果统一使用 `results[]`：
+
+```json
+{
+  "results": [
+    {
+      "member_datasource_id": "ORG_CODE1",
+      "member_name": "财付通",
+      "status": "succeeded",
+      "sql": "SELECT ...",
+      "columns": ["字段A"],
+      "data": [{"字段A": 1}],
+      "total_count": 1,
+      "execution_time_ms": 56,
+      "error": null
+    }
+  ]
+}
+```
+
+字段约定：
+
+- `member_datasource_id` 是执行对象标识，用于权限、历史、看板保存和回放。
+- `member_name` 是用户可见名称，用于结果标题和图表展示。
+- `status` 是成员执行状态主口径；成功为 `succeeded`，失败或取消由具体状态和 `error` 表达。
+- `columns` 保留服务端返回顺序，前端表格不要仅从 `data[0]` 推断列顺序。
+- `data` 是当前成员结果行，不承载多成员合并身份字段。
+
+新增查询入口或结果字段时，需要同步检查：
+
+```text
+后端 router/service/runtime
+-> web-vue/src/views/chat-data/api/* 类型
+-> web-vue/src/views/chat-data/types/query.ts
+-> web-vue/src/views/chat-data/utils/queryResult.ts
+-> 智能体、可视化查询、SQL 查询、看板消费侧
+```
+
+---
+
 ## 语义层架构
 
 ### 核心流程：NL → DSL → SQL

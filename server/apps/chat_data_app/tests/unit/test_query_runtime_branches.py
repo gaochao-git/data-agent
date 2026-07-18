@@ -195,6 +195,8 @@ def test_runtime_task_operator_and_execution_id_helpers():
 
 def test_prepare_sql_request_for_execution_branches(monkeypatch):
     normal = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
+    dangerous = ExecuteSqlRequest(sql="select 1; drop table orders", datasource_id="ds_a")
+    oversized_limit = ExecuteSqlRequest(sql="select * from orders limit 100000", datasource_id="ds_a")
     no_semantic_config = ExecuteSqlRequest(
         sql="select bad",
         datasource_id="ds_a",
@@ -223,6 +225,11 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
     monkeypatch.setattr(query_runtime, "compile_semantic_builder_sql", fake_compile_semantic_builder_sql)
 
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(normal)) is normal
+    assert asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous)) is dangerous
+    with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
+    with pytest.raises(ValueError, match="查询结果最多返回"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
     with pytest.raises(ValueError, match="必须基于指标集"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
@@ -1195,32 +1202,6 @@ def test_run_sql_query_task_cancel_after_running(monkeypatch):
 
     assert updates[0][0] == "task_1"
     assert updates[0][1]["status"] == "running"
-
-
-def test_execute_sql_request_with_task_marks_failed_before_reraising(monkeypatch):
-    updates = []
-    request = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
-
-    async def create_task_for_execute_request(_request, query_type=None, operator_name=None):
-        return {"task_id": "task_1"}
-
-    async def create_query_executions_for_task(*_args, **_kwargs):
-        raise RuntimeError("create executions failed")
-
-    async def update_query_task(task_id, **kwargs):
-        updates.append((task_id, kwargs))
-
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_for_execute_request)
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_query_executions_for_task)
-    monkeypatch.setattr(query_runtime, "update_query_task", update_query_task)
-
-    with pytest.raises(RuntimeError, match="create executions failed"):
-        asyncio.run(query_runtime.execute_sql_request_with_task(request, operator_name="张三"))
-
-    assert len(updates) == 1
-    assert updates[0][0] == "task_1"
-    assert updates[0][1]["status"] == "failed"
-    assert updates[0][1]["error_message"] == "create executions failed"
 
 
 def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch):

@@ -1406,9 +1406,8 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
         sql="select 1; drop table orders",
         query_type="sql",
     )
-    prepared = asyncio.run(query_runtime.prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
-    assert prepared is sql_request
-    assert prepared.sql == "select 1; drop table orders"
+    with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
 
 
 def test_create_query_task_endpoint_branches(monkeypatch):

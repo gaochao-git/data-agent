@@ -21,13 +21,11 @@ from ..agent import get_all_tables_async, get_tables_create_format
 from ..agent.sql_assist_agent import create_sql_assist_agent
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
-    ExecuteSqlRequest,
     QueryTaskCreateRequest,
     QuickSqlRequest,
 )
 from ..services import query_runtime
 from ..services.datasource_manager import get_datasource_manager
-from ..services.query_result import query_result_succeeded
 from ..services.query_task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,
@@ -238,41 +236,6 @@ async def cancel_query_task(
     except Exception as e:
         logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
         return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
-@router.post("/execute-sql")
-async def execute_sql_direct(
-    request: Request,
-    body: ExecuteSqlRequest,
-):
-    """直接执行 SQL（用于 SQL 编辑器模式）。"""
-    try:
-        current_user = _resolve_current_user(request, None)
-        body = body.model_copy(update={"user_id": current_user.user_id})
-        body = await query_runtime.prepare_sql_request_for_execution(body)
-        logger.info("execute-sql request: datasource_id=%s", body.datasource_id)
-        result_data = await query_runtime.execute_sql_request_with_task(
-            body,
-            query_type=body.query_type or "sql",
-            operator_name=current_user.username,
-        )
-        if not query_result_succeeded(result_data):
-            return business_response(
-                data=result_data,
-                msg=result_data.get("error") or "SQL 执行失败，请稍后重试或联系管理员",
-                code=ErrorCode.CHATDATA_SERVICE_ERROR,
-                status="error",
-            )
-        return business_response(data=result_data, msg="执行完成")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except Exception as e:
-        logger.error("执行 SQL 失败: %s", e, exc_info=True)
-        return business_response(msg="SQL 执行失败，请稍后重试或联系管理员", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.post("/compile-semantic-builder-sql")

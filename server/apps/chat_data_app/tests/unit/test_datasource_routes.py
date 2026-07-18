@@ -1390,81 +1390,6 @@ def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
     ]
 
 
-def test_execute_sql_direct_returns_selected_member_results(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_b"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["member_datasource_id"] == "phy_b"
-    assert len(data["data"]["results"]) == 1
-    assert data["data"]["results"][0]["member_name"] == "成员B"
-
-
-def test_execute_sql_direct_returns_multi_member_results(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a", "phy_b"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["member_datasource_id"] == "phy_a"
-    assert len(data["data"]["results"]) == 2
-    assert data["data"]["results"][0]["member_name"] == "成员A"
-    assert data["data"]["results"][1]["member_name"] == "成员B"
-
-
-def test_execute_sql_direct_does_not_persist_http_result_payload(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_http", "org_name": "HTTP成员", "member_name": "HTTP成员", "source_type": "mysql", "query_executor_type": "http", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    updates = _mock_query_tracking(monkeypatch)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_http"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["member_datasource_id"] == "phy_http"
-    assert updates[-1][1]["status"] == "succeeded"
-    assert updates[-1][1]["result_payload"] is None
-
-
 def test_create_query_task_schedules_background_run(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -1995,68 +1920,6 @@ def test_run_sql_query_task_skips_result_payload_for_all_http_targets(monkeypatc
     assert updates[1][1]["result_payload"] is None
 
 
-def test_execute_sql_direct_keeps_failed_member_result(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a", "phy_error"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert len(data["data"]["results"]) == 2
-    assert data["data"]["results"][1]["status"] == "failed"
-    assert "执行失败" in data["data"]["results"][1]["error"]
-
-
-def test_execute_sql_uses_query_cache_when_enabled(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    async def fake_get_cache(cache_identity):
-        assert cache_identity["datasource_id"] == "ds_a"
-        assert cache_identity["member_datasource_id"] == "phy_a"
-        return {
-            "success": True,
-            "columns": ["cached_col"],
-            "data": [{"cached_col": 1}],
-            "total_count": 1,
-            "execution_time_ms": 1,
-            "cache_hit": True,
-        }
-
-    def raise_get_executor(_datasource):
-        raise AssertionError("cache hit should not execute datasource")
-
-    monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["cache_hit"] is True
-    assert data["data"]["results"][0]["columns"] == ["cached_col"]
-
-
 def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
     from apps.chat_data_app import routes
 
@@ -2108,96 +1971,6 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
     assert session.committed is True
 
 
-def test_execute_sql_skip_query_cache_ignores_cache(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    async def raise_get_cache(_cache_identity):
-        raise AssertionError("skip_query_cache should not read cache")
-
-    async def raise_save_cache(_cache_identity, _result, operator_id=None):
-        raise AssertionError("skip_query_cache should not write cache")
-
-    monkeypatch.setattr(query_cache, "get_sql_result_cache", raise_get_cache)
-    monkeypatch.setattr(query_cache, "save_sql_result_cache", raise_save_cache)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a"],
-        skip_query_cache=True,
-    )))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["cache_hit"] is False
-    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
-
-
-def test_execute_sql_query_cache_read_failure_falls_back_to_datasource(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    async def raise_get_cache(_cache_identity):
-        raise RuntimeError("cache db down")
-
-    monkeypatch.setattr(query_cache, "get_sql_result_cache", raise_get_cache)
-    monkeypatch.setattr(query_cache, "save_sql_result_cache", lambda *_args, **_kwargs: asyncio.sleep(0))
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a"],
-    )))
-    data = _payload(resp)
-
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["cache_hit"] is False
-    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
-
-
-def test_execute_sql_query_cache_write_failure_does_not_fail_query(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    async def fake_get_cache(_cache_identity):
-        return None
-
-    async def raise_save_cache(_cache_identity, _result, operator_id=None):
-        raise RuntimeError("duplicate cache key")
-
-    monkeypatch.setattr(query_cache, "get_sql_result_cache", fake_get_cache)
-    monkeypatch.setattr(query_cache, "save_sql_result_cache", raise_save_cache)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_a"],
-    )))
-    data = _payload(resp)
-
-    assert data["status"] == "success"
-    assert data["data"]["results"][0]["cache_hit"] is False
-    assert data["data"]["results"][0]["columns"] == ["member_name", "sql_text"]
-
-
 def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
     target = {
         "id": "phy_a",
@@ -2222,29 +1995,6 @@ def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
     assert string_literal_changed["cache_key"] != string_literal_with_double_space["cache_key"]
     assert same_sql_a["cache_key"] != other_limit["cache_key"]
     assert same_sql_a["cache_key"] != other_member["cache_key"]
-
-
-def test_execute_sql_direct_returns_error_when_all_members_fail(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-
-    resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(
-        sql="select 1",
-        datasource_id="ds_a",
-        member_datasource_ids=["phy_error"],
-    )))
-    data = _payload(resp)
-    assert data["status"] == "error"
-    assert data["data"]["status"] == "failed"
-    assert data["data"]["error"] == "成员失败 执行失败"
 
 
 def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
@@ -3570,11 +3320,9 @@ def test_task_endpoint_auth_and_error_branches(monkeypatch):
     create_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql="select 1")))
     get_resp = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
     cancel_resp = asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
-    execute_resp = asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")))
     assert _payload(create_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
     assert _payload(get_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
     assert _payload(cancel_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert _payload(execute_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
     _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result=None))
@@ -3714,22 +3462,6 @@ def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: (_ for _ in ()).throw(RuntimeError("cancel crashed")))
     failed = asyncio.run(query_execution_routes.cancel_query_task("task_payload_owner", SimpleNamespace()))
     assert _payload(failed)["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-
-
-def test_execute_sql_direct_value_error_and_runtime_error(monkeypatch):
-    _mock_authenticated_user(monkeypatch)
-    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad sql")))
-    assert _payload(asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(sql="select 1", datasource_id="ds_a"))))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    async def fake_prepare(body, *_args, **_kwargs):
-        return body
-
-    async def fake_execute(*_args, **_kwargs):
-        raise RuntimeError("executor down")
-
-    monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", fake_prepare)
-    monkeypatch.setattr(query_runtime, "execute_sql_request_with_task", fake_execute)
-    assert _payload(asyncio.run(query_execution_routes.execute_sql_direct(SimpleNamespace(), ExecuteSqlRequest(sql="select 1", datasource_id="ds_a"))))["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
 def test_query_runtime_helper_functions(monkeypatch):

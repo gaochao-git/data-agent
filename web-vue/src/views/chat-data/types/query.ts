@@ -21,22 +21,10 @@ export interface MemberQueryResult {
 
 export interface QueryResult {
   status?: string | null
-  success?: boolean
-  sql?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string | null
-  results?: MemberQueryResult[]
-}
-
-export interface SqlExecuteResult {
-  status?: string | null
-  error?: string | null
   sql?: string
   total_count?: number
   execution_time_ms?: number
+  error?: string | null
   results?: MemberQueryResult[]
 }
 

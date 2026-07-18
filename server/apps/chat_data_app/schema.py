@@ -73,7 +73,7 @@ class QuickSqlRequest(BaseModel):
 
 
 class ExecuteSqlRequest(BaseModel):
-    """直接执行 SQL 请求（用于 SQL 编辑器模式和辅助查询模式）"""
+    """SQL 执行运行时请求（供异步任务、智能体和内部复用）"""
     sql: str = Field(..., min_length=1, description="要执行的 SQL 语句")
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")

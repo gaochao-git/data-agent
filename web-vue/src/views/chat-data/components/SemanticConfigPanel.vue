@@ -18,7 +18,8 @@ import {
   toggleSemanticConfig,
   autoPrefillSemanticFields,
   parseSemanticPrefillContextFile,
-  executeSql,
+  createQueryTask,
+  getQueryTask,
   getDatasourceColumnDict,
   getDatasourceTableColumnDicts,
 } from '../api'
@@ -2206,6 +2207,27 @@ const removeFieldRow = (row: FieldConfigRow) => {
   fieldRows.value = fieldRows.value.filter(item => item.key !== row.key)
 }
 
+const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
+
+const waitTablePreviewTask = async (taskId: string, pollIntervalMs = 1500) => {
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    const response = await getQueryTask(taskId)
+    const task = response.data
+    if (!task) {
+      throw new Error(response.msg || '查询任务不存在')
+    }
+    if (task.status === 'succeeded' || task.status === 'partial_success') {
+      return task
+    }
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      throw new Error(task.error_message || '查询失败')
+    }
+    await sleep(Math.max(500, pollIntervalMs))
+  }
+  throw new Error('查询超时，请稍后重试')
+}
+
 const previewTableData = async (tableName: string) => {
   if (!props.datasourceId || !tableName) return
   previewingTableName.value = tableName
@@ -2216,32 +2238,37 @@ const previewTableData = async (tableName: string) => {
   tablePreviewMode.value = 'table'
   showTablePreviewDialog.value = true
   try {
-    const res = await executeSql({
+    const createResp = await createQueryTask({
       datasource_id: props.datasourceId,
       sql: `SELECT * FROM ${quoteTableIdentifier(tableName)} LIMIT 1`,
       limit: 1,
+      query_type: 'sql',
+      query_text: '表数据预览',
     })
-    if (res.status !== 'success' || !res.data) {
-      tablePreviewError.value = res.msg || '查询失败'
+    const taskId = createResp.data?.task_id
+    if (createResp.status !== 'success' || !taskId) {
+      tablePreviewError.value = createResp.msg || '查询任务创建失败'
       return
     }
-    const firstResult = Array.isArray(res.data.results) && res.data.results.length > 0
-      ? res.data.results[0]
-      : res.data
-    if (firstResult && !isQuerySucceeded(firstResult)) {
+    const task = await waitTablePreviewTask(taskId, createResp.data?.poll_interval_ms)
+    const taskResults = Array.isArray(task.results) ? task.results : []
+    const firstResult = taskResults.find(result => isQuerySucceeded(result)) || taskResults[0] || null
+    if (!firstResult) {
+      tablePreviewError.value = task.error_message || '查询结果为空'
+      return
+    }
+    if (!isQuerySucceeded(firstResult)) {
       tablePreviewError.value = firstResult.error || '查询失败'
       return
     }
-    const rows = firstResult?.data || []
-    const columns = firstResult?.columns?.length
+    const rows = firstResult.data || []
+    const cols = (firstResult.columns && firstResult.columns.length > 0)
       ? firstResult.columns
-      : Object.keys(rows[0] || {})
-    tablePreviewColumns.value = columns
-    tablePreviewRows.value = rows.slice(0, 1)
-  } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    tablePreviewError.value = apiMsg || apiDetail || (err instanceof Error ? err.message : '查询失败')
+      : (rows.length > 0 ? Object.keys(rows[0]) : [])
+    tablePreviewColumns.value = cols
+    tablePreviewRows.value = rows
+  } catch (err: any) {
+    tablePreviewError.value = err?.message || '查询失败'
   } finally {
     previewingTableName.value = ''
   }

@@ -6,7 +6,6 @@ import type {
   QueryHistoryResult,
   QueryTaskCreateResult,
   QueryTaskStatusResult,
-  SqlExecuteResult,
 } from '../types/query'
 
 export type {
@@ -15,30 +14,7 @@ export type {
   QueryHistoryResult,
   QueryTaskCreateResult,
   QueryTaskStatusResult,
-  SqlExecuteResult,
 } from '../types/query'
-
-export function executeSql(params: {
-  sql: string
-  datasource_id: string
-  member_datasource_ids?: string[]
-  limit?: number
-  timeout?: number
-  skip_query_cache?: boolean
-}): Promise<ApiResponse<SqlExecuteResult>> {
-  return request({
-    url: `/agents/api/chatdata/execute-sql`,
-    method: 'post',
-    data: {
-      sql: params.sql,
-      datasource_id: params.datasource_id,
-      member_datasource_ids: params.member_datasource_ids || [],
-      ...(params.limit !== undefined ? { limit: params.limit } : {}),
-      timeout: params.timeout,
-      skip_query_cache: params.skip_query_cache ?? false,
-    }
-  })
-}
 
 export function createQueryTask(params: {
   sql: string
