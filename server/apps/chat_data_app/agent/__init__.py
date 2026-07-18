@@ -12,14 +12,8 @@
 """
 
 from .chat_data_agent import ChatDataAgentState, create_chat_data_agent, get_chat_data_graph
-from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE, TABLE_SELECTOR_PROMPT
+from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from utils.checkpoint import get_checkpointer, DB_PATH
-from .tools import (
-    get_all_tables_async,
-    get_tables_name_comment,
-    get_tables_create_format,
-    llm_select_tables,
-)
 
 __all__ = [
     "ChatDataAgentState",
@@ -27,10 +21,5 @@ __all__ = [
     "get_chat_data_graph",
     "get_checkpointer",
     "DB_PATH",
-    "TABLE_SELECTOR_PROMPT",
     "SQL_GENERATOR_PROMPT_GENERATE",
-    "get_all_tables_async",
-    "get_tables_name_comment",
-    "get_tables_create_format",
-    "llm_select_tables",
 ]

@@ -1,11 +1,7 @@
-"""
-SQL Generator 工具函数
-
-提供表选择、DDL 生成等辅助功能，用于 Graph 执行前的预处理阶段
-"""
+"""Semantic query agent tool."""
 
 import json
-import re
+from dataclasses import dataclass
 from typing import Any, Annotated
 
 from langchain_core.messages import HumanMessage
@@ -15,14 +11,10 @@ from langgraph.prebuilt import InjectedState
 from utils.logger import get_logger
 from utils.artifact_store import ArtifactType, save_artifact
 from ...schema import SemanticQueryInput
-from ...services.datasource_manager import get_datasource_manager
-from ...services.llm_config import get_chat_data_llm
 from ...services.semantic_tools import load_runtime_semantic_config
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.semantic_query_service import (
-    build_member_query_result,
-    build_multi_member_query_result,
     compile_semantic_query_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
@@ -30,9 +22,38 @@ from ...services.semantic_query_service import (
 from ...services.semantic_sql_generator import SemanticSQLGenerator
 from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
 from .common import json_dumps, normalize_json_like_payload
-from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
 logger = get_logger(__name__)
+TOOL_ERROR_PREFIX = "semantic_query_tool 执行失败"
+
+
+@dataclass(frozen=True)
+class _PreparedToolRequest:
+    dsl: dict[str, Any] | None
+    sql: str
+    has_dsl: bool
+    save_path: str
+
+
+@dataclass(frozen=True)
+class _ResolvedToolContext:
+    state: dict[str, Any]
+    datasource_id: str | None
+    semantic_config_id: str
+    query_text: str
+    user_id: str | None
+    operator_name: str | None
+    conversation_id: str | None
+    member_datasource_ids: list[str]
+    available_member_datasource_ids: list[str]
+    matched_member_datasource_ids: list[str]
+
+
+@dataclass(frozen=True)
+class _CompiledToolQuery:
+    sql: str
+    query_mode: str
+    confidence: float
 
 
 def _query_result_tool_payload(
@@ -56,191 +77,14 @@ def _query_result_tool_payload(
     )
 
 
+def _tool_error(message: str) -> str:
+    return f"{TOOL_ERROR_PREFIX}: {message}"
+
+
 def save_query_result(data: dict, conversation_id: str | None = None) -> str:
     """保存查询结果，返回结果ID。"""
     return save_artifact(ArtifactType.QUERY_RESULT, data, conversation_id=conversation_id)
 
-
-async def get_all_tables_async(datasource_id: str | None) -> list[dict[str, Any]]:
-    """
-    异步获取指定数据源的所有表元数据（表名、描述、字段结构）。
-
-    从数据源表结构缓存中读取表信息，包含完整的表结构定义。
-    这是表选择流程的第一步，获取候选表的完整信息。
-    """
-    datasource_manager = get_datasource_manager()
-
-    if datasource_id:
-        datasource = await datasource_manager.get_datasource_async(datasource_id)
-        return datasource.get("ds_tables", []) if datasource else []
-
-    all_datasources = await datasource_manager.get_all_datasources_async()
-    tables: list[dict[str, Any]] = []
-    for ds in all_datasources:
-        tables.extend(ds.get("ds_tables", []))
-    return tables
-
-
-def get_tables_name_comment(tables: list[dict[str, Any]]) -> str:
-    """
-    生成表名和备注的摘要文本（用于 LLM 表选择）
-
-    只提取表名和备注，不包含字段详情，用于第一轮 LLM 调用。
-    这样可以用很少的 token 让 LLM 判断需要哪些表。
-
-    Args:
-        tables: 表信息列表（来自 get_all_tables_async）
-
-    Returns:
-        格式化的表名+备注字符串，示例:
-        ```
-        - ods_order: 订单主表
-        - ods_customer: 客户信息表
-        - ods_product: 商品表
-        ```
-    """
-    if not tables:
-        return "暂无可用数据表"
-
-    lines = []
-    for table in tables:
-        table_name = table.get("table_name", "")
-        description = table.get("description", "")
-        lines.append(f"- {table_name}: {description}")
-
-    return "\n".join(lines)
-
-
-def get_tables_create_format(tables: list[dict[str, Any]], selected_table_names: list[str]) -> str:
-    """
-    获取指定表的 CREATE TABLE 格式文本（用于 SQL 生成）
-
-    根据 LLM 选择的表名，生成这些表的 CREATE TABLE 语句。
-    只加载选中的表，避免传入所有表的结构信息浪费 token。
-
-    Args:
-        tables: 全部表信息列表（来自 get_all_tables_async）
-        selected_table_names: LLM 选中的表名列表
-
-    Returns:
-        格式化的 CREATE TABLE 文本，示例:
-        ```
-        ### ods_order
-        描述: 订单主表
-        ```sql
-        CREATE TABLE ods_order (
-            order_id INT PRIMARY KEY  -- 订单ID,
-            customer_id INT  -- 客户ID,
-            order_date TIMESTAMP  -- 下单时间,
-            amount DECIMAL(10,2)  -- 订单金额
-        );
-        ```
-        ```
-    """
-    if not tables or not selected_table_names:
-        return ""
-
-    # 过滤出选中的表
-    selected_tables = [t for t in tables if t.get("table_name") in selected_table_names]
-
-    if not selected_tables:
-        return ""
-
-    lines = []
-    for table in selected_tables:
-        table_name = table.get("table_name", "")
-        description = table.get("description", "")
-        columns = table.get("columns", [])
-
-        lines.append(f"### {table_name}")
-        lines.append(f"描述: {description}")
-        lines.append("```sql")
-        lines.append(f"CREATE TABLE {table_name} (")
-
-        col_defs = []
-        for col in columns:
-            col_def = f"    {col.get('name', '')} {col.get('type', 'TEXT')}"
-            if col.get("primary_key"):
-                col_def += " PRIMARY KEY"
-            if col.get("description"):
-                col_def += f"  -- {col.get('description')}"
-            col_defs.append(col_def)
-
-        lines.append(",\n".join(col_defs))
-        lines.append(");")
-        lines.append("```\n")
-
-    return "\n".join(lines)
-
-
-async def llm_select_tables(user_query: str, tables: list[dict[str, Any]]) -> list[str]:
-    """
-    根据用户问题智能选择相关的表（LLM 调用）
-
-    这是两步表选择策略的核心：
-    1. 只传表名+备注给 LLM（token 少）
-    2. LLM 返回需要的表名列表
-    3. 后续只加载选中表的完整 DDL
-
-    Args:
-        user_query: 用户的自然语言问题，如 "查询最近7天的订单数量"
-        tables: 可用表信息列表（来自 get_all_tables_async）
-
-    Returns:
-        LLM 选中的表名列表，示例: ["ods_order"]
-
-    Note:
-        - 使用 TABLE_SELECTOR_PROMPT 提示词
-        - LLM 返回 JSON 格式: {"tables": [...], "reasoning": "..."}
-        - 如果解析失败，降级为返回所有表名
-    """
-    if not tables:
-        return []
-
-    # 生成表名+备注摘要
-    tables_name_comment = get_tables_name_comment(tables)
-
-    # 构建表选择提示词
-    system_prompt = TABLE_SELECTOR_PROMPT.format(
-        tables_summary=tables_name_comment,
-        user_query=user_query
-    )
-
-    # 调用 LLM 选择表（非流式，快速返回）
-    llm = get_chat_data_llm(streaming=False)
-    response = await llm.ainvoke([HumanMessage(content=system_prompt)])
-
-    # 解析返回的表名列表
-    content = response.content.strip()
-    logger.info(f"表选择结果: {content}")
-
-    try:
-        # 尝试解析 JSON 格式（可能被 ```json 包裹）
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(1))
-            selected = result.get("tables", [])
-        else:
-            # 尝试直接解析 JSON
-            result = json.loads(content)
-            selected = result.get("tables", [])
-
-        # 验证表名有效性（防止 LLM 幻觉）
-        valid_table_names = {t.get("table_name") for t in tables}
-        selected = [t for t in selected if t in valid_table_names]
-
-        logger.info(f"选中的表: {selected}")
-        return selected
-
-    except Exception as e:
-        # 解析失败时降级：返回所有表（保证功能可用）
-        logger.warning(f"解析表选择结果失败: {e}，降级使用所有表")
-        return [t.get("table_name") for t in tables]
-
-
-# ============ Agent 工具定义 ============
-
-# ============ 语义查询工具 ============
 
 def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
     """判断 state 中预加载的语义配置是否可用于本次工具调用。"""
@@ -310,6 +154,281 @@ def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[st
     return available_member_ids, matched_member_ids
 
 
+def _prepare_tool_request(
+    *,
+    dsl: Any,
+    sql: str | None,
+    save_as: str | None,
+    workspace_root: str | None,
+    allow_save_as: bool,
+) -> _PreparedToolRequest | str:
+    has_dsl = dsl is not None
+    normalized_sql = str(sql or "").strip()
+    has_sql = bool(normalized_sql)
+    if has_dsl == has_sql:
+        return _tool_error("必须且只能传入 dsl 或 sql 其中一个")
+    if has_dsl:
+        dsl = normalize_json_like_payload(dsl)
+    if has_dsl and not isinstance(dsl, dict):
+        return _tool_error("dsl 必须是对象")
+    if isinstance(dsl, dict) and "sql" in dsl:
+        return _tool_error("sql 必须放在顶层 sql 参数中，不要放入 dsl")
+    if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
+        return _tool_error("dsl 必须是单个查询对象")
+
+    save_path = str(save_as or "").strip()
+    if save_path:
+        if not allow_save_as:
+            return _tool_error("当前工具不支持 save_as")
+        if not str(workspace_root or "").strip():
+            return _tool_error("当前会话未初始化工作目录，无法保存结果")
+        if not save_path.lower().endswith(".json"):
+            return _tool_error("save_as 只支持 .json 文件")
+    return _PreparedToolRequest(
+        dsl=dsl if isinstance(dsl, dict) else None,
+        sql=normalized_sql,
+        has_dsl=has_dsl,
+        save_path=save_path,
+    )
+
+
+async def _resolve_tool_context(
+    *,
+    state: dict | None,
+    semantic_config_id: str | None,
+    member_datasource_ids: list[str] | None,
+    require_datasource_id: bool,
+) -> _ResolvedToolContext | str:
+    state = state or {}
+    datasource_id = _get_datasource_id_from_state(state)
+    normalized_semantic_config_id = str(semantic_config_id or "").strip()
+    if not normalized_semantic_config_id:
+        return _tool_error("缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id")
+    if require_datasource_id and not datasource_id:
+        return _tool_error("当前会话未绑定数据源")
+
+    selected_semantic_config_id = str(
+        state.get("semantic_config_id")
+        or (state.get("semantic_config") or {}).get("id")
+        or ""
+    ).strip()
+    if selected_semantic_config_id and normalized_semantic_config_id != selected_semantic_config_id:
+        return _tool_error(
+            f"当前会话已选择指标集 {selected_semantic_config_id}，请在 semantic_config_id 中传入该 ID"
+        )
+
+    query_text = _latest_human_query(state.get("messages") or [])
+    requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
+    available_member_datasource_ids, matched_member_datasource_ids = _get_member_scope_from_state(state)
+
+    return _ResolvedToolContext(
+        state=state,
+        datasource_id=datasource_id,
+        semantic_config_id=normalized_semantic_config_id,
+        query_text=query_text,
+        user_id=str(state.get("user_id") or "").strip() or None,
+        operator_name=str(state.get("operator_name") or "").strip() or None,
+        conversation_id=str(state.get("conversation_id") or "").strip() or None,
+        member_datasource_ids=requested_member_datasource_ids,
+        available_member_datasource_ids=available_member_datasource_ids,
+        matched_member_datasource_ids=matched_member_datasource_ids,
+    )
+
+
+def _validate_member_scope(
+    *,
+    requested_member_datasource_ids: list[str],
+    available_member_datasource_ids: list[str],
+    matched_member_datasource_ids: list[str],
+) -> str | None:
+    if not available_member_datasource_ids:
+        return _tool_error("本次请求没有可用执行对象，请先选择有权限的数据源后再查询")
+    if not requested_member_datasource_ids:
+        return _tool_error("缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围")
+    if matched_member_datasource_ids:
+        invalid_matched_member_ids = [
+            member_id
+            for member_id in requested_member_datasource_ids
+            if member_id not in matched_member_datasource_ids
+        ]
+        if invalid_matched_member_ids:
+            return _tool_error(
+                "本次查询的执行对象与用户问题中指定的机构不一致；"
+                f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
+            )
+
+    invalid_member_ids = [
+        member_id
+        for member_id in requested_member_datasource_ids
+        if member_id not in available_member_datasource_ids
+    ]
+    if invalid_member_ids:
+        return _tool_error(f"本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids")
+    return None
+
+
+async def _compile_tool_query(
+    *,
+    request: _PreparedToolRequest,
+    context: _ResolvedToolContext,
+) -> _CompiledToolQuery | str:
+    query_mode = "nl2sql" if not request.has_dsl else "dsl2sql"
+    confidence = 0.6 if not request.has_dsl else 0.9
+    config = await _resolve_semantic_query_config(
+        context.state,
+        context.datasource_id,
+        context.semantic_config_id,
+    )
+    if not config:
+        return _tool_error(f"未找到可用指标集 {context.semantic_config_id or '-'}")
+    if not request.has_dsl:
+        return _CompiledToolQuery(sql=request.sql, query_mode=query_mode, confidence=confidence)
+
+    compile_result = compile_semantic_query_dsl(
+        config,
+        request.dsl or {},
+        user_query=context.query_text or None,
+        generator_cls=SemanticSQLGenerator,
+    )
+    if not compile_result.get("success"):
+        return _tool_error(compile_result.get("error") or "DSL2SQL 编译失败")
+    sql = str(compile_result.get("sql") or "").strip()
+    if not sql:
+        return _tool_error("DSL2SQL 未生成 SQL")
+    return _CompiledToolQuery(sql=sql, query_mode=query_mode, confidence=confidence)
+
+
+async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToolQuery) -> dict | str:
+    logger.info(f"执行语义查询 SQL: {query.sql[:100]}...")
+    logger.info(
+        "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
+        context.user_id,
+        context.operator_name,
+        context.datasource_id,
+        context.member_datasource_ids,
+    )
+    try:
+        query_result = await _execute_sql_real(
+            sql=query.sql,
+            datasource_id=context.datasource_id,
+            member_datasource_ids=context.member_datasource_ids,
+            user_id=context.user_id,
+            semantic_config_id=context.semantic_config_id,
+            query_text=context.query_text,
+            conversation_id=context.conversation_id,
+            operator_name=context.operator_name,
+        )
+    except Exception as exc:
+        logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
+        return _tool_error(str(exc))
+
+    query_result["sql"] = query_result.get("sql") or query.sql
+    query_result["query_mode"] = query.query_mode
+    query_result["confidence"] = query.confidence
+    return query_result
+
+
+async def _build_tool_response(
+    *,
+    query_result: dict,
+    query: _CompiledToolQuery,
+    save_path: str,
+    execution_session_ref: SandboxExecutionSessionRef | None,
+    conversation_id: str | None,
+) -> str:
+    if save_path:
+        return await _build_saved_result_response(
+            query_result=query_result,
+            query=query,
+            save_path=save_path,
+            execution_session_ref=execution_session_ref,
+        )
+    if query_result_succeeded(query_result):
+        return _build_success_result_response(query_result, query, conversation_id)
+    return _build_failed_result_response(query_result, query)
+
+
+async def _build_saved_result_response(
+    *,
+    query_result: dict,
+    query: _CompiledToolQuery,
+    save_path: str,
+    execution_session_ref: SandboxExecutionSessionRef | None,
+) -> str:
+    write_result = await sandbox_write_text_file(
+        session_ref=execution_session_ref,
+        file_path=save_path,
+        content=json_dumps(query_result),
+        mode="overwrite",
+    )
+    return _query_result_tool_payload(
+        status=query_result_status(query_result),
+        data=None,
+        error=query_result.get("error"),
+        meta={
+            "result_path": write_result.get("file_path") or save_path,
+            "total_count": query_result.get("total_count"),
+            "execution_time_ms": query_result.get("execution_time_ms"),
+            "sql": query_result.get("sql") or query.sql,
+            "query_mode": query.query_mode,
+            "confidence": query.confidence,
+            "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
+        },
+    )
+
+
+def _build_success_result_response(query_result: dict, query: _CompiledToolQuery, conversation_id: str | None) -> str:
+    result_json = json.dumps(query_result, ensure_ascii=False)
+    if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
+        artifact_id = save_query_result(query_result, conversation_id=conversation_id)
+        result_summary = {
+            "status": query_result.get("status") or "succeeded",
+            "artifact_id": artifact_id,
+            "total_count": query_result.get("total_count", 0),
+            "execution_time_ms": query_result.get("execution_time_ms"),
+            "result_size_chars": len(result_json),
+            "llm_analysis_skipped": True,
+            "query_mode": query.query_mode,
+            "confidence": query.confidence,
+            "message": "查询结果已超过限制，完整结果已写入 artifact；模型仅接收摘要，前端可加载完整结果。",
+        }
+        if query_result.get("sql"):
+            result_summary["sql"] = query_result.get("sql")
+        logger.info(
+            "语义查询结果过大，已写入 artifact: artifact_id=%s size_chars=%s rows=%s",
+            artifact_id,
+            len(result_json),
+            query_result.get("total_count", 0),
+        )
+        return _query_result_tool_payload(
+            status=str(result_summary.get("status") or "succeeded"),
+            data=None,
+            meta={**result_summary, "artifact_id": artifact_id},
+            error=None,
+        )
+    return _query_result_tool_payload(
+        status=str(query_result.get("status") or "succeeded"),
+        data=query_result,
+        meta={
+            "query_mode": query.query_mode,
+            "confidence": query.confidence,
+        },
+    )
+
+
+def _build_failed_result_response(query_result: dict, query: _CompiledToolQuery) -> str:
+    return _query_result_tool_payload(
+        status=str(query_result.get("status") or "failed"),
+        data=None,
+        error=str(query_result.get("error") or "未知错误"),
+        meta={
+            "sql": query_result.get("sql") or query.sql,
+            "query_mode": query.query_mode,
+            "confidence": query.confidence,
+        },
+    )
+
+
 @tool(args_schema=SemanticQueryInput)
 async def semantic_query_tool(
     dsl: dict | None = None,
@@ -339,192 +458,48 @@ async def _run_semantic_query_tool(
     allow_save_as: bool = False,
     require_datasource_id: bool = False,
 ) -> str:
-    has_dsl = dsl is not None
-    sql = str(sql or "").strip()
-    has_sql = bool(sql)
-    if has_dsl == has_sql:
-        return "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
-    if has_dsl:
-        dsl = normalize_json_like_payload(dsl)
-    if has_dsl and not isinstance(dsl, dict):
-        return "semantic_query_tool 执行失败: dsl 必须是对象"
-    if isinstance(dsl, dict) and "sql" in dsl:
-        return "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
-    if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
-        return "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
-    save_path = str(save_as or "").strip()
-    if save_path:
-        if not allow_save_as:
-            return "semantic_query_tool 执行失败: 当前工具不支持 save_as"
-        if not str(workspace_root or "").strip():
-            return "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
-        if not save_path.lower().endswith(".json"):
-            return "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
-    state = state or {}
-
-    datasource_id = _get_datasource_id_from_state(state)
-    semantic_config_id = str(semantic_config_id or "").strip() or None
-    if not semantic_config_id:
-        return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id"
-    if require_datasource_id and not datasource_id:
-        return "semantic_query_tool 执行失败: 当前会话未绑定数据源"
-    selected_semantic_config_id = str(
-        state.get("semantic_config_id")
-        or (state.get("semantic_config") or {}).get("id")
-        or ""
-    ).strip()
-    if selected_semantic_config_id and semantic_config_id != selected_semantic_config_id:
-        return (
-            "semantic_query_tool 执行失败: 当前会话已选择指标集 "
-            f"{selected_semantic_config_id}，请在 semantic_config_id 中传入该 ID"
-        )
-
-    config = await _resolve_semantic_query_config(state, datasource_id, semantic_config_id)
-    if not config:
-        return f"semantic_query_tool 执行失败: 未找到可用指标集 {semantic_config_id or '-'}"
-
-    query_text = _latest_human_query(state.get("messages") or [])
-
-    query_mode = "nl2sql" if has_sql else "dsl2sql"
-    confidence = 0.6 if has_sql else 0.9
-    if has_dsl:
-        compile_result = compile_semantic_query_dsl(
-            config,
-            dsl,
-            user_query=query_text or None,
-            generator_cls=SemanticSQLGenerator,
-        )
-        if not compile_result.get("success"):
-            return f"semantic_query_tool 执行失败: {compile_result.get('error') or 'DSL2SQL 编译失败'}"
-        sql = str(compile_result.get("sql") or "").strip()
-        if not sql:
-            return "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
-
-    logger.info(f"执行语义查询 SQL: {sql[:100]}...")
-
-    # 获取数据源ID
-    user_id = str(state.get("user_id") or "").strip() or None
-    operator_name = str(state.get("operator_name") or "").strip() or None
-    requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    available_member_datasource_ids, matched_member_datasource_ids = _get_member_scope_from_state(state)
-    allowed_member_datasource_ids = available_member_datasource_ids
-    if not allowed_member_datasource_ids:
-        return "semantic_query_tool 执行失败: 本次请求没有可用执行对象，请先选择有权限的数据源后再查询"
-    if not requested_member_datasource_ids:
-        return "semantic_query_tool 执行失败: 缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围"
-    if matched_member_datasource_ids:
-        invalid_matched_member_ids = [
-            member_id
-            for member_id in requested_member_datasource_ids
-            if member_id not in matched_member_datasource_ids
-        ]
-        if invalid_matched_member_ids:
-            return (
-                "semantic_query_tool 执行失败: 本次查询的执行对象与用户问题中指定的机构不一致；"
-                f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
-            )
-    invalid_member_ids = [
-        member_id
-        for member_id in requested_member_datasource_ids
-        if member_id not in allowed_member_datasource_ids
-    ]
-    if invalid_member_ids:
-        return f"semantic_query_tool 执行失败: 本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；请只使用可用执行对象中的 member_datasource_ids"
-    effective_member_datasource_ids = requested_member_datasource_ids
-    logger.info(
-        "chatdata conversation execute sql: user_id=%s operator_name=%s datasource_id=%s member_datasource_ids=%s",
-        user_id,
-        operator_name,
-        datasource_id,
-        effective_member_datasource_ids,
+    prepared_request = _prepare_tool_request(
+        dsl=dsl,
+        sql=sql,
+        save_as=save_as,
+        workspace_root=workspace_root,
+        allow_save_as=allow_save_as,
     )
-    conversation_id = str(state.get("conversation_id") or "").strip() or None
-    try:
-        query_result = await _execute_sql_real(
-            sql=sql,
-            datasource_id=datasource_id,
-            member_datasource_ids=effective_member_datasource_ids,
-            user_id=user_id,
-            semantic_config_id=semantic_config_id,
-            query_text=query_text,
-            conversation_id=conversation_id,
-            operator_name=operator_name,
-        )
-    except Exception as exc:
-        logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
-        return f"semantic_query_tool 执行失败: {exc}"
-    query_result["sql"] = query_result.get("sql") or sql
-    query_result["query_mode"] = query_mode
-    query_result["confidence"] = confidence
-    if save_path:
-        write_result = await sandbox_write_text_file(
-            session_ref=execution_session_ref,
-            file_path=save_path,
-            content=json_dumps(query_result),
-            mode="overwrite",
-        )
-        return _query_result_tool_payload(
-            status=query_result_status(query_result),
-            data=None,
-            error=query_result.get("error"),
-            meta={
-                "result_path": write_result.get("file_path") or save_path,
-                "total_count": query_result.get("total_count"),
-                "execution_time_ms": query_result.get("execution_time_ms"),
-                "sql": query_result.get("sql") or sql,
-                "query_mode": query_mode,
-                "confidence": confidence,
-                "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
-            },
-        )
-    if query_result_succeeded(query_result):
-        result_json = json.dumps(query_result, ensure_ascii=False)
-        if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
-            artifact_id = save_query_result(query_result, conversation_id=conversation_id)
-            result_summary = {
-                "status": query_result.get("status") or "succeeded",
-                "artifact_id": artifact_id,
-                "total_count": query_result.get("total_count", 0),
-                "execution_time_ms": query_result.get("execution_time_ms"),
-                "result_size_chars": len(result_json),
-                "llm_analysis_skipped": True,
-                "query_mode": query_mode,
-                "confidence": confidence,
-                "message": "查询结果已超过限制，完整结果已写入 artifact；模型仅接收摘要，前端可加载完整结果。",
-            }
-            if query_result.get("sql"):
-                result_summary["sql"] = query_result.get("sql")
-            logger.info(
-                "语义查询结果过大，已写入 artifact: artifact_id=%s size_chars=%s rows=%s",
-                artifact_id,
-                len(result_json),
-                query_result.get("total_count", 0),
-            )
-            return _query_result_tool_payload(
-                status=str(result_summary.get("status") or "succeeded"),
-                data=None,
-                meta={**result_summary, "artifact_id": artifact_id},
-                error=None,
-            )
-        return _query_result_tool_payload(
-            status=str(query_result.get("status") or "succeeded"),
-            data=query_result,
-            meta={
-                "query_mode": query_mode,
-                "confidence": confidence,
-            },
-        )
-    else:
-        return _query_result_tool_payload(
-            status=str(query_result.get("status") or "failed"),
-            data=None,
-            error=str(query_result.get("error") or "未知错误"),
-            meta={
-                "sql": query_result.get("sql") or sql,
-                "query_mode": query_mode,
-                "confidence": confidence,
-            },
-        )
+    if isinstance(prepared_request, str):
+        return prepared_request
+
+    context = await _resolve_tool_context(
+        state=state,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        require_datasource_id=require_datasource_id,
+    )
+    if isinstance(context, str):
+        return context
+
+    query = await _compile_tool_query(request=prepared_request, context=context)
+    if isinstance(query, str):
+        return query
+
+    member_scope_error = _validate_member_scope(
+        requested_member_datasource_ids=context.member_datasource_ids,
+        available_member_datasource_ids=context.available_member_datasource_ids,
+        matched_member_datasource_ids=context.matched_member_datasource_ids,
+    )
+    if member_scope_error:
+        return member_scope_error
+
+    query_result = await _execute_tool_query(context, query)
+    if isinstance(query_result, str):
+        return query_result
+
+    return await _build_tool_response(
+        query_result=query_result,
+        query=query,
+        save_path=prepared_request.save_path,
+        execution_session_ref=execution_session_ref,
+        conversation_id=context.conversation_id,
+    )
 
 
 def create_bound_semantic_query_tool(
@@ -583,16 +558,6 @@ def _normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:
     return normalize_member_datasource_ids(member_datasource_ids)
 
 
-def _build_member_query_result(base_result: dict, sql: str, member_datasource_id: str | None = None, member_name: str | None = None) -> dict:
-    """构造成员执行结果。"""
-    return build_member_query_result(base_result, sql, member_datasource_id, member_name)
-
-
-def _build_multi_member_query_result(sql: str, member_results: list[dict]) -> dict:
-    """构造多成员查询结果。"""
-    return build_multi_member_query_result(sql, member_results)
-
-
 async def _execute_sql_real(
     sql: str,
     datasource_id: str | None,
@@ -624,253 +589,3 @@ async def _execute_sql_real(
         conversation_id=conversation_id,
         operator_name=operator_name,
     )
-
-
-# ============ 语义查询工具 ============
-
-# 工具名称常量
-class SemanticToolNames:
-    """语义工具名称常量（避免硬编码字符串）"""
-    GENERATE = "dsl2sql_tool"
-
-
-def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
-    """
-    构建语义配置的提示词，告诉 LLM 有哪些指标和维度可用
-
-    注意：从独立提示词架构开始，此函数只返回配置信息部分（指标和维度列表）
-    工作流程和规则已经包含在 SQL_GENERATOR_PROMPT_SEMANTIC_* 中
-
-    Args:
-        semantic_config: 语义配置
-        mode: 工作模式 ("generate" 或 "query")
-
-    Returns:
-        格式化的配置信息字符串
-    """
-    def get_metric_type(field: dict) -> str:
-        return str(
-            field.get('data_type')
-            or field.get('mysql_type')
-            or field.get('hive_type')
-            or field.get('columnType')
-            or ''
-        ).strip()
-
-    def get_dimension_type(field: dict) -> str:
-        return str(
-            field.get('logical_type')
-            or field.get('mysql_type')
-            or field.get('hive_type')
-            or field.get('columnType')
-            or field.get('data_type')
-            or ''
-        ).strip()
-
-    def format_prompt_line(name: str, desc: str, field_type: str, expression: str, metadata_supplement: str = "") -> str:
-        parts = [f"**{name}**"]
-        if desc and desc != name:
-            parts.append(desc)
-        if field_type:
-            parts.append(f"类型: {field_type}")
-        parts.append(f"表达式: {expression}")
-        supplement = str(metadata_supplement or "").strip()
-        if supplement:
-            parts.append(f"元数据补充: {supplement}")
-        return "，".join(parts)
-
-    def semantic_table_ref(table: str, table_alias: str = "") -> str:
-        table_name = str(table or "").strip()
-        alias = str(table_alias or table_name).strip()
-        if not table_name:
-            return alias
-        if not alias or alias == table_name:
-            return table_name
-        return f"{alias}({table_name})"
-
-    def collect_semantic_table_names() -> set[str]:
-        table_names: set[str] = set()
-        for item in [*(semantic_config.get("metrics") or []), *(semantic_config.get("dimensions") or [])]:
-            table_name = str((item or {}).get("table") or "").strip()
-            if table_name:
-                table_names.add(table_name)
-        for relationship in semantic_config.get("relationships") or []:
-            left_table = str((relationship or {}).get("left_table") or "").strip()
-            right_table = str((relationship or {}).get("right_table") or "").strip()
-            if left_table:
-                table_names.add(left_table)
-            if right_table:
-                table_names.add(right_table)
-        return table_names
-
-    def column_name(column: dict) -> str:
-        return str(column.get("name") or column.get("column_name") or "").strip()
-
-    def column_type(column: dict) -> str:
-        return str(
-            column.get("type")
-            or column.get("mysql_type")
-            or column.get("hive_type")
-            or column.get("data_type")
-            or column.get("columnType")
-            or ""
-        ).strip()
-
-    def column_description(column: dict) -> str:
-        return str(column.get("description") or column.get("comment") or "").strip()
-
-    # 配置描述（可选）
-    description_section = ""
-    if semantic_config.get('description'):
-        description_section = f"**配置说明**: {semantic_config['description']}\n\n"
-
-    # 业务描述（可选）
-    business_description_section = ""
-    if semantic_config.get('ontology_rules'):
-        business_description_section = f"**业务描述**: {semantic_config['ontology_rules']}\n\n"
-
-    # SQL 方言（帮助模型理解 SQL 语法边界）
-    source_type = str(semantic_config.get('source_type') or '').strip()
-    dialect_section = f"**SQL方言**: {source_type.upper()}\n\n" if source_type else ""
-
-    # 构建维度列表
-    dimensions = semantic_config.get('dimensions', [])
-    dimensions_section = ""
-    if dimensions:
-        dimensions_lines = []
-        for d in dimensions:
-            name = d.get('name', '')
-            desc = d.get('description') or d.get('label') or name
-            expression = d.get('expression')
-            if not expression:
-                field = d.get('field')
-                if field:
-                    expression = field
-                else:
-                    table = d.get('table', '')
-                    table_alias = d.get('table_alias', '')
-                    column = d.get('column', '')
-                    table_ref = table_alias or table
-                    expression = f"{table_ref}.{column}" if table_ref and column else column or '-'
-            field_type = get_dimension_type(d)
-            table_ref = semantic_table_ref(d.get('table', ''), d.get('table_alias', ''))
-            prompt_line = format_prompt_line(name, desc, field_type, expression, d.get('metadata_supplement'))
-            if table_ref:
-                prompt_line = f"{prompt_line}，表: {table_ref}"
-
-            # 业务枚举给 DSL 使用；SQL 映射只在直接 SQL 路径使用。
-            allowed_values = d.get('allowed_values')
-            mapping = d.get('mapping') if isinstance(d.get('mapping'), dict) else {}
-            value_hints = []
-            if allowed_values:
-                values_str = "、".join(str(v) for v in allowed_values)
-                value_hints.append(f"业务可选值: [{values_str}]")
-            if mapping:
-                mapping_str = "，".join(f"{key}={value}" for key, value in mapping.items() if str(key).strip() and str(value).strip())
-                if mapping_str:
-                    value_hints.append(f"SQL取值映射: {mapping_str}")
-                    value_hints.append("生成 DSL 时使用业务可选值；直接生成 SQL 时使用映射后的物理值")
-            if value_hints:
-                dimensions_lines.append(f"- {prompt_line} - {'；'.join(value_hints)}")
-            else:
-                dimensions_lines.append(f"- {prompt_line}")
-
-        dimensions_section = "### 可用维度/字段（可用于返回、筛选、分组）\n" + "\n".join(dimensions_lines) + "\n\n"
-
-    # 构建指标列表
-    metrics = semantic_config.get('metrics', [])
-    metrics_section = ""
-    if metrics:
-        metrics_lines = []
-        for m in metrics:
-            name = m.get('name', '')
-            desc = m.get('description') or m.get('label') or name
-            expression = m.get('expression')
-            if not expression:
-                aggregation = m.get('aggregation', 'COUNT')
-                field = m.get('field', '')
-                expression = f"{aggregation}({field})"
-            table_ref = semantic_table_ref(m.get('table', ''), m.get('table_alias', ''))
-            line = format_prompt_line(name, desc, get_metric_type(m), expression, m.get('metadata_supplement'))
-            if table_ref:
-                line = f"{line}，表: {table_ref}"
-            metrics_lines.append(f"- {line}")
-        metrics_section = "### 可用指标（仅用于明确聚合口径）\n" + "\n".join(metrics_lines) + "\n\n"
-
-    # 构建当前指标集相关表和原始字段列表，供 NL2SQL 回退理解表名、字段名和字段备注。
-    tables = semantic_config.get('tables') or []
-    table_names = collect_semantic_table_names()
-    tables_section = ""
-    if tables and table_names:
-        table_lines = []
-        for table in tables:
-            table_name = str((table or {}).get("table_name") or "").strip()
-            if not table_name or table_name not in table_names:
-                continue
-            table_desc = str((table or {}).get("description") or "").strip()
-            header = f"- **{table_name}**"
-            if table_desc:
-                header = f"{header}：{table_desc}"
-            table_lines.append(header)
-            for column in table.get("columns") or []:
-                name = column_name(column)
-                if not name:
-                    continue
-                parts = [name]
-                col_type = column_type(column)
-                col_desc = column_description(column)
-                if col_type:
-                    parts.append(f"类型: {col_type}")
-                if col_desc:
-                    parts.append(f"备注: {col_desc}")
-                table_lines.append(f"  - {'，'.join(parts)}")
-        if table_lines:
-            tables_section = "### 相关表和原始字段（用于补充字段理解和 SQL 回退）\n" + "\n".join(table_lines) + "\n\n"
-
-    # 构建表关系列表
-    relationships = semantic_config.get('relationships', [])
-    relationships_section = ""
-    if relationships:
-        relationships_lines = []
-        for r in relationships:
-            left_table = r.get('left_table', '')
-            right_table = r.get('right_table', '')
-            left_ref = semantic_table_ref(left_table, r.get('left_alias', ''))
-            right_ref = semantic_table_ref(right_table, r.get('right_alias', ''))
-            join_type = r.get('join_type', 'left').upper()
-            rel_type = r.get('relationship_type', 'one_to_many')
-            join_conditions = r.get('join_conditions') or []
-            condition_parts = []
-            for cond in join_conditions:
-                left_col = (cond or {}).get('left_column')
-                right_col = (cond or {}).get('right_column')
-                if left_col and right_col:
-                    condition_parts.append(f"{left_ref}.{left_col} = {right_ref}.{right_col}")
-            if not condition_parts:
-                continue
-            relationships_lines.append(
-                f"- **{left_ref}** → **{right_ref}**: {' AND '.join(condition_parts)} ({join_type} JOIN, {rel_type})"
-            )
-        relationships_section = "### 表关系（用于跨表查询）\n" + "\n".join(relationships_lines) + "\n\n"
-
-    # 只注入当前指标集配置；工具参数规则由智能问数主提示词维护。
-    return f"""{description_section}{business_description_section}{dialect_section}{dimensions_section}{tables_section}{relationships_section}{metrics_section}"""
-
-
-# ============ 直接执行 SQL（用于 Dashboard 面板刷新） ============
-
-async def execute_sql_direct(sql: str, datasource_id: str = None) -> dict:
-    """
-    直接执行 SQL 并返回结果。
-
-    用于 Dashboard 面板数据刷新，不经过 Agent 工作流
-
-    Args:
-        sql: SQL 查询语句
-        datasource_id: 数据源ID
-
-    Returns:
-        查询结果 {"status": str, "results": [...]}
-    """
-    logger.info(f"直接执行 SQL: {sql[:100]}... (datasource_id={datasource_id}, mode=真实)")
-    return await _execute_sql_real(sql, datasource_id)

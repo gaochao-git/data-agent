@@ -3,8 +3,8 @@
 from typing import Any
 
 from ..agent_runtime import format_current_time_for_prompt
-from ..tools import build_semantic_prompt
 from .chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
+from .semantic_layer import build_semantic_prompt
 
 
 def format_semantic_config_directory_info_for_llm(directory_info: str) -> str:

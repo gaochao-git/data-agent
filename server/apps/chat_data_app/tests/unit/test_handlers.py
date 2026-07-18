@@ -505,27 +505,6 @@ def test_get_semantic_config_async_branches(monkeypatch):
     assert config["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效"
 
 
-def test_agent_sql_member_result_helpers():
-    success = agent_sql_tools._build_member_query_result(
-        {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": 12},
-        "select 1",
-        "m1",
-        "杭州库",
-    )
-    failed = agent_sql_tools._build_member_query_result(
-        {"success": False, "columns": [], "data": [], "total_count": 0, "error": "表不存在"},
-        "select * from missing",
-        "m2",
-        "宁波库",
-    )
-    merged = agent_sql_tools._build_multi_member_query_result("select 1", [failed, success])
-
-    assert success["member_name"] == "杭州库"
-    assert failed["error"] == "表不存在"
-    assert merged["status"] == "succeeded"
-    assert merged["results"] == [failed, success]
-
-
 def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
     assert agent_sql_tools._normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
 

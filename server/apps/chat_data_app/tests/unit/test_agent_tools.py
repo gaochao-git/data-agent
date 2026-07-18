@@ -13,7 +13,9 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.tools import calculator_tool
 from apps.chat_data_app.agent.tools import semantic_query as agent_tools
+from apps.chat_data_app.agent.prompts.semantic_layer import build_semantic_prompt
 from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services import sql_assist_context
 
 
 def _query_result_payload(result: str) -> dict:
@@ -82,7 +84,7 @@ def test_calculator_tool_covers_empty_division_and_unary_branches():
 
 
 def test_build_semantic_prompt_includes_ontology_rules():
-    prompt = agent_tools.build_semantic_prompt({
+    prompt = build_semantic_prompt({
         "description": "订单指标集",
         "ontology_rules": "有效订单仅统计已支付且未退款订单",
         "metrics": [{"name": "订单金额", "expression": "SUM(pay_amount)", "description": "实付金额"}],
@@ -109,19 +111,17 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
         {"table_name": "users", "description": "用户表", "columns": []},
     ]
 
-    assert agent_tools.get_tables_name_comment([]) == "暂无可用数据表"
-    assert agent_tools.get_tables_name_comment(tables) == "- orders: 订单表\n- users: 用户表"
-    assert agent_tools.get_tables_create_format([], ["orders"]) == ""
-    assert agent_tools.get_tables_create_format(tables, []) == ""
-    assert agent_tools.get_tables_create_format(tables, ["missing"]) == ""
+    assert sql_assist_context.get_tables_create_format([], ["orders"]) == ""
+    assert sql_assist_context.get_tables_create_format(tables, []) == ""
+    assert sql_assist_context.get_tables_create_format(tables, ["missing"]) == ""
 
-    ddl = agent_tools.get_tables_create_format(tables, ["orders"])
+    ddl = sql_assist_context.get_tables_create_format(tables, ["orders"])
 
     assert "CREATE TABLE orders" in ddl
     assert "order_id bigint PRIMARY KEY  -- 订单ID" in ddl
     assert "status TEXT  -- 订单状态" in ddl
 
-    no_comment = agent_tools.get_tables_create_format(
+    no_comment = sql_assist_context.get_tables_create_format(
         [{"table_name": "logs", "description": "", "columns": [{"name": "id"}]}],
         ["logs"],
     )
@@ -130,7 +130,7 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
 
 
 def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relationships():
-    prompt = agent_tools.build_semantic_prompt({
+    prompt = build_semantic_prompt({
         "source_type": "hive",
         "metrics": [
             {"name": "订单数", "label": "订单数量", "aggregation": "COUNT", "field": "order_id", "mysql_type": "bigint", "metadata_supplement": "同义词：订单量"},
@@ -202,40 +202,11 @@ def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
                 {"ds_tables": [{"table_name": "users"}]},
             ]
 
-    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(sql_assist_context, "get_datasource_manager", lambda: FakeManager())
 
-    assert asyncio.run(agent_tools.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
-    assert asyncio.run(agent_tools.get_all_tables_async("missing")) == []
-    assert asyncio.run(agent_tools.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
-
-
-def test_llm_select_tables_parses_json_code_block_filters_invalid_and_falls_back(monkeypatch):
-    tables = [{"table_name": "orders", "description": "订单表"}, {"table_name": "users", "description": "用户表"}]
-    captured = {}
-
-    class FakeResponse:
-        def __init__(self, content):
-            self.content = content
-
-    class FakeLLM:
-        def __init__(self, content):
-            self.content = content
-
-        async def ainvoke(self, messages):
-            captured["messages"] = messages
-            assert "orders" in messages[0].content
-            return FakeResponse(self.content)
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('```json\n{"tables":["orders","missing"]}\n```'))
-    assert asyncio.run(agent_tools.llm_select_tables("查订单", tables)) == ["orders"]
-    assert getattr(captured["messages"][0], "type", "") == "human"
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('{"tables":["users"]}'))
-    assert asyncio.run(agent_tools.llm_select_tables("查用户", tables)) == ["users"]
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM("not json"))
-    assert asyncio.run(agent_tools.llm_select_tables("查全部", tables)) == ["orders", "users"]
-    assert asyncio.run(agent_tools.llm_select_tables("查空", [])) == []
+    assert asyncio.run(sql_assist_context.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
+    assert asyncio.run(sql_assist_context.get_all_tables_async("missing")) == []
+    assert asyncio.run(sql_assist_context.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
 
 
 class _FakeDatasourceManager:
@@ -1323,17 +1294,8 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
     assert '"sql": "select 1"' in result
 
 
-def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch():
-    assert agent_tools._build_multi_member_query_result("select 1", []) == {
-        "status": "failed",
-        "sql": "select 1",
-        "total_count": 0,
-        "execution_time_ms": None,
-        "error": "查询失败",
-        "results": [],
-    }
-
-    prompt = agent_tools.build_semantic_prompt({
+def test_sql_tool_remaining_helpers_cover_prompt_alias_branch():
+    prompt = build_semantic_prompt({
         "metrics": [
             {"name": "无表指标", "expression": "COUNT(*)", "table": "", "description": ""},
             {"name": "同表指标", "expression": "SUM(amount)", "table": "orders", "table_alias": "orders"},
@@ -1352,17 +1314,17 @@ def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch()
     assert "表达式: -" in prompt
 
 
-def test_execute_sql_direct_delegates_to_real_executor(monkeypatch):
+def test_execute_direct_sql_delegates_to_agent_sql(monkeypatch):
     captured = {}
 
-    async def fake_execute_sql_real(sql, datasource_id):
+    async def fake_execute_agent_sql(sql, datasource_id):
         captured["sql"] = sql
         captured["datasource_id"] = datasource_id
         return {"success": True}
 
-    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(query_runtime, "execute_agent_sql", fake_execute_agent_sql)
 
-    result = asyncio.run(agent_tools.execute_sql_direct("select 1", "ds_a"))
+    result = asyncio.run(query_runtime.execute_direct_sql("select 1", "ds_a"))
 
     assert result == {"success": True}
     assert captured == {"sql": "select 1", "datasource_id": "ds_a"}

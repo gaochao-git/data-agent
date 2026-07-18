@@ -17,7 +17,6 @@ from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
 from .. import agent as agent_module
-from ..agent import get_all_tables_async, get_tables_create_format
 from ..agent.sql_assist_agent import create_sql_assist_agent
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
@@ -33,6 +32,7 @@ from ..services.query_task_service import (
 )
 from ..services.query_providers import get_query_task_service
 from ..services.semantic_builder_compiler import compile_semantic_builder_sql
+from ..services.sql_assist_context import get_all_tables_async, get_tables_create_format
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

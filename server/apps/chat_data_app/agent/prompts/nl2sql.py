@@ -2,23 +2,6 @@
 
 from .security_prompt import SECURITY_PROMPT
 
-TABLE_SELECTOR_PROMPT = """你是数据库专家，根据用户问题选择需要的表。
-
-## 可用表
-{tables_summary}
-
-## 用户问题
-{user_query}
-
-## 输出格式
-```json
-{{
-  "tables": ["table1", "table2"],
-  "reasoning": "选择原因"
-}}
-```
-"""
-
 SQL_GENERATOR_PROMPT_GENERATE = """# 角色
 你是数据查询助手，帮助用户生成 SQL 查询语句。
 

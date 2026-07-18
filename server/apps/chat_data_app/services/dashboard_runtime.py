@@ -15,9 +15,9 @@ from utils.database import get_session
 from utils.models import ChatDataQueryExecution
 from utils.logger import get_logger
 
-from ..agent.tools import execute_sql_direct as execute_sql_direct_runner
 from .dashboard_service import get_dashboard_service
 from .query_result import build_query_result_payload, query_result_succeeded
+from .query_runtime import execute_direct_sql as execute_sql_direct_runner
 from .runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
 from .sql_executor import resolve_query_timeout
 

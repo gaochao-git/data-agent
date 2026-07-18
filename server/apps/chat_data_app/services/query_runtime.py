@@ -1032,3 +1032,9 @@ async def execute_agent_sql(
             except Exception as update_err:
                 logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=f"执行失败: {str(e)}")
+
+
+async def execute_direct_sql(sql: str, datasource_id: Optional[str] = None) -> Dict[str, Any]:
+    """直接执行 SQL，用于非智能体入口复用统一查询运行时。"""
+    logger.info("直接执行 SQL: %s... (datasource_id=%s)", sql[:100], datasource_id)
+    return await execute_agent_sql(sql=sql, datasource_id=datasource_id)

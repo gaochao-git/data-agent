@@ -335,7 +335,7 @@ async def test_compile_and_execute_local_branches(monkeypatch):
 
     import apps.chat_data_app.services.dashboard_spec_service as dashboard_spec_service
     import apps.chat_data_app.services.semantic_sql_generator as generator_module
-    import apps.chat_data_app.agent.tools.semantic_query as sql_tool
+    import apps.chat_data_app.services.semantic_query_service as semantic_query_service
 
     monkeypatch.setattr(dashboard_spec_service, "get_dashboard_spec_semantic_config", fake_get_config)
     monkeypatch.setattr(dashboard_spec_service, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_clean_dsl)
@@ -368,10 +368,10 @@ async def test_compile_and_execute_local_branches(monkeypatch):
     assert invalid_result["success"] is False
     assert "未捕获到可编译 DSL" in invalid_result["error"]
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None):
+    async def fake_execute_semantic_query_sql(sql, datasource_id, member_datasource_ids=None, user_id=None):
         return {"success": True, "data": [{"ok": 1}]}
 
-    monkeypatch.setattr(sql_tool, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(semantic_query_service, "execute_semantic_query_sql", fake_execute_semantic_query_sql)
     assert (await runner.execute_sql_locally(sql="", datasource_id="ds_a", user_id="u"))["success"] is False
     assert (await runner.execute_sql_locally(sql="select 1", datasource_id="ds_a", user_id="u"))["success"] is True
 

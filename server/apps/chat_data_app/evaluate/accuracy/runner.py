@@ -404,9 +404,9 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
     """Execute generated SQL through the same backend SQL executor used by DataAnalyze."""
     if not sql.strip():
         return {"success": False, "error": "SQL 为空"}
-    from apps.chat_data_app.agent.tools.semantic_query import _execute_sql_real
+    from apps.chat_data_app.services.semantic_query_service import execute_semantic_query_sql
 
-    return await _execute_sql_real(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
+    return await execute_semantic_query_sql(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
 
 
 def build_completion_options(args: AccuracyRunConfig, datasource_id: str, semantic_config_id: str) -> dict[str, Any]:
