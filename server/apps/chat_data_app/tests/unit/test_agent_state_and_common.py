@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.agent import agent_runtime, chat_data_agent
-from apps.chat_data_app.agent.tools import sql as sql_tools
+from apps.chat_data_app.agent.tools import semantic_query as sql_tools
 from apps.chat_data_app.agent.tools import common
 from utils import conversation
 

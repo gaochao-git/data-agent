@@ -454,11 +454,10 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
-def test_create_request_context_usage_middleware_edits_old_tool_results(monkeypatch):
+def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch):
     async def run():
         from apps.chat_data_app.agent.middleware import context_usage
 
-        monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70})
         monkeypatch.setattr(
             context_usage.ToolResultBudget,
             "configure",
@@ -496,11 +495,11 @@ def test_create_request_context_usage_middleware_edits_old_tool_results(monkeypa
 
     middleware, response, captured = asyncio.run(run())
     sent_messages = captured["request"].messages
-    assert sent_messages[1].content.startswith("[工具结果已移出模型上下文]")
+    assert sent_messages[1].content.startswith("历史工具结果")
     assert response.model_response.result[0].content == "ok"
     usage = response.command.update["token_usage"]
-    assert usage["context_editing"]["triggered"] is True
-    assert middleware.get_context_usage()["context_editing"]["triggered"] is True
+    assert "context_editing" not in usage
+    assert "context_editing" not in middleware.get_context_usage()
 
 
 def test_invoke_with_context_usage_prefers_runtime_usage_and_falls_back_to_estimate():

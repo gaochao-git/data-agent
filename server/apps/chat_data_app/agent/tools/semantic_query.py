@@ -19,7 +19,7 @@ from ...services.datasource_manager import get_datasource_manager
 from ...services.llm_config import get_chat_data_llm
 from ...services.semantic_tools import load_runtime_semantic_config
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
-from ...services.query_result import query_result_succeeded
+from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.semantic_query_service import (
     build_member_query_result,
     build_multi_member_query_result,
@@ -28,6 +28,8 @@ from ...services.semantic_query_service import (
     normalize_member_datasource_ids,
 )
 from ...services.semantic_sql_generator import SemanticSQLGenerator
+from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
+from .common import json_dumps, normalize_json_like_payload
 from ..prompts.nl2sql import TABLE_SELECTOR_PROMPT
 
 logger = get_logger(__name__)
@@ -317,26 +319,55 @@ async def semantic_query_tool(
     member_datasource_ids: list[str] | None = None,
 ) -> str:
     """
-    执行智能问数查询并返回结果。
+    执行语义查询并返回统一查询结果。
 
     优先接收语义 DSL，内部生成 SQL 后执行；DSL 明确无法表达时接收只读 SQL 执行。
-    返回的 result_id 可用于后续生成图表。
     """
+    return await _run_semantic_query_tool(dsl=dsl, sql=sql, semantic_config_id=semantic_config_id, member_datasource_ids=member_datasource_ids, state=state)
+
+
+async def _run_semantic_query_tool(
+    *,
+    dsl: Any = None,
+    sql: str | None = None,
+    semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] | None = None,
+    state: dict | None = None,
+    save_as: str | None = None,
+    workspace_root: str | None = None,
+    execution_session_ref: SandboxExecutionSessionRef | None = None,
+    allow_save_as: bool = False,
+    require_datasource_id: bool = False,
+) -> str:
     has_dsl = dsl is not None
     sql = str(sql or "").strip()
     has_sql = bool(sql)
     if has_dsl == has_sql:
         return "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
+    if has_dsl:
+        dsl = normalize_json_like_payload(dsl)
     if has_dsl and not isinstance(dsl, dict):
         return "semantic_query_tool 执行失败: dsl 必须是对象"
     if isinstance(dsl, dict) and "sql" in dsl:
         return "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
+    if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
+        return "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
+    save_path = str(save_as or "").strip()
+    if save_path:
+        if not allow_save_as:
+            return "semantic_query_tool 执行失败: 当前工具不支持 save_as"
+        if not str(workspace_root or "").strip():
+            return "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
+        if not save_path.lower().endswith(".json"):
+            return "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
     state = state or {}
 
     datasource_id = _get_datasource_id_from_state(state)
     semantic_config_id = str(semantic_config_id or "").strip() or None
     if not semantic_config_id:
         return "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id"
+    if require_datasource_id and not datasource_id:
+        return "semantic_query_tool 执行失败: 当前会话未绑定数据源"
     selected_semantic_config_id = str(
         state.get("semantic_config_id")
         or (state.get("semantic_config") or {}).get("id")
@@ -408,10 +439,44 @@ async def semantic_query_tool(
         effective_member_datasource_ids,
     )
     conversation_id = str(state.get("conversation_id") or "").strip() or None
-    query_result = await _execute_sql_real(sql, datasource_id, effective_member_datasource_ids, user_id, semantic_config_id, query_text, conversation_id, operator_name=operator_name)
+    try:
+        query_result = await _execute_sql_real(
+            sql=sql,
+            datasource_id=datasource_id,
+            member_datasource_ids=effective_member_datasource_ids,
+            user_id=user_id,
+            semantic_config_id=semantic_config_id,
+            query_text=query_text,
+            conversation_id=conversation_id,
+            operator_name=operator_name,
+        )
+    except Exception as exc:
+        logger.error("semantic_query_tool 执行失败: %s", exc, exc_info=True)
+        return f"semantic_query_tool 执行失败: {exc}"
     query_result["sql"] = query_result.get("sql") or sql
     query_result["query_mode"] = query_mode
     query_result["confidence"] = confidence
+    if save_path:
+        write_result = await sandbox_write_text_file(
+            session_ref=execution_session_ref,
+            file_path=save_path,
+            content=json_dumps(query_result),
+            mode="overwrite",
+        )
+        return _query_result_tool_payload(
+            status=query_result_status(query_result),
+            data=None,
+            error=query_result.get("error"),
+            meta={
+                "result_path": write_result.get("file_path") or save_path,
+                "total_count": query_result.get("total_count"),
+                "execution_time_ms": query_result.get("execution_time_ms"),
+                "sql": query_result.get("sql") or sql,
+                "query_mode": query_mode,
+                "confidence": confidence,
+                "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
+            },
+        )
     if query_result_succeeded(query_result):
         result_json = json.dumps(query_result, ensure_ascii=False)
         if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
@@ -425,12 +490,12 @@ async def semantic_query_tool(
                 "llm_analysis_skipped": True,
                 "query_mode": query_mode,
                 "confidence": confidence,
-                "message": "查询结果已超过限制，仅返回工具结果，不进行分析；如需二次分析请使用智能分析功能。",
+                "message": "查询结果已超过限制，完整结果已写入 artifact；模型仅接收摘要，前端可加载完整结果。",
             }
             if query_result.get("sql"):
                 result_summary["sql"] = query_result.get("sql")
             logger.info(
-                "智能问数查询结果过大，已写入 artifact: artifact_id=%s size_chars=%s rows=%s",
+                "语义查询结果过大，已写入 artifact: artifact_id=%s size_chars=%s rows=%s",
                 artifact_id,
                 len(result_json),
                 query_result.get("total_count", 0),
@@ -438,7 +503,8 @@ async def semantic_query_tool(
             return _query_result_tool_payload(
                 status=str(result_summary.get("status") or "succeeded"),
                 data=None,
-                meta=result_summary,
+                meta={**result_summary, "artifact_id": artifact_id},
+                error=None,
             )
         return _query_result_tool_payload(
             status=str(query_result.get("status") or "succeeded"),
@@ -459,6 +525,57 @@ async def semantic_query_tool(
                 "confidence": confidence,
             },
         )
+
+
+def create_bound_semantic_query_tool(
+    *,
+    datasource_id: str | None = None,
+    semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] | None = None,
+    user_id: str = "system",
+    operator_name: str | None = None,
+    conversation_id: str | None = None,
+    workspace_root: str | None = None,
+    execution_session_ref: SandboxExecutionSessionRef | None = None,
+    allow_save_as: bool = False,
+):
+    """创建绑定上下文的统一语义查询工具，供智能分析复用智能问数同一套执行逻辑。"""
+    bound_state = {
+        "datasource_id": str(datasource_id or "").strip() or None,
+        "semantic_config_id": str(semantic_config_id or "").strip() or None,
+        "available_member_datasource_ids": _normalize_member_datasource_ids(member_datasource_ids),
+        "user_id": str(user_id or "system").strip() or "system",
+        "operator_name": str(operator_name or "").strip() or "",
+        "conversation_id": str(conversation_id or "").strip() or None,
+    }
+
+    @tool("semantic_query_tool")
+    async def bound_semantic_query_tool(
+        dsl: Any = None,
+        sql: str | None = None,
+        semantic_config_id: str | None = None,
+        member_datasource_ids: list[str] | None = None,
+        save_as: str | None = None,
+        user_query: str = "",
+    ) -> str:
+        """使用统一语义查询逻辑执行 DSL 或只读 SQL；智能分析可通过 save_as 保存完整结果。"""
+        state = dict(bound_state)
+        if user_query:
+            state["messages"] = [HumanMessage(content=user_query)]
+        return await _run_semantic_query_tool(
+            dsl=dsl,
+            sql=sql,
+            semantic_config_id=semantic_config_id,
+            member_datasource_ids=member_datasource_ids,
+            state=state,
+            save_as=save_as,
+            workspace_root=workspace_root,
+            execution_session_ref=execution_session_ref,
+            allow_save_as=allow_save_as,
+            require_datasource_id=True,
+        )
+
+    return bound_semantic_query_tool
 
 
 def _normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:

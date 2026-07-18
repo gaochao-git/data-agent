@@ -13,7 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from utils.logger import get_logger
 from ...services.context_budget import ToolResultBudget, count_messages_tokens
 from ...services.llm_config import get_chat_data_llm
-from ...services.runtime_config import get_context_edit_config
+from ...services.runtime_config import get_context_compression_config
 
 logger = get_logger(__name__)
 
@@ -122,7 +122,7 @@ def create_context_compression_middleware(
             messages,
             context_window=budget.context_window,
             message_budget_tokens=message_budget_tokens,
-            config=get_context_edit_config(),
+            config=get_context_compression_config(),
             summarizer=lambda compressible_messages: _summarize_messages_with_llm(
                 compressible_messages,
                 model_id=model_id,

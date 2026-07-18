@@ -37,7 +37,7 @@ from apps.chat_data_app.handlers import (
     prepare_data_analyze_workspace,
     sql_completion_handler,
 )
-from apps.chat_data_app.agent.tools import sql as agent_sql_tools
+from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
 
 
 def _tool_event_contents(events: list[str]) -> list[str]:

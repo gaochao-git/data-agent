@@ -19,7 +19,7 @@ from .middleware.context_compression import create_context_compression_middlewar
 from .middleware.context_usage import create_chat_data_context_usage_middleware
 from .tools.calculator import calculator_tool
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
-from .tools.sql import semantic_query_tool
+from .tools.semantic_query import semantic_query_tool
 
 
 def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:

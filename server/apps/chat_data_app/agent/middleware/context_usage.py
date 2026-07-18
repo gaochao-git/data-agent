@@ -27,8 +27,7 @@ from ...services.context_budget import (
     get_model_context_budget,
     sanitize_context_usage_for_response,
 )
-from ...services.runtime_config import get_context_edit_config
-from .context_editing import edit_messages_for_llm
+from ...services.runtime_config import get_context_compression_config
 
 logger = get_logger(__name__)
 
@@ -126,7 +125,6 @@ def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None,
         "overhead_tokens": int(token_usage.get("overhead_tokens") or REQUEST_OVERHEAD_TOKENS),
         "estimated": True,
         "message_count": int(token_usage.get("message_count") or 0),
-        "context_editing": token_usage.get("context_editing"),
         "context_compression": token_usage.get("context_compression"),
         "breakdown": list(token_usage.get("breakdown") or []),
     }
@@ -355,7 +353,6 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         "total_tokens": total_tokens,
         "estimated": True,
         "llm_calls": calls,
-        "context_editing": current_call.get("context_editing"),
         "context_compression": current_call.get("context_compression"),
         "breakdown": list(current_call.get("breakdown") or []),
     })
@@ -384,16 +381,9 @@ def _build_agent_context_usage(
     request_budget: ToolResultBudget,
     context_compression: dict[str, Any] | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
-    """裁剪消息并构造当前模型入口 token usage。"""
+    """构造当前模型入口 token usage。"""
     budget = request_budget.configure(system_prompt, tools, model_id=model_id)
-    edited_messages, context_edit = edit_messages_for_llm(
-        messages,
-        context_window=budget.context_window,
-        config=get_context_edit_config(),
-        message_budget_tokens=request_budget.remaining_for_messages(),
-    )
-    _log_context_editing_if_triggered(context_edit, context_window=budget.context_window, model_id=model_id)
-    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(system_prompt, edited_messages)
+    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(system_prompt, messages)
     llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)
     tool_tokens = count_tools_tokens(tools)
@@ -409,7 +399,6 @@ def _build_agent_context_usage(
         "output_tokens": 0,
         "total_tokens": input_tokens,
         "estimated": True,
-        "context_editing": context_edit,
         "context_compression": context_compression or _empty_context_compression_report(
             context_window=budget.context_window,
             message_budget_tokens=request_budget.remaining_for_messages(),
@@ -426,7 +415,7 @@ def _build_agent_context_usage(
 
 
 def _empty_context_compression_report(*, context_window: int, message_budget_tokens: int) -> dict[str, Any]:
-    config = get_context_edit_config()
+    config = get_context_compression_config()
     trigger_ratio = float(config.get("trigger_ratio", 0.70))
     return {
         "enabled": bool(config.get("enabled", True)),
@@ -462,21 +451,6 @@ def _merge_compression_summary_into_system_prompt(system_prompt: str, messages: 
         if summary:
             return f"{system_prompt}\n\n## 历史对话摘要\n{summary}", list(messages[1:])
     return system_prompt, list(messages)
-
-
-def _log_context_editing_if_triggered(context_edit: dict[str, Any], *, context_window: int, model_id: str | None) -> None:
-    """工具结果裁剪实际触发时打印一条摘要日志。"""
-    if not context_edit.get("triggered"):
-        return
-    logger.info(
-        "[agent] 工具结果裁剪已触发: model=%s context_window=%s before=%s after=%s cleared=%s tool_results=%s",
-        model_id or "-",
-        context_window,
-        context_edit.get("estimated_tokens_before"),
-        context_edit.get("estimated_tokens_after"),
-        context_edit.get("estimated_cleared_tokens"),
-        context_edit.get("cleared_tool_results"),
-    )
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:

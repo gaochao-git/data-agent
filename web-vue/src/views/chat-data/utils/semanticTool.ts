@@ -51,6 +51,8 @@ export const parseQueryResultEnvelope = (result?: string): QueryToolResultEnvelo
 export const getRenderableQueryResultData = (result?: string): string => {
   const envelope = parseQueryResultEnvelope(result)
   if (!envelope) return ''
+  const meta = isRecord(envelope.meta) ? envelope.meta : {}
+  if (!isRecord(envelope.data) && !meta.artifact_id) return ''
   if (isRecord(envelope.data)) return JSON.stringify(envelope.data)
   return JSON.stringify(envelope)
 }

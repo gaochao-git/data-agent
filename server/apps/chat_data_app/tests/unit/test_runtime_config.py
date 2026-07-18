@@ -49,15 +49,14 @@ def test_context_window_reads_chat_data_model_config(monkeypatch):
     assert runtime_config.get_context_window("unknown") == 128000
 
 
-def test_get_context_edit_config_returns_runtime_values(monkeypatch):
-    monkeypatch.setattr(runtime_config, "CONTEXT_EDIT_ENABLED", False)
+def test_get_context_compression_config_returns_runtime_values(monkeypatch):
+    monkeypatch.setattr(runtime_config, "CONTEXT_COMPRESSION_ENABLED", False)
 
-    config = runtime_config.get_context_edit_config()
+    config = runtime_config.get_context_compression_config()
 
     assert config == {
         "enabled": False,
         "trigger_ratio": 0.70,
-        "tool_result_offload_size": runtime_config.TOOL_RESULT_OFFLOAD_SIZE,
     }
 
 

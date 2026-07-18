@@ -43,6 +43,10 @@ interface QueryResult {
   member_name?: string
   results?: QueryResult[]
   artifact_id?: string
+  meta?: {
+    artifact_id?: string
+    [key: string]: unknown
+  }
 }
 
 type ResultTabItem = {
@@ -121,8 +125,12 @@ const parseInlineResult = (raw: string | null | undefined): { result: QueryResul
 }
 
 const inlineParse = computed(() => parseInlineResult(props.resultData))
-const artifactId = computed(() => String(inlineParse.value.result?.artifact_id || '').trim())
-const panelResult = computed(() => artifactResult.value || inlineParse.value.result)
+const artifactId = computed(() => String(
+  inlineParse.value.result?.artifact_id ||
+  inlineParse.value.result?.meta?.artifact_id ||
+  ''
+).trim())
+const panelResult = computed(() => artifactResult.value || inlineParse.value.result?.data || inlineParse.value.result)
 const parseError = computed(() => inlineParse.value.error)
 
 const resultToData = (result: QueryResult) => JSON.stringify(result)

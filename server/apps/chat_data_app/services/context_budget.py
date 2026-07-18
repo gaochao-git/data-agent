@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from .llm_config import get_chat_data_max_tokens
-from .runtime_config import get_context_edit_config, get_context_window, is_context_usage_system_prompt_visible
+from .runtime_config import get_context_compression_config, get_context_window, is_context_usage_system_prompt_visible
 
 
 REQUEST_OVERHEAD_TOKENS = 3
@@ -97,7 +97,7 @@ def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | N
     requested_output = max(int(max_output_tokens or get_chat_data_max_tokens()), 1)
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
-    trigger_ratio = float(get_context_edit_config().get("trigger_ratio", 0.70))
+    trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
     soft_input_limit = max(int(context_window * trigger_ratio), 1)
     return ContextBudget(
         context_window=context_window,

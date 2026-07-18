@@ -404,7 +404,7 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
     """Execute generated SQL through the same backend SQL executor used by DataAnalyze."""
     if not sql.strip():
         return {"success": False, "error": "SQL 为空"}
-    from apps.chat_data_app.agent.tools.sql import _execute_sql_real
+    from apps.chat_data_app.agent.tools.semantic_query import _execute_sql_real
 
     return await _execute_sql_real(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
 

@@ -12,7 +12,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import calculator_tool
-from apps.chat_data_app.agent.tools import sql as agent_tools
+from apps.chat_data_app.agent.tools import semantic_query as agent_tools
 from apps.chat_data_app.services import query_runtime
 
 
@@ -1210,7 +1210,7 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
     payload = _query_result_payload(result)
     assert payload["meta"]["artifact_id"] == "artifact_large"
     assert payload["meta"]["llm_analysis_skipped"] is True
-    assert "查询结果已超过限制，仅返回工具结果，不进行分析" in result
+    assert "查询结果已超过限制，完整结果已写入 artifact" in result
     assert "x" * 120 not in result
     assert captured["result"]["data"][0]["content"] == "x" * 200
     assert captured["conversation_id"] == "conv_a"

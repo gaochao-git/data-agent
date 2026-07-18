@@ -34,11 +34,11 @@ from .chat_data_agent import keep_conversation_datasource_id, merge_reasoning_se
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.dsl2sql import create_dsl2sql_tool
-from .tools.exec_sql import create_exec_sql_tool
 from .tools.file_edit import create_file_edit_tool
 from .tools.file_read import create_file_read_tool
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.sandbox_run import create_sandbox_run_tool
+from .tools.semantic_query import create_bound_semantic_query_tool
 from .tools.retry_guard import create_tool_retry_guard
 from .tools.skill_load import create_skill_load_tool
 
@@ -150,15 +150,16 @@ def create_data_analyze_tools(
             tool_result_budget=tool_result_budget,
         ),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
-        create_exec_sql_tool(
+        create_bound_semantic_query_tool(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
             member_datasource_ids=member_datasource_ids,
             user_id=user_id,
             operator_name=operator_name,
+            conversation_id=conversation_id,
             workspace_root=root,
             execution_session_ref=execution_session_ref,
-            conversation_id=conversation_id,
+            allow_save_as=True,
         ),
     ]
     return create_tool_retry_guard(tools)

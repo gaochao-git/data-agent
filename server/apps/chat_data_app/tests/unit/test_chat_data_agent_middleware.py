@@ -136,32 +136,6 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
     assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool_extra"
 
 
-def test_log_context_editing_only_when_triggered(monkeypatch):
-    logs = []
-
-    monkeypatch.setattr(context_usage.logger, "info", lambda *args, **kwargs: logs.append(args))
-
-    context_usage._log_context_editing_if_triggered({"triggered": False}, context_window=100, model_id="qwen-test")
-    assert logs == []
-
-    context_usage._log_context_editing_if_triggered(
-        {
-            "triggered": True,
-            "estimated_tokens_before": 1000,
-            "estimated_tokens_after": 300,
-            "estimated_cleared_tokens": 700,
-            "cleared_tool_results": 2,
-            "history_trimmed": False,
-        },
-        context_window=128000,
-        model_id="qwen-test",
-    )
-
-    assert len(logs) == 1
-    assert "工具结果裁剪已触发" in logs[0][0]
-    assert "qwen-test" in logs[0]
-
-
 @pytest.mark.asyncio
 async def test_context_compression_compresses_completed_old_rounds_and_logs_tokens(monkeypatch):
     logs = []
@@ -249,7 +223,9 @@ async def _fake_summary(text: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_chat_data_context_usage_middleware_edits_messages_and_updates_state(monkeypatch):
+async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatch):
+    from apps.chat_data_app.agent.middleware import context_usage
+
     original_tool_content = "订单 " * 5000
     recent_tool_content = "结果 " * 1000
     messages = [
@@ -260,7 +236,6 @@ async def test_chat_data_context_usage_middleware_edits_messages_and_updates_sta
         ToolMessage(content=recent_tool_content, tool_call_id="call_recent", name="semantic_query_tool"),
         HumanMessage(content="当前问题"),
     ]
-    monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70, "tool_result_offload_size": 10000})
     monkeypatch.setattr(
         context_usage.ToolResultBudget,
         "configure",
@@ -294,25 +269,24 @@ async def test_chat_data_context_usage_middleware_edits_messages_and_updates_sta
 
     sent_messages = captured["request"].messages
     assert sent_messages[0].content == "历史问题"
-    assert sent_messages[1].content.startswith("[工具结果已移出模型上下文]")
+    assert sent_messages[1].content == original_tool_content
     assert sent_messages[4].content == recent_tool_content
     assert sent_messages[5].content == "当前问题"
-    assert messages[1].content == original_tool_content
     assert response.model_response.result[0].content == "完成"
     token_usage = response.command.update["token_usage"]
-    assert token_usage["context_editing"]["triggered"] is True
-    assert token_usage["context_editing"]["cleared_tool_results"] == 1
+    assert "context_editing" not in token_usage
 
 
 @pytest.mark.asyncio
 async def test_chat_data_context_usage_middleware_merges_persisted_compression_summary(monkeypatch):
+    from apps.chat_data_app.agent.middleware import context_usage
+
     messages = []
     messages.append(SystemMessage(
         content="[历史对话摘要]\n1. 用户: 历史问题",
         additional_kwargs={"context_compression": True, "compressed_message_count": 10},
     ))
     messages.append(HumanMessage(content="当前问题"))
-    monkeypatch.setattr(context_usage, "get_context_edit_config", lambda: {"enabled": True, "trigger_ratio": 0.70, "tool_result_offload_size": 10000})
     monkeypatch.setattr(
         context_usage.ToolResultBudget,
         "configure",

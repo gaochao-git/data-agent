@@ -189,7 +189,6 @@ export interface ChatDataTokenUsage {
   input_budget_tokens?: number
   input_budget_trigger_ratio?: number
   estimated?: boolean
-  context_editing?: ChatDataContextEditingInfo | null
   context_compression?: ChatDataContextCompressionInfo | null
   llm_calls?: Array<{
     index: number
@@ -204,23 +203,10 @@ export interface ChatDataTokenUsage {
     total_tokens?: number
     estimated?: boolean
     message_count?: number
-    context_editing?: ChatDataContextEditingInfo | null
     context_compression?: ChatDataContextCompressionInfo | null
     breakdown?: ChatDataTokenUsageBreakdown[]
   }>
   breakdown?: ChatDataTokenUsageBreakdown[]
-}
-
-export interface ChatDataContextEditingInfo {
-  enabled?: boolean
-  triggered?: boolean
-  cleared_tool_results?: number
-  estimated_tokens_before?: number
-  estimated_tokens_after?: number
-  estimated_cleared_tokens?: number
-  message_budget_tokens?: number
-  trigger_ratio?: number
-  tool_result_offload_size?: number
 }
 
 export interface ChatDataContextCompressionInfo {

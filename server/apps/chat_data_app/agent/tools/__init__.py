@@ -1,7 +1,7 @@
 """ChatData agent tool package."""
 
 from .calculator import calculator_tool
-from .sql import (
+from .semantic_query import (
     SemanticToolNames,
     build_semantic_prompt,
     execute_sql_direct,
