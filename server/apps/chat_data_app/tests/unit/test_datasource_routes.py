@@ -2100,34 +2100,6 @@ def test_run_sql_query_task_marks_failed_on_unhandled_execute_error(monkeypatch)
     assert updates[-1][1]["error_message"] == "executor crashed"
 
 
-def test_execute_panel_uses_selected_member_datasource(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(dashboard_runtime, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
-
-    resp = asyncio.run(dashboard_routes.execute_panel(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="phy_b"),
-    ))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["member_datasource_id"] == "phy_b"
-    assert data["data"]["result"]["results"][0]["member_name"] == "成员B"
-
-
 def test_add_panel_persists_member_datasource_id(monkeypatch):
     service = _FakeDashboardService()
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
@@ -2148,61 +2120,6 @@ def test_add_panel_persists_member_datasource_id(monkeypatch):
     assert data["status"] == "success"
     assert data["data"]["member_datasource_id"] == "phy_b"
     assert service.panels[data["data"]["id"]]["member_datasource_id"] == "phy_b"
-
-
-def test_execute_panel_uses_saved_member_datasource_when_not_overridden(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "成员A", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "成员B", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    service = _FakeDashboardService()
-    service.panels["panel_a"]["member_datasource_id"] = "phy_b"
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
-
-    resp = asyncio.run(dashboard_routes.execute_panel(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        None,
-    ))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["member_datasource_id"] == "phy_b"
-    assert data["data"]["result"]["results"][0]["member_name"] == "成员B"
-
-
-def test_execute_panel_returns_error_when_member_execution_fails(monkeypatch):
-    from apps.chat_data_app import routes
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_error", "org_name": "成员失败", "source_type": "mysql", "host": "127.0.0.3", "port": 3306, "database": "db_c"},
-    ]
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(dashboard_runtime, "get_dashboard_service", lambda: _FakeDashboardService())
-    monkeypatch.setattr(query_runtime, "get_executor", lambda datasource: _FakeExecutor(datasource))
-    _mock_authenticated_user(monkeypatch)
-    _mock_query_tracking(monkeypatch)
-    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
-
-    resp = asyncio.run(dashboard_routes.execute_panel(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="phy_error"),
-    ))
-    data = _payload(resp)
-    assert data["status"] == "error"
-    assert data["msg"] == "成员失败 执行失败"
 
 
 def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):

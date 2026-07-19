@@ -758,12 +758,6 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
     ))
     assert failed_spec["code"] == ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED
 
-    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-    executed = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request, PanelExecuteRequest(member_datasource_id="member_a")))
-    assert executed["status"] == "success"
-    missing = response_payload(await dashboard_routes.execute_panel("dash_a", "missing", request))
-    assert missing["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
     task = response_payload(await dashboard_routes.create_panel_query_task("dash_a", "panel_a", request, PanelExecuteRequest(member_datasource_id="member_a")))
     assert task["data"]["task_id"].startswith("task_")
     batch_task = response_payload(await dashboard_routes.create_dashboard_query_task("dash_a", request, PanelBatchExecuteRequest(panel_ids=["panel_a"])))
@@ -837,52 +831,6 @@ async def test_dashboard_route_exception_branches(dashboard_context, monkeypatch
 
     monkeypatch.setattr(dashboard_routes, "_resolve_panel_name", name_raises)
     assert response_payload(await dashboard_routes.generate_panel_name(PanelNameGenerateRequest(sql="select 1")))["code"] == ErrorCode.CHATDATA_DASHBOARD_LAYOUT_FAILED
-
-
-@pytest.mark.asyncio
-async def test_execute_panel_error_branches_update_task(dashboard_context, monkeypatch):
-    service, runtime, _user = dashboard_context
-    request = object()
-    monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-
-    async def raise_value_error(**_kwargs):
-        raise ValueError("bad panel input")
-
-    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", raise_value_error)
-    value_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert value_error["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    async def runtime_failure(**kwargs):
-        panel = kwargs["panel"]
-        return {
-            "panel_id": panel["id"],
-            "name": panel["name"],
-            "chart_type": panel["chart_type"],
-            "chart_config": {},
-            "result": {"success": False, "error": "runtime failed"},
-        }
-
-    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", runtime_failure)
-    runtime_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert runtime_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
-    assert runtime.updates[-1]["status"] == "failed"
-    assert runtime.updates[-1]["result_payload"]["result"]["error"] == "runtime failed"
-
-    async def generic_failure(**_kwargs):
-        raise TypeError("generic failed")
-
-    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", generic_failure)
-    generic_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
-    assert "generic failed" in generic_error["msg"]
-    assert runtime.updates[-1]["status"] == "failed"
-
-    service.dashboard["panels"][0]["member_datasource_id"] = "missing_member"
-    invalid_member = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert invalid_member["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert runtime.updates[-1]["status"] == "failed"
-    assert "missing_member" in runtime.updates[-1]["error_message"]
-    service.dashboard["panels"][0]["member_datasource_id"] = ""
 
 
 @pytest.mark.asyncio
@@ -1113,30 +1061,10 @@ async def test_dashboard_streaming_batch_cancellation_and_exception_branches(das
 
 
 @pytest.mark.asyncio
-async def test_execute_panel_and_dashboard_query_task_remaining_branches(dashboard_context, monkeypatch):
+async def test_dashboard_query_task_remaining_branches(dashboard_context, monkeypatch):
     service, runtime, _user = dashboard_context
     request = object()
     monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result="exec_a"))
-
-    no_datasource = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_b", request))
-    assert no_datasource["status"] == "error"
-    assert "缺少数据源" in no_datasource["msg"]
-
-    class RuntimeRaisingService(FakeDashboardService):
-        async def get_panel(self, *_args, **_kwargs):
-            raise RuntimeError("get panel runtime failed")
-
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: RuntimeRaisingService())
-    runtime_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert runtime_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
-
-    class GenericRaisingService(FakeDashboardService):
-        async def get_panel(self, *_args, **_kwargs):
-            raise TypeError("get panel generic failed")
-
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: GenericRaisingService())
-    generic_error = response_payload(await dashboard_routes.execute_panel("dash_a", "panel_a", request))
-    assert generic_error["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
 
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: service)
     runtime.is_query_task_cancelled = lambda _task_id: asyncio.sleep(0, result=False)

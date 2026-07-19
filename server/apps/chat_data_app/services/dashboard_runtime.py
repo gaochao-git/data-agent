@@ -304,7 +304,7 @@ async def execute_dashboard_panel_task_payload(
 
 
 def raise_if_dashboard_panel_execution_failed(payload: Dict[str, Any]) -> None:
-    """校验面板执行结果，失败时抛错，统一单面板/批量/同步接口口径。"""
+    """校验面板执行结果，失败时抛错，统一单面板异步任务和批量执行口径。"""
     result = (payload or {}).get("result") or {}
     if query_result_succeeded(result):
         return
