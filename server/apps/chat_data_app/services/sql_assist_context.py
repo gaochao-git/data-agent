@@ -12,8 +12,10 @@ async def get_all_tables_async(datasource_id: str | None) -> list[dict[str, Any]
     datasource_manager = get_datasource_manager()
 
     if datasource_id:
-        datasource = await datasource_manager.get_datasource_async(datasource_id)
-        return datasource.get("ds_tables", []) if datasource else []
+        try:
+            return await datasource_manager.get_cached_schema_async(datasource_id)
+        except ValueError:
+            return []
 
     all_datasources = await datasource_manager.get_all_datasources_async()
     tables: list[dict[str, Any]] = []

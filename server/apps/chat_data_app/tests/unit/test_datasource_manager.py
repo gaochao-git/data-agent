@@ -204,6 +204,15 @@ class _FakeStore:
     async def replace_table_group_relations_async(self, group_id: str, groups: list[dict], create_by: str = "", update_by: str = "", create_by_name: str = "", update_by_name: str = ""):
         self.replace_table_group_relations(group_id, groups, create_by=create_by, update_by=update_by, create_by_name=create_by_name, update_by_name=update_by_name)
 
+    def replace_datasource_tables(self, group_id: str, tables: list[dict], **kwargs):
+        self.replaced_datasource_tables = {"group_id": group_id, "tables": list(tables or []), **kwargs}
+        for item in self.datasources.values():
+            if item.get("group_id") == group_id:
+                item["ds_tables"] = list(tables or [])
+
+    async def replace_datasource_tables_async(self, group_id: str, tables: list[dict], **kwargs):
+        self.replace_datasource_tables(group_id, tables, **kwargs)
+
     def soft_delete_semantic_config(self, config_id: str, update_by: str = "", update_by_name: str = ""):
         self.deleted_config_id = config_id
 
@@ -1493,19 +1502,19 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
 
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", FakeMySQLSyncService)
-    monkeypatch.setattr("apps.chat_data_app.services.hive_sync.HiveSyncService", FakeHiveSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
 
     async def run_checks():
-        assert await manager.get_schema_async("ds_a", source="cache", table_names=["users"]) == [{"table_name": "users"}]
-        mysql_schema = await manager.get_schema_async("ds_a", source="live", table_names=["orders"])
+        assert await manager.get_cached_schema_async("ds_a", table_names=["users"]) == [{"table_name": "users"}]
+        mysql_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert mysql_schema == [{"table_name": "orders"}]
         assert FakeMySQLSyncService.kwargs["user"] == "mysql_user"
 
         store.datasources["ds_a"]["source_type"] = "hive"
         store.datasources["ds_a"]["query_executor_type"] = "direct"
         store.datasources["ds_a"]["source_config"] = {"host": "127.0.0.1", "port": 10000, "database": "dw"}
-        hive_schema = await manager.get_schema_async("ds_a", source="live", table_names=["orders"])
+        hive_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert hive_schema == [{"table_name": "orders"}]
         assert FakeHiveSyncService.kwargs["username"] == "hive_user"
 
@@ -1513,18 +1522,98 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
         store.datasources["ds_a"]["member_sources"] = [{"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http"}]
         store.datasources["ds_a"]["template_datasource_id"] = "ORG_A"
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_schema_async", fake_hive_http_schema)
-        assert await manager.get_schema_async("ds_a", source="live", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
+        assert await manager.get_live_schema_async("ds_a", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
 
-        assert await manager.get_schema_async("ds_a", source="cache", table_names=["missing"]) == []
+        assert await manager.get_cached_schema_async("ds_a", table_names=["missing"]) == []
         with pytest.raises(ValueError, match="数据源不存在"):
-            await manager.get_schema_async("missing")
+            await manager.get_cached_schema_async("missing")
         store.datasources["ds_a"]["source_type"] = "sqlite"
         with pytest.raises(ValueError, match="不支持实时获取"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
         store.datasources["ds_a"]["source_type"] = "mysql"
         store.datasources["ds_a"]["source_config"] = {}
         with pytest.raises(ValueError, match="连接配置不完整"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
+
+    asyncio.run(run_checks())
+
+
+def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
+    store = _FakeStore()
+    manager = _build_manager(store)
+    calls = []
+
+    class FakeMySQLSyncService:
+        def __init__(self, **kwargs):
+            calls.append(("mysql_init", kwargs))
+
+        async def get_tables_async(self):
+            return ["orders", "users"]
+
+    class FakeHiveSyncService:
+        def __init__(self, **kwargs):
+            calls.append(("hive_init", kwargs))
+
+        async def get_tables_async(self):
+            return [{"table_name": "hive_orders"}]
+
+    async def fake_hive_http_tables(source_config, user_id=None, username=None):
+        calls.append(("hive_http_tables", dict(source_config), user_id, username))
+        return ["http_orders"]
+
+    async def fake_live_schema(datasource_id, table_names=None, **kwargs):
+        calls.append(("live_schema", datasource_id, list(table_names or []), kwargs))
+        return [{"table_name": name, "columns": [{"name": "id"}]} for name in table_names or []]
+
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_tables_async", fake_hive_http_tables)
+
+    async def run_checks():
+        mysql_tables = await manager.get_physical_table_names_async(
+            "mysql",
+            {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"},
+        )
+        assert mysql_tables == ["orders", "users"]
+        assert calls[-1] == ("mysql_init", {"host": "127.0.0.1", "port": 3307, "database": "demo", "user": "mysql_user", "password": "mysql_pwd"})
+
+        hive_tables = await manager.get_physical_table_names_async(
+            "hive",
+            {"host": "127.0.0.2", "port": 10001, "database": "dw", "query_executor_type": "direct"},
+        )
+        assert hive_tables == [{"table_name": "hive_orders"}]
+        assert calls[-1] == ("hive_init", {"host": "127.0.0.2", "port": 10001, "database": "dw", "username": "hive_user", "password": "hive_pwd"})
+
+        http_tables = await manager.get_physical_table_names_async(
+            "hive",
+            {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"},
+            user_id="user_a",
+            username="测试用户",
+        )
+        assert http_tables == ["http_orders"]
+        assert calls[-1] == ("hive_http_tables", {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"}, "user_a", "测试用户")
+
+        manager.get_live_schema_async = fake_live_schema
+        synced = await manager.sync_datasource_schema_from_source_async(
+            "ds_a",
+            table_names=["orders", "users"],
+            update_by="u1",
+            update_by_name="用户1",
+            user_id="user_a",
+            username="测试用户",
+        )
+        assert [table["table_name"] for table in synced["ds_tables"]] == ["orders", "users"]
+        assert store.datasources["ds_a"]["ds_tables"] == [
+            {"table_name": "orders", "columns": [{"name": "id"}]},
+            {"table_name": "users", "columns": [{"name": "id"}]},
+        ]
+        assert calls[-1] == ("live_schema", "ds_a", ["orders", "users"], {"user_id": "user_a", "username": "测试用户"})
+        assert await manager.sync_datasource_schema_from_source_async("missing", table_names=["orders"]) is None
+
+        with pytest.raises(ValueError, match="HTTP 元数据模式当前仅支持 Hive 数据源"):
+            await manager.get_physical_table_names_async("mysql", {"database": "demo", "query_executor_type": "http"})
 
     asyncio.run(run_checks())
 
@@ -1551,14 +1640,14 @@ def test_datasource_manager_get_schema_timeout_and_connection_error(monkeypatch)
     async def run_checks():
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "u", "password": "p"})
-        monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", TimeoutMySQLSyncService)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", TimeoutMySQLSyncService)
         with pytest.raises(ConnectionError, match="数据库连接超时"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
 
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
-        monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", FailingMySQLSyncService)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FailingMySQLSyncService)
         with pytest.raises(ConnectionError, match="数据库连接失败"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
 
     asyncio.run(run_checks())
 
@@ -2166,7 +2255,7 @@ def test_datasource_manager_async_default_and_cache_schema_branches():
     manager = _build_manager(store)
 
     async def run_checks():
-        assert await manager.get_schema_async("ds_a", source="cache") == [{"table_name": "orders"}, {"table_name": "users"}]
+        assert await manager.get_cached_schema_async("ds_a") == [{"table_name": "orders"}, {"table_name": "users"}]
         store.datasources["ds_a"]["is_default"] = False
         assert await manager.clear_default_datasource_async("ds_a") is False
         assert await manager.set_default_datasource_async("ds_b") is True

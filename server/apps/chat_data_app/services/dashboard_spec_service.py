@@ -217,7 +217,8 @@ async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config
         raise ValueError("未找到可用语义配置，无法生成看板 SQL")
     result = dict(selected)
     result["source_type"] = datasource.get("source_type") or selected.get("source_type") or "mysql"
-    result["tables"] = datasource.get("ds_tables") or result.get("tables") or []
+    cached_tables = await ds_manager.get_cached_schema_async(datasource_id)
+    result["tables"] = cached_tables or result.get("tables") or []
     if result.get("relationships") and not result.get("joins"):
         result["joins"] = result.get("relationships")
     return result

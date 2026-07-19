@@ -196,6 +196,12 @@ def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
         async def get_datasource_async(self, datasource_id):
             return {"ds_tables": [{"table_name": datasource_id}]} if datasource_id == "ds_a" else None
 
+        async def get_cached_schema_async(self, datasource_id):
+            datasource = await self.get_datasource_async(datasource_id)
+            if not datasource:
+                raise ValueError("数据源不存在")
+            return datasource.get("ds_tables", [])
+
         async def get_all_datasources_async(self):
             return [
                 {"ds_tables": [{"table_name": "orders"}]},

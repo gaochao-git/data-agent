@@ -16,10 +16,10 @@ def test_list_datasources_api_contract(client, auth_headers, fake_datasource_man
     assert payload["data"]["datasources"][0]["ds_tables"]
 
 
-def test_get_datasource_schema_api_contract(client, fake_datasource_manager, patch_datasource_manager):
+def test_get_datasource_schema_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
     patch_datasource_manager(fake_datasource_manager)
 
-    response = client.get("/api/chatdata/datasources/ds_a/schema", params={"tables": "orders"})
+    response = client.get("/api/chatdata/datasources/ds_a/schema", params={"tables": "orders"}, headers=auth_headers)
 
     assert response.status_code == 200
     payload = response.json()
@@ -27,6 +27,15 @@ def test_get_datasource_schema_api_contract(client, fake_datasource_manager, pat
     assert payload["data"]["count"] == 1
     assert payload["data"]["source"] == "cache"
     assert payload["data"]["tables"][0]["table_name"] == "orders"
+
+
+def test_get_datasource_schema_requires_auth(client, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
+
+    response = client.get("/api/chatdata/datasources/ds_a/schema", params={"tables": "orders"})
+
+    assert response.status_code == 401
+    assert response.json()["status"] == "error"
 
 
 def test_list_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, monkeypatch):

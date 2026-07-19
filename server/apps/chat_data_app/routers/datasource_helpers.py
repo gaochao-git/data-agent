@@ -2,49 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import Request
-
-from utils.logger import get_logger
-
-from ..services.datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials
-from ..services.hive_meta_http import get_hive_meta_schema_async
-from ..services.hive_sync import HiveSyncService
-from ..services.mysql_sync import MySQLSyncService
-from ..services.runtime_config import read_positive_int_env
-from .dependencies import _optional_current_user
 from ..services.semantic_common import _build_table_columns_map
 
-logger = get_logger(__name__)
-
-SOURCE_DEFAULT_PORTS = {
-    "mysql": 3306,
-    "hive": 10000,
-}
-DATASOURCE_SYNC_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
-
-
-def _is_http_query_executor(source_config: Optional[Dict[str, Any]]) -> bool:
-    """判断当前数据源连接项是否走 HTTP 执行。"""
-    return str((source_config or {}).get("query_executor_type") or "direct").strip().lower() == "http"
-
-
-def _get_optional_request_user_http_params(request: Optional[Request]) -> Dict[str, str]:
-    """尽量从请求中提取用户参数，不改变原接口鉴权行为。"""
-    user = _optional_current_user(request) if request is not None else None
-    if user is None:
-        return {}
-    user_id = str(getattr(user, "user_id", "") or "").strip()
-    username = str(getattr(user, "username", "") or "").strip()
-    params: Dict[str, str] = {}
-    if user_id:
-        params["user_id"] = user_id
-    if username:
-        params["username"] = username
-    return params
+SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
 
 
 def _normalize_source_item(
@@ -89,81 +52,6 @@ def _normalize_source_item(
     result["org_name"] = normalized_org_name
     result["org_code"] = normalized_org_code
     return result
-
-
-async def _load_tables_from_source(
-    source_type: str,
-    source_item: Dict[str, Any],
-    table_names: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """从模板数据源拉取表结构。"""
-    if _is_http_query_executor(source_item) and source_type != "hive":
-        raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-    if source_type == "hive":
-        if _is_http_query_executor(source_item):
-            return await get_hive_meta_schema_async(source_item, table_names, user_id=user_id, username=username)
-        hive_credentials = resolve_hive_credentials(source_item)
-        service = HiveSyncService(
-            host=source_item.get("host", "localhost"),
-            port=source_item.get("port", 10000),
-            database=source_item.get("database", "default"),
-            username=hive_credentials.get("username"),
-            password=hive_credentials.get("password"),
-        )
-        return await asyncio.wait_for(
-            service.get_full_schema_async(table_names),
-            timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-        )
-
-    mysql_credentials = resolve_mysql_credentials(source_item)
-    service = MySQLSyncService(
-        host=source_item.get("host", "localhost"),
-        port=source_item.get("port", 3306),
-        database=source_item.get("database", ""),
-        user=mysql_credentials["user"],
-        password=mysql_credentials["password"],
-    )
-    return await asyncio.wait_for(
-        service.get_full_schema_async(table_names),
-        timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-    )
-
-
-def _get_datasource_meta_source_config(datasource: Dict[str, Any]) -> Dict[str, Any]:
-    """构建元数据接口使用的模板源配置。"""
-    source_config = dict(datasource.get("source_config") or {})
-    source_config.pop("namespace", None)
-    source_config.pop("orgCode", None)
-    source_config.pop("orgName", None)
-    template_member_id = str(datasource.get("template_datasource_id") or "").strip()
-    template_member = None
-    for member in datasource.get("member_sources") or []:
-        member_id = str((member or {}).get("member_datasource_id") or "").strip()
-        if template_member_id and member_id != template_member_id:
-            continue
-        template_member = member
-        break
-    if not template_member and datasource.get("member_sources"):
-        template_member = (datasource.get("member_sources") or [])[0]
-    org_code = str((template_member or {}).get("org_code") or "").strip()
-    if org_code:
-        source_config["org_code"] = org_code
-    org_name = str((template_member or {}).get("org_name") or "").strip()
-    if org_name:
-        source_config["org_name"] = org_name
-    query_executor_type = str((template_member or {}).get("query_executor_type") or datasource.get("query_executor_type") or "direct").strip().lower()
-    source_config["query_executor_type"] = query_executor_type if query_executor_type in {"direct", "http"} else "direct"
-    return source_config
-
-
-def _get_datasource_physical_source_config(datasource: Dict[str, Any]) -> Dict[str, Any]:
-    """构建元数据实时读取与校验表结构共用的物理源配置。"""
-    source_type = datasource.get("source_type")
-    if source_type == "hive":
-        return _get_datasource_meta_source_config(datasource)
-    return dict(datasource.get("source_config") or {})
 
 
 def _column_type_label(column: Dict[str, Any]) -> str:
@@ -225,8 +113,8 @@ def _compare_datasource_schema(cached_tables: List[Dict[str, Any]], physical_tab
     }
 
 
-async def _build_datasource_schema_health(datasource: Dict[str, Any]) -> Dict[str, Any]:
-    """拉取真实物理表结构并校验当前缓存表字段是否仍存在。"""
+def _build_datasource_schema_health(datasource: Dict[str, Any], physical_tables: Optional[List[Dict[str, Any]]] = None, error: Optional[Exception] = None) -> Dict[str, Any]:
+    """根据实时物理表结构校验当前缓存表字段是否仍存在。"""
     source_type = datasource.get("source_type")
     if source_type not in ("mysql", "hive"):
         return {
@@ -234,16 +122,13 @@ async def _build_datasource_schema_health(datasource: Dict[str, Any]) -> Dict[st
             "summary": {"cached_table_count": len(datasource.get("ds_tables") or []), "physical_table_count": 0, "issue_count": 1, "error_count": 0, "warning_count": 1},
             "issues": [_schema_health_issue("warning", "physical_schema_unsupported", f"暂不支持校验该数据源类型的物理表结构: {source_type or '未知'}", "datasource")],
         }
-    try:
-        physical_tables = await _load_tables_from_source(source_type, _get_datasource_physical_source_config(datasource), None)
-        return _compare_datasource_schema(datasource.get("ds_tables") or [], physical_tables)
-    except Exception as e:
-        logger.error("物理表结构校验失败: datasource_id=%s error=%s", datasource.get("id"), e, exc_info=True)
+    if error is not None:
         return {
             "status": "invalid",
             "summary": {"cached_table_count": len(datasource.get("ds_tables") or []), "physical_table_count": 0, "issue_count": 1, "error_count": 1, "warning_count": 0},
-            "issues": [_schema_health_issue("error", "physical_schema_check_failed", f"连接物理库读取表结构失败: {str(e)}", "datasource")],
+            "issues": [_schema_health_issue("error", "physical_schema_check_failed", f"连接物理库读取表结构失败: {str(error)}", "datasource")],
         }
+    return _compare_datasource_schema(datasource.get("ds_tables") or [], physical_tables or [])
 
 
 def _extract_expression_identifiers(expression: str) -> Set[str]:

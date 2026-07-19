@@ -25,19 +25,12 @@ from ..schema import (
     DatasourceUpdateRequest,
 )
 from ..services.semantic_json_parser import parse_llm_json
-from ..services.datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials
-from ..services.datasource_manager import get_datasource_manager
-from ..services.hive_meta_http import get_hive_meta_tables_async
-from ..services.hive_sync import HiveSyncService
+from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.mysql_sync import MySQLSyncService
 from .dependencies import _get_current_user
 from .datasource_helpers import (
-    DATASOURCE_SYNC_TIMEOUT_SECONDS,
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
-    _get_datasource_physical_source_config,
-    _load_tables_from_source,
     _merge_health_status,
     _normalize_source_item,
 )
@@ -209,29 +202,21 @@ async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGro
     try:
         current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
-        if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
         selected_table_names = _selected_table_names(body.template_table_names)
         if not selected_table_names:
             return business_response(msg="请选择需要同步的表", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
-        tables = await _load_tables_from_source(
-            datasource.get("source_type"),
-            _get_datasource_physical_source_config(datasource),
-            selected_table_names,
+        updated = await ds_manager.sync_datasource_schema_from_source_async(
+            datasource_id=datasource_id,
+            table_names=selected_table_names,
+            update_by=str(current_user.user_id),
+            update_by_name=str(current_user.username or ""),
             user_id=current_user.user_id,
             username=current_user.username,
         )
-        updated = await ds_manager.sync_datasource_tables_async(
-            datasource_id=datasource_id,
-            tables=tables,
-            update_by=str(current_user.user_id),
-            update_by_name=str(current_user.username or ""),
-        )
         if not updated:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        tables = updated.get("ds_tables") or []
         return business_response(
             data={"datasource": updated, "table_count": len(tables)},
             msg=f"同步成功，共 {len(tables)} 个表",
@@ -242,6 +227,13 @@ async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGro
         logger.error("同步数据源组元数据超时: datasource_id=%s timeout=%ss", datasource_id, DATASOURCE_SYNC_TIMEOUT_SECONDS)
         return business_response(
             msg=f"同步超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒），请检查模板数据源配置或稍后重试",
+            code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
+            status="error",
+        )
+    except ConnectionError as e:
+        logger.error("同步数据源组元数据连接失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(
+            msg="同步失败，请检查模板数据源配置或稍后重试",
             code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
             status="error",
         )
@@ -297,13 +289,26 @@ async def get_datasource_table_groups(datasource_id: str, request: Request):
 async def get_datasource_semantic_health(datasource_id: str, request: Request):
     """校验数据源物理表结构与指标集配置是否一致。"""
     try:
-        _get_current_user(request)
+        current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         configs = await ds_manager.get_semantic_configs_async(datasource_id)
-        schema_health = await _build_datasource_schema_health(datasource)
+        schema_health = None
+        if datasource.get("source_type") in ("mysql", "hive"):
+            try:
+                physical_tables = await ds_manager.get_live_schema_async(
+                    datasource_id,
+                    user_id=str(current_user.user_id),
+                    username=str(current_user.username or ""),
+                )
+                schema_health = _build_datasource_schema_health(datasource, physical_tables=physical_tables)
+            except Exception as e:
+                logger.error("物理表结构校验失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+                schema_health = _build_datasource_schema_health(datasource, error=e)
+        else:
+            schema_health = _build_datasource_schema_health(datasource)
         semantic_health = _build_datasource_semantic_health(datasource, configs)
         return business_response(
             data={
@@ -563,45 +568,20 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request):
             request.org_code,
         )
 
-        if source_type == "hive":
-            source_config = {
-                "database": request.database,
-                "org_code": request.org_code,
-                "org_name": request.org_name,
-                "query_executor_type": request.query_executor_type,
-            }
-            if request.query_executor_type == "http":
-                tables = await get_hive_meta_tables_async(source_config, **user_params)
-            else:
-                source_config["host"] = request.host
-                source_config["port"] = port
-                hive_credentials = resolve_hive_credentials(source_config)
-                service = HiveSyncService(
-                    host=request.host,
-                    port=port,
-                    database=request.database,
-                    username=hive_credentials.get("username"),
-                    password=hive_credentials.get("password"),
-                )
-                tables = await asyncio.wait_for(
-                    service.get_tables_async(),
-                    timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-                )
-        else:
-            if request.query_executor_type == "http":
-                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-            mysql_credentials = resolve_mysql_credentials({})
-            service = MySQLSyncService(
-                host=request.host,
-                port=port,
-                database=request.database,
-                user=mysql_credentials["user"],
-                password=mysql_credentials["password"]
-            )
-            tables = await asyncio.wait_for(
-                service.get_tables_async(),
-                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-            )
+        source_config = {
+            "database": request.database,
+            "org_code": request.org_code,
+            "org_name": request.org_name,
+            "query_executor_type": request.query_executor_type,
+        }
+        if request.query_executor_type == "direct":
+            source_config["host"] = request.host
+            source_config["port"] = port
+        tables = await get_datasource_manager().get_physical_table_names_async(
+            source_type,
+            source_config,
+            **user_params,
+        )
 
         return business_response(data={"tables": tables, "total": len(tables)}, msg=f"获取成功，共 {len(tables)} 个表")
     except ValueError as e:

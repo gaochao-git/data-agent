@@ -22,7 +22,9 @@ from .execution_permission import (
     filter_datasources_by_allowed_org_codes,
     get_allowed_org_codes_by_executor,
 )
-from .hive_meta_http import get_hive_meta_schema_async
+from .hive_meta_http import get_hive_meta_schema_async, get_hive_meta_tables_async
+from .hive_sync import HiveSyncService
+from .mysql_sync import MySQLSyncService
 from .semantic_common import ensure_dimension_logical_type
 
 logger = get_logger(__name__)
@@ -354,6 +356,102 @@ class DataSourceManager:
             config["tables"] = config.get("tables") or tables
             if config.get("relationships") and not config.get("joins"):
                 config["joins"] = config.get("relationships")
+
+    def _build_physical_metadata_source_config(self, datasource: Dict[str, Any]) -> Dict[str, Any]:
+        """构建物理元数据读取使用的模板源配置。"""
+        source_type = datasource.get("source_type")
+        if source_type == "hive":
+            return _build_meta_source_config(datasource)
+        return dict(datasource.get("source_config") or {})
+
+    async def _load_physical_schema_async(
+        self,
+        source_type: str,
+        source_config: Dict[str, Any],
+        table_names: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """按物理连接配置读取完整表结构。"""
+        if source_type not in ("mysql", "hive"):
+            raise ValueError(f"不支持实时获取: {source_type}，只支持 mysql/hive")
+        if not source_config:
+            raise ValueError("数据源连接配置不完整")
+        if str(source_config.get("query_executor_type") or "direct").strip().lower() == "http":
+            if source_type != "hive":
+                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
+            return await get_hive_meta_schema_async(source_config, table_names, user_id=user_id, username=username)
+
+        if source_type == "mysql":
+            mysql_credentials = resolve_mysql_credentials(source_config)
+            service = MySQLSyncService(
+                host=source_config.get("host", "localhost"),
+                port=source_config.get("port", 3306),
+                database=source_config.get("database", ""),
+                user=mysql_credentials["user"],
+                password=mysql_credentials["password"],
+            )
+            return await asyncio.wait_for(
+                service.get_full_schema_async(table_names),
+                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            )
+
+        hive_credentials = resolve_hive_credentials(source_config)
+        service = HiveSyncService(
+            host=source_config.get("host", "localhost"),
+            port=source_config.get("port", 10000),
+            database=source_config.get("database", "default"),
+            username=hive_credentials.get("username"),
+            password=hive_credentials.get("password"),
+        )
+        return await asyncio.wait_for(
+            service.get_full_schema_async(table_names),
+            timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+        )
+
+    async def _load_physical_table_names_async(
+        self,
+        source_type: str,
+        source_config: Dict[str, Any],
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Any]:
+        """按物理连接配置读取表名列表。"""
+        if source_type not in ("mysql", "hive"):
+            raise ValueError(f"不支持获取表列表: {source_type}，只支持 mysql/hive")
+        if not source_config:
+            raise ValueError("数据源连接配置不完整")
+        if str(source_config.get("query_executor_type") or "direct").strip().lower() == "http":
+            if source_type != "hive":
+                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
+            return await get_hive_meta_tables_async(source_config, user_id=user_id, username=username)
+
+        if source_type == "mysql":
+            mysql_credentials = resolve_mysql_credentials(source_config)
+            service = MySQLSyncService(
+                host=source_config.get("host", "localhost"),
+                port=source_config.get("port", 3306),
+                database=source_config.get("database", ""),
+                user=mysql_credentials["user"],
+                password=mysql_credentials["password"],
+            )
+            return await asyncio.wait_for(
+                service.get_tables_async(),
+                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            )
+
+        hive_credentials = resolve_hive_credentials(source_config)
+        service = HiveSyncService(
+            host=source_config.get("host", "localhost"),
+            port=source_config.get("port", 10000),
+            database=source_config.get("database", "default"),
+            username=hive_credentials.get("username"),
+            password=hive_credentials.get("password"),
+        )
+        return await asyncio.wait_for(
+            service.get_tables_async(),
+            timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+        )
 
     def _extract_metric_source_column(self, metric: Dict[str, Any]) -> str:
         """从指标表达式中提取单字段物理列名。"""
@@ -943,6 +1041,31 @@ class DataSourceManager:
         logger.info("同步数据源组表结构: %s, tables=%s", datasource_id, len(tables or []))
         return await self._load_datasource_async(datasource_id)
 
+    async def sync_datasource_schema_from_source_async(
+        self,
+        datasource_id: str,
+        table_names: Optional[List[str]] = None,
+        update_by: str = "",
+        update_by_name: str = "",
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """从模板物理源读取表结构并写入数据源缓存。"""
+        if not await self.get_datasource_async(datasource_id):
+            return None
+        tables = await self.get_live_schema_async(
+            datasource_id,
+            table_names=table_names,
+            user_id=user_id,
+            username=username,
+        )
+        return await self.sync_datasource_tables_async(
+            datasource_id=datasource_id,
+            tables=tables,
+            update_by=update_by,
+            update_by_name=update_by_name,
+        )
+
     async def update_datasource_async(
         self,
         datasource_id: str,
@@ -1245,74 +1368,75 @@ class DataSourceManager:
         logger.info("取消默认数据源: %s", datasource_id)
         return True
 
-    async def get_schema_async(
+    async def get_cached_schema_async(
         self,
         datasource_id: str,
-        source: str = "cache",
+        table_names: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """从业务库缓存读取数据源表结构。"""
+        datasource = await self.get_datasource_async(datasource_id)
+        if not datasource:
+            raise ValueError(f"数据源不存在: {datasource_id}")
+        tables = datasource.get("ds_tables", []) or []
+        if table_names:
+            selected_names = {str(table_name or "").strip() for table_name in table_names if str(table_name or "").strip()}
+            tables = [table for table in tables if str(table.get("table_name") or "").strip() in selected_names]
+        return tables
+
+    async def get_live_schema_async(
+        self,
+        datasource_id: str,
         table_names: Optional[List[str]] = None,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """异步获取数据源的表结构。"""
+        """从模板物理源实时读取数据源表结构。"""
         datasource = await self.get_datasource_async(datasource_id)
         if not datasource:
             raise ValueError(f"数据源不存在: {datasource_id}")
 
-        if source == "cache":
-            tables = datasource.get("ds_tables", [])
-            if table_names:
-                tables = [t for t in tables if t.get("table_name") in table_names]
-            return tables
-
         source_type = datasource.get("source_type")
-        source_config = datasource.get("source_config", {})
-        if source_type not in ("mysql", "hive"):
-            raise ValueError(f"不支持实时获取: {source_type}，只支持 mysql/hive")
-        if not source_config:
-            raise ValueError("数据源连接配置不完整")
+        source_config = self._build_physical_metadata_source_config(datasource)
 
         try:
-            meta_source_config = _build_meta_source_config(datasource)
-            if meta_source_config.get("query_executor_type") == "http":
-                if source_type != "hive":
-                    raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-                return await get_hive_meta_schema_async(meta_source_config, table_names, user_id=user_id, username=username)
-
-            if source_type == "mysql":
-                from apps.chat_data_app.services.mysql_sync import MySQLSyncService
-
-                mysql_credentials = resolve_mysql_credentials(source_config)
-                service = MySQLSyncService(
-                    host=source_config.get("host"),
-                    port=source_config.get("port", 3306),
-                    database=source_config.get("database"),
-                    user=mysql_credentials["user"],
-                    password=mysql_credentials["password"],
-                )
-                return await asyncio.wait_for(
-                    service.get_full_schema_async(table_names),
-                    timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-                )
-
-            from apps.chat_data_app.services.hive_sync import HiveSyncService
-
-            hive_credentials = resolve_hive_credentials(source_config)
-            service = HiveSyncService(
-                host=source_config.get("host"),
-                port=source_config.get("port", 10000),
-                database=source_config.get("database", "default"),
-                username=hive_credentials.get("username"),
-                password=hive_credentials.get("password"),
-            )
-            return await asyncio.wait_for(
-                service.get_full_schema_async(table_names),
-                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
+            return await self._load_physical_schema_async(
+                source_type,
+                source_config,
+                table_names,
+                user_id=user_id,
+                username=username,
             )
         except asyncio.TimeoutError as err:
             logger.error("异步获取表结构超时: datasource_id=%s source_type=%s timeout=%ss", datasource_id, source_type, DATASOURCE_SYNC_TIMEOUT_SECONDS)
             raise ConnectionError(f"数据库连接超时（{DATASOURCE_SYNC_TIMEOUT_SECONDS}秒）") from err
+        except ValueError:
+            raise
         except Exception as err:
             logger.error("异步获取表结构失败: %s", err)
+            raise ConnectionError(f"数据库连接失败: {str(err)}")
+
+    async def get_physical_table_names_async(
+        self,
+        source_type: str,
+        source_config: Dict[str, Any],
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Any]:
+        """从物理源实时读取表名列表。"""
+        try:
+            return await self._load_physical_table_names_async(
+                source_type,
+                source_config,
+                user_id=user_id,
+                username=username,
+            )
+        except asyncio.TimeoutError:
+            logger.error("获取表列表超时: source_type=%s timeout=%ss", source_type, DATASOURCE_SYNC_TIMEOUT_SECONDS)
+            raise
+        except ValueError:
+            raise
+        except Exception as err:
+            logger.error("获取表列表失败: %s", err, exc_info=True)
             raise ConnectionError(f"数据库连接失败: {str(err)}")
 
 
