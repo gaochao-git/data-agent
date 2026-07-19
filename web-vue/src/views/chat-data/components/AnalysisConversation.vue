@@ -1196,6 +1196,10 @@ const openConsolePanel = () => {
   sidePanelOpen.value = true
 }
 
+defineExpose({
+  openConsolePanel,
+})
+
 const syncHistoryToolCalls = () => {
   const nextMap = new Map<string, ToolCallInfo>()
   for (const message of messages.value) {
@@ -2249,6 +2253,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :open="sidePanelOpen"
       :title="sidePanelTitle"
       :subtitle="sidePanelSubtitle"
+      :show-trigger="false"
       @open="openConsolePanel"
       @close="sidePanelOpen = false"
     >

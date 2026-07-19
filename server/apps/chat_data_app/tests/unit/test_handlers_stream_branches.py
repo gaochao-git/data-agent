@@ -624,7 +624,7 @@ async def test_data_analyze_stream_thinking_and_semantic_retrieval_branches(monk
     monkeypatch.setattr(handlers.analyze_data_agent, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
     monkeypatch.setattr(handlers.analyze_data_agent, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(
@@ -672,7 +672,7 @@ async def test_data_analyze_stream_tool_selection_payload_empty_branch(monkeypat
     monkeypatch.setattr(handlers.analyze_data_agent, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
     monkeypatch.setattr(handlers.analyze_data_agent, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(
@@ -789,7 +789,7 @@ async def test_data_analyze_stream_bad_selection_payload_branch(monkeypatch):
     monkeypatch.setattr(handlers.analyze_data_agent, "build_data_analyze_system_prompt", lambda **_kwargs: "system")
     monkeypatch.setattr(handlers.analyze_data_agent, "create_data_analyze_agent", lambda **_kwargs: Agent())
     monkeypatch.setattr(handlers, "build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr(handlers, "prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     session_calls = patch_data_analyze_workspace_session(monkeypatch)
 
     response = await handlers.data_analyze_completion_handler(

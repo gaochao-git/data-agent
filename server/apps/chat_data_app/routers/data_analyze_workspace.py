@@ -17,6 +17,27 @@ from .dependencies import _get_current_user
 logger = get_logger(__name__)
 router = APIRouter()
 
+
+INTERNAL_WORKSPACE_FILE_PATHS = {"workspace/data_context.json"}
+
+
+def _normalize_workspace_file_path(path: str) -> str:
+    normalized = str(path or "").strip()
+    return normalized.replace("/mnt/user-data/", "").lstrip("/")
+
+
+def _is_internal_workspace_file(path: str) -> bool:
+    normalized = _normalize_workspace_file_path(path)
+    return normalized in INTERNAL_WORKSPACE_FILE_PATHS
+
+
+def _filter_visible_workspace_files(files: list[dict]) -> list[dict]:
+    return [
+        item for item in files
+        if not _is_internal_workspace_file(str(item.get("relative_path") or item.get("path") or ""))
+    ]
+
+
 @router.get("/data-analyze/conversations/{conversation_id}/workspace-files")
 async def list_data_analyze_workspace_files(conversation_id: str, request: Request):
     """获取智能分析会话工作区文件列表。"""
@@ -28,7 +49,8 @@ async def list_data_analyze_workspace_files(conversation_id: str, request: Reque
         if not await can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_data_analyze_workspace(conversation_id)
-        return business_response(data={"files": await list_workspace_files_from_sandbox(workspace_root=workspace_paths["root"], user_id=str(current_user.user_id))}, msg="获取成功")
+        files = await list_workspace_files_from_sandbox(workspace_root=workspace_paths["root"], user_id=str(current_user.user_id))
+        return business_response(data={"files": _filter_visible_workspace_files(files)}, msg="获取成功")
     except HTTPException:
         raise
     except ValueError as e:
@@ -48,6 +70,8 @@ async def read_data_analyze_workspace_file(conversation_id: str, path: str, requ
         current_user = _get_current_user(request)
         if not await can_access_data_analyze_conversation(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if _is_internal_workspace_file(path):
+            return business_response(msg="文件不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_data_analyze_workspace(conversation_id)
         return business_response(data=await read_workspace_file_from_sandbox(workspace_root=workspace_paths["root"], file_path=path, user_id=str(current_user.user_id)), msg="获取成功")
     except HTTPException:

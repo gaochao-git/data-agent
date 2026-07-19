@@ -560,6 +560,11 @@ const handleAnalysisPanelChange = (open: boolean) => {
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
 const sqlConversationRef = ref<InstanceType<typeof SqlConversation> | null>(null)
+const analysisConversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
+
+const openAnalysisConsole = () => {
+  analysisConversationRef.value?.openConsolePanel()
+}
 
 // 加载数据源
 const loadDatasources = async () => {
@@ -1562,6 +1567,14 @@ onUnmounted(() => {
           >
             <i class="fa-solid fa-circle-plus text-[13px]"></i>
           </button>
+          <button
+            v-if="viewMode === 'conversation' && currentConversationAgentId === 'chat_data_data_analyze'"
+            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
+            title="控制台"
+            @click="openAnalysisConsole"
+          >
+            <i class="fa-solid fa-terminal text-[12px]"></i>
+          </button>
 
           <div
             v-if="showHistoryPopover"
@@ -1841,6 +1854,7 @@ onUnmounted(() => {
                 />
                 <AnalysisConversation
                   v-else
+                  ref="analysisConversationRef"
                   :key="conversationKey"
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"

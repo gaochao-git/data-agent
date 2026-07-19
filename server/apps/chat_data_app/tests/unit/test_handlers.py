@@ -431,23 +431,12 @@ def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):
         "apps.chat_data_app.handlers.ensure_data_analyze_workspace",
         lambda conversation_id: calls.setdefault("workspace", {"root": f"/tmp/{conversation_id}"}),
     )
-    def fake_write_workspace_json(root, path, payload):
-        calls["write"] = (root, path, payload)
-        return f"{root}/{path}"
 
-    monkeypatch.setattr(
-        "apps.chat_data_app.handlers.write_workspace_json",
-        fake_write_workspace_json,
-    )
-
-    paths, context_file = _prepare_data_analyze_workspace_sync("conv_ws", {"a": 1})
+    paths = _prepare_data_analyze_workspace_sync("conv_ws")
     assert paths["root"] == "/tmp/conv_ws"
-    assert calls["write"] == ("/tmp/conv_ws", "workspace/data_context.json", {"a": 1})
-    assert context_file == "/tmp/conv_ws/workspace/data_context.json"
 
-    async_paths, async_file = asyncio.run(prepare_data_analyze_workspace("conv_ws", {"a": 1}))
+    async_paths = asyncio.run(prepare_data_analyze_workspace("conv_ws"))
     assert async_paths == paths
-    assert async_file == context_file
 
 
 def test_get_semantic_config_async_branches(monkeypatch):
@@ -1381,7 +1370,7 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1438,7 +1427,7 @@ def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch)
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", fake_build_context)
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", fake_create_graph)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1490,7 +1479,7 @@ def test_data_analyze_completion_handler_streams_multiple_semantic_configs(monke
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", fake_build_context)
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1528,7 +1517,7 @@ def test_data_analyze_completion_handler_covers_tool_chunks_and_disconnect(monke
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
@@ -1595,7 +1584,7 @@ def test_data_analyze_completion_handler_falls_back_when_skill_list_fails(monkey
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_builtin_skills_prompt", lambda: "<builtin-skills />")
     monkeypatch.setattr("apps.chat_data_app.handlers.skill_service", BrokenSkillService())
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", fake_build_system_prompt)
@@ -1639,7 +1628,7 @@ def test_data_analyze_completion_handler_message_end_uses_state_token_usage(monk
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.skill_service.list_skills_async", lambda **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())
@@ -1680,7 +1669,7 @@ def test_data_analyze_completion_handler_tool_call_index_and_fallback_args(monke
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": {"source_type": "mysql"}}))
-    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result=({"root": "/tmp/workspace"}, "/tmp/workspace/data_context.json")))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.skill_service.list_skills_async", lambda **_kwargs: asyncio.sleep(0, result=[]))
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())

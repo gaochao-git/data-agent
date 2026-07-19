@@ -170,7 +170,6 @@ def build_data_analyze_system_prompt(
     skill: dict[str, Any] | None,
     data_context: dict[str, Any],
     workspace_root: str,
-    data_context_file: str = "",
     available_skills_xml: str | None = None,
 ) -> str:
     """构造通用分析智能体系统提示词。"""
@@ -178,8 +177,6 @@ def build_data_analyze_system_prompt(
     if available_skills_xml is None:
         available_skills_xml = build_builtin_skills_prompt()
     dialect_context_text, dialect_fewshot = build_dialect_prompt_sections(data_context or {})
-
-    _ = data_context_file
 
     return DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.format(
         current_time=format_current_time_for_prompt(),
@@ -269,7 +266,6 @@ def get_data_analyze_graph(checkpointer=None):
         skill=None,
         data_context={},
         workspace_root=workspace_paths["root"],
-        data_context_file="",
     )
     return create_data_analyze_agent(
         workspace_root=workspace_paths["root"],

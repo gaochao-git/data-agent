@@ -4,11 +4,13 @@ interface Props {
   title: string
   subtitle?: string
   triggerLabel?: string
+  showTrigger?: boolean
 }
 
 withDefaults(defineProps<Props>(), {
   subtitle: '',
   triggerLabel: '控制台',
+  showTrigger: true,
 })
 
 const emit = defineEmits<{
@@ -19,7 +21,7 @@ const emit = defineEmits<{
 
 <template>
   <button
-    v-if="!open"
+    v-if="showTrigger && !open"
     type="button"
     class="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center gap-1 rounded-l-xl border border-r-0 border-slate-200 bg-white px-2.5 py-3 text-xs font-medium text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] transition-colors hover:bg-blue-50 hover:text-blue-700"
     @click="emit('open')"

@@ -22,7 +22,6 @@ from apps.chat_data_app.services.data_analyze_workspace import (
     read_workspace_text_file,
     resolve_workspace_path,
     to_visible_path,
-    write_workspace_json,
 )
 from apps.chat_data_app.agent.analyze_data_agent import create_data_analyze_tools
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
@@ -178,7 +177,9 @@ def test_resolve_workspace_path_accepts_short_absolute_aliases():
 
 def test_workspace_json_list_read_and_visible_paths():
     paths = ensure_data_analyze_workspace(f"conv_workspace_file_ops_{uuid.uuid4().hex}")
-    visible_path = write_workspace_json(paths["root"], "workspace/context.json", {"用户": "张三"})
+    context_file = Path(paths["workspace"]) / "context.json"
+    context_file.write_text('{"用户": "张三"}', encoding="utf-8")
+    visible_path = to_visible_path(paths["root"], context_file)
 
     assert visible_path == "/workspace/context.json"
     assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"

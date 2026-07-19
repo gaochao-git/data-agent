@@ -29,7 +29,7 @@ from .services.datasource_manager import get_datasource_manager
 from .services.context_budget import sanitize_context_usage_for_response
 from .services.data_analyze_context import build_data_analyze_context
 from .services.execution_target_context import append_selected_execution_targets_to_context
-from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
+from .services.data_analyze_workspace import ensure_data_analyze_workspace
 from .services.skill_service import skill_service
 from .services.semantic_tools import (
     format_semantic_config_directory_for_prompt,
@@ -67,16 +67,14 @@ def _get_timestamp() -> str:
     return time.strftime('%Y-%m-%d %H:%M:%S')
 
 
-async def prepare_data_analyze_workspace(conversation_id: str, data_context: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """异步准备 DataAnalyze 工作目录和上下文文件。"""
-    return await asyncio.to_thread(_prepare_data_analyze_workspace_sync, conversation_id, data_context)
+async def prepare_data_analyze_workspace(conversation_id: str) -> dict[str, str]:
+    """异步准备 DataAnalyze 工作目录。"""
+    return await asyncio.to_thread(_prepare_data_analyze_workspace_sync, conversation_id)
 
 
-def _prepare_data_analyze_workspace_sync(conversation_id: str, data_context: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """同步创建 DataAnalyze 工作目录并写入上下文文件。"""
-    workspace_paths = ensure_data_analyze_workspace(conversation_id)
-    data_context_file = write_workspace_json(workspace_paths["root"], "workspace/data_context.json", data_context)
-    return workspace_paths, data_context_file
+def _prepare_data_analyze_workspace_sync(conversation_id: str) -> dict[str, str]:
+    """同步创建 DataAnalyze 工作目录。"""
+    return ensure_data_analyze_workspace(conversation_id)
 
 
 def _format_sse(event: str, data: dict | str) -> str:
@@ -1152,7 +1150,7 @@ async def data_analyze_completion_handler(
                 data_context_kwargs["member_datasource_ids"] = member_datasource_ids
             data_context = await build_data_analyze_context(datasource_id, semantic_config_id, **data_context_kwargs)
             log_phase("build_data_context")
-            workspace_paths, data_context_file = await prepare_data_analyze_workspace(conversation_id, data_context)
+            workspace_paths = await prepare_data_analyze_workspace(conversation_id)
             log_phase("ensure_workspace")
             try:
                 available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="analyze")
@@ -1164,7 +1162,6 @@ async def data_analyze_completion_handler(
                 skill=None,
                 data_context=data_context,
                 workspace_root=workspace_paths["root"],
-                data_context_file=data_context_file,
                 available_skills_xml=available_skills_xml,
             )
             log_phase("build_system_prompt")

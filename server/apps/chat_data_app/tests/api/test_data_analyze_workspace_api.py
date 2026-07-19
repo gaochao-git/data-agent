@@ -19,7 +19,10 @@ def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, t
     async def fake_list_files(workspace_root, user_id):
         assert workspace_root == str(tmp_path)
         assert user_id == "user_a"
-        return [{"path": "/outputs/chart.json"}]
+        return [
+            {"path": "/mnt/user-data/workspace/data_context.json", "relative_path": "/mnt/user-data/workspace/data_context.json"},
+            {"path": "/outputs/chart.json", "relative_path": "/outputs/chart.json"},
+        ]
 
     async def fake_read_file(workspace_root, file_path, user_id):
         assert workspace_root == str(tmp_path)
@@ -38,9 +41,33 @@ def test_data_analyze_workspace_file_routes(client, auth_headers, monkeypatch, t
     )
 
     assert list_response.status_code == 200
+    assert len(list_response.json()["data"]["files"]) == 1
     assert list_response.json()["data"]["files"][0]["path"] == "/outputs/chart.json"
     assert read_response.status_code == 200
     assert read_response.json()["data"]["content"] == "{}"
+
+
+def test_data_analyze_workspace_hides_internal_context_file(client, auth_headers, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_routes, "get_data_analyze_unavailable_response", lambda: None)
+
+    async def can_access(_conversation_id, _user_id):
+        return True
+
+    async def fake_read_file(**_kwargs):
+        raise AssertionError("internal context file should not be read from sandbox")
+
+    monkeypatch.setattr(workspace_routes, "can_access_data_analyze_conversation", can_access)
+    monkeypatch.setattr(workspace_routes, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path)})
+    monkeypatch.setattr(workspace_routes, "read_workspace_file_from_sandbox", fake_read_file)
+
+    response = client.get(
+        "/api/chatdata/data-analyze/conversations/conv_a/workspace-files/content",
+        params={"path": "/mnt/user-data/workspace/data_context.json"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_data_analyze_workspace_rejects_inaccessible_conversation(client, auth_headers, monkeypatch):

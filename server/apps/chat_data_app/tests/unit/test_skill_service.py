@@ -664,7 +664,6 @@ def test_data_analyze_prompt_injects_skill_metadata_not_skill_body():
         skill={"name": "dashboard-generation", "title": "看板生成技能"},
         data_context={"datasource": {"id": "ds_1"}, "semantic_configs": []},
         workspace_root="/tmp/workspace",
-        data_context_file="/mnt/user-data/workspace/data_context.json",
     )
 
     role_index = prompt.index("<role>")
