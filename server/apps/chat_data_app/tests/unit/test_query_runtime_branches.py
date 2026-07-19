@@ -273,7 +273,8 @@ def test_remote_ref_cache_result_branches(monkeypatch):
         "cache_age_seconds": 3,
         "cache_expires_in_seconds": 9,
     }))
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
+    assert "success" not in success
     assert success["remote_task_id"] == "rt3"
     assert success["cache_hit"] is True
     assert success["cache_age_seconds"] == 3
@@ -450,7 +451,8 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is False
+    assert result["status"] == "cancelled"
+    assert "success" not in result
     assert result["error"] == "已人工取消"
     assert result["sql"] == "select 1 LIMIT 10"
     assert remote_tasks == [("task_1", {
@@ -534,7 +536,8 @@ def test_execute_sql_for_member_http_remote_ref_cache_hit(monkeypatch):
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["cache_hit"] is True
     assert result["remote_task_id"] == "remote_cached"
     assert remote_tasks == [("task_http", {
@@ -633,8 +636,10 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
         datasource_id="ds_a",
     ))
 
-    assert http_result["success"] is True
-    assert direct_result["success"] is True
+    assert http_result["status"] == "succeeded"
+    assert direct_result["status"] == "succeeded"
+    assert "success" not in http_result
+    assert "success" not in direct_result
     assert execute_calls == [("select 1", "测试用户"), ("select 1", "测试用户")]
     assert ("http", "user_1", "测试用户") in cache_writes
     assert ("direct", "user_1", "测试用户") in cache_writes
@@ -678,7 +683,8 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["data"] == [{"id": 1}]
 
 
@@ -767,7 +773,8 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert "success" not in result
     assert result["error"] == "executor failed"
     assert result["columns"] == []
     assert result["data"] == []
@@ -1145,7 +1152,8 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert execute_calls == ["select 1"]
     assert final_updates == []
 
@@ -1181,7 +1189,8 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
         timeout=None,
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
 
 
 def test_run_sql_query_task_cancel_after_running(monkeypatch):

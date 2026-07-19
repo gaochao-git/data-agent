@@ -508,6 +508,9 @@ def test_get_query_task_api_contract(client, auth_headers, sample_query_task, mo
     assert payload["data"]["datasource_id"] == "ds_a"
     assert "result" not in payload["data"]
     assert "executions" not in payload["data"]
+    assert "success" not in payload["data"]
+    assert "columns" not in payload["data"]
+    assert "data" not in payload["data"]
     assert payload["data"]["results"] == [{
         "execution_id": "exec_1",
         "member_datasource_id": "m1",
@@ -635,6 +638,9 @@ def test_get_query_task_merges_live_remote_sql_result(client, auth_headers, monk
     assert payload["data"]["status"] == "succeeded"
     assert "result" not in payload["data"]
     assert "executions" not in payload["data"]
+    assert "success" not in payload["data"]
+    assert "columns" not in payload["data"]
+    assert "data" not in payload["data"]
     assert payload["data"]["results"] == [{
         "member_datasource_id": "m1",
         "status": "succeeded",

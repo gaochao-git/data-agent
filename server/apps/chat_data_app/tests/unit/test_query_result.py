@@ -3,6 +3,7 @@ from apps.chat_data_app.services.query_result import (
     query_result_status,
     query_result_succeeded,
 )
+from apps.chat_data_app.services.query_history_service import QueryHistoryService
 from apps.chat_data_app.services.query_task_service import QueryTaskService
 
 
@@ -195,3 +196,30 @@ def test_build_sql_task_results_returns_none_without_payload_or_executions():
     assert QueryTaskService.build_sql_task_results(None, []) is None
     assert QueryTaskService.build_sql_task_results({"results": []}, []) == []
     assert QueryTaskService.build_sql_task_results({"results": {"bad": "shape"}}, []) == []
+
+
+def test_normalize_history_result_payload_removes_legacy_success():
+    class Execution:
+        sql_status = "succeeded"
+        result_row_count = None
+        error_message = None
+
+    payload = QueryHistoryService.normalize_history_result_payload(
+        {
+            "success": False,
+            "columns": ["id"],
+            "data": [{"id": 1}],
+            "error": "执行失败",
+        },
+        Execution(),
+        12,
+    )
+
+    assert payload == {
+        "status": "failed",
+        "columns": ["id"],
+        "data": [{"id": 1}],
+        "total_count": 1,
+        "execution_time_ms": 12,
+        "error": "执行失败",
+    }

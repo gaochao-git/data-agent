@@ -12,6 +12,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
 
 from . import query_runtime
+from .query_result import query_result_status
 from ..daos.query_history_dao import QueryHistoryDao
 
 logger = get_logger(__name__)
@@ -318,6 +319,54 @@ class QueryHistoryService:
             "remote_result_status": status,
         }
 
+    @classmethod
+    def normalize_history_result_payload(
+        cls,
+        result_payload: Any,
+        execution: ChatDataQueryExecution,
+        execution_time_ms: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """归一化历史详情里的单成员查询结果，避免继续暴露 success 旧口径。"""
+        if not isinstance(result_payload, dict):
+            return None
+
+        payload = dict(result_payload)
+        raw_status = payload.get("status")
+        if not raw_status and payload.get("success") is True:
+            raw_status = "succeeded"
+        if not raw_status and payload.get("success") is False:
+            raw_status = "failed"
+        if not raw_status:
+            raw_status = getattr(execution, "sql_status", None) or ("failed" if payload.get("error") else "succeeded")
+        payload["status"] = query_result_status({"status": raw_status})
+        payload.pop("success", None)
+
+        columns = payload.get("columns")
+        payload["columns"] = columns if isinstance(columns, list) else []
+
+        rows = payload.get("data")
+        payload["data"] = rows if isinstance(rows, list) else []
+
+        total_count = payload.get("total_count")
+        if total_count is None:
+            total_count = payload.get("row_count")
+        if total_count is None:
+            total_count = getattr(execution, "result_row_count", None)
+        if total_count is None:
+            total_count = len(payload["data"])
+        try:
+            payload["total_count"] = int(total_count or 0)
+        except (TypeError, ValueError):
+            payload["total_count"] = 0
+
+        if payload.get("execution_time_ms") is None:
+            payload["execution_time_ms"] = execution_time_ms
+        if payload["status"] == "succeeded":
+            payload["error"] = None
+        else:
+            payload["error"] = str(payload.get("error") or getattr(execution, "error_message", None) or "").strip() or None
+        return payload
+
     async def build_remote_history_result_payload(
         self,
         execution: ChatDataQueryExecution,
@@ -355,14 +404,15 @@ class QueryHistoryService:
         if not execution:
             return None
         payload = execution.to_dict()
-        result_payload = payload.get("result_payload")
-        if self.is_http_query_execution(execution):
-            result_payload = await self.build_remote_history_result_payload(execution, task, fetch_remote_result=fetch_remote_result)
         execution_time_ms = query_runtime.resolve_execution_time_ms(
             execution.execution_time_ms,
             execution.started_time,
             execution.finished_time,
         )
+        result_payload = payload.get("result_payload")
+        if self.is_http_query_execution(execution):
+            result_payload = await self.build_remote_history_result_payload(execution, task, fetch_remote_result=fetch_remote_result)
+        result_payload = self.normalize_history_result_payload(result_payload, execution, execution_time_ms)
         return {
             "execution_id": execution.execution_id,
             "query": execution.sql_text,

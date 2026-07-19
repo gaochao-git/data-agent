@@ -50,7 +50,8 @@ def test_query_cache_remote_ref_result_branches():
         },
         fetch_remote_result=success_fetch,
     ))
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
+    assert "success" not in success
     assert success["remote_task_id"] == "rt3"
     assert success["cache_hit"] is True
     assert success["cache_age_seconds"] == 3

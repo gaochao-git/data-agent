@@ -82,7 +82,6 @@ export interface QueryHistoryResult {
   error_message?: string | null
   result_payload?: {
     status?: string | null
-    success?: boolean
     columns?: string[]
     data?: Record<string, unknown>[]
     total_count?: number

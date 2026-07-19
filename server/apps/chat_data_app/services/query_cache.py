@@ -14,6 +14,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataSqlResultCache
 
+from .query_result import query_result_status, query_result_succeeded
 from .runtime_config import QUERY_CACHE_ENABLED, QUERY_CACHE_TTL_SECONDS
 
 logger = get_logger(__name__)
@@ -107,6 +108,8 @@ async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[
         await db.commit()
     cache_age_seconds = max(0, int((now - cache_item.create_time).total_seconds())) if cache_item.create_time else None
     cache_expires_in_seconds = max(0, int((cache_item.expire_time - now).total_seconds())) if cache_item.expire_time else None
+    payload["status"] = query_result_status(payload)
+    payload.pop("success", None)
     payload["cache_hit"] = True
     payload["execution_time_ms"] = int((time.perf_counter() - started_at) * 1000)
     payload["cache_age_seconds"] = cache_age_seconds
@@ -121,13 +124,13 @@ async def save_sql_result_cache(
     operator_name: Optional[str] = None,
 ) -> None:
     """Save a successful SQL result cache payload."""
-    if not result.get("success"):
+    if not query_result_succeeded(result):
         return
     if str((cache_identity or {}).get("executor_type") or "").strip().lower() == "http":
         await save_http_remote_ref_sql_result_cache(cache_identity, result, operator_id=operator_id, operator_name=operator_name)
         return
     payload = {
-        "success": True,
+        "status": "succeeded",
         "columns": result.get("columns") or [],
         "data": result.get("data") or [],
         "total_count": int(result.get("total_count") or 0),
@@ -150,14 +153,14 @@ async def save_http_remote_ref_sql_result_cache(
     operator_name: Optional[str] = None,
 ) -> None:
     """Save an HTTP remote task reference instead of local rows."""
-    if not result.get("success"):
+    if not query_result_succeeded(result):
         return
     remote_task_id = str(result.get("remote_task_id") or "").strip()
     if not remote_task_id:
         return
     source_type = str(result.get("source_type") or cache_identity.get("source_type") or "").strip().lower() or "hive"
     payload = {
-        "success": True,
+        "status": "succeeded",
         "cache_type": HTTP_REMOTE_REF_CACHE_TYPE,
         "remote_task_id": remote_task_id,
         "source_type": source_type,
@@ -189,7 +192,7 @@ async def fetch_http_remote_ref_cache_result(
     if not remote_task_id:
         return {
             "_cache_ref_unavailable": True,
-            "success": False,
+            "status": "failed",
             "error": "HTTP 缓存缺少远端任务 ID",
             "columns": [],
             "data": [],
@@ -206,24 +209,23 @@ async def fetch_http_remote_ref_cache_result(
         logger.warning("读取 HTTP 远端缓存结果失败: remote_task_id=%s error=%s", remote_task_id, err, exc_info=True)
         return {
             "_cache_ref_unavailable": True,
-            "success": False,
+            "status": "failed",
             "error": str(err) or "HTTP 远端缓存结果读取失败",
             "columns": [],
             "data": [],
             "total_count": 0,
         }
-    if not remote_result.get("success"):
+    if not query_result_succeeded(remote_result):
         return {
             "_cache_ref_unavailable": True,
-            "success": False,
             "error": remote_result.get("error") or "HTTP 远端缓存结果不可用",
-            "status": remote_result.get("status"),
+            "status": query_result_status(remote_result),
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
         }
     return {
-        "success": True,
+        "status": "succeeded",
         "columns": remote_result.get("columns") or [],
         "data": remote_result.get("data") or [],
         "total_count": int(remote_result.get("total_count") or 0),

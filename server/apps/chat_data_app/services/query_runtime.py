@@ -360,7 +360,7 @@ async def execute_sql_for_member(
                     "member_datasource_id": member_datasource_id,
                     "member_name": member_name,
                     "sql": effective_sql,
-                    "success": False,
+                    "status": "cancelled",
                     "columns": [],
                     "data": [],
                     "total_count": 0,
@@ -375,7 +375,7 @@ async def execute_sql_for_member(
                     "member_datasource_id": member_datasource_id,
                     "member_name": member_name,
                     "sql": effective_sql,
-                    "success": False,
+                    "status": "cancelled",
                     "columns": [],
                     "data": [],
                     "total_count": 0,
@@ -445,14 +445,15 @@ async def execute_sql_for_member(
         else:
             result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
         if execution_id and await get_query_execution_status(execution_id) == "cancelled":
-            result = {"success": False, "error": "已人工取消", "columns": [], "data": [], "total_count": 0}
+            result = {"status": "cancelled", "error": "已人工取消", "columns": [], "data": [], "total_count": 0}
     except Exception as e:
         logger.error("成员 SQL 执行异常: member_datasource_id=%s error=%s", member_datasource_id, e, exc_info=True)
-        result = {"success": False, "error": str(e) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+        result = {"status": "failed", "error": str(e) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
     finally:
         if executor is not None:
             await executor.close()
-    if result.get("execution_time_ms") is None and str(result.get("status") or "").strip().lower() not in {"pending", "running"}:
+    status = query_result_status(result)
+    if result.get("execution_time_ms") is None and status not in {"pending", "running"}:
         result["execution_time_ms"] = int((time.perf_counter() - local_started_at) * 1000)
     if execution_id:
         await update_query_execution_from_result(execution_id, result, store_result_payload=not http_target)
@@ -460,8 +461,7 @@ async def execute_sql_for_member(
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
         "sql": effective_sql,
-        "success": bool(result.get("success")),
-        "status": result.get("status"),
+        "status": status,
         "columns": result.get("columns") or [],
         "data": result.get("data") or [],
         "total_count": int(result.get("total_count") or 0),

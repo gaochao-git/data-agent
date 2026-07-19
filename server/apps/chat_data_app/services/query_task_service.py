@@ -13,7 +13,7 @@ from utils.models import ChatDataQueryExecution
 
 from ..schema import QueryTaskCreateRequest
 from . import dashboard_runtime, query_runtime
-from .query_result import build_query_result_payload, query_result_succeeded
+from .query_result import build_query_result_payload, query_result_status, query_result_succeeded
 from .query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 
 logger = get_logger(__name__)
@@ -562,7 +562,6 @@ class QueryTaskService:
                 "member_datasource_id": remote_task.get("member_datasource_id"),
                 "member_name": remote_task.get("member_name"),
                 "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "success": False,
                 "status": local_status,
                 "columns": [],
                 "data": [],
@@ -576,8 +575,7 @@ class QueryTaskService:
             "member_datasource_id": remote_task.get("member_datasource_id"),
             "member_name": remote_task.get("member_name"),
             "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-            "success": bool(remote_result.get("success")),
-            "status": remote_result.get("status"),
+            "status": query_result_status(remote_result),
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),

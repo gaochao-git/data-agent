@@ -16,7 +16,7 @@ from utils.models import ChatDataQueryExecution
 from utils.logger import get_logger
 
 from .dashboard_service import get_dashboard_service
-from .query_result import build_query_result_payload, query_result_succeeded
+from .query_result import build_query_result_payload, query_result_status, query_result_succeeded
 from .query_runtime import execute_direct_sql as execute_sql_direct_runner
 from .runtime_config import DEFAULT_ROW_LIMIT, read_positive_int_env
 from .sql_executor import resolve_query_timeout
@@ -85,7 +85,7 @@ async def execute_dashboard_panel_sql(
             "member_datasource_id": None,
             "member_name": None,
             "sql": sql,
-            "success": bool(result.get("success")),
+            "status": query_result_status(result),
             "columns": result.get("columns") or [],
             "data": result.get("data") or [],
             "total_count": int(result.get("total_count") or 0),
@@ -363,7 +363,7 @@ def normalize_dashboard_member_execution_result(target: Dict[str, Any], result: 
         return {
             "member_datasource_id": target.get("member_datasource_id"),
             "member_name": target.get("member_name") or target.get("group_name") or "",
-            "success": False,
+            "status": "failed",
             "columns": [],
             "data": [],
             "total_count": 0,
@@ -373,7 +373,7 @@ def normalize_dashboard_member_execution_result(target: Dict[str, Any], result: 
     return result if isinstance(result, dict) else {
         "member_datasource_id": target.get("member_datasource_id"),
         "member_name": target.get("member_name") or target.get("group_name") or "",
-        "success": False,
+        "status": "failed",
         "columns": [],
         "data": [],
         "total_count": 0,

@@ -601,7 +601,9 @@ def test_get_query_history_result_success_and_not_found(route_db):
     assert body["status"] == "success"
     assert body["data"]["execution_id"] == "ex_builder"
     assert body["data"]["query"].startswith("select city")
+    assert body["data"]["result_payload"]["status"] == "succeeded"
     assert body["data"]["result_payload"]["columns"] == ["city"]
+    assert "success" not in body["data"]["result_payload"]
 
     missing_response = asyncio.run(query_history_routes.get_query_history_result("missing", _make_request()))
     missing_body = _payload(missing_response)
@@ -1140,7 +1142,8 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
         datasource_id="ds1",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["remote_task_id"] == "remote_1"
     assert updates[0][1]["sql_status"] == "running"
     assert ("exec_1", {"remote_task_id": "remote_1"}) in updates
@@ -1166,7 +1169,8 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
         execution_id="exec_http",
         datasource_id="ds1",
     ))
-    assert http_result["success"] is True
+    assert http_result["status"] == "succeeded"
+    assert "success" not in http_result
     assert result_updates[-1][0] == "exec_http"
     assert result_updates[-1][2] == {"store_result_payload": False}
 
@@ -1178,7 +1182,8 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
         30,
         execution_id="exec_cancelled",
     ))
-    assert cancelled["success"] is False
+    assert cancelled["status"] == "cancelled"
+    assert "success" not in cancelled
     assert cancelled["error"] == "已人工取消"
 
     monkeypatch.setattr(query_runtime, "get_query_execution_status", lambda _execution_id: asyncio.sleep(0, result="running"))
@@ -1190,7 +1195,8 @@ def test_execute_sql_for_member_callbacks_cancel_and_error(monkeypatch):
         30,
         execution_id="exec_failed",
     ))
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
+    assert "success" not in failed
     assert failed["error"] == "executor failed"
     assert closed[-1] == "failing"
 
@@ -1266,7 +1272,8 @@ def test_execute_sql_for_member_uses_http_remote_ref_cache(monkeypatch):
         datasource_id="ds1",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["columns"] == ["id"]
     assert result["data"] == [{"id": 1}]
     assert result["remote_task_id"] == "remote_cached"

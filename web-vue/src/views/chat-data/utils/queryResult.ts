@@ -6,7 +6,6 @@ export interface QueryResultLike {
 }
 
 export interface QueryMemberResultLike extends QueryResultLike {
-  success?: boolean
   member_datasource_id?: string | null
   member_name?: string | null
   columns?: string[] | null

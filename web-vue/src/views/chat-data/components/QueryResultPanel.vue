@@ -25,7 +25,6 @@ interface VisualizationConfig {
 
 interface QueryResult {
   status?: string | null
-  success?: boolean
   sql?: string
   query_mode?: string
   confidence?: number | string

@@ -168,7 +168,6 @@ interface DataSource {
 
 interface BuilderQueryResultPayload {
   status?: string | null
-  success?: boolean
   sql?: string
   columns?: string[]
   data?: Record<string, unknown>[]
@@ -648,7 +647,6 @@ const parseResultEnvelope = (result: string | null) => {
   try {
     return JSON.parse(result) as {
       status?: string | null
-      success?: boolean
       error?: string
       sql?: string
       columns?: string[]
