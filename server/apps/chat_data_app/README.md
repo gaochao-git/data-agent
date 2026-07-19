@@ -76,7 +76,7 @@ index.vue
 - 前端只发起 `streamCompletion()` SSE，不拿 `task_id` 轮询。
 - `semantic_query_tool` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
 - SQL 执行在当前工具调用内等待完成，结果通过结构化 JSON 工具结果回到智能体和 SSE 流。
-- 如果任务记录创建失败，当前逻辑会降级直接执行查询；因此智能问数的用户交互主口径不是“前端异步任务”，而是“对话流内同步等待工具结果”。
+- 如果任务记录或执行明细创建失败，当前 SQL 工具调用直接失败，不再绕过任务审计降级查询；智能问数的用户交互主口径仍是“对话流内同步等待工具结果”。
 
 `semantic_query_tool` 的查询结果返回协议固定为 JSON 字符串，不再使用 XML 标签：
 
@@ -194,6 +194,7 @@ DashboardEditor.vue
   -> routers/dashboard.py: create_dashboard_query_task()
   -> QueryTaskService.schedule_query_task()
   -> dashboard_runtime.run_dashboard_batch_task()
+  -> execute_dashboard_panel_task_payload()
   -> build_dashboard_panel_execution_result()
   -> execute_dashboard_panel_sql_with_target()
   -> execute_sql_for_member()
@@ -205,6 +206,7 @@ DashboardEditor.vue
   -> POST /agents/api/chatdata/dashboards/{dashboard_id}/panels/execute-batch
   -> routers/dashboard.py: execute_panels_batch()
   -> dashboard_runtime.stream_dashboard_batch_execution()
+  -> execute_dashboard_panel_task_payload()
   -> execute_sql_for_member()
 ```
 
@@ -216,7 +218,7 @@ DashboardEditor.vue
 - 单面板刷新当前前端走 `executePanel()`：先 `POST /dashboards/{dashboard_id}/query-tasks` 创建 `task_type=dashboard_batch` 任务，再轮询通用 `GET /query-tasks/{task_id}`，最后从 `task.result.results[panel_id].payload` 取面板数据。
 - 批量加载当前前端走 `executePanelsBatch()`：调用 `POST /dashboards/{dashboard_id}/panels/execute-batch`，后端立即创建 `task_type=dashboard_batch` 记录并返回 SSE；每个面板完成后推送一个 `PanelData`。
 - 批量 SSE 失败时，前端 `useDashboard.loadAllPanelData()` 会回退到多个单面板 `executePanel()`。
-- 两种看板执行最终都进入 `dashboard_runtime.build_dashboard_panel_execution_result()`，再复用 `execute_sql_for_member()` 做成员数据源权限、limit、安全校验、缓存和真实执行。
+- 两种看板执行最终都进入 `dashboard_runtime.execute_dashboard_panel_task_payload()`，再到 `build_dashboard_panel_execution_result()` 和 `execute_sql_for_member()`，统一做 execution 记录、成员数据源权限、limit、安全校验、缓存和真实执行。
 - 看板任务返回结构不同于 SQL 任务：`GET /query-tasks/{task_id}` 对 `dashboard_batch` 返回 `result`，其中 `result.results` 是按 `panel_id` 索引的面板结果；SQL/Builder 查询返回顶层 `results[]` 成员结果。
 
 ### 统一结果口径

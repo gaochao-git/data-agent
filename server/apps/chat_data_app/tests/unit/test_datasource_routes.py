@@ -2262,30 +2262,17 @@ def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monke
             "datasource_id": "ds_a",
         }
 
-    async def fake_build_panel_result(panel, member_datasource_id=None):
-        assert panel["id"] == "panel_a"
+    async def fake_execute_dashboard_panel_task_item(panel_id, member_datasource_id=None, **_kwargs):
+        assert panel_id == "panel_a"
         assert member_datasource_id == "phy_error"
-        return {
-            "panel_id": "panel_a",
-            "name": "面板A",
-            "chart_type": "table",
-            "chart_config": {},
-            "member_datasource_id": "phy_error",
-            "member_name": "成员失败",
-            "result": {
-                "success": False,
-                "error": "成员失败 执行失败",
-                "member_datasource_id": "phy_error",
-                "member_name": "成员失败",
-            },
-        }
+        return panel_id, {"status": "failed", "error": "成员失败 执行失败"}
 
     async def fake_update_query_task(task_id, **kwargs):
         updates.append((task_id, kwargs))
         return None
 
     monkeypatch.setattr(dashboard_runtime, "load_dashboard_panel_or_raise", fake_load_panel)
-    monkeypatch.setattr(dashboard_runtime, "build_dashboard_panel_execution_result", fake_build_panel_result)
+    monkeypatch.setattr(dashboard_runtime, "execute_dashboard_panel_task_item", fake_execute_dashboard_panel_task_item)
     monkeypatch.setattr(query_providers.query_task_service, "update_query_task", fake_update_query_task)
     monkeypatch.setattr(query_runtime, "update_query_task", fake_update_query_task)
 

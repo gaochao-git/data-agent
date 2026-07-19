@@ -1318,19 +1318,3 @@ def test_sql_tool_remaining_helpers_cover_prompt_alias_branch():
     assert "**同表指标**，表达式: SUM(amount)，表: orders" in prompt
     assert "表: alias_only" in prompt
     assert "表达式: -" in prompt
-
-
-def test_execute_direct_sql_delegates_to_agent_sql(monkeypatch):
-    captured = {}
-
-    async def fake_execute_agent_sql(sql, datasource_id):
-        captured["sql"] = sql
-        captured["datasource_id"] = datasource_id
-        return {"success": True}
-
-    monkeypatch.setattr(query_runtime, "execute_agent_sql", fake_execute_agent_sql)
-
-    result = asyncio.run(query_runtime.execute_direct_sql("select 1", "ds_a"))
-
-    assert result == {"success": True}
-    assert captured == {"sql": "select 1", "datasource_id": "ds_a"}

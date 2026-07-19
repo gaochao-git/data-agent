@@ -373,19 +373,15 @@ def test_execute_panel_success_and_failure(fake_dashboard_service, monkeypatch):
     assert any(update[1].get("status") == "failed" for update in runtime.updated_tasks)
 
 
-def test_execute_panel_without_datasource_uses_tool_direct(monkeypatch):
+def test_execute_panel_without_datasource_returns_error(monkeypatch):
     _patch_dashboard_user(monkeypatch)
 
     class NoDatasourceDashboardService:
         async def get_panel(self, panel_id, dashboard_id=None, user_id=None, include_public=True):
             return {"id": panel_id, "name": "SQL面板", "chart_type": "table", "chart_config": {}, "sql": "select 1", "datasource_id": ""}
 
-    async def fake_execute_sql_direct_runner(sql, _datasource_id):
-        return {"success": True, "columns": ["x"], "data": [{"x": 1}], "total_count": 1}
-
     runtime = FakeDashboardRuntime()
     monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: NoDatasourceDashboardService())
-    monkeypatch.setattr(dashboard_runtime, "execute_sql_direct_runner", fake_execute_sql_direct_runner)
     monkeypatch.setattr(dashboard_runtime, "create_dashboard_panel_execution", lambda **_kwargs: asyncio.sleep(0, result=None))
     dashboard_runtime.configure_dashboard_runtime(dashboard_runtime.DashboardRuntime(
         get_datasource_manager=runtime.get_datasource_manager,
@@ -399,8 +395,9 @@ def test_execute_panel_without_datasource_uses_tool_direct(monkeypatch):
 
     payload = _payload(asyncio.run(dashboard_routes.execute_panel("dash_a", "panel_a", SimpleNamespace(), None)))
 
-    assert payload["status"] == "success"
-    assert payload["data"]["result"]["results"][0]["columns"] == ["x"]
+    assert payload["status"] == "error"
+    assert payload["code"] == ErrorCode.CHATDATA_DASHBOARD_EXECUTE_FAILED
+    assert "缺少数据源" in payload["msg"]
 
 
 def test_create_dashboard_query_task_and_panel_alias(fake_dashboard_service, monkeypatch):

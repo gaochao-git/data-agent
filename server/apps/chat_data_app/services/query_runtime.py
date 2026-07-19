@@ -960,7 +960,20 @@ async def execute_agent_sql(
         execution_map = await create_query_executions_for_task(task_info["task_id"], execute_request, operator_name=operator_name)
         await update_query_task(task_info["task_id"], status="running", progress_text="SQL 执行中", started_time=datetime.now(), error_message=None)
     except Exception as task_err:
-        logger.warning("创建智能体 SQL 查询任务失败，将直接执行查询: %s", task_err, exc_info=True)
+        logger.error("创建智能体 SQL 查询任务失败: %s", task_err, exc_info=True)
+        error_message = str(task_err) or "创建智能体 SQL 查询任务失败"
+        if task_info:
+            try:
+                await update_query_task(
+                    task_info["task_id"],
+                    status="failed",
+                    progress_text="执行失败",
+                    error_message=error_message,
+                    finished_time=datetime.now(),
+                )
+            except Exception as update_err:
+                logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
+        return build_query_result_payload(sql=sql, member_results=[], fallback_error=error_message)
 
     try:
         execution_targets = await ds_manager.get_authorized_execution_datasources_async(
@@ -1032,9 +1045,3 @@ async def execute_agent_sql(
             except Exception as update_err:
                 logger.error("更新智能体 SQL 查询任务失败状态异常: %s", update_err, exc_info=True)
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=f"执行失败: {str(e)}")
-
-
-async def execute_direct_sql(sql: str, datasource_id: Optional[str] = None) -> Dict[str, Any]:
-    """直接执行 SQL，用于非智能体入口复用统一查询运行时。"""
-    logger.info("直接执行 SQL: %s... (datasource_id=%s)", sql[:100], datasource_id)
-    return await execute_agent_sql(sql=sql, datasource_id=datasource_id)

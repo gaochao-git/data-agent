@@ -638,32 +638,14 @@ async def execute_panel(
             progress_text="面板执行中",
         )
         await dashboard_runtime.dashboard_runtime().update_query_task(task_info["task_id"], status="running", progress_text="面板执行中", started_time=datetime.now(), error_message=None)
-        execution_target = None
-        if panel.get("datasource_id"):
-            ds_manager = dashboard_runtime.dashboard_runtime().get_datasource_manager()
-            selected_member_ids = [effective_member_datasource_id] if effective_member_datasource_id else None
-            execution_targets = await ds_manager.get_authorized_execution_datasources_async(
-                panel.get("datasource_id"),
-                selected_member_ids,
-                user_id=str(current_user.user_id),
-                username=str(current_user.username or ""),
-            )
-            execution_target = execution_targets[0] if execution_targets else None
-        execution_id = await dashboard_runtime.create_dashboard_panel_execution(
-            task_id=task_info["task_id"],
-            panel=panel,
-            execution_target=execution_target,
-            user_id=current_user.user_id,
-            operator_name=current_user.username,
-        )
-        payload = await dashboard_runtime.build_dashboard_panel_execution_result(
-            panel=panel,
+        payload = await dashboard_runtime.execute_dashboard_panel_task_payload(
+            panel_id,
             member_datasource_id=effective_member_datasource_id,
-            execution_target=execution_target,
+            panel=panel,
             user_id=current_user.user_id,
             operator_name=current_user.username,
             query_task_id=task_info["task_id"],
-            execution_id=execution_id,
+            validate_success=False,
         )
         dashboard_runtime.raise_if_dashboard_panel_execution_failed(payload)
         await dashboard_runtime.dashboard_runtime().update_query_task(

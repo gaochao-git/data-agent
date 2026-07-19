@@ -1213,7 +1213,7 @@ def test_run_sql_query_task_cancel_after_running(monkeypatch):
     assert updates[0][1]["status"] == "running"
 
 
-def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch):
+def test_execute_agent_sql_task_persist_and_error_branches(monkeypatch):
     class Manager:
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id}
@@ -1227,7 +1227,10 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
         ):
             return [{"member_datasource_id": "m1", "member_name": "成员1"}]
 
+    execute_calls = []
+
     async def execute_sql_for_member(**_kwargs):
+        execute_calls.append(_kwargs)
         return {"success": True, "sql": "select 1", "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
     async def create_task_raises(*_args, **_kwargs):
@@ -1237,8 +1240,10 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
     monkeypatch.setattr(query_runtime, "execute_sql_for_member", execute_sql_for_member)
 
-    fallback = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
-    assert fallback["status"] == "succeeded"
+    task_failed = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
+    assert task_failed["status"] == "failed"
+    assert task_failed["error"] == "task unavailable"
+    assert execute_calls == []
 
     updates = []
 
@@ -1274,11 +1279,16 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
         ):
             raise ValueError("unsupported")
 
-    async def update_raises(*_args, **_kwargs):
+    update_raise_calls = []
+
+    async def update_raises_after_running(*_args, **kwargs):
+        update_raise_calls.append(kwargs)
+        if len(update_raise_calls) == 1 and kwargs.get("status") == "running":
+            return None
         raise RuntimeError("update failed")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
-    monkeypatch.setattr(query_runtime, "update_query_task", update_raises)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_raises_after_running)
     value_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
     assert value_error_result["status"] == "failed"
     assert value_error_result["error"] == "unsupported"
@@ -1294,17 +1304,7 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
             raise RuntimeError("boom")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
+    monkeypatch.setattr(query_runtime, "update_query_task", update_ok)
     generic_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
     assert generic_error_result["status"] == "failed"
     assert generic_error_result["error"] == "执行失败: boom"
-
-    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
-    no_task_value_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert no_task_value_error["status"] == "failed"
-    assert no_task_value_error["error"] == "unsupported"
-
-    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
-    no_task_generic_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert no_task_generic_error["status"] == "failed"
-    assert no_task_generic_error["error"] == "执行失败: boom"
