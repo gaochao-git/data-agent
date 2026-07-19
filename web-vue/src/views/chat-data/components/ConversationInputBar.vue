@@ -170,3 +170,31 @@ defineExpose({
     <slot name="command-menu" />
   </form>
 </template>
+
+<style scoped>
+.chat-input-box {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .chat-input-toolbar {
+    gap: 4px;
+  }
+
+  .chat-input-toolbar .toolbar-label,
+  .chat-input-toolbar :deep(.toolbar-label) {
+    display: none;
+  }
+
+  .chat-input-toolbar .model-select {
+    max-width: 92px;
+  }
+}
+
+@container (max-width: 430px) {
+  .chat-input-toolbar .model-select {
+    max-width: 0;
+    padding-right: 0;
+  }
+}
+</style>

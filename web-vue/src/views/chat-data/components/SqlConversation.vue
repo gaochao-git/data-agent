@@ -1903,31 +1903,6 @@ const handleViewAnalysis = (msg: Message) => {
 </template>
 
 <style scoped>
-.chat-input-box {
-  container-type: inline-size;
-}
-
-@container (max-width: 560px) {
-  .chat-input-toolbar {
-    gap: 4px;
-  }
-
-  .chat-input-toolbar .toolbar-label {
-    display: none;
-  }
-
-  .chat-input-toolbar .model-select {
-    max-width: 92px;
-  }
-}
-
-@container (max-width: 430px) {
-  .chat-input-toolbar .model-select {
-    max-width: 0;
-    padding-right: 0;
-  }
-}
-
 .markdown-body {
   max-width: 100%;
   min-width: 0;
