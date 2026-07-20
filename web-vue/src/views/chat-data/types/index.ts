@@ -609,3 +609,52 @@ export interface OrderByItem {
   column: string
   direction: 'ASC' | 'DESC'
 }
+
+// QueryBuilder 拖拽载荷：表
+export interface BuilderDragTableData {
+  name: string
+  alias: string
+  label: string
+}
+
+// 语义配置-扩展聚合指标选项
+export interface MetricExpandOption {
+  aggFunc: string
+  label: string
+  fieldName: string
+  displayName: string
+  expression: string
+  exists: boolean
+  selected: boolean
+}
+
+// 语义配置-新增字段表单
+export interface AddFieldForm {
+  tableAlias: string
+  column: string
+  fieldName: string
+  displayName: string
+  mode: 'dimension' | 'metric'
+}
+
+// 语义配置-新增字段弹窗的表选项
+export interface AddFieldTableOption {
+  alias: string
+  table: string
+  description?: string
+  columns: Array<{ name: string; description?: string }>
+}
+
+// QueryBuilder 拖拽载荷：字段（数据表字段或语义维度/指标）
+export interface BuilderDragFieldData {
+  table: string
+  tableAlias?: string
+  tableLabel?: string
+  column: string
+  label?: string
+  semanticName?: string
+  expression?: string
+  displayName?: string
+  aggFunc?: string
+  type?: string
+}

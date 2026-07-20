@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import { cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
+import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
@@ -197,39 +198,10 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const attrs = useAttrs()
 
-// 表结构面板
-const searchText = ref('')
-const expandedTables = ref<Set<string>>(new Set())
+// 表结构面板（搜索/展开/悬浮标题，与 QueryBuilder 共享逻辑）
+const schemaTables = computed(() => props.datasource?.ds_tables || [])
+const { searchText, expandedTables, filteredTables, buildTableTitle, toggleTable } = useTableSchemaPanel(schemaTables)
 const isDatasourceHovered = ref(false)
-
-// 过滤表
-const filteredTables = computed(() => {
-  if (!props.datasource?.ds_tables) return []
-  if (!searchText.value.trim()) return props.datasource.ds_tables
-  const keyword = searchText.value.toLowerCase()
-  return props.datasource.ds_tables.filter(t =>
-    t.table_name.toLowerCase().includes(keyword) ||
-    t.description?.toLowerCase().includes(keyword) ||
-    t.business_desc?.toLowerCase().includes(keyword)
-  )
-})
-
-const buildTableTitle = (table: TableInfo) => [
-  `表名：${table.table_name}`,
-  `备注：${table.description || '-'}`,
-  table.business_desc ? `表业务说明：${table.business_desc}` : '',
-].filter(Boolean).join('\n')
-
-// 切换表展开
-const toggleTable = (tableName: string) => {
-  const newSet = new Set(expandedTables.value)
-  if (newSet.has(tableName)) {
-    newSet.delete(tableName)
-  } else {
-    newSet.add(tableName)
-  }
-  expandedTables.value = newSet
-}
 
 const focusSqlEditor = () => {
   const view = editorViewRef.value

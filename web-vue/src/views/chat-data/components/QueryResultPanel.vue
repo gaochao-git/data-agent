@@ -114,10 +114,15 @@ const artifactResult = ref<QueryResult | null>(null)
 const artifactLoading = ref(false)
 const artifactError = ref('')
 
-const parseInlineResult = (raw: string | null | undefined): { result: QueryResult | null; error: string | null } => {
+/** 内联结果可能是统一响应包裹：data 字段里嵌套完整结果对象 */
+type InlineQueryResult = Omit<QueryResult, 'data'> & {
+  data?: QueryResult | Record<string, unknown>[]
+}
+
+const parseInlineResult = (raw: string | null | undefined): { result: InlineQueryResult | null; error: string | null } => {
   if (!raw) return { result: null, error: null }
   try {
-    return { result: JSON.parse(raw) as QueryResult, error: null }
+    return { result: JSON.parse(raw) as InlineQueryResult, error: null }
   } catch {
     return { result: null, error: '无法解析查询结果' }
   }
@@ -129,7 +134,14 @@ const artifactId = computed(() => String(
   inlineParse.value.result?.meta?.artifact_id ||
   ''
 ).trim())
-const panelResult = computed(() => artifactResult.value || inlineParse.value.result?.data || inlineParse.value.result)
+const panelResult = computed<QueryResult | null>(() => {
+  if (artifactResult.value) return artifactResult.value
+  const parsed = inlineParse.value.result
+  if (!parsed) return null
+  const envelopeData = parsed.data
+  if (envelopeData && !Array.isArray(envelopeData)) return envelopeData
+  return parsed as QueryResult
+})
 const parseError = computed(() => inlineParse.value.error)
 
 const resultToData = (result: QueryResult) => JSON.stringify(result)

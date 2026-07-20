@@ -525,7 +525,7 @@ class SemanticPrefillRequest(BaseModel):
 
 # ============ 树形过滤条件模型（参考 Cube.js 设计）============
 
-from typing import Union, ForwardRef
+from typing import ForwardRef
 
 # 使用 ForwardRef 解决循环引用
 FilterConditionRef = ForwardRef('FilterCondition')

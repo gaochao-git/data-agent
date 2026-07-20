@@ -10,7 +10,7 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
 import SqlConversation from '../components/SqlConversation.vue'
 import AnalysisConversation from '../components/AnalysisConversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
@@ -1425,7 +1425,7 @@ const tableSchema = computed(() => {
 const queryBuilderRef = ref<InstanceType<typeof QueryBuilder> | null>(null)
 
 // BuilderSidebar 拖拽事件处理
-const handleBuilderDragStart = (type: 'table' | 'field', data: any, event: DragEvent) => {
+const handleBuilderDragStart = (type: 'field', data: BuilderDragFieldData, event: DragEvent) => {
   if (queryBuilderRef.value) {
     queryBuilderRef.value.handleSidebarDragStart(type, data, event)
   }
@@ -1437,11 +1437,11 @@ const handleBuilderDragEnd = () => {
   }
 }
 
-const handleBuilderAddDimension = (data: any) => {
+const handleBuilderAddDimension = (data: BuilderDragFieldData) => {
   queryBuilderRef.value?.addFieldToDimension(data)
 }
 
-const handleBuilderAddMetric = (data: any) => {
+const handleBuilderAddMetric = (data: BuilderDragFieldData) => {
   queryBuilderRef.value?.addFieldToAggregation(data)
 }
 

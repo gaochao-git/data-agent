@@ -3,13 +3,14 @@
  * 辅助查询构建器 - 拖拽式界面
  * 支持拖拽表到数据源区域，拖拽字段到维度/聚合区域
  */
-import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, useAttrs } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, useAttrs, type ComponentPublicInstance } from 'vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
 import { useQueryTask } from '../../composables/useQueryTask'
+import { useTableSchemaPanel } from '../../composables/useTableSchemaPanel'
 import QueryResultPanel from '../QueryResultPanel.vue'
-import QuickQueries, { type BuilderConfig } from '../QuickQueries.vue'
+import QuickQueries, { type BuilderConfig, type BuilderFilterNode } from '../QuickQueries.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import QueryFavoriteModal from '../QueryFavoriteModal.vue'
 import ExecutionTargetPicker from '../ExecutionTargetPicker.vue'
@@ -20,7 +21,7 @@ import IconPlay from '../icons/IconPlay.vue'
 import IconClose from '../icons/IconClose.vue'
 import IconCaretDown from '../icons/IconCaretDown.vue'
 import type { ChartType } from '../../chartTypes'
-import type { ChatDataSqlChangePayload, SemanticConfigItem, SemanticRelationship, ExecutionTargetOption } from '../../types'
+import type { BuilderDragFieldData, BuilderDragTableData, ChatDataSqlChangePayload, SemanticConfigItem, SemanticRelationship, ExecutionTargetOption } from '../../types'
 import { isQuerySucceeded } from '../../utils'
 
 interface ColumnInfo {
@@ -93,7 +94,7 @@ interface FilterCondition {
   displayName?: string
   expression?: string
   operator: string
-  value: string
+  value: string | string[]
   valueType?: 'literal' | 'field_ref' | 'expression'
   rightTable?: string
   rightTableAlias?: string
@@ -102,6 +103,7 @@ interface FilterCondition {
   logic: 'AND' | 'OR'
   aggFunc?: string  // 如果设置，则为 HAVING 条件
   aggId?: string
+  asChartFilter?: boolean
 }
 
 type FilterLogic = 'AND' | 'OR'
@@ -216,8 +218,9 @@ const emit = defineEmits<{
 // 表结构数据
 const tables = ref<TableInfo[]>([])
 const loading = ref(false)
-const expandedTables = ref<Set<string>>(new Set())
-const searchText = ref('')
+
+// 左侧数据表面板（搜索/展开/悬浮标题，与 SQL 编辑器共享逻辑）
+const { searchText, expandedTables, filteredTables, buildTableTitle, toggleTable } = useTableSchemaPanel(tables)
 
 // 数据源悬浮状态
 const isDatasourceHovered = ref(false)
@@ -228,7 +231,11 @@ const handleDatasourceSelect = (dsId: string) => {
 }
 
 // 拖拽状态
-const draggedItem = ref<{ type: 'table' | 'field'; data: any } | null>(null)
+type DraggedItem =
+  | { type: 'table'; data: BuilderDragTableData }
+  | { type: 'field'; data: BuilderDragFieldData }
+
+const draggedItem = ref<DraggedItem | null>(null)
 const dropTargetActive = ref<'dimension' | 'aggregation' | 'filter' | 'order' | null>(null)
 
 // 已选数据
@@ -434,9 +441,7 @@ const handleSaveSql = async () => {
     savedBuilderConfigSnapshot.value = buildBuilderConfigSnapshot()
     ElMessage.success('SQL 已保存')
   } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    const rawMessage = apiMsg || apiDetail || (err instanceof Error ? err.message : '')
+    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
     const message = normalizeBuilderErrorMessage(rawMessage, 'SQL 编译失败')
     ElMessage.error(message)
   }
@@ -1341,34 +1346,6 @@ const loadTables = async () => {
   }
 }
 
-// 过滤表
-const filteredTables = computed(() => {
-  if (!searchText.value.trim()) return tables.value
-  const keyword = searchText.value.toLowerCase()
-  return tables.value.filter(t =>
-    t.table_name.toLowerCase().includes(keyword) ||
-    t.description?.toLowerCase().includes(keyword) ||
-    t.business_desc?.toLowerCase().includes(keyword)
-  )
-})
-
-const buildTableTitle = (table: TableInfo) => [
-  `表名：${table.table_name}`,
-  `备注：${table.description || '-'}`,
-  table.business_desc ? `表业务说明：${table.business_desc}` : '',
-].filter(Boolean).join('\n')
-
-// 切换表展开
-const toggleTable = (tableName: string) => {
-  const newSet = new Set(expandedTables.value)
-  if (newSet.has(tableName)) {
-    newSet.delete(tableName)
-  } else {
-    newSet.add(tableName)
-  }
-  expandedTables.value = newSet
-}
-
 // 拖拽开始 - 表
 const handleTableDragStart = (table: TableInfo, e: DragEvent) => {
   draggedItem.value = {
@@ -1405,7 +1382,7 @@ const handleDragEnd = () => {
 }
 
 // 从外部侧边栏开始拖拽（供 index.vue 调用）
-const handleSidebarDragStart = (type: 'table' | 'field', data: any, e: DragEvent) => {
+const handleSidebarDragStart = (type: 'field', data: BuilderDragFieldData, e: DragEvent) => {
   draggedItem.value = { type, data }
   if (e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'copy'
@@ -1470,9 +1447,9 @@ const canConnectTableInSemanticMode = (target: string | { table?: string; tableA
   return false
 }
 
-const addFieldToDimension = (field: any) => {
-  const { table, column, label, aggFunc, expression, displayName, semanticName } = field || {}
-  const tableAlias = getTableAlias(field || {})
+const addFieldToDimension = (field: BuilderDragFieldData) => {
+  const { table, column, label, aggFunc, expression, displayName, semanticName } = field
+  const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
     ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
@@ -1502,7 +1479,7 @@ const addFieldToDimension = (field: any) => {
       semanticName,
       expression: dimensionExpression,
       displayName,
-      label: dimensionLabel,
+      label: dimensionLabel || column,
       transform: 'raw'
     })
     if (aggFunc) {
@@ -1511,15 +1488,15 @@ const addFieldToDimension = (field: any) => {
   }
 }
 
-const addFieldToAggregation = (field: any) => {
-  const { table, column, label, aggFunc, displayName, expression, semanticName } = field || {}
-  const tableAlias = getTableAlias(field || {})
+const addFieldToAggregation = (field: BuilderDragFieldData) => {
+  const { table, column, label, aggFunc, displayName, expression, semanticName } = field
+  const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
     ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
     return
   }
-  const targetFunc = aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })
+  const targetFunc = (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })) as AggregationField['func']
   if (!canUseAggregationFunc(targetFunc)) {
     showAggregationModeConflictMessage(targetFunc)
     return
@@ -1533,7 +1510,7 @@ const addFieldToAggregation = (field: any) => {
       semanticName,
       displayName,
       expression,
-      label,
+      label: label || column,
       func: targetFunc
     })
   }
@@ -1610,9 +1587,9 @@ const pruneInvalidFieldReferences = () => {
       validDetailFields.add(buildFieldKey(getSelectedTableAlias(table), table.name, column.name))
     })
   })
-  const hasAggregation = (item: { table: string; column: string; aggFunc?: string; aggId?: string }) => {
+  const hasAggregation = (item: { table: string; tableAlias?: string; column: string; aggFunc?: string; aggId?: string }) => {
     if (item.aggId && aggregations.value.some(agg => agg.id === item.aggId)) return true
-    return aggregations.value.some(agg => buildFieldKey(agg.tableAlias, agg.table, agg.column) === buildFieldKey((item as any).tableAlias, item.table, item.column) && agg.func === item.aggFunc)
+    return aggregations.value.some(agg => buildFieldKey(agg.tableAlias, agg.table, agg.column) === buildFieldKey(item.tableAlias, item.table, item.column) && agg.func === item.aggFunc)
   }
   const nextFilters = filters.value.filter((item) => {
     if (item.aggFunc) return hasAggregation(item)
@@ -1848,8 +1825,8 @@ const handleFilterOperatorChange = (f: FilterCondition, operator: string) => {
     subqueryExclude.value = operator === 'NOT IN'
     return
   }
-  if (Array.isArray((f as any).value)) {
-    ;(f as any).value = ''
+  if (Array.isArray(f.value)) {
+    f.value = ''
   }
   if (operator !== 'BETWEEN') {
     fixedDateRange.value = []
@@ -1865,7 +1842,7 @@ const applyDatePreset = (preset: DateQuickPreset) => {
   f.operator = preset.operator
   f.valueType = 'expression'
   f.rightExpression = preset.expression
-  ;(f as any).value = ''
+  f.value = ''
   dateFilterMode.value = 'dynamic'
 }
 
@@ -1886,7 +1863,7 @@ const openFilterEditor = (f: FilterCondition) => {
       f.rightColumn = parsed.column
     }
   }
-  showAsChartFilter.value = Boolean((f as any).asChartFilter)
+  showAsChartFilter.value = Boolean(f.asChartFilter)
   const op = (f.operator || '').toUpperCase()
   if (isListOperator(op) && f.valueType === 'expression' && /select/i.test(f.rightExpression || '')) {
     inInputMode.value = 'subquery'
@@ -1895,7 +1872,7 @@ const openFilterEditor = (f: FilterCondition) => {
     manualInputText.value = ''
   } else if (isListOperator(op)) {
     inInputMode.value = 'list'
-    const arr = ensureArrayValues((f as any).value)
+    const arr = ensureArrayValues(f.value)
     manualInputText.value = arr.join('\n')
     subquerySql.value = ''
     subqueryExclude.value = op === 'NOT IN'
@@ -1907,15 +1884,15 @@ const openFilterEditor = (f: FilterCondition) => {
   }
   if (isDateLikeType(getFilterColumnType(f))) {
     const op = (f.operator || '').toUpperCase()
-    if (op === 'BETWEEN' && Array.isArray((f as any).value) && (f as any).value.length === 2) {
+    if (op === 'BETWEEN' && Array.isArray(f.value) && f.value.length === 2) {
       dateFilterMode.value = 'fixed'
-      fixedDateRange.value = [String((f as any).value[0] || ''), String((f as any).value[1] || '')]
+      fixedDateRange.value = [String(f.value[0] || ''), String(f.value[1] || '')]
     } else if (op === 'BETWEEN' && f.valueType === 'expression' && (f.rightExpression || '').includes('AND')) {
       dateFilterMode.value = 'dynamic'
       fixedDateRange.value = []
-    } else if (op === '=' && !Array.isArray((f as any).value) && String((f as any).value || '').trim()) {
+    } else if (op === '=' && !Array.isArray(f.value) && String(f.value || '').trim()) {
       dateFilterMode.value = 'single'
-      singleDateValue.value = String((f as any).value || '').trim()
+      singleDateValue.value = String(f.value || '').trim()
       fixedDateRange.value = []
     } else {
       dateFilterMode.value = 'dynamic'
@@ -1960,7 +1937,7 @@ const handleFilterEditorConfirm = () => {
       }
       f.operator = 'BETWEEN'
       f.valueType = 'literal'
-      ;(f as any).value = [fixedDateRange.value[0], fixedDateRange.value[1]]
+      f.value = [fixedDateRange.value[0] || '', fixedDateRange.value[1] || '']
       f.rightExpression = undefined
     } else if (dateFilterMode.value === 'single') {
       if (!singleDateValue.value) {
@@ -1971,7 +1948,7 @@ const handleFilterEditorConfirm = () => {
         f.operator = '='
       }
       f.valueType = 'literal'
-      ;(f as any).value = singleDateValue.value
+      f.value = singleDateValue.value
       f.rightExpression = undefined
     } else {
       const expr = (f.rightExpression || '').trim()
@@ -1997,12 +1974,12 @@ const handleFilterEditorConfirm = () => {
         ElMessage.warning('请至少输入一个值')
         return
       }
-      ;(f as any).value = values
+      f.value = values
       f.valueType = 'literal'
       f.rightExpression = undefined
     }
   }
-  ;(f as any).asChartFilter = showAsChartFilter.value
+  f.asChartFilter = showAsChartFilter.value
   filterEditorCommitted.value = true
   showFilterEditor.value = false
 }
@@ -2091,11 +2068,11 @@ const getFilterValueLabel = (f: FilterCondition) => {
     }
     return (f.rightExpression || '').trim() || '表达式'
   }
-  if (f.operator === 'BETWEEN' && Array.isArray((f as any).value) && (f as any).value.length === 2) {
-    return `${(f as any).value[0]} ~ ${(f as any).value[1]}`
+  if (f.operator === 'BETWEEN' && Array.isArray(f.value) && f.value.length === 2) {
+    return `${f.value[0]} ~ ${f.value[1]}`
   }
-  if (Array.isArray((f as any).value)) {
-    const arr = (f as any).value as string[]
+  if (Array.isArray(f.value)) {
+    const arr = f.value
     if (arr.length === 0) return '值'
     if (arr.length === 1) return String(arr[0])
     return `${arr[0]} 等${arr.length}项`
@@ -2743,6 +2720,12 @@ const normalizeBuilderErrorMessage = (raw: unknown, fallback: string) => {
   return text
 }
 
+// 提取后端统一响应中的错误信息（msg 优先，其次 detail）
+const getApiErrorDetail = (err: unknown): string => {
+  const data = (err as { response?: { data?: { msg?: string; detail?: string } } } | null)?.response?.data
+  return data?.msg || data?.detail || ''
+}
+
 const compileCurrentBuilderSql = async (force = false): Promise<string> => {
   if (!validateQueryPagination()) {
     return ''
@@ -3379,9 +3362,7 @@ const handlePreviewSql = async () => {
     }
     showSqlPreview.value = true
   } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    const rawMessage = apiMsg || apiDetail || (err instanceof Error ? err.message : '')
+    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
     const message = normalizeBuilderErrorMessage(rawMessage, 'SQL 编译失败')
     ElMessage.error(message)
   } finally {
@@ -3506,9 +3487,7 @@ const executeQuery = async () => {
       }]
     }
   } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    const rawMessage = apiMsg || apiDetail || (err instanceof Error ? err.message : '')
+    const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
     const message = normalizeBuilderErrorMessage(rawMessage, '查询失败')
     rawResultData.value = JSON.stringify({
       status: 'failed',
@@ -3598,14 +3577,14 @@ const clearAll = () => {
   savedBuilderConfigSnapshot.value = ''
 }
 
-const parseAdvancedFilterFromConfig = (node: any): AdvancedFilterGroup | AdvancedFilterLeaf | null => {
+const parseAdvancedFilterFromConfig = (node: BuilderFilterNode | null | undefined): AdvancedFilterGroup | AdvancedFilterLeaf | null => {
   if (!node || typeof node !== 'object') return null
   if (Array.isArray(node.and) || Array.isArray(node.or)) {
     const logic: FilterLogic = Array.isArray(node.and) ? 'AND' : 'OR'
-    const source = (node[logic === 'AND' ? 'and' : 'or'] || []) as any[]
+    const source = node[logic === 'AND' ? 'and' : 'or'] || []
     const children = source
       .map((child) => parseAdvancedFilterFromConfig(child))
-      .filter(Boolean) as Array<AdvancedFilterLeaf | AdvancedFilterGroup>
+      .filter((child): child is AdvancedFilterLeaf | AdvancedFilterGroup => Boolean(child))
     return {
       kind: 'group',
       id: createNodeId(),
@@ -3684,16 +3663,16 @@ const loadBuilderConfig = (config: BuilderConfig) => {
   if (config.mainTable) {
     selectedTables.value.push({
       name: config.mainTable,
-      alias: (config as any).mainAlias || config.mainTable,
-      label: getTableRoleLabel(config.mainTable, (config as any).mainAlias || config.mainTable, config.mainTable)
+      alias: config.mainAlias || config.mainTable,
+      label: getTableRoleLabel(config.mainTable, config.mainAlias || config.mainTable, config.mainTable)
     })
   }
 
   // 设置关联表
   if (config.joins?.length) {
     config.joins.forEach(join => {
-      const joinConditions = (join as any).joinConditions?.length
-        ? (join as any).joinConditions.map((cond: any) => ({
+      const joinConditions = join.joinConditions?.length
+        ? join.joinConditions.map((cond) => ({
           leftCol: cond.leftColumn || '',
           rightCol: cond.rightColumn || ''
         })).filter((cond: { leftCol: string; rightCol: string }) => cond.leftCol || cond.rightCol)
@@ -3703,12 +3682,12 @@ const loadBuilderConfig = (config: BuilderConfig) => {
         }]
       selectedTables.value.push({
         name: join.rightTable,
-        alias: (join as any).rightAlias || join.rightTable,
-        label: getTableRoleLabel(join.rightTable, (join as any).rightAlias || join.rightTable, join.rightTable),
+        alias: join.rightAlias || join.rightTable,
+        label: getTableRoleLabel(join.rightTable, join.rightAlias || join.rightTable, join.rightTable),
         joinType: join.joinType,
         joinOn: {
           leftTable: join.leftTable || config.mainTable,
-          leftAlias: (join as any).leftAlias || join.leftTable || (config as any).mainAlias || config.mainTable,
+          leftAlias: join.leftAlias || join.leftTable || config.mainAlias || config.mainTable,
           conditions: joinConditions
         }
       })
@@ -3723,10 +3702,10 @@ const loadBuilderConfig = (config: BuilderConfig) => {
       return {
         id: d.id || `${Date.now()}-${Math.random()}`,
         table: d.table,
-        tableAlias: (d as any).tableAlias || d.table,
+        tableAlias: d.tableAlias || d.table,
         column: d.column,
-        semanticName: (d as any).semanticName,
-        expression: (d as any).expression,
+        semanticName: d.semanticName,
+        expression: d.expression,
         displayName: d.alias || d.column,
         label: `${tableLabel}.${colLabel}`,
         transform: d.transform || 'raw'
@@ -3742,11 +3721,11 @@ const loadBuilderConfig = (config: BuilderConfig) => {
       return {
         id: a.id || `${Date.now()}-${Math.random()}`,
         table: a.table,
-        tableAlias: (a as any).tableAlias || a.table,
+        tableAlias: a.tableAlias || a.table,
         column: a.column,
-        semanticName: (a as any).semanticName,
+        semanticName: a.semanticName,
         displayName: a.alias || a.column,
-        expression: (a as any).expression,
+        expression: a.expression,
         label: `${tableLabel}.${colLabel}`,
         func: a.func
       }
@@ -3757,7 +3736,7 @@ const loadBuilderConfig = (config: BuilderConfig) => {
   if (config.filters?.length) {
     const flatFilters: FilterCondition[] = []
     let whereTree: AdvancedFilterGroup | null = null
-    ;(config.filters as any[]).forEach((f) => {
+    ;(config.filters || []).forEach((f) => {
       const parsed = parseAdvancedFilterFromConfig(f)
       if (!parsed) return
       if (parsed.kind === 'group') {
@@ -3779,9 +3758,9 @@ const loadBuilderConfig = (config: BuilderConfig) => {
     orderBy.value = config.orderBy.map(o => ({
       id: o.id || `${Date.now()}-${Math.random()}`,
       table: o.table,
-      tableAlias: (o as any).tableAlias || o.table,
+      tableAlias: o.tableAlias || o.table,
       column: o.column,
-      semanticName: (o as any).semanticName,
+      semanticName: o.semanticName,
       direction: o.direction
     }))
   }
@@ -4783,11 +4762,11 @@ defineExpose({
                 <!-- @mention 输入 -->
                 <span class="text-[#e3e5eb] mx-1">|</span>
                 <input
-                  :ref="(el: any) => { if (atState.activeRow === 'dimension') atInputRef = el }"
+                  :ref="(el: Element | ComponentPublicInstance | null) => { if (atState.activeRow === 'dimension') atInputRef = el as HTMLInputElement | null }"
                   :value="atState.activeRow === 'dimension' ? atState.inputText : ''"
                   class="flex-1 min-w-[60px] h-[24px] border-none outline-none bg-transparent text-[12px] text-[#21252C] placeholder:text-[#93949580]"
                   placeholder="可@选择字段"
-                  @input="(e: any) => { atState.inputText = e.target.value; handleAtInputChange('dimension') }"
+                  @input="(e: Event) => { atState.inputText = (e.target as HTMLInputElement).value; handleAtInputChange('dimension') }"
                   @keydown="handleAtKeydown"
                   @blur="handleAtInputBlur"
                   @focus="atState.activeRow = 'dimension'"
@@ -4832,11 +4811,11 @@ defineExpose({
                 <!-- @mention 输入 -->
                 <span class="text-[#e3e5eb] mx-1">|</span>
                 <input
-                  :ref="(el: any) => { if (atState.activeRow === 'aggregation') atInputRef = el }"
+                  :ref="(el: Element | ComponentPublicInstance | null) => { if (atState.activeRow === 'aggregation') atInputRef = el as HTMLInputElement | null }"
                   :value="atState.activeRow === 'aggregation' ? atState.inputText : ''"
                   class="flex-1 min-w-[60px] h-[24px] border-none outline-none bg-transparent text-[12px] text-[#21252C] placeholder:text-[#93949580]"
                   placeholder="可@选择字段"
-                  @input="(e: any) => { atState.inputText = e.target.value; handleAtInputChange('aggregation') }"
+                  @input="(e: Event) => { atState.inputText = (e.target as HTMLInputElement).value; handleAtInputChange('aggregation') }"
                   @keydown="handleAtKeydown"
                   @blur="handleAtInputBlur"
                   @focus="atState.activeRow = 'aggregation'"
@@ -4929,11 +4908,11 @@ defineExpose({
                 <span class="text-[12px] text-[#93949580]">拖拽字段添加筛选</span>
                 <span class="text-[#e3e5eb] mx-1">|</span>
                 <input
-                  :ref="(el: any) => { if (atState.activeRow === 'filter') atInputRef = el }"
+                  :ref="(el: Element | ComponentPublicInstance | null) => { if (atState.activeRow === 'filter') atInputRef = el as HTMLInputElement | null }"
                   :value="atState.activeRow === 'filter' ? atState.inputText : ''"
                   class="flex-1 min-w-[60px] h-[24px] border-none outline-none bg-transparent text-[12px] text-[#21252C] placeholder:text-[#93949580]"
                   placeholder="可@选择字段"
-                  @input="(e: any) => { atState.inputText = e.target.value; handleAtInputChange('filter') }"
+                  @input="(e: Event) => { atState.inputText = (e.target as HTMLInputElement).value; handleAtInputChange('filter') }"
                   @keydown="handleAtKeydown"
                   @blur="handleAtInputBlur"
                   @focus="atState.activeRow = 'filter'"
@@ -5000,11 +4979,11 @@ defineExpose({
                   </div>
                   <span class="text-[#e3e5eb] mx-1">|</span>
                   <input
-                    :ref="(el: any) => { if (atState.activeRow === 'order') atInputRef = el }"
+                    :ref="(el: Element | ComponentPublicInstance | null) => { if (atState.activeRow === 'order') atInputRef = el as HTMLInputElement | null }"
                     :value="atState.activeRow === 'order' ? atState.inputText : ''"
                     class="min-w-[120px] h-[24px] border-none outline-none bg-transparent text-[12px] text-[#21252C] placeholder:text-[#93949580]"
                     placeholder="可@选择字段"
-                    @input="(e: any) => { atState.inputText = e.target.value; handleAtInputChange('order') }"
+                    @input="(e: Event) => { atState.inputText = (e.target as HTMLInputElement).value; handleAtInputChange('order') }"
                     @keydown="handleAtKeydown"
                     @blur="handleAtInputBlur"
                     @focus="atState.activeRow = 'order'"
@@ -5015,11 +4994,11 @@ defineExpose({
                 <span class="text-[12px] text-[#93949580]">拖拽字段添加排序</span>
                 <span class="text-[#e3e5eb] mx-1">|</span>
                 <input
-                  :ref="(el: any) => { if (atState.activeRow === 'order') atInputRef = el }"
+                  :ref="(el: Element | ComponentPublicInstance | null) => { if (atState.activeRow === 'order') atInputRef = el as HTMLInputElement | null }"
                   :value="atState.activeRow === 'order' ? atState.inputText : ''"
                   class="flex-1 min-w-[120px] h-[24px] border-none outline-none bg-transparent text-[12px] text-[#21252C] placeholder:text-[#93949580]"
                   placeholder="可@选择字段"
-                  @input="(e: any) => { atState.inputText = e.target.value; handleAtInputChange('order') }"
+                  @input="(e: Event) => { atState.inputText = (e.target as HTMLInputElement).value; handleAtInputChange('order') }"
                   @keydown="handleAtKeydown"
                   @blur="handleAtInputBlur"
                   @focus="atState.activeRow = 'order'"
@@ -5725,7 +5704,7 @@ defineExpose({
             @mousedown.prevent="handleAtSelect(item)"
             @mouseenter="atState.selectedIndex = idx"
           >
-            <FieldTypeIcon :type="(item.fieldType as any) || 'date'" class="text-[#165DFF]" />
+            <FieldTypeIcon :type="(item.fieldType as 'string' | 'number' | 'date') || 'date'" class="text-[#165DFF]" />
             <span class="flex-1 text-[#21252C] overflow-hidden text-ellipsis whitespace-nowrap">{{ item.label }}</span>
           </div>
         </template>

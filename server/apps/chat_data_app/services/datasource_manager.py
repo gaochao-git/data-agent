@@ -145,7 +145,6 @@ def _build_member_source_identity(
 ) -> str:
     """根据执行方式生成成员唯一标识。"""
     normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
-    normalized_query_executor_type = normalized_config.get("query_executor_type") or "direct"
     org_code = str(normalized_config.get("org_code") or "").strip()
     if org_code:
         return org_code

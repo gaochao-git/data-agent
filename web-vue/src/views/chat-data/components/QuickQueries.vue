@@ -11,6 +11,29 @@ import queryWorkflowHintIcon from '../assets/icons/query-workflow-hint.svg'
 import type { SkillInfo } from '../types'
 import { getSkillCreatorLabel, getSkillCreatorShortLabel } from '../utils'
 
+// Builder 筛选配置节点（支持 and/or 嵌套分组）
+export interface BuilderFilterNode {
+  id?: string
+  table?: string
+  tableAlias?: string
+  column?: string
+  semanticName?: string
+  displayName?: string
+  operator?: string
+  value?: string | string[]
+  valueType?: 'literal' | 'field_ref' | 'expression'
+  rightTable?: string
+  rightTableAlias?: string
+  rightColumn?: string
+  rightExpression?: string
+  logic?: 'AND' | 'OR'
+  and?: BuilderFilterNode[]
+  or?: BuilderFilterNode[]
+  expression?: string
+  aggFunc?: string
+  aggId?: string
+}
+
 // Builder 配置类型
 export interface BuilderConfig {
   semantic_config_id?: string
@@ -41,6 +64,8 @@ export interface BuilderConfig {
     tableAlias?: string
     column: string
     alias?: string
+    semanticName?: string
+    expression?: string
     transform?: 'raw' | 'year' | 'quarter' | 'month' | 'week' | 'day'
   }>
   aggregations: Array<{
@@ -50,31 +75,16 @@ export interface BuilderConfig {
     tableAlias?: string
     column: string
     alias?: string
-  }>
-  filters: Array<{
-    id?: string
-    table?: string
-    tableAlias?: string
-    column?: string
-    operator?: string
-    value?: string
-    valueType?: 'literal' | 'field_ref' | 'expression'
-    rightTable?: string
-    rightTableAlias?: string
-    rightColumn?: string
-    rightExpression?: string
-    logic?: 'AND' | 'OR'
-    and?: unknown[]
-    or?: unknown[]
+    semanticName?: string
     expression?: string
-    aggFunc?: string
-    aggId?: string
   }>
+  filters: BuilderFilterNode[]
   orderBy?: Array<{
     id: string
     table: string
     tableAlias?: string
     column: string
+    semanticName?: string
     direction: 'ASC' | 'DESC'
   }>
   limit?: number | null

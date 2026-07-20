@@ -23,7 +23,6 @@ from ..schema import (
     QueryTaskCreateRequest,
     QuickSqlRequest,
 )
-from ..services import query_runtime
 from ..services.datasource_manager import get_datasource_manager
 from ..services.query_task_service import (
     QueryTaskNotFoundError,

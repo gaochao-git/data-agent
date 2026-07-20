@@ -34,27 +34,9 @@ from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_history_learning_service import (
     SemanticHistoryLearningService,
-    _build_existing_semantic_indexes,
-    _build_history_learning_table_context,
     _compact_history_conversation_messages,
-    _compact_history_sample_for_llm,
-    _extract_expression_columns,
-    _extract_history_task_conversation_id,
-    _extract_history_task_query_text,
-    _extract_history_task_semantic_id,
     _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
     _history_belongs_to_config as _service_history_belongs_to_config,
-    _history_message_text,
-    _is_existing_history_suggestion,
-    _is_history_tool_error_message,
-    _is_negative_feedback_text,
-    _normalize_history_learning_result,
-    _normalize_history_suggestion_item,
-    _normalize_semantic_expression,
-    _normalize_semantic_text,
-    _parse_json_object,
-    _sample_map_by_execution_id,
-    _semantic_scope_tables,
     build_semantic_history_learning_service,
 )
 from ..services.semantic_common import (

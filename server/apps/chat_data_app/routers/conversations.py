@@ -6,7 +6,7 @@
 import inspect
 from typing import Callable, Optional, Dict, Any, List
 
-from fastapi import APIRouter, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Query, UploadFile, File, Request
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode, ensure_defined_error_code

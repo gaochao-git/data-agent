@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 
 from utils.logger import get_logger
 from utils import conversation
@@ -929,7 +929,7 @@ async def _stream_sql_generation(
     if temp_semantic_config:
         # 使用临时配置（用于测试，不保存到数据库）
         semantic_config = temp_semantic_config
-        logger.info(f"使用临时语义配置（测试模式）")
+        logger.info("使用临时语义配置（测试模式）")
     elif semantic_config_id is not None:
         semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id, user_query, user_id)
         if semantic_config:
@@ -1124,7 +1124,6 @@ async def data_analyze_completion_handler(
     semantic_config_selection = options_data.get("semantic_config_selection")
 
     async def generate_stream():
-        nonlocal semantic_config_id
         started_at = time.perf_counter()
         last_phase_at = started_at
 
