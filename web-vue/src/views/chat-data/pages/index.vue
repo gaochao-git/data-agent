@@ -488,9 +488,6 @@ const hasMoreConversations = ref(false)
 const conversationPage = ref(1)
 const conversationPageSize = 20
 const conversationKey = ref(0) // 用于强制重新渲染 SqlConversation
-const hasAnalysisPanel = ref(false)
-const rightConversationPanelMode = ref<'conversation' | 'analysis'>('conversation')
-const showConversationListPanel = ref(true)
 const showHistoryPopover = ref(false)
 const hasEnteredConversationOnce = ref(false)
 const conversationsLoaded = ref(false)
@@ -519,43 +516,6 @@ const closeHistoryPopoverWithDelay = () => {
 const canShowNewConversationButton = computed(() => {
   return hasEnteredConversationOnce.value || !!currentConversationId.value
 })
-
-onUnmounted(() => {
-})
-
-const switchConversationRightPanel = () => {
-  if (!hasAnalysisPanel.value) return
-  rightConversationPanelMode.value = rightConversationPanelMode.value === 'conversation' ? 'analysis' : 'conversation'
-  if (rightConversationPanelMode.value === 'conversation') {
-    showConversationListPanel.value = true
-  } else {
-    showConversationListPanel.value = false
-  }
-}
-
-const switchToConversationPanel = () => {
-  rightConversationPanelMode.value = 'conversation'
-  showConversationListPanel.value = true
-}
-
-const switchToAnalysisPanel = () => {
-  if (!hasAnalysisPanel.value) return
-  rightConversationPanelMode.value = 'analysis'
-  showConversationListPanel.value = false
-}
-
-const handleAnalysisPanelChange = (open: boolean) => {
-  hasAnalysisPanel.value = open
-  if (open) {
-    rightConversationPanelMode.value = 'analysis'
-    showConversationListPanel.value = false
-    return
-  }
-  if (rightConversationPanelMode.value === 'analysis') {
-    rightConversationPanelMode.value = 'conversation'
-    showConversationListPanel.value = true
-  }
-}
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
@@ -777,9 +737,6 @@ const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
   hasMoreConversations.value = false
   isLoadingConversations.value = false
   isLoadingMoreConversations.value = false
-  hasAnalysisPanel.value = false
-  rightConversationPanelMode.value = 'conversation'
-  showConversationListPanel.value = true
   conversationKey.value++
   void ensureConversationsLoaded(true)
 }
@@ -848,7 +805,6 @@ const ensureConversationDatasource = async (): Promise<boolean> => {
 
 const handleHistoryConversationSelect = async (id: string) => {
   if (!await selectConversation(id)) return
-  showConversationListPanel.value = false
   showHistoryPopover.value = false
 }
 
@@ -1830,7 +1786,6 @@ onUnmounted(() => {
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
                   :semantic-configs="enabledSemanticConfigs"
-                  :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
                   :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"
@@ -1845,10 +1800,7 @@ onUnmounted(() => {
                   @first-message-complete="handleFirstMessageComplete"
                   @datasource-change="handleDatasourceChange"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
-                  @analysis-panel-change="handleAnalysisPanelChange"
                   @agent-change="handleAgentChange"
-                  @switch-to-conversation="switchToConversationPanel"
-                  @switch-to-analysis="switchToAnalysisPanel"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"
                 />

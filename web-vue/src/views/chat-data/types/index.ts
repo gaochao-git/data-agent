@@ -260,15 +260,6 @@ export interface LangGraphMessage {
   timestamp?: string
 }
 
-export interface TaskStageInfo {
-  stage: 'thinking' | 'plan' | 'execute' | 'done'
-  status: 'running' | 'completed' | 'error'
-  title?: string
-  content?: string
-  steps?: string[]
-  source?: 'reasoning' | 'task_stage'
-}
-
 export interface ThinkingSegment {
   id: string
   content: string
@@ -308,7 +299,6 @@ export interface Message {
   error?: string
   isStreaming?: boolean
   dashboardSpec?: DashboardSpecPayload
-  taskStages?: TaskStageInfo[]
   semanticConfigSelection?: SemanticConfigSelectionInfo
   skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
   // tool 消息专用字段
@@ -371,8 +361,8 @@ export interface ToolCallInfo {
 // 消息内容片段（用于按顺序渲染文本和工具调用）
 export type MessageSegment =
   | { type: 'text'; content: string }
+  | { type: 'thinkingSegment'; thinkingSegmentId: string }
   | { type: 'toolCall'; toolCallId: string }
-  | { type: 'taskStage'; stageIndex: number }
 
 export interface SqlHistoryItem {
   id: number | string

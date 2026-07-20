@@ -6,7 +6,7 @@
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, TaskStageInfo, ToolCallInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -87,7 +87,7 @@ const inputFocused = ref(false)
 const isGenerating = ref(false)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
-const collapsedReasoningStageKeys = ref<Set<string>>(new Set())
+const collapsedThinkingSegmentKeys = ref<Set<string>>(new Set())
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
@@ -114,26 +114,27 @@ const closeTokenUsagePanel = () => {
   tokenUsagePanelRef.value?.closePanel()
 }
 
-const getReasoningStageKey = (messageId: string, stageIndex: number) => `${messageId}:${stageIndex}`
+const getThinkingSegmentKey = (messageId: string, thinkingSegmentId: string) => `${messageId}:${thinkingSegmentId}`
 
-const isReasoningStageCollapsed = (message: Message, stageIndex: number): boolean => {
-  const stage = message.taskStages?.[stageIndex]
-  if (stage?.source !== 'reasoning') return false
-  if (stage.status === 'running' && message.isStreaming) return false
-  return collapsedReasoningStageKeys.value.has(getReasoningStageKey(message.id, stageIndex))
+const getThinkingSegment = (message: Message, thinkingSegmentId: string): ThinkingSegment | null => {
+  return message.thinkingSegments?.find(segment => segment.id === thinkingSegmentId) || null
 }
 
-const toggleReasoningStage = (message: Message, stageIndex: number) => {
-  const stage = message.taskStages?.[stageIndex]
-  if (stage?.source !== 'reasoning') return
-  const key = getReasoningStageKey(message.id, stageIndex)
-  const next = new Set(collapsedReasoningStageKeys.value)
+const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => {
+  if (message.isStreaming) return false
+  return collapsedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
+}
+
+const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
+  if (!getThinkingSegment(message, thinkingSegmentId)) return
+  const key = getThinkingSegmentKey(message.id, thinkingSegmentId)
+  const next = new Set(collapsedThinkingSegmentKeys.value)
   if (next.has(key)) {
     next.delete(key)
   } else {
     next.add(key)
   }
-  collapsedReasoningStageKeys.value = next
+  collapsedThinkingSegmentKeys.value = next
 }
 
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
@@ -1374,7 +1375,7 @@ watch(
       sidePanelOpen.value = false
       sidePanelTab.value = 'console'
       activeAssistantMessageId.value = null
-      collapsedReasoningStageKeys.value = new Set()
+      collapsedThinkingSegmentKeys.value = new Set()
       resetTokenUsagePanel()
       resetHistory()
       focusInput()
@@ -1462,8 +1463,7 @@ const removeEmptyActiveAssistant = () => {
   if (!activeId) return
   const active = messages.value.find(item => item.id === activeId)
   const hasSegments = Boolean(active?.segments?.length)
-  const hasTaskStages = Boolean(active?.taskStages?.length)
-  if (active && active.role === 'assistant' && !active.content && !active.error && !active.toolCalls?.length && !hasSegments && !hasTaskStages) {
+  if (active && active.role === 'assistant' && !active.content && !active.error && !active.toolCalls?.length && !hasSegments) {
     messages.value = messages.value.filter(item => item.id !== activeId)
   }
 }
@@ -1520,26 +1520,9 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
   }
 }
 
-const completeRunningReasoningStages = (message?: Message) => {
-  const targetMessages = message ? [message] : messages.value
-  for (const item of targetMessages) {
-    if (item.role !== 'assistant' || !item.taskStages?.length) continue
-    let changed = false
-    const nextStages = item.taskStages.map((stage) => {
-      if (stage.source === 'reasoning' && stage.status === 'running') {
-        changed = true
-        return { ...stage, status: 'completed' as const }
-      }
-      return stage
-    })
-    if (changed) item.taskStages = nextStages
-  }
-}
-
 const appendAssistantContent = (content: string) => {
   if (!content) return
   const assistant = ensureAssistantMessage()
-  completeRunningReasoningStages(assistant)
   assistant.content += content
   const segments = assistant.segments || []
   const last = segments[segments.length - 1]
@@ -1552,7 +1535,6 @@ const appendAssistantContent = (content: string) => {
 }
 
 const finishStreamingMessages = () => {
-  completeRunningReasoningStages()
   for (const item of messages.value) {
     if (item.role === 'assistant') item.isStreaming = false
   }
@@ -1560,41 +1542,38 @@ const finishStreamingMessages = () => {
 
 const setActiveAssistantError = (error: string) => {
   const assistant = ensureAssistantMessage()
-  completeRunningReasoningStages(assistant)
   assistant.error = error
   assistant.isStreaming = false
 }
 
-const appendReasoningStage = (content: string) => {
+const appendThinkingSegment = (content: string) => {
   if (!content) return
   const assistant = ensureAssistantMessage()
-  const stages = [...(assistant.taskStages || [])]
+  const thinkingSegments = [...(assistant.thinkingSegments || [])]
   const segments = [...(assistant.segments || [])]
   const lastSegment = segments[segments.length - 1]
-  if (lastSegment?.type === 'taskStage') {
-    const existing = stages[lastSegment.stageIndex]
-    if (existing?.stage === 'thinking' && existing.source === 'reasoning' && existing.status === 'running') {
-      stages[lastSegment.stageIndex] = {
-        ...existing,
-        content: `${existing.content || ''}${content}`,
+  if (lastSegment?.type === 'thinkingSegment') {
+    const segmentIndex = thinkingSegments.findIndex(item => item.id === lastSegment.thinkingSegmentId)
+    if (segmentIndex >= 0) {
+      thinkingSegments[segmentIndex] = {
+        ...thinkingSegments[segmentIndex]!,
+        content: `${thinkingSegments[segmentIndex]!.content}${content}`,
       }
-      assistant.taskStages = stages
+      assistant.thinkingSegments = thinkingSegments
       assistant.segments = segments
       activeAssistantMessageId.value = assistant.id
       return
     }
   }
 
-  const stageIndex = stages.length
-  stages.push({
-    stage: 'thinking',
-    status: 'running',
-    title: '思考',
+  const thinkingSegment: ThinkingSegment = {
+    id: `thinking-${Date.now()}-${thinkingSegments.length}`,
     content,
-    source: 'reasoning',
-  })
-  segments.push({ type: 'taskStage', stageIndex })
-  assistant.taskStages = stages
+    toolCallCount: (assistant.toolCalls || []).length,
+  }
+  thinkingSegments.push(thinkingSegment)
+  segments.push({ type: 'thinkingSegment', thinkingSegmentId: thinkingSegment.id })
+  assistant.thinkingSegments = thinkingSegments
   assistant.segments = segments
   activeAssistantMessageId.value = assistant.id
 }
@@ -1607,13 +1586,12 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
         ? msg.additional_kwargs.reasoning_content
         : ''
     if (reasoningContent) {
-      appendReasoningStage(reasoningContent)
+      appendThinkingSegment(reasoningContent)
     }
     return
   }
 
   if (msg.tool_calls?.length) {
-    completeRunningReasoningStages(ensureAssistantMessage())
     for (const tc of msg.tool_calls) {
       if (!tc.id || !tc.name) continue
       const existing = toolCallsMap.value.get(tc.id)
@@ -1629,7 +1607,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
   }
 
   if (msg.type === 'tool' && msg.tool_call_id) {
-    completeRunningReasoningStages(ensureAssistantMessage())
     const existing = toolCallsMap.value.get(msg.tool_call_id)
     const result = msg.content || ''
     const toolInfo: ToolCallInfo = {
@@ -1644,83 +1621,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
   }
 
   appendAssistantContent(msg.content || '')
-}
-
-const getTaskStageLabel = (stage: TaskStageInfo['stage']): string => {
-  const labels: Record<TaskStageInfo['stage'], string> = {
-    thinking: '思考',
-    plan: '规划',
-    execute: '执行',
-    done: '完成',
-  }
-  return labels[stage]
-}
-
-const getTaskStageIcon = (stage: TaskStageInfo['stage']): string => {
-  const icons: Record<TaskStageInfo['stage'], string> = {
-    thinking: 'fa-regular fa-lightbulb',
-    plan: 'fa-regular fa-list-check',
-    execute: 'fa-solid fa-terminal',
-    done: 'fa-regular fa-circle-check',
-  }
-  return icons[stage]
-}
-
-const getTaskStageByIndex = (message: Message, index: number): TaskStageInfo | null => {
-  return message.taskStages?.[index] || null
-}
-
-const getTaskStageDisplayStatus = (message: Message, index: number): TaskStageInfo['status'] => {
-  const stage = getTaskStageByIndex(message, index)
-  if (!stage) return 'completed'
-  if (stage.source === 'reasoning' && stage.status === 'running' && !message.isStreaming) {
-    return 'completed'
-  }
-  return stage.status
-}
-
-const shouldShowTaskStageLine = (message: Message, segmentIndex: number): boolean => {
-  const segments = message.segments || []
-  const segment = segments[segmentIndex]
-  if (!segment || segment.type !== 'taskStage') return false
-  const stage = getTaskStageByIndex(message, segment.stageIndex)
-  if (!stage) return false
-  const hasBody = Boolean(stage.content || stage.steps?.length)
-  const nextSegment = segments[segmentIndex + 1]
-  if (stage.stage === 'execute' && !hasBody && (nextSegment?.type === 'text' || nextSegment?.type === 'toolCall')) {
-    return false
-  }
-  return segments.slice(segmentIndex + 1).some((item) => {
-    if (item.type === 'text') return Boolean(item.content)
-    if (item.type === 'toolCall') return Boolean(getMessageToolCall(message, item.toolCallId))
-    if (item.type === 'taskStage') return Boolean(getTaskStageByIndex(message, item.stageIndex))
-    return false
-  })
-}
-
-const isExecutionDetailSegment = (message: Message, segmentIndex: number): boolean => {
-  const segments = message.segments || []
-  for (let index = segmentIndex - 1; index >= 0; index -= 1) {
-    const segment = segments[index]
-    if (!segment || segment.type !== 'taskStage') continue
-    const stage = getTaskStageByIndex(message, segment.stageIndex)
-    return stage?.stage === 'execute'
-  }
-  return false
-}
-
-const isFirstExecutionDetailSegment = (message: Message, segmentIndex: number): boolean => {
-  if (!isExecutionDetailSegment(message, segmentIndex)) return false
-  const segments = message.segments || []
-  for (let index = segmentIndex - 1; index >= 0; index -= 1) {
-    const segment = segments[index]
-    if (!segment) continue
-    if (segment.type === 'text' || segment.type === 'toolCall') return false
-    if (segment.type !== 'taskStage') continue
-    const stage = getTaskStageByIndex(message, segment.stageIndex)
-    return stage?.stage === 'execute'
-  }
-  return false
 }
 
 const getExistingAssistantMessage = (messageId?: string) => {
@@ -1754,8 +1654,8 @@ const submitAnalysisQuery = async (
     assistantMessage.content = ''
     assistantMessage.error = undefined
     assistantMessage.toolCalls = []
+    assistantMessage.thinkingSegments = []
     assistantMessage.segments = []
-    assistantMessage.taskStages = []
     assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
     assistantMessage.isStreaming = true
   } else {
@@ -1998,19 +1898,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
                     <div
                       v-if="segment.type === 'text' && segment.content"
-                      :class="[
-                        'analysis-markdown min-w-0 text-sm leading-relaxed text-slate-800 relative',
-                        isExecutionDetailSegment(msg, index) && 'ml-9 execution-detail-line',
-                        isFirstExecutionDetailSegment(msg, index) && '-mt-3'
-                      ]"
+                      class="analysis-markdown min-w-0 text-sm leading-relaxed text-slate-800"
                       v-html="renderMarkdown(segment.content)"
                     ></div>
                     <div
                       v-else-if="segment.type === 'toolCall' && getMessageToolCall(msg, segment.toolCallId)"
-                      :class="[
-                        isExecutionDetailSegment(msg, index) && 'relative ml-9 execution-detail-line',
-                        isFirstExecutionDetailSegment(msg, index) && '-mt-3'
-                      ]"
                     >
                       <ToolCallList
                         :tool-calls="[getRenderableMessageToolCall(msg, segment.toolCallId)!]"
@@ -2029,76 +1921,28 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       />
                     </div>
                     <div
-                      v-else-if="segment.type === 'taskStage' && getTaskStageByIndex(msg, segment.stageIndex)"
-                      class="flex relative"
+                      v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(msg, segment.thinkingSegmentId)"
+                      class="overflow-hidden rounded-lg border border-slate-100 bg-slate-50"
                     >
-                      <div class="mr-3 flex flex-col items-center">
-                        <div
-                          :class="[
-                            'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px]',
-                            getTaskStageDisplayStatus(msg, segment.stageIndex) === 'error'
-                              ? 'bg-red-50 text-red-500'
-                              : getTaskStageDisplayStatus(msg, segment.stageIndex) === 'running'
-                                ? 'bg-blue-50 text-blue-500'
-                                : 'bg-emerald-50 text-emerald-600'
-                          ]"
-                        >
-                          <i v-if="getTaskStageDisplayStatus(msg, segment.stageIndex) === 'running'" class="fa-solid fa-spinner fa-spin"></i>
-                          <i v-else-if="getTaskStageDisplayStatus(msg, segment.stageIndex) === 'error'" class="fa-solid fa-xmark"></i>
-                          <i v-else class="fa-solid fa-check"></i>
-                        </div>
-                        <div
-                          v-if="shouldShowTaskStageLine(msg, index)"
-                          class="mt-2 min-h-5 flex-1"
-                          style="width: 1px; background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);"
-                        ></div>
-                      </div>
-                      <div
-                        :class="[
-                          'min-w-0 flex-1',
-                          (getTaskStageByIndex(msg, segment.stageIndex)!.content || getTaskStageByIndex(msg, segment.stageIndex)!.steps?.length) ? 'pb-4' : 'pb-1'
-                        ]"
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"
+                        @click="toggleThinkingSegment(msg, segment.thinkingSegmentId)"
                       >
-                        <button
-                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.source === 'reasoning'"
-                          type="button"
-                          class="flex w-full items-center gap-2 border-none bg-transparent p-0 text-left text-sm font-medium text-slate-800 cursor-pointer"
-                          @click="toggleReasoningStage(msg, segment.stageIndex)"
-                        >
-                          <i
-                            :class="[
-                              'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
-                              !isReasoningStageCollapsed(msg, segment.stageIndex) && 'rotate-90'
-                            ]"
-                          ></i>
-                          <i class="text-xs text-slate-500" :class="getTaskStageIcon(getTaskStageByIndex(msg, segment.stageIndex)!.stage)"></i>
-                          <span>{{ getTaskStageByIndex(msg, segment.stageIndex)!.title || getTaskStageLabel(getTaskStageByIndex(msg, segment.stageIndex)!.stage) }}</span>
-                          <span class="ml-auto text-[11px] font-normal text-slate-400">
-                            {{ isReasoningStageCollapsed(msg, segment.stageIndex) ? '展开' : '收起' }}
-                          </span>
-                        </button>
-                        <div v-else class="flex items-center gap-2 text-sm font-medium text-slate-800">
-                          <i class="text-xs text-slate-500" :class="getTaskStageIcon(getTaskStageByIndex(msg, segment.stageIndex)!.stage)"></i>
-                          <span>{{ getTaskStageByIndex(msg, segment.stageIndex)!.title || getTaskStageLabel(getTaskStageByIndex(msg, segment.stageIndex)!.stage) }}</span>
-                          <span
-                            v-if="getTaskStageByIndex(msg, segment.stageIndex)!.status === 'error'"
-                            class="ml-auto inline-flex items-center gap-1 text-[11px] text-red-500"
-                          >
-                            失败
-                          </span>
-                        </div>
-                        <div
-                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.content && !isReasoningStageCollapsed(msg, segment.stageIndex)"
-                          class="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-500"
-                        >
-                          {{ getTaskStageByIndex(msg, segment.stageIndex)!.content }}
-                        </div>
-                        <ol
-                          v-if="getTaskStageByIndex(msg, segment.stageIndex)!.steps?.length && !isReasoningStageCollapsed(msg, segment.stageIndex)"
-                          class="mt-1.5 list-decimal space-y-0.5 pl-4 text-sm leading-relaxed text-slate-500"
-                        >
-                          <li v-for="step in getTaskStageByIndex(msg, segment.stageIndex)!.steps" :key="step">{{ step }}</li>
-                        </ol>
+                        <i class="fa-solid fa-brain text-xs text-slate-500"></i>
+                        <span>思考</span>
+                        <i
+                          :class="[
+                            'ml-auto fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
+                            !isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId) && 'rotate-90'
+                          ]"
+                        ></i>
+                      </button>
+                      <div
+                        v-if="!isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId)"
+                        class="border-t border-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-500 whitespace-pre-wrap"
+                      >
+                        {{ getThinkingSegment(msg, segment.thinkingSegmentId)!.content }}
                       </div>
                     </div>
                   </template>

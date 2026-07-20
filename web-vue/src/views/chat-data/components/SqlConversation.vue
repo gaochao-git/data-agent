@@ -3,10 +3,10 @@
  * SQL 对话组件
  * 支持结构化消息和工具调用展示
  */
-import { ref, computed, watch, nextTick, toRef, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, toRef, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import type { ChatDataModelOption, ChatDataTokenUsage, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigItem, SemanticDimension, SemanticMetric } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigItem, SemanticDimension, SemanticMetric, ThinkingSegment } from '../types'
 import { createDashboardFromSpec, getChatDataConfig } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
@@ -14,18 +14,18 @@ import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
 import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs, getRenderableQueryResultData, parseQueryResultEnvelope } from '../utils/semanticTool'
-import StructuredMessage from './StructuredMessage.vue'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import AnalysisPanel from './AnalysisPanel.vue'
+import ToolCallList from './ToolCallList.vue'
+import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
+import ConversationSidePanel from './ConversationSidePanel.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import SkillManager from './SkillManager.vue'
 import AssistantMessageFooter from './AssistantMessageFooter.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
-import type { AnalysisData } from './AnalysisPanel.vue'
 import { formatDateTimeValue, parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
 
 interface ConversationItem {
@@ -60,8 +60,6 @@ interface Props {
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   semanticConfigs?: SemanticConfigItem[]
-  // 是否显示分析面板（由外层切换控制）
-  showAnalysisPanel?: boolean
   executionTargets?: ExecutionTargetOption[]
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
@@ -80,7 +78,6 @@ const props = withDefaults(defineProps<Props>(), {
   semanticConfigId: null,
   semanticConfigSelection: null,
   semanticConfigs: () => [],
-  showAnalysisPanel: true,
   executionTargetMultiple: true,
   hideExecutionTargetSelector: false,
   selectedModelId: '',
@@ -120,111 +117,12 @@ const emit = defineEmits<{
   firstMessageComplete: [conversationId: string]
   datasourceChange: [datasourceId: string]
   selectConversation: [conversationId: string]
-  analysisPanelChange: [open: boolean]
   agentChange: [agentId: 'chat_data' | 'chat_data_data_analyze']
-  switchToConversation: []
-  switchToAnalysis: []
   dashboardCreated: [dashboard: Dashboard]
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
 }>()
-
-// ===== 分析面板状态（内部管理） =====
-const isAnalysisPanelOpen = ref(false)
-const analysisPanelData = ref<AnalysisData | null>(null)
-const currentAnalysisRoundId = ref<string | null>(null)
-const analysisStreaming = ref(false)
-const analysisPanelWidth = ref(40) // 百分比
-const isDraggingDivider = ref(false)
-const containerRef = ref<HTMLElement | null>(null)
-const isAnalysisVisible = computed(() => isAnalysisPanelOpen.value && props.showAnalysisPanel)
-const loadingParticles = Array.from({ length: 30 }, (_, index) => ({
-  id: index,
-  top: Math.random() * 112,
-  duration: 2.6 + Math.random() * 2.2,
-  delay: Math.random() * 2,
-  drift: Math.random() * 112
-}))
-
-const hasAnalysisDataContent = (data: AnalysisData | null): boolean => {
-  return Boolean(data?.thinkingSegments?.length || data?.toolCalls.length || data?.semanticConfigSelection)
-}
-
-// 打开分析面板
-const handleOpenAnalysisPanel = (data: AnalysisData) => {
-  if (isAnalysisPanelOpen.value && analysisPanelData.value?.roundId === data.roundId) {
-    // 点击同一个，关闭面板（非流式时才允许 toggle）
-    if (!analysisStreaming.value) {
-      isAnalysisPanelOpen.value = false
-      analysisPanelData.value = null
-      currentAnalysisRoundId.value = null
-      emit('analysisPanelChange', false)
-      return
-    }
-  }
-  analysisPanelData.value = data
-  currentAnalysisRoundId.value = data.roundId
-  isAnalysisPanelOpen.value = true
-  emit('analysisPanelChange', true)
-  // 如果数据为空（流式开始），标记为流式中
-  if (!hasAnalysisDataContent(data)) {
-    analysisStreaming.value = true
-  }
-}
-
-const handleUpdateAnalysisPanel = (data: AnalysisData, streaming = true) => {
-  analysisPanelData.value = data
-  currentAnalysisRoundId.value = data.roundId
-  analysisStreaming.value = streaming
-}
-
-// 流式结束标记
-const handleAnalysisStreamEnd = () => {
-  analysisStreaming.value = false
-}
-
-// 关闭分析面板
-const handleCloseAnalysisPanel = () => {
-  isAnalysisPanelOpen.value = false
-  analysisPanelData.value = null
-  currentAnalysisRoundId.value = null
-  analysisStreaming.value = false
-  emit('analysisPanelChange', false)
-}
-
-// 分析面板拖拽分隔条
-const startDraggingDivider = (e: MouseEvent) => {
-  e.preventDefault()
-  isDraggingDivider.value = true
-  document.body.classList.add('is-resizing')
-  document.addEventListener('mousemove', handleDividerDrag)
-  document.addEventListener('mouseup', stopDraggingDivider)
-}
-
-const handleDividerDrag = (e: MouseEvent) => {
-  if (!isDraggingDivider.value || !containerRef.value) return
-  const containerRect = containerRef.value.getBoundingClientRect()
-  const containerWidth = containerRect.width
-  const mouseX = e.clientX - containerRect.left
-  const mainWidthPercent = (mouseX / containerWidth) * 100
-  let panelWidth = 100 - mainWidthPercent
-  panelWidth = Math.max(20, Math.min(60, panelWidth))
-  analysisPanelWidth.value = panelWidth
-}
-
-const stopDraggingDivider = () => {
-  isDraggingDivider.value = false
-  document.body.classList.remove('is-resizing')
-  document.removeEventListener('mousemove', handleDividerDrag)
-  document.removeEventListener('mouseup', stopDraggingDivider)
-}
-
-onUnmounted(() => {
-  document.body.classList.remove('is-resizing')
-  document.removeEventListener('mousemove', handleDividerDrag)
-  document.removeEventListener('mouseup', stopDraggingDivider)
-})
 
 const HIDDEN_TOOLS = ['load_skill_tool']
 
@@ -265,6 +163,29 @@ const { enableDeepThinking } = useDeepThinking()
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
+const activeToolCallId = ref<string | null>(null)
+const sidePanelOpen = ref(false)
+const collapsedThinkingSegmentIds = ref<Set<string>>(new Set())
+
+const findToolCallById = (toolCallId: string | null): ToolCallInfo | null => {
+  if (!toolCallId) return null
+  const cached = toolCallsMap.value.get(toolCallId)
+  if (cached) return cached
+  for (const message of messages.value) {
+    const toolCall = message.toolCalls?.find(item => item.tool_call_id === toolCallId)
+    if (toolCall) return toolCall
+  }
+  return null
+}
+
+const activeToolCall = computed(() => findToolCallById(activeToolCallId.value))
+const selectToolCall = (toolCall: ToolCallInfo) => {
+  activeToolCallId.value = toolCall.tool_call_id
+  sidePanelOpen.value = true
+}
+const closeToolDetailPanel = () => {
+  sidePanelOpen.value = false
+}
 
 // 保存到看板弹窗
 const showSaveModal = ref(false)
@@ -364,6 +285,8 @@ watch(
       if (newId === null) {
         messages.value = []
         toolCallsMap.value.clear()
+        activeToolCallId.value = null
+        sidePanelOpen.value = false
         resetHistory()
       }
     }
@@ -670,22 +593,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
       if (msgIndex >= 0) {
         const m = messages.value[msgIndex]
         if (m) {
-          const toolCallCount = getVisibleToolCalls(m.toolCalls).length
-          const thinkingSegments = [...(m.thinkingSegments || [])]
-          const lastSegment = thinkingSegments[thinkingSegments.length - 1]
           const normalizedReasoningContent = String(reasoningContent || '')
-          if (!normalizedReasoningContent.trim()) return
-          if (lastSegment && lastSegment.toolCallCount === toolCallCount) {
-            lastSegment.content += normalizedReasoningContent
-          } else {
-            thinkingSegments.push({
-              id: `thinking-${Date.now()}-${thinkingSegments.length}`,
-              content: normalizedReasoningContent,
-              toolCallCount,
-            })
-          }
-          m.thinkingSegments = thinkingSegments
-          syncAnalysisPanelFromMessage(m, true)
+          appendThinkingSegment(m, normalizedReasoningContent)
         }
       }
     }
@@ -731,7 +640,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
                 m.toolCalls = [...existingToolCalls, toolCallInfo]
                 appendMessageSegment(m, { type: 'toolCall', toolCallId: tc.id })
               }
-              syncAnalysisPanelFromMessage(m, true)
             }
           }
         }
@@ -800,7 +708,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
             m.toolCalls = m.toolCalls.map((t) =>
               t.tool_call_id === msg.tool_call_id ? updatedToolInfo : t
             )
-            syncAnalysisPanelFromMessage(m, false)
           }
         }
       }
@@ -820,11 +727,6 @@ const handleLangGraphMessage = (msg: LangGraphMessage, messageId: string) => {
     }
   }
 
-  // 实时更新分析面板（仅当有思考内容或工具调用时才打开/更新）
-  const currentMsg = messages.value.find(m => m.id === messageId)
-  if (currentMsg?.isStreaming) {
-    syncAnalysisPanelFromMessage(currentMsg, true)
-  }
 }
 
 const handleDashboardSpec = (payload: DashboardSpecPayload, messageId: string) => {
@@ -973,6 +875,8 @@ const submitQuery = async (
       msg.error = undefined
       msg.isStreaming = true
       msg.toolCalls = []
+      msg.thinkingSegments = []
+      msg.segments = []
       msg.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
       msg.skill = effectiveSkill || undefined
     }
@@ -983,14 +887,9 @@ const submitQuery = async (
   resetSemanticQuestionDraft()
   isGenerating.value = true
   toolCallsMap.value.clear()
+  activeToolCallId.value = null
+  sidePanelOpen.value = false
   closeTokenUsagePanel()
-
-  // 新一轮开始，关闭上一轮的分析面板
-  handleCloseAnalysisPanel()
-  const currentAssistantMessage = messages.value.find((m) => m.id === assistantMessageId && m.role === 'assistant')
-  if (currentAssistantMessage?.semanticConfigSelection) {
-    syncAnalysisPanelFromMessage(currentAssistantMessage, true)
-  }
 
   // 确保有会话 ID（懒创建模式）
   let convId = props.conversationId
@@ -1036,9 +935,6 @@ const submitQuery = async (
         if (msgIndex >= 0 && messages.value[msgIndex]) {
           const msg = messages.value[msgIndex]!
           finishAssistantMessage(msg)
-          // 发送最终的分析数据并标记流式结束
-          syncAnalysisPanelFromMessage(msg, false)
-          handleAnalysisStreamEnd()
         }
         emit('firstMessageComplete', convId)
       },
@@ -1052,7 +948,6 @@ const submitQuery = async (
           msg.error = error
           finishAssistantMessage(msg)
         }
-        handleAnalysisStreamEnd()
       },
       // onRunningTool
       (toolInfo) => {
@@ -1101,7 +996,6 @@ const submitQuery = async (
       msg.error = '生成失败，请重试'
       finishAssistantMessage(msg)
     }
-    handleAnalysisStreamEnd()
   } finally {
     isGenerating.value = false
   }
@@ -1123,7 +1017,6 @@ const handleStop = () => {
   }
   isGenerating.value = false
   resetSemanticQuestionDraft()
-  handleAnalysisStreamEnd()
 }
 
 // 键盘事件
@@ -1209,7 +1102,31 @@ const appendMessageSegment = (message: Message, segment: MessageSegment) => {
   if (segment.type === 'toolCall') {
     if (segments.some(item => item.type === 'toolCall' && item.toolCallId === segment.toolCallId)) return
   }
+  if (segment.type === 'thinkingSegment') {
+    if (segments.some(item => item.type === 'thinkingSegment' && item.thinkingSegmentId === segment.thinkingSegmentId)) return
+  }
   message.segments = [...segments, segment]
+}
+
+const appendThinkingSegment = (message: Message, content: string) => {
+  const normalizedContent = String(content || '')
+  if (!normalizedContent.trim()) return
+  const toolCallCount = getVisibleToolCalls(message.toolCalls).length
+  const thinkingSegments = [...(message.thinkingSegments || [])]
+  const lastSegment = thinkingSegments[thinkingSegments.length - 1]
+  if (lastSegment && lastSegment.toolCallCount === toolCallCount) {
+    lastSegment.content += normalizedContent
+    message.thinkingSegments = thinkingSegments
+    appendMessageSegment(message, { type: 'thinkingSegment', thinkingSegmentId: lastSegment.id })
+    return
+  }
+  const thinkingSegment: ThinkingSegment = {
+    id: `thinking-${Date.now()}-${thinkingSegments.length}`,
+    content: normalizedContent,
+    toolCallCount,
+  }
+  message.thinkingSegments = [...thinkingSegments, thinkingSegment]
+  appendMessageSegment(message, { type: 'thinkingSegment', thinkingSegmentId: thinkingSegment.id })
 }
 
 const appendTextSegment = (message: Message, content: string) => {
@@ -1233,29 +1150,6 @@ const getConversationDisplayContent = (content: string): string => {
   return stripTechnicalContent(content)
 }
 
-const buildAnalysisDataFromMessage = (msg: Message): AnalysisData => {
-  return {
-    roundId: msg.id,
-    thinkingSegments: msg.thinkingSegments || [],
-    toolCalls: getVisibleToolCalls(msg.toolCalls),
-    semanticConfigSelection: msg.semanticConfigSelection || null,
-    textContent: ''
-  }
-}
-
-const syncAnalysisPanelFromMessage = (msg: Message, autoOpen: boolean) => {
-  const data = buildAnalysisDataFromMessage(msg)
-  if (!hasAnalysisDataContent(data)) return
-  if (autoOpen && (!isAnalysisPanelOpen.value || currentAnalysisRoundId.value !== msg.id)) {
-    handleOpenAnalysisPanel(data)
-    analysisStreaming.value = Boolean(msg.isStreaming)
-    return
-  }
-  if (isAnalysisPanelOpen.value && currentAnalysisRoundId.value === msg.id) {
-    handleUpdateAnalysisPanel(data, Boolean(msg.isStreaming))
-  }
-}
-
 const stripTechnicalContent = (content: string): string => {
   const cleaned = hideSemanticConfigSelectionPayloads(String(content || '').trim())
   if (parseQueryResultEnvelope(cleaned)) return ''
@@ -1272,137 +1166,37 @@ const hasVisibleAssistantContent = (content: string): boolean => {
 
 // 首 token 前已有气泡占位时，底部状态行不重复显示。
 const shouldShowStreamingStatus = (message: Message): boolean => {
-  return hasVisibleAssistantContent(message.content) || getVisibleToolCalls(message.toolCalls).length > 0 || Boolean(message.semanticConfigSelection)
+  return hasVisibleAssistantContent(message.content)
+    || Boolean(message.thinkingSegments?.length)
+    || getVisibleToolCalls(message.toolCalls).length > 0
+    || Boolean(message.semanticConfigSelection)
 }
-
-// 检查是否有已完成的查询结果
-const hasCompletedQueryResult = (toolCalls?: ToolCallInfo[]): boolean => {
-  if (!toolCalls) return false
-  return toolCalls.some(
-    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
-  )
-}
-
-// 获取已完成的查询结果工具调用
-const getCompletedQueryResults = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
-  if (!toolCalls) return []
-  return toolCalls.filter(
-    (tc) => tc.tool_name === 'semantic_query_tool' && tc.status === 'completed' && tc.renderId
-  )
-}
-
-type OrderedMessageSegment =
-  | { type: 'text'; content: string }
-  | { type: 'queryResult'; toolCall: ToolCallInfo }
-  | { type: 'chart'; toolCall: ToolCallInfo }
 
 const getToolCallById = (msg: Message, toolCallId: string): ToolCallInfo | null => {
   return msg.toolCalls?.find(tc => tc.tool_call_id === toolCallId) || null
 }
 
-const isRenderableToolCall = (toolCall: ToolCallInfo | null | undefined): toolCall is ToolCallInfo => {
-  return Boolean(
-    toolCall?.renderId
-    && (toolCall.renderType === 'queryResult' || toolCall.renderType === 'chart')
-  )
+const getRenderableQueryResultToolCall = (msg: Message, toolCallId: string): ToolCallInfo | null => {
+  const toolCall = getToolCallById(msg, toolCallId)
+  return toolCall?.renderType === 'queryResult' && toolCall.renderId ? toolCall : null
 }
 
-const toOrderedToolSegment = (toolCall: ToolCallInfo): OrderedMessageSegment => {
-  return toolCall.renderType === 'chart'
-    ? { type: 'chart', toolCall }
-    : { type: 'queryResult', toolCall }
+const getThinkingSegment = (message: Message, thinkingSegmentId: string): ThinkingSegment | null => {
+  return message.thinkingSegments?.find(segment => segment.id === thinkingSegmentId) || null
 }
 
-const getOrderedMessageSegments = (msg: Message): OrderedMessageSegment[] => {
-  const segments = msg.segments || []
-  const orderedSegments: OrderedMessageSegment[] = []
-  for (const segment of segments) {
-    if (segment.type === 'text') {
-      const content = getConversationDisplayContent(segment.content)
-      if (content) {
-        orderedSegments.push({ type: 'text', content })
-      }
-      continue
-    }
-    if (segment.type === 'toolCall') {
-      const toolCall = getToolCallById(msg, segment.toolCallId)
-      if (isRenderableToolCall(toolCall)) {
-        orderedSegments.push(toOrderedToolSegment(toolCall))
-      }
-    }
-  }
-  if (orderedSegments.length > 0) return orderedSegments
-  const fallbackSegments: OrderedMessageSegment[] = []
-  const summaryText = getSummaryText(msg.content)
-  if (summaryText) {
-    fallbackSegments.push({ type: 'text', content: summaryText })
-  }
-  for (const toolCall of getVisibleToolCalls(msg.toolCalls)) {
-    if (isRenderableToolCall(toolCall)) {
-      fallbackSegments.push(toOrderedToolSegment(toolCall))
-    }
-  }
-  return fallbackSegments
+const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => {
+  if (message.isStreaming) return false
+  return collapsedThinkingSegmentIds.value.has(`${message.id}:${thinkingSegmentId}`)
 }
 
-// 判断消息是否应该显示简洁模式（隐藏思考和工具调用，只显示结果）
-const shouldShowCompactMode = (msg: Message): boolean => {
-  // 查询结果一旦产出，立即进入简洁模式（支持总结流式更新）
-  if (hasCompletedQueryResult(msg.toolCalls)) return true
-  // 纯流式文本阶段不使用简洁模式
-  if (msg.isStreaming) return false
-  // 有工具调用时使用简洁模式（无论成功或失败，工具过程都在分析面板展示）
-  if (getVisibleToolCalls(msg.toolCalls).length > 0) return true
-  return false
-}
-
-// 提取文字总结（移除技术标签内容）
-const getSummaryText = (content: string): string => {
-  if (!content) return ''
-  let text = getConversationDisplayContent(content)
-  if (parseQueryResultEnvelope(text)) return ''
-  // 移除所有技术标签和内容
-  text = text.replace(/<chart_config>[\s\S]*?<\/chart_config>/g, '')
-  // text = text.replace(/查询结果已生成[。.]?/g, '') // 已改为输出简要说明
-  return text.trim()
-}
-
-const renderSummaryMarkdown = (content: string) => {
-  return md.render(hideSemanticConfigSelectionPayloads(content))
-}
-
-// 创建分析数据
-const createAnalysisData = (msg: Message): AnalysisData | null => {
-  const data = buildAnalysisDataFromMessage(msg)
-  if (!hasAnalysisDataContent(data)) return null
-  if (!hasCompletedQueryResult(msg.toolCalls) && !data.semanticConfigSelection && !data.thinkingSegments?.length && data.toolCalls.length === 0) return null
-  return data
-}
-
-// 获取流式阶段文案
-const getStreamingStageText = (msg: Message): string => {
-  const toolCalls = getVisibleToolCalls(msg.toolCalls)
-  if (msg.semanticConfigSelection && toolCalls.length === 0) {
-    return '已选择指标集，正在生成查询...'
-  }
-  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool' && tc.status === 'running')) {
-    return '正在查询数据...'
-  }
-  if (toolCalls.some(tc => tc.tool_name === 'semantic_query_tool')) {
-    return '正在执行查询...'
-  }
-  if (toolCalls.length > 0) {
-    return '正在生成查询...'
-  }
-  return '正在理解您的问题...'
-}
-
-const shouldShowStreamingProgress = (msg: Message): boolean => {
-  return Boolean(
-    msg.thinkingSegments?.length
-    || getVisibleToolCalls(msg.toolCalls).length > 0
-    || msg.semanticConfigSelection
-  )
+const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
+  if (!getThinkingSegment(message, thinkingSegmentId)) return
+  const key = `${message.id}:${thinkingSegmentId}`
+  const next = new Set(collapsedThinkingSegmentIds.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedThinkingSegmentIds.value = next
 }
 
 const finishAssistantMessage = (msg: Message) => {
@@ -1418,18 +1212,14 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
   }
 }
 
-const shouldShowMessageAnalysisButton = (msg: Message): boolean => {
-  return Boolean(createAnalysisData(msg))
-}
-
 const getCopyableAssistantContent = (msg: Message): string => {
-  const orderedText = getOrderedMessageSegments(msg)
-    .filter((segment): segment is { type: 'text'; content: string } => segment.type === 'text')
+  const orderedText = (msg.segments || [])
+    .filter((segment): segment is Extract<MessageSegment, { type: 'text' }> => segment.type === 'text')
     .map(segment => getConversationDisplayContent(segment.content))
     .filter(Boolean)
     .join('\n\n')
     .trim()
-  return orderedText || getSummaryText(msg.content)
+  return orderedText || getConversationDisplayContent(msg.content)
 }
 
 const shouldShowMessageCopyButton = (msg: Message): boolean => {
@@ -1451,13 +1241,6 @@ const handleCopyAssistantMessage = async (msg: Message) => {
   }
 }
 
-// 打开分析面板
-const handleViewAnalysis = (msg: Message) => {
-  const analysisData = createAnalysisData(msg)
-  if (analysisData) {
-    handleOpenAnalysisPanel(analysisData)
-  }
-}
 </script>
 
 <template>
@@ -1522,12 +1305,9 @@ const handleViewAnalysis = (msg: Message) => {
       </div>
     </div>
 
-    <!-- 右侧：对话区域 + 分析面板 -->
-    <div ref="containerRef" class="flex-1 flex min-w-0 overflow-hidden">
-      <div
-        class="flex flex-col min-w-0 overflow-hidden bg-gray-50"
-        :style="{ flex: isAnalysisVisible ? '1 1 0' : '1 1 auto' }"
-      >
+    <!-- 右侧：对话主区域和按需打开的工具详情 -->
+    <div class="flex-1 flex min-w-0 overflow-hidden">
+      <div class="flex flex-1 flex-col min-w-0 overflow-hidden bg-gray-50">
       <!-- 顶部工具栏 -->
       <div v-if="!hideHeader" class="flex items-center justify-between h-13 px-4 shrink-0">
       <div class="w-[200px]"></div>
@@ -1622,90 +1402,65 @@ const handleViewAnalysis = (msg: Message) => {
           <!-- AI 消息 -->
           <div v-else class="flex flex-col gap-3">
             <div class="max-w-full p-4 rounded-2xl rounded-bl-md bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-              <!-- 简洁模式：查询完成后只显示结果 -->
-              <template v-if="shouldShowCompactMode(msg)">
-                <div class="flex flex-col gap-4">
-                  <template
-                    v-for="(segment, segmentIndex) in getOrderedMessageSegments(msg)"
-                    :key="`${segment.type}-${segmentIndex}-${segment.type !== 'text' ? segment.toolCall.tool_call_id : segmentIndex}`"
+              <div v-if="msg.segments?.length" class="flex min-w-0 flex-col gap-3">
+                <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
+                  <div
+                    v-if="segment.type === 'text' && getConversationDisplayContent(segment.content)"
+                    class="markdown-body min-w-0 text-sm leading-relaxed text-gray-700"
+                    v-html="md.render(getConversationDisplayContent(segment.content))"
+                  ></div>
+                  <div
+                    v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(msg, segment.thinkingSegmentId)"
+                    class="overflow-hidden rounded-lg border border-slate-100 bg-slate-50"
                   >
-                    <div
-                      v-if="segment.type === 'text'"
-                      class="text-sm text-gray-700 leading-relaxed markdown-body"
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"
+                      @click="toggleThinkingSegment(msg, segment.thinkingSegmentId)"
                     >
-                      <span v-html="renderSummaryMarkdown(segment.content)"></span>
-                    </div>
-                    <QueryResultPanel
-                      v-else-if="segment.type === 'queryResult'"
-                      class="max-h-[46vh]"
-                      :result-data="segment.toolCall.renderId!"
-                      :sql="extractGeneratedSqlFromToolCall(segment.toolCall)"
-                      :semantic-params="segment.toolCall.semanticParams"
-                      :on-save="handleSaveToDashboard"
-                    />
+                      <i class="fa-solid fa-brain text-xs text-slate-500"></i>
+                      <span>思考</span>
+                      <i
+                        :class="[
+                          'ml-auto fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
+                          !isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId) && 'rotate-90'
+                        ]"
+                      ></i>
+                    </button>
                     <div
-                      v-else
-                      class="flex items-center gap-2.5 rounded-xl border border-dashed border-black/10 bg-[linear-gradient(135deg,#fafbfc_0%,#f5f7fa_100%)] p-5 text-center text-[13px] text-gray-500"
+                      v-if="!isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId)"
+                      class="border-t border-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-500 whitespace-pre-wrap"
                     >
-                      <i class="fa-solid fa-chart-column text-lg bg-[linear-gradient(135deg,#1f82d9_0%,#135589_100%)] bg-clip-text text-transparent"></i>
-                      <span>图表配置已生成</span>
-                    </div>
-                  </template>
-                </div>
-                <span v-if="msg.isStreaming" class="mt-2 inline-block animate-pulse text-gray-400">▌</span>
-              </template>
-
-              <!-- 流式中：数据查询显示加载状态，普通问答直接流式输出 -->
-              <template v-else-if="msg.isStreaming">
-                <!-- 有思考/工具调用 → 数据查询，过程在侧边栏展示 -->
-                <div
-                  v-if="shouldShowStreamingProgress(msg)"
-                  class="px-1 py-1"
-                >
-                  <div class="px-2 py-1">
-                    <div class="particle-storm relative h-[88px] overflow-hidden">
-                      <div
-                        v-for="particle in loadingParticles"
-                        :key="particle.id"
-                        class="particle-storm__dot absolute h-1 w-1 rounded-full bg-[#1f82d9]"
-                        :style="{
-                          top: `${particle.top}px`,
-                          left: '-20px',
-                          animationDuration: `${particle.duration}s`,
-                          animationDelay: `${particle.delay}s`,
-                          '--particle-drift': `${particle.drift}px`,
-                        }"
-                      ></div>
+                      {{ getThinkingSegment(msg, segment.thinkingSegmentId)!.content }}
                     </div>
                   </div>
-                  <StructuredMessage
-                    v-if="getConversationDisplayContent(msg.content)"
-                    class="mt-3"
-                    :content="getConversationDisplayContent(msg.content)"
-                    :is-streaming="false"
-                  />
-                </div>
-                <StructuredMessage
-                  v-else-if="getConversationDisplayContent(msg.content)"
-                  :content="getConversationDisplayContent(msg.content)"
-                  :is-streaming="true"
-                />
-                <!-- 普通问答 → 直接流式显示文字 -->
-                <div v-else-if="!getConversationDisplayContent(msg.content)" class="flex items-center gap-2 text-gray-500 text-sm">
-                  <i class="fa-solid fa-spinner fa-spin"></i>
-                  <span>正在思考...</span>
-                </div>
-              </template>
+                  <div v-else-if="segment.type === 'toolCall' && getToolCallById(msg, segment.toolCallId)" class="min-w-0">
+                    <ToolCallList
+                      :tool-calls="[getToolCallById(msg, segment.toolCallId)!]"
+                      :datasource-id="selectedDatasource"
+                      :execution-targets="executionTargets"
+                      compact
+                      :active-tool-call-id="activeToolCallId"
+                      @select-tool="selectToolCall"
+                    />
+                    <QueryResultPanel
+                      v-if="getRenderableQueryResultToolCall(msg, segment.toolCallId)"
+                      class="mt-2 max-h-[46vh]"
+                      :result-data="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.renderId!"
+                      :sql="extractGeneratedSqlFromToolCall(getRenderableQueryResultToolCall(msg, segment.toolCallId)!)"
+                      :semantic-params="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.semanticParams"
+                      :on-save="handleSaveToDashboard"
+                    />
+                  </div>
+                </template>
+              </div>
+              <div v-else-if="getConversationDisplayContent(msg.content)" class="markdown-body min-w-0 text-sm leading-relaxed text-gray-700" v-html="md.render(getConversationDisplayContent(msg.content))"></div>
+              <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
+                <i class="fa-solid fa-spinner fa-spin"></i>
+                <span>正在思考...</span>
+              </div>
 
-              <!-- 非流式、无查询结果：显示内容（去除思考过程） -->
-              <template v-else>
-                <StructuredMessage
-                  v-if="getConversationDisplayContent(msg.content)"
-                  :content="getConversationDisplayContent(msg.content)"
-                  :is-streaming="false"
-                />
-
-                <div v-if="hasDashboardSpecContent(msg.dashboardSpec) && !msg.isStreaming" class="mt-3 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/90 to-white px-3.5 py-3 shadow-[0_8px_24px_rgba(22,119,255,0.08)]">
+              <div v-if="hasDashboardSpecContent(msg.dashboardSpec) && !msg.isStreaming" class="mt-3 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/90 to-white px-3.5 py-3 shadow-[0_8px_24px_rgba(22,119,255,0.08)]">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
                       <div class="flex items-center gap-2">
@@ -1736,15 +1491,6 @@ const handleViewAnalysis = (msg: Message) => {
                   </div>
                 </div>
 
-                <button
-                  v-if="getVisibleToolCalls(msg.toolCalls).length > 0 && !getConversationDisplayContent(msg.content)"
-                  class="mt-2 h-7 px-2.5 rounded-md border border-blue-100 bg-blue-50 text-xs text-blue-600 hover:bg-blue-100"
-                  @click="handleViewAnalysis(msg)"
-                >
-                  查看工具调用
-                </button>
-              </template>
-
               <!-- 错误消息 -->
               <div v-if="msg.error" class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-500/10 text-red-600 text-[13px] mt-2">
                 <i class="fa-solid fa-circle-exclamation"></i>
@@ -1752,10 +1498,7 @@ const handleViewAnalysis = (msg: Message) => {
               </div>
             </div>
 
-            <div
-              v-if="!msg.isStreaming && (shouldShowMessageCopyButton(msg) || shouldShowMessageAnalysisButton(msg))"
-              class="px-0"
-            >
+            <div v-if="!msg.isStreaming && shouldShowMessageCopyButton(msg)" class="px-0">
               <AssistantMessageFooter :timestamp="formatDateTimeValue(msg.timestamp)">
                 <button
                   v-if="shouldShowMessageCopyButton(msg)"
@@ -1765,35 +1508,15 @@ const handleViewAnalysis = (msg: Message) => {
                   <i class="fa-regular fa-copy text-[11px]"></i>
                   <span>复制</span>
                 </button>
-                <button
-                  v-if="shouldShowMessageAnalysisButton(msg)"
-                  :class="[
-                    'inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] transition-all duration-200',
-                    isAnalysisPanelOpen && currentAnalysisRoundId === msg.id
-                      ? 'bg-blue-500/10 text-blue-500'
-                      : 'text-gray-500 hover:bg-blue-500/5 hover:text-blue-500'
-                  ]"
-                  @click="handleViewAnalysis(msg)"
-                >
-                  <i class="fa-solid fa-diagram-project text-[11px]"></i>
-                  <span>分析</span>
-                </button>
               </AssistantMessageFooter>
             </div>
 
             <!-- 生成状态 -->
             <div v-if="msg.isStreaming && shouldShowStreamingStatus(msg)" class="flex items-center gap-2 py-1">
-              <span class="text-xs font-medium text-gray-500">{{ shouldShowStreamingProgress(msg) ? getStreamingStageText(msg) : (hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考') }}</span>
+              <span class="text-xs font-medium text-gray-500">{{ hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考' }}</span>
               <div class="flex gap-1">
                 <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
               </div>
-              <button
-                v-if="shouldShowStreamingProgress(msg) && isAnalysisPanelOpen && !showAnalysisPanel"
-                class="ml-auto h-6 px-2 border border-blue-200 rounded bg-blue-50 text-[11px] text-blue-600 hover:bg-blue-100 hover:border-blue-300"
-                @click="emit('switchToAnalysis')"
-              >
-                查看分析
-              </button>
             </div>
           </div>
         </div>
@@ -1850,38 +1573,15 @@ const handleViewAnalysis = (msg: Message) => {
       </div>
     </div>
       </div>
-
-      <!-- 分析过程面板 -->
-      <template v-if="isAnalysisVisible">
-        <!-- 拖拽分隔条 -->
-        <div
-          :class="[
-            'w-1.5 flex items-center justify-center bg-gray-100 cursor-col-resize transition-colors duration-200 shrink-0 select-none',
-            isDraggingDivider && 'bg-blue-300'
-          ]"
-          @mousedown="startDraggingDivider"
-        >
-          <div :class="[
-            'w-0.5 h-12 bg-gray-400 rounded-sm transition-colors duration-200',
-            isDraggingDivider && 'bg-blue-500'
-          ]"></div>
-        </div>
-        <!-- 面板内容 -->
-        <div
-          class="h-full min-w-[280px] max-w-[60%] border-l border-gray-200 bg-white overflow-hidden"
-          :style="{ flex: `0 0 ${analysisPanelWidth}%` }"
-        >
-          <AnalysisPanel
-            :is-open="isAnalysisPanelOpen"
-            :data="analysisPanelData"
-            :datasource-id="selectedDatasource"
-            :execution-targets="executionTargets"
-            :is-streaming="analysisStreaming"
-            @switch-conversation="emit('switchToConversation')"
-            @close="emit('switchToConversation')"
-          />
-        </div>
-      </template>
+      <ConversationSidePanel
+        :open="sidePanelOpen"
+        title="工具详情"
+        subtitle="工具调用参数与结果"
+        :show-trigger="false"
+        @close="closeToolDetailPanel"
+      >
+        <ToolCallDetailPanel :tool-call="activeToolCall" />
+      </ConversationSidePanel>
     </div>
 
     <!-- 保存到看板弹窗 -->
@@ -1985,35 +1685,4 @@ const handleViewAnalysis = (msg: Message) => {
   padding-left: 18px;
 }
 
-.particle-storm__dot {
-  opacity: 0;
-  animation-name: particle-storm-flow;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-  will-change: transform, opacity;
-}
-
-@keyframes particle-storm-flow {
-  0% {
-    left: -20px;
-    transform: translate3d(0, 0, 0) scale(0.5);
-    opacity: 0;
-  }
-
-  15% {
-    opacity: 1;
-  }
-
-  50% {
-    left: calc(50% - 10px);
-    transform: translate3d(0, var(--particle-drift), 0) scale(1.5);
-    opacity: 0.95;
-  }
-
-  100% {
-    left: calc(100% + 20px);
-    transform: translate3d(0, 0, 0) scale(0.5);
-    opacity: 0;
-  }
-}
 </style>

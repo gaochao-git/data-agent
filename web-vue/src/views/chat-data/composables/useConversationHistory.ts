@@ -4,7 +4,7 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticParams, TaskStageInfo, ThinkingSegment } from '../types'
+import type { ChatDataTokenUsage, ToolCallInfo, Message, MessageSegment, SemanticConfigSelectionInfo, SemanticParams, ThinkingSegment } from '../types'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
@@ -15,18 +15,33 @@ const parseHistoryTimestamp = (value: unknown): Date | null => {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-const buildAssistantHistorySegments = (message: Message, stageOffset = 0): MessageSegment[] => {
+const buildAssistantHistorySegments = (message: Message): MessageSegment[] => {
   const segments: MessageSegment[] = []
-  for (const [_index, stage] of (message.taskStages || []).entries()) {
-    void stage
-    segments.push({ type: 'taskStage', stageIndex: stageOffset + _index })
+  const thinkingSegments = message.thinkingSegments || []
+  const visibleToolCalls = (message.toolCalls || []).filter(toolCall => !HIDDEN_TOOLS.includes(toolCall.tool_name))
+  const emittedThinkingSegmentIds = new Set<string>()
+
+  for (let toolIndex = 0; toolIndex < visibleToolCalls.length; toolIndex += 1) {
+    for (const thinkingSegment of thinkingSegments) {
+      if (thinkingSegment.toolCallCount === toolIndex) {
+        segments.push({ type: 'thinkingSegment', thinkingSegmentId: thinkingSegment.id })
+        emittedThinkingSegmentIds.add(thinkingSegment.id)
+      }
+    }
+    const toolCall = visibleToolCalls[toolIndex]
+    if (!toolCall) continue
+    segments.push({ type: 'toolCall', toolCallId: toolCall.tool_call_id })
   }
+
+  for (const thinkingSegment of thinkingSegments) {
+    if (!emittedThinkingSegmentIds.has(thinkingSegment.id)) {
+      segments.push({ type: 'thinkingSegment', thinkingSegmentId: thinkingSegment.id })
+    }
+  }
+
   const visibleContent = String(message.content || '').trim()
   if (visibleContent) {
     segments.push({ type: 'text', content: visibleContent })
-  }
-  for (const toolCall of message.toolCalls || []) {
-    segments.push({ type: 'toolCall', toolCallId: toolCall.tool_call_id })
   }
   return segments
 }
@@ -50,62 +65,10 @@ const appendAssistantHistoryMessage = (target: Message, source: Message) => {
   if (source.toolCalls?.length) {
     target.toolCalls = [...(target.toolCalls || []), ...source.toolCalls]
   }
-  if (source.taskStages?.length) {
-    target.taskStages = [...(target.taskStages || []), ...source.taskStages]
-  }
   if (source.semanticConfigSelection) {
     target.semanticConfigSelection = source.semanticConfigSelection
   }
-  target.segments = [
-    ...(target.segments || []),
-    ...buildAssistantHistorySegments(source, (target.taskStages?.length || 0) - (source.taskStages?.length || 0)),
-  ]
-}
-
-const applyTaskStagesToHistoryMessage = (message: Message, taskStages: TaskStageInfo[]) => {
-  if (taskStages.length === 0) return
-  const existingStages = message.taskStages || []
-  const stageOffset = existingStages.length
-  message.taskStages = [...existingStages, ...taskStages]
-  const segments = message.segments || []
-  const beforeExecuteDetails: MessageSegment[] = []
-  const afterExecuteDetails: MessageSegment[] = []
-  taskStages.forEach((stage, index) => {
-    const shiftedSegment: MessageSegment = { type: 'taskStage', stageIndex: stageOffset + index }
-    if (stage.stage === 'done') afterExecuteDetails.push(shiftedSegment)
-    else beforeExecuteDetails.push(shiftedSegment)
-  })
-  message.segments = [
-    ...beforeExecuteDetails,
-    ...segments,
-    ...afterExecuteDetails,
-  ]
-}
-
-const normalizeTaskStages = (value: unknown): TaskStageInfo[] => {
-  if (!Array.isArray(value)) return []
-  const allowedStages = new Set(['thinking', 'plan', 'execute', 'done'])
-  const allowedStatuses = new Set(['running', 'completed', 'error'])
-  const result: TaskStageInfo[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const data = item as Record<string, unknown>
-    const stage = String(data.stage || '').trim()
-    const status = String(data.status || '').trim()
-    if (!allowedStages.has(stage) || !allowedStatuses.has(status)) continue
-    const steps = Array.isArray(data.steps)
-      ? data.steps.map(step => String(step || '').trim()).filter(Boolean)
-      : undefined
-    result.push({
-      stage: stage as TaskStageInfo['stage'],
-      status: status as TaskStageInfo['status'],
-      title: typeof data.title === 'string' ? data.title : undefined,
-      content: typeof data.content === 'string' ? data.content : undefined,
-      steps,
-      source: data.source === 'reasoning' ? 'reasoning' : 'task_stage',
-    })
-  }
-  return result
+  target.segments = buildAssistantHistorySegments(target)
 }
 
 const normalizeReasoningContent = (value: unknown): string => {
@@ -137,16 +100,6 @@ const applyThinkingSegmentsToHistoryMessage = (message: Message, thinkingSegment
   if (message.role !== 'assistant' || thinkingSegments.length === 0) return
   if (message.thinkingSegments?.length) return
   message.thinkingSegments = thinkingSegments
-  message.taskStages = [
-    ...(message.taskStages || []),
-    ...thinkingSegments.map((segment): TaskStageInfo => ({
-      stage: 'thinking',
-      status: 'completed',
-      title: '思考',
-      content: segment.content,
-      source: 'reasoning',
-    })),
-  ]
   message.content = String(message.content || '').trim()
   message.segments = buildAssistantHistorySegments(message)
 }
@@ -154,15 +107,6 @@ const applyThinkingSegmentsToHistoryMessage = (message: Message, thinkingSegment
 const setThinkingSegmentsOnHistoryMessage = (message: Message, thinkingSegments: ThinkingSegment[]) => {
   if (message.role !== 'assistant' || thinkingSegments.length === 0) return
   message.thinkingSegments = thinkingSegments
-  const nonReasoningStages = (message.taskStages || []).filter(stage => stage.source !== 'reasoning')
-  const reasoningStages = thinkingSegments.map((segment): TaskStageInfo => ({
-    stage: 'thinking',
-    status: 'completed',
-    title: '思考',
-    content: segment.content,
-    source: 'reasoning',
-  }))
-  message.taskStages = [...reasoningStages, ...nonReasoningStages]
   message.content = String(message.content || '').trim()
   message.segments = buildAssistantHistorySegments(message)
 }
@@ -254,7 +198,6 @@ export function useConversationHistory({
       if (response.ok) {
         const data = await response.json()
         const historyMessages = data.data?.messages || []
-        const historyTaskStages = normalizeTaskStages(data.data?.task_stages)
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
         const historyTokenUsage = data.data?.token_usage
         tokenUsage && (tokenUsage.value = historyTokenUsage && typeof historyTokenUsage === 'object' ? historyTokenUsage as ChatDataTokenUsage : null)
@@ -277,13 +220,6 @@ export function useConversationHistory({
                 id: `thinking-history-${msg.id || 'message'}-${index}`,
                 content,
                 toolCallCount: index,
-              }))
-              message.taskStages = thinkingTexts.map((content): TaskStageInfo => ({
-                stage: 'thinking',
-                status: 'completed',
-                title: '思考',
-                content,
-                source: 'reasoning',
               }))
             }
 
@@ -423,8 +359,6 @@ export function useConversationHistory({
           })
 
           applyReasoningSegmentsToHistoryMessages(displayMessages, historyReasoningSegments)
-          const latestAssistantMessage = [...displayMessages].reverse().find(msg => msg.role === 'assistant')
-          if (latestAssistantMessage) applyTaskStagesToHistoryMessage(latestAssistantMessage, historyTaskStages)
 
           messages.value = displayMessages
           isFirstMessage.value = false
