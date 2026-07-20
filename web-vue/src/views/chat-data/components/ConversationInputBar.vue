@@ -197,4 +197,17 @@ defineExpose({
     padding-right: 0;
   }
 }
+
+@keyframes breathe {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(0, 122, 255, 0.35), 0 0 0 0 rgba(22, 119, 255, 0.28);
+  }
+  50% {
+    box-shadow: 0 4px 14px rgba(0, 122, 255, 0.45), 0 0 0 6px rgba(22, 119, 255, 0.08);
+  }
+}
+
+.animate-breathe {
+  animation: breathe 1.4s ease-in-out infinite;
+}
 </style>

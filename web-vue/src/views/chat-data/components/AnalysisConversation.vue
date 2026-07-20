@@ -5,7 +5,6 @@
  */
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import MarkdownIt from 'markdown-it'
 import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
@@ -14,18 +13,16 @@ import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
 import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFileContent, getDataAnalyzeWorkspaceFiles, importDataAnalyzeWorkspaceSkill } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { DataAnalyzeWorkspaceFile } from '../api'
-import ToolCallList from './ToolCallList.vue'
-import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import ChartSpecRenderer from './ChartSpecRenderer.vue'
 import { normalizeChartType } from '../chartTypes'
 import SkillManager from './SkillManager.vue'
-import AssistantMessageFooter from './AssistantMessageFooter.vue'
+import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
-import { formatDateTimeValue, parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
+import { parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
@@ -63,7 +60,6 @@ const emit = defineEmits<{
   semanticConfigSelected: [payload: SemanticConfigSelectionInfo]
 }>()
 
-const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
 const dataAnalyzeEnabled = ref(false)
@@ -87,7 +83,6 @@ const inputFocused = ref(false)
 const isGenerating = ref(false)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
-const collapsedThinkingSegmentKeys = ref<Set<string>>(new Set())
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
@@ -112,29 +107,6 @@ const resetTokenUsagePanel = () => {
 
 const closeTokenUsagePanel = () => {
   tokenUsagePanelRef.value?.closePanel()
-}
-
-const getThinkingSegmentKey = (messageId: string, thinkingSegmentId: string) => `${messageId}:${thinkingSegmentId}`
-
-const getThinkingSegment = (message: Message, thinkingSegmentId: string): ThinkingSegment | null => {
-  return message.thinkingSegments?.find(segment => segment.id === thinkingSegmentId) || null
-}
-
-const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => {
-  if (message.isStreaming) return false
-  return collapsedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
-}
-
-const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
-  if (!getThinkingSegment(message, thinkingSegmentId)) return
-  const key = getThinkingSegmentKey(message.id, thinkingSegmentId)
-  const next = new Set(collapsedThinkingSegmentKeys.value)
-  if (next.has(key)) {
-    next.delete(key)
-  } else {
-    next.add(key)
-  }
-  collapsedThinkingSegmentKeys.value = next
 }
 
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
@@ -1175,17 +1147,6 @@ const formatToolTableCell = (value: unknown): string => {
   }
 }
 
-// 判断是否已输出可见正文，排除占位文案和空白内容。
-const hasVisibleAssistantContent = (content: string): boolean => {
-  const text = hideSemanticConfigSelectionPayloads(content).trim()
-  return Boolean(text && text !== '正在思考...')
-}
-
-// 首 token 前已有气泡占位时，底部状态行不重复显示。
-const shouldShowStreamingStatus = (message: Message): boolean => {
-  return hasVisibleAssistantContent(message.content) || Boolean(message.toolCalls?.length)
-}
-
 const selectToolCall = (toolCall: ToolCallInfo) => {
   activeToolCallId.value = toolCall.tool_call_id
   sidePanelTab.value = 'tool'
@@ -1229,39 +1190,7 @@ const { isLoadingHistory, resetHistory } = useConversationHistory({
   tokenUsage,
 })
 
-const renderMarkdown = (content: string) => md.render(hideSemanticConfigSelectionPayloads(content))
-
-const normalizeCopyText = (value: unknown): string => (
-  hideSemanticConfigSelectionPayloads(String(value || '')).trim()
-)
-
-const getCopyableAssistantContent = (message: Message): string => {
-  if (message.role !== 'assistant') return ''
-  const segmentText = (message.segments || [])
-    .filter((segment): segment is { type: 'text'; content: string } => segment.type === 'text')
-    .map(segment => normalizeCopyText(segment.content))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-  return segmentText || normalizeCopyText(message.content) || normalizeCopyText(message.error)
-}
-
-const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
-
-const handleCopyAssistantMessage = async (message: Message) => {
-  const text = getCopyableAssistantContent(message)
-  if (!text) {
-    ElMessage.info('暂无可复制内容')
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-  } catch (err) {
-    console.error('复制分析回复失败:', err)
-    ElMessage.error('复制失败，请稍后重试')
-  }
-}
+const getConversationDisplayContent = (content: string) => hideSemanticConfigSelectionPayloads(content).trim()
 
 const handleScroll = () => {
   const container = chatContainerRef.value
@@ -1282,11 +1211,6 @@ const getMessageToolCall = (message: Message, toolCallId: string) => {
 const getRenderableMessageToolCall = (message: Message, toolCallId: string) => {
   const toolCall = getMessageToolCall(message, toolCallId)
   return toolCall ? normalizeToolCallForDisplay(toolCall) : null
-}
-
-const getRenderableQueryResultToolCall = (message: Message, toolCallId: string) => {
-  const toolCall = getRenderableMessageToolCall(message, toolCallId)
-  return shouldInlineRenderToolCall(toolCall) ? toolCall : null
 }
 
 const handleSkillSelect = (skill: SkillInfo) => {
@@ -1375,7 +1299,6 @@ watch(
       sidePanelOpen.value = false
       sidePanelTab.value = 'console'
       activeAssistantMessageId.value = null
-      collapsedThinkingSegmentKeys.value = new Set()
       resetTokenUsagePanel()
       resetHistory()
       focusInput()
@@ -1866,93 +1789,19 @@ const handleKeyDown = (event: KeyboardEvent) => {
           </div>
         </div>
 
-        <div v-else class="max-w-[774px] mx-auto w-[90%] flex flex-col gap-5">
-          <div v-for="msg in messages" :key="msg.id" class="flex" :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
-            <div :class="msg.role === 'user' ? 'max-w-[80%] flex flex-col items-end gap-1.5' : 'w-full'">
-              <template v-if="msg.role === 'user'">
-                <div class="rounded-2xl rounded-br-md bg-[#1677FF]/10 px-4 py-2.5 text-[#1F3A56] shadow-[0_2px_8px_rgba(59,130,246,0.12)]">
-                  <div class="whitespace-pre-wrap text-sm leading-relaxed">{{ msg.content }}</div>
-                </div>
-                <div class="mr-1 text-[10px] text-gray-400">
-                  {{ formatDateTimeValue(msg.timestamp) }}
-                </div>
-              </template>
-              <template v-else-if="msg.role === 'tool'">
-                <div class="rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
-                  <ToolCallList
-                    v-if="msg.toolCalls?.length"
-                    :tool-calls="msg.toolCalls"
-                    :datasource-id="selectedDatasource"
-                    :execution-targets="props.executionTargets"
-                    compact
-                    :active-tool-call-id="activeToolCallId"
-                    @select-tool="selectToolCall"
-                  />
-                </div>
-                <div v-if="formatDateTimeValue(msg.timestamp)" class="px-1 text-right text-[10px] text-gray-400">
-                  {{ formatDateTimeValue(msg.timestamp) }}
-                </div>
-              </template>
-              <div v-else class="min-w-0 rounded-xl bg-white border border-slate-100 px-4 py-3 shadow-sm">
-                <div v-if="msg.segments?.length" class="min-w-0 space-y-3">
-                  <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
-                    <div
-                      v-if="segment.type === 'text' && segment.content"
-                      class="analysis-markdown min-w-0 text-sm leading-relaxed text-slate-800"
-                      v-html="renderMarkdown(segment.content)"
-                    ></div>
-                    <div
-                      v-else-if="segment.type === 'toolCall' && getMessageToolCall(msg, segment.toolCallId)"
-                    >
-                      <ToolCallList
-                        :tool-calls="[getRenderableMessageToolCall(msg, segment.toolCallId)!]"
-                        :datasource-id="selectedDatasource"
-                        :execution-targets="props.executionTargets"
-                        compact
-                        :active-tool-call-id="activeToolCallId"
-                        @select-tool="selectToolCall"
-                      />
-                      <QueryResultPanel
-                        v-if="getRenderableQueryResultToolCall(msg, segment.toolCallId)"
-                        class="mt-2 max-h-[46vh]"
-                        :result-data="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.renderId!"
-                        :semantic-params="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.semanticParams"
-                        :sql="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.args?.sql as string | undefined"
-                      />
-                    </div>
-                    <div
-                      v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(msg, segment.thinkingSegmentId)"
-                      class="overflow-hidden rounded-lg border border-slate-100 bg-slate-50"
-                    >
-                      <button
-                        type="button"
-                        class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"
-                        @click="toggleThinkingSegment(msg, segment.thinkingSegmentId)"
-                      >
-                        <i class="fa-solid fa-brain text-xs text-slate-500"></i>
-                        <span>思考</span>
-                        <i
-                          :class="[
-                            'ml-auto fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
-                            !isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId) && 'rotate-90'
-                          ]"
-                        ></i>
-                      </button>
-                      <div
-                        v-if="!isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId)"
-                        class="border-t border-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-500 whitespace-pre-wrap"
-                      >
-                        {{ getThinkingSegment(msg, segment.thinkingSegmentId)!.content }}
-                      </div>
-                    </div>
-                  </template>
-                </div>
-                <div v-else-if="msg.content" class="analysis-markdown min-w-0 text-sm leading-relaxed text-slate-800" v-html="renderMarkdown(msg.content)"></div>
-                <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-sm text-slate-500">
-                  <i class="fa-solid fa-spinner fa-spin text-xs"></i>
-                  <span>正在思考...</span>
-                </div>
-                <div v-if="getDashboardPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
+        <ConversationMessageList
+          v-else
+          :messages="messages"
+          :datasource-id="selectedDatasource"
+          :execution-targets="props.executionTargets"
+          :active-tool-call-id="activeToolCallId"
+          :display-content="getConversationDisplayContent"
+          :resolve-tool-call="getRenderableMessageToolCall"
+          :should-inline-render-result="shouldInlineRenderToolCall"
+          @select-tool="selectToolCall"
+        >
+          <template #assistant-extra="{ message: msg }">
+            <div v-if="getDashboardPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
                   <div
                     v-for="tool in getDashboardPreviewTools(msg)"
                     :key="tool.tool_call_id"
@@ -2011,7 +1860,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     </div>
                   </div>
                 </div>
-                <div v-if="getChartPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
+            <div v-if="getChartPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
                   <div
                     v-for="tool in getChartPreviewTools(msg)"
                     :key="tool.tool_call_id"
@@ -2022,31 +1871,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
                       :spec="getChartSpecFromTool(tool)!"
                     />
                   </div>
-                </div>
-                <div v-if="msg.error" class="mt-2 text-sm text-red-500">{{ msg.error }}</div>
-              </div>
-              <div v-if="msg.role === 'assistant' && !msg.isStreaming" class="mt-1">
-                <AssistantMessageFooter :timestamp="formatDateTimeValue(msg.timestamp)">
-                  <button
-                    v-if="shouldShowMessageCopyButton(msg)"
-                    class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
-                    @click="handleCopyAssistantMessage(msg)"
-                  >
-                    <i class="fa-regular fa-copy text-[11px]"></i>
-                    <span>复制</span>
-                  </button>
-                </AssistantMessageFooter>
-              </div>
-              <div v-if="msg.role === 'assistant' && msg.isStreaming && shouldShowStreamingStatus(msg)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
-                <i class="fa-solid fa-spinner fa-spin text-[11px]"></i>
-                <span>{{ hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考' }}</span>
-                <span class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse"></span>
-                <span class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:120ms]"></span>
-                <span class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
-              </div>
             </div>
-          </div>
-        </div>
+          </template>
+        </ConversationMessageList>
       </div>
 
       <div v-if="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
@@ -2288,95 +2115,3 @@ const handleKeyDown = (event: KeyboardEvent) => {
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.analysis-markdown :deep(p) {
-  margin: 0 0 8px;
-}
-
-.analysis-markdown :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.analysis-markdown {
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-.analysis-markdown :deep(pre) {
-  max-width: 100%;
-  overflow-x: auto;
-  margin: 8px 0;
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  white-space: pre;
-}
-
-.analysis-markdown :deep(pre code) {
-  display: block;
-  min-width: max-content;
-  padding: 0;
-  background: transparent;
-  white-space: pre;
-  overflow-wrap: normal;
-  word-break: normal;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #334155;
-}
-
-.analysis-markdown :deep(:not(pre) > code) {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.analysis-markdown :deep(table) {
-  width: 100%;
-  max-width: 100%;
-  margin: 10px 0;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
-.analysis-markdown :deep(th),
-.analysis-markdown :deep(td) {
-  border: 1px solid #d8dee8;
-  padding: 8px 10px;
-  text-align: left;
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.analysis-markdown :deep(th) {
-  background: #f8fafc;
-  color: #334155;
-  font-weight: 700;
-}
-
-@keyframes breathe {
-  0%, 100% {
-    box-shadow: 0 2px 8px rgba(0, 122, 255, 0.35), 0 0 0 0 rgba(22, 119, 255, 0.28);
-  }
-  50% {
-    box-shadow: 0 4px 14px rgba(0, 122, 255, 0.45), 0 0 0 6px rgba(22, 119, 255, 0.08);
-  }
-}
-
-.animate-breathe {
-  animation: breathe 1.4s ease-in-out infinite;
-}
-
-.execution-detail-line::before {
-  content: '';
-  position: absolute;
-  left: -25px;
-  top: -12px;
-  bottom: -12px;
-  width: 1px;
-  background-image: repeating-linear-gradient(to bottom, #D8DAE5 0 3px, transparent 3px 6px);
-}
-</style>

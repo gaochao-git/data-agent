@@ -5,7 +5,6 @@
  */
 import { ref, computed, watch, nextTick, toRef, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import MarkdownIt from 'markdown-it'
 import type { ChatDataModelOption, ChatDataTokenUsage, DataSource, ToolCallInfo, LangGraphMessage, Message, MessageSegment, ExecutionTargetOption, SkillInfo, DashboardSpecPayload, SemanticConfigSelectionInfo, SemanticConfigItem, SemanticDimension, SemanticMetric, ThinkingSegment } from '../types'
 import { createDashboardFromSpec, getChatDataConfig } from '../api'
 import type { Dashboard } from '../api/dashboard'
@@ -13,20 +12,18 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { extractGeneratedSqlFromToolCall, extractSemanticParamsFromArgs, getRenderableQueryResultData, parseQueryResultEnvelope } from '../utils/semanticTool'
-import QueryResultPanel from './QueryResultPanel.vue'
+import { extractSemanticParamsFromArgs, getRenderableQueryResultData, parseQueryResultEnvelope } from '../utils/semanticTool'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import ToolCallList from './ToolCallList.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import SkillManager from './SkillManager.vue'
-import AssistantMessageFooter from './AssistantMessageFooter.vue'
+import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
-import { formatDateTimeValue, parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
+import { parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
 
 interface ConversationItem {
   id: string
@@ -82,8 +79,6 @@ const props = withDefaults(defineProps<Props>(), {
   hideExecutionTargetSelector: false,
   selectedModelId: '',
 })
-
-const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
 
 // 表结构面板
 const searchText = ref('')
@@ -165,7 +160,6 @@ const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | nul
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
-const collapsedThinkingSegmentIds = ref<Set<string>>(new Set())
 
 const findToolCallById = (toolCallId: string | null): ToolCallInfo | null => {
   if (!toolCallId) return null
@@ -1158,45 +1152,8 @@ const stripTechnicalContent = (content: string): string => {
     .trim()
 }
 
-// 判断是否已输出可见正文，排除思考标签和占位文案。
-const hasVisibleAssistantContent = (content: string): boolean => {
-  const text = getConversationDisplayContent(content)
-  return Boolean(text && text !== '正在思考...')
-}
-
-// 首 token 前已有气泡占位时，底部状态行不重复显示。
-const shouldShowStreamingStatus = (message: Message): boolean => {
-  return hasVisibleAssistantContent(message.content)
-    || Boolean(message.thinkingSegments?.length)
-    || getVisibleToolCalls(message.toolCalls).length > 0
-    || Boolean(message.semanticConfigSelection)
-}
-
 const getToolCallById = (msg: Message, toolCallId: string): ToolCallInfo | null => {
   return msg.toolCalls?.find(tc => tc.tool_call_id === toolCallId) || null
-}
-
-const getRenderableQueryResultToolCall = (msg: Message, toolCallId: string): ToolCallInfo | null => {
-  const toolCall = getToolCallById(msg, toolCallId)
-  return toolCall?.renderType === 'queryResult' && toolCall.renderId ? toolCall : null
-}
-
-const getThinkingSegment = (message: Message, thinkingSegmentId: string): ThinkingSegment | null => {
-  return message.thinkingSegments?.find(segment => segment.id === thinkingSegmentId) || null
-}
-
-const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => {
-  if (message.isStreaming) return false
-  return collapsedThinkingSegmentIds.value.has(`${message.id}:${thinkingSegmentId}`)
-}
-
-const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
-  if (!getThinkingSegment(message, thinkingSegmentId)) return
-  const key = `${message.id}:${thinkingSegmentId}`
-  const next = new Set(collapsedThinkingSegmentIds.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  collapsedThinkingSegmentIds.value = next
 }
 
 const finishAssistantMessage = (msg: Message) => {
@@ -1209,35 +1166,6 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
   const msg = messages.value.find(item => item.id === messageId)
   if (msg?.role === 'assistant') {
     msg.timestamp = finishedAt
-  }
-}
-
-const getCopyableAssistantContent = (msg: Message): string => {
-  const orderedText = (msg.segments || [])
-    .filter((segment): segment is Extract<MessageSegment, { type: 'text' }> => segment.type === 'text')
-    .map(segment => getConversationDisplayContent(segment.content))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-  return orderedText || getConversationDisplayContent(msg.content)
-}
-
-const shouldShowMessageCopyButton = (msg: Message): boolean => {
-  return Boolean(getCopyableAssistantContent(msg))
-}
-
-const handleCopyAssistantMessage = async (msg: Message) => {
-  const text = getCopyableAssistantContent(msg)
-  if (!text) {
-    ElMessage.info('暂无可复制内容')
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-  } catch (err) {
-    console.error('复制回复失败:', err)
-    ElMessage.error('复制失败，请稍后重试')
   }
 }
 
@@ -1388,79 +1316,20 @@ const handleCopyAssistantMessage = async (msg: Message) => {
         </div>
       </div>
 
-      <!-- 有消息时：对话列表 -->
-      <div v-else class="max-w-[774px] mx-auto w-[90%]">
-        <div v-for="msg in messages" :key="msg.id" class="mb-5">
-          <!-- 用户消息 -->
-          <div v-if="msg.role === 'user'" class="flex flex-col items-end gap-1">
-            <div class="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-md bg-[#1677FF]/10 text-[#1F3A56] text-sm leading-relaxed shadow-[0_2px_8px_rgba(59,130,246,0.12)]">{{ msg.content }}</div>
-            <div class="text-[10px] text-gray-400 mr-1">
-              {{ formatDateTimeValue(msg.timestamp) }}
-            </div>
-          </div>
-
-          <!-- AI 消息 -->
-          <div v-else class="flex flex-col gap-3">
-            <div class="max-w-full p-4 rounded-2xl rounded-bl-md bg-white border border-black/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-              <div v-if="msg.segments?.length" class="flex min-w-0 flex-col gap-3">
-                <template v-for="(segment, index) in msg.segments" :key="`${segment.type}-${index}`">
-                  <div
-                    v-if="segment.type === 'text' && getConversationDisplayContent(segment.content)"
-                    class="markdown-body min-w-0 text-sm leading-relaxed text-gray-700"
-                    v-html="md.render(getConversationDisplayContent(segment.content))"
-                  ></div>
-                  <div
-                    v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(msg, segment.thinkingSegmentId)"
-                    class="overflow-hidden rounded-lg border border-slate-100 bg-slate-50"
-                  >
-                    <button
-                      type="button"
-                      class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"
-                      @click="toggleThinkingSegment(msg, segment.thinkingSegmentId)"
-                    >
-                      <i class="fa-solid fa-brain text-xs text-slate-500"></i>
-                      <span>思考</span>
-                      <i
-                        :class="[
-                          'ml-auto fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
-                          !isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId) && 'rotate-90'
-                        ]"
-                      ></i>
-                    </button>
-                    <div
-                      v-if="!isThinkingSegmentCollapsed(msg, segment.thinkingSegmentId)"
-                      class="border-t border-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-500 whitespace-pre-wrap"
-                    >
-                      {{ getThinkingSegment(msg, segment.thinkingSegmentId)!.content }}
-                    </div>
-                  </div>
-                  <div v-else-if="segment.type === 'toolCall' && getToolCallById(msg, segment.toolCallId)" class="min-w-0">
-                    <ToolCallList
-                      :tool-calls="[getToolCallById(msg, segment.toolCallId)!]"
-                      :datasource-id="selectedDatasource"
-                      :execution-targets="executionTargets"
-                      compact
-                      :active-tool-call-id="activeToolCallId"
-                      @select-tool="selectToolCall"
-                    />
-                    <QueryResultPanel
-                      v-if="getRenderableQueryResultToolCall(msg, segment.toolCallId)"
-                      class="mt-2 max-h-[46vh]"
-                      :result-data="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.renderId!"
-                      :sql="extractGeneratedSqlFromToolCall(getRenderableQueryResultToolCall(msg, segment.toolCallId)!)"
-                      :semantic-params="getRenderableQueryResultToolCall(msg, segment.toolCallId)!.semanticParams"
-                      :on-save="handleSaveToDashboard"
-                    />
-                  </div>
-                </template>
-              </div>
-              <div v-else-if="getConversationDisplayContent(msg.content)" class="markdown-body min-w-0 text-sm leading-relaxed text-gray-700" v-html="md.render(getConversationDisplayContent(msg.content))"></div>
-              <div v-else-if="msg.isStreaming" class="flex items-center gap-2 text-gray-500 text-sm">
-                <i class="fa-solid fa-spinner fa-spin"></i>
-                <span>正在思考...</span>
-              </div>
-
-              <div v-if="hasDashboardSpecContent(msg.dashboardSpec) && !msg.isStreaming" class="mt-3 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/90 to-white px-3.5 py-3 shadow-[0_8px_24px_rgba(22,119,255,0.08)]">
+      <!-- 有消息时：由共享消息列表负责气泡、思考、工具流与结果预览。 -->
+      <ConversationMessageList
+        v-else
+        :messages="messages"
+        :datasource-id="selectedDatasource"
+        :execution-targets="executionTargets"
+        :active-tool-call-id="activeToolCallId"
+        :display-content="getConversationDisplayContent"
+        :resolve-tool-call="(message, toolCallId) => getToolCallById(message, toolCallId)"
+        :on-save="handleSaveToDashboard"
+        @select-tool="selectToolCall"
+      >
+        <template #assistant-extra="{ message: msg }">
+          <div v-if="hasDashboardSpecContent(msg.dashboardSpec) && !msg.isStreaming" class="mt-3 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50/90 to-white px-3.5 py-3 shadow-[0_8px_24px_rgba(22,119,255,0.08)]">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
                       <div class="flex items-center gap-2">
@@ -1489,38 +1358,9 @@ const handleCopyAssistantMessage = async (msg: Message) => {
                       确认写入
                     </button>
                   </div>
-                </div>
-
-              <!-- 错误消息 -->
-              <div v-if="msg.error" class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-500/10 text-red-600 text-[13px] mt-2">
-                <i class="fa-solid fa-circle-exclamation"></i>
-                <span>{{ msg.error }}</span>
-              </div>
-            </div>
-
-            <div v-if="!msg.isStreaming && shouldShowMessageCopyButton(msg)" class="px-0">
-              <AssistantMessageFooter :timestamp="formatDateTimeValue(msg.timestamp)">
-                <button
-                  v-if="shouldShowMessageCopyButton(msg)"
-                  class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
-                  @click="handleCopyAssistantMessage(msg)"
-                >
-                  <i class="fa-regular fa-copy text-[11px]"></i>
-                  <span>复制</span>
-                </button>
-              </AssistantMessageFooter>
-            </div>
-
-            <!-- 生成状态 -->
-            <div v-if="msg.isStreaming && shouldShowStreamingStatus(msg)" class="flex items-center gap-2 py-1">
-              <span class="text-xs font-medium text-gray-500">{{ hasVisibleAssistantContent(msg.content) ? '正在生成' : '正在思考' }}</span>
-              <div class="flex gap-1">
-                <span v-for="i in 3" :key="i" class="w-1.5 h-1.5 rounded-full bg-[#1677FF] animate-pulse" :style="{ animationDelay: `${i * 0.2}s` }"></span>
-              </div>
-            </div>
           </div>
-        </div>
-      </div>
+        </template>
+      </ConversationMessageList>
     </div>
 
     <!-- 底部输入区 -->
@@ -1601,88 +1441,3 @@ const handleCopyAssistantMessage = async (msg: Message) => {
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.markdown-body {
-  max-width: 100%;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.markdown-body :deep(p) {
-  margin: 0 0 8px 0;
-}
-
-.markdown-body :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.markdown-body :deep(strong) {
-  font-weight: 700;
-}
-
-.markdown-body :deep(code) {
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  background: rgba(15, 23, 42, 0.06);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.markdown-body :deep(pre) {
-  max-width: 100%;
-  margin: 8px 0;
-  padding: 12px;
-  overflow-x: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  white-space: pre;
-}
-
-.markdown-body :deep(pre code) {
-  display: block;
-  min-width: max-content;
-  padding: 0;
-  background: transparent;
-  white-space: pre;
-  overflow-wrap: normal;
-  word-break: normal;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #334155;
-}
-
-.markdown-body :deep(table) {
-  width: 100%;
-  max-width: 100%;
-  margin: 10px 0;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  border: 1px solid #d8dee8;
-  padding: 8px 10px;
-  text-align: left;
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.markdown-body :deep(th) {
-  background: #f8fafc;
-  color: #334155;
-  font-weight: 700;
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-
-</style>
