@@ -253,6 +253,14 @@ class AlarmLogFormatter(logging.Formatter):
     - 报警只记录需要外部值班关注的失败，普通降级、可自动切换恢复的场景写 app warning。
     - 业务库/checkpoint 启动探测全部节点不可用时写 alarm；运行中当前节点失败但能切换时只写 app warning。
     - 查询数据源连接失败、高危 SQL 拦截、外部接口调用异常、API 未捕获异常、大模型连接异常、大模型首 token 超时写 alarm。
+    - 当前 alarm_id 类型：
+      DATABASE_CONNECTION_FAILED
+      CHECKPOINT_CONNECTION_FAILED
+      DANGEROUS_SQL_BLOCKED
+      EXTERNAL_API_EXCEPTION
+      API_CALL_EXCEPTION
+      LLM_CONNECTION_EXCEPTION
+      LLM_FIRST_TOKEN_TIMEOUT
     - 业务侧不做 TTL 聚合去重，报警平台负责收敛；代码只对同一个 LLM 连接异常对象做一次性标记，避免冒泡多层重复写同类 alarm。
     - ext1/ext2 由 utils.alarm 统一格式化为扁平 key=value 文本，不输出 JSON，便于报警平台检索。
     """
