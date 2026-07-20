@@ -10,12 +10,14 @@ chat_data_app 的 completion handler
 import json
 import asyncio
 import time
+from contextlib import suppress
 from typing import Dict, Any, Optional
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
 from utils import conversation
 from .agent import (
@@ -29,6 +31,7 @@ from .services.datasource_manager import get_datasource_manager
 from .services.context_budget import sanitize_context_usage_for_response
 from .services.data_analyze_context import build_data_analyze_context
 from .services.execution_target_context import append_selected_execution_targets_to_context
+from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.data_analyze_workspace import ensure_data_analyze_workspace
 from .services.skill_service import skill_service
 from .services.semantic_tools import (
@@ -559,36 +562,52 @@ class _AgentSseStreamAdapter:
         self.latest_token_usage: dict[str, Any] | None = None
         self.state: Any | None = None
         self.disconnected = False
-        self._first_message_seen = False
+        self._first_visible_payload_seen = False
+        self._first_token_timeout_alarm_emitted = False
 
     async def stream_events(self):
         """输出 token_usage、thinking、tool、message 事件。"""
-        async for event in self.agent.astream(
-            self.initial_state,
-            config=self.config,
-            stream_mode=["messages", "custom"],
-        ):
-            if await self._handle_disconnect():
-                return
+        started_at = time.perf_counter()
+        timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
+        try:
+            async for event in self.agent.astream(
+                self.initial_state,
+                config=self.config,
+                stream_mode=["messages", "custom"],
+            ):
+                if await self._handle_disconnect():
+                    return
 
-            event_kind, payload = self._parse_stream_event(event)
-            if event_kind == "custom":
-                token_usage_event = self._handle_custom_payload(payload)
-                if token_usage_event:
-                    yield token_usage_event
-                continue
-            if event_kind != "messages":
-                continue
+                event_kind, payload = self._parse_stream_event(event)
+                if event_kind == "custom":
+                    token_usage_event = self._handle_custom_payload(payload)
+                    if token_usage_event:
+                        yield token_usage_event
+                    continue
+                if event_kind != "messages":
+                    continue
 
-            message_chunk, metadata = payload
-            if self.on_first_message and not self._first_message_seen:
-                self._first_message_seen = True
-                self.on_first_message()
-            if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
-                continue
+                message_chunk, metadata = payload
+                if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
+                    continue
+                if self._has_visible_payload(message_chunk):
+                    self._record_first_visible_payload(started_at)
 
-            async for sse_event in self._handle_message_chunk(message_chunk, metadata):
-                yield sse_event
+                async for sse_event in self._handle_message_chunk(message_chunk, metadata):
+                    yield sse_event
+        except Exception as exc:
+            if not self._first_visible_payload_seen:
+                self._emit_first_token_timeout_if_needed(started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)})
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1=self._alarm_context(),
+                ext2={"error_type": exc.__class__.__name__, "error": str(exc)},
+            )
+            raise
+        finally:
+            timeout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await timeout_task
 
     async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
         """持久化思考分段并构造 message_end payload。"""
@@ -624,6 +643,56 @@ class _AgentSseStreamAdapter:
             return None
         self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
         return _format_sse("token_usage", self.latest_token_usage)
+
+    def _alarm_context(self) -> dict[str, Any]:
+        configurable = self.config.get("configurable") if isinstance(self.config, dict) else {}
+        return {
+            "thread_id": (configurable or {}).get("thread_id") or "",
+            "checkpoint_ns": (configurable or {}).get("checkpoint_ns") or "",
+            "debug_label": self.debug_label or "",
+        }
+
+    def _has_visible_payload(self, message_chunk: Any) -> bool:
+        has_content = bool(getattr(message_chunk, "content", None))
+        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
+        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
+        msg_type = getattr(message_chunk, "type", None)
+        return bool(
+            has_content
+            or has_tool_calls
+            or has_tool_call_chunks
+            or _format_thinking_event(message_chunk)
+            or (self.include_empty_tool_messages and msg_type == "tool")
+        )
+
+    def _record_first_visible_payload(self, started_at: float) -> None:
+        if self._first_visible_payload_seen:
+            return
+        self._first_visible_payload_seen = True
+        self._emit_first_token_timeout_if_needed(started_at)
+        if self.on_first_message:
+            self.on_first_message()
+
+    async def _first_token_timeout_watchdog(self, started_at: float) -> None:
+        threshold_seconds = int(LLM_FIRST_TOKEN_TIMEOUT_SECONDS or 0)
+        if threshold_seconds <= 0:
+            return
+        await asyncio.sleep(threshold_seconds)
+        if not self._first_visible_payload_seen and not self.disconnected:
+            self._emit_first_token_timeout_if_needed(started_at)
+
+    def _emit_first_token_timeout_if_needed(self, started_at: float, *, ext2: Any = None) -> None:
+        threshold_seconds = int(LLM_FIRST_TOKEN_TIMEOUT_SECONDS or 0)
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        if threshold_seconds <= 0 or elapsed_ms < threshold_seconds * 1000 or self._first_token_timeout_alarm_emitted:
+            return
+        self._first_token_timeout_alarm_emitted = True
+        emit_llm_first_token_timeout_alarm(
+            elapsed_ms=elapsed_ms,
+            threshold_seconds=threshold_seconds,
+            ext1=self._alarm_context(),
+            ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
+        )
 
     async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]):
         has_content = bool(getattr(message_chunk, "content", None))

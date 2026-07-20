@@ -323,3 +323,30 @@ async def test_hive_meta_post_json_uses_http_client(monkeypatch):
     assert calls[0] == ("init", {"verify": False, "timeout": 12})
     assert calls[2] == ("post", "http://meta/tables", {"org_code": "org_1"}, {"Content-Type": "application/json", "Authorization": "Bearer secret"})
     assert "raise_for_status" in calls
+
+
+@pytest.mark.asyncio
+async def test_hive_meta_post_json_failure_writes_external_api_alarm(monkeypatch):
+    alarms = []
+
+    class ErrorClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers):
+            raise RuntimeError("meta down")
+
+    monkeypatch.setattr(hive_meta_http.httpx, "AsyncClient", ErrorClient)
+    monkeypatch.setattr(hive_meta_http, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
+
+    with pytest.raises(RuntimeError, match="meta down"):
+        await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})
+
+    assert alarms[0][0][0] == "hive_meta_http"
+    assert alarms[0][1]["url"] == "http://meta/tables"

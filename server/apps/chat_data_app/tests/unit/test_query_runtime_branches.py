@@ -194,6 +194,7 @@ def test_runtime_task_operator_and_execution_id_helpers():
 
 
 def test_prepare_sql_request_for_execution_branches(monkeypatch):
+    alarm_records = []
     normal = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
     dangerous = ExecuteSqlRequest(sql="select 1; drop table orders", datasource_id="ds_a")
     oversized_limit = ExecuteSqlRequest(sql="select * from orders limit 100000", datasource_id="ds_a")
@@ -223,11 +224,14 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         return {"sql": "select city from orders"}
 
     monkeypatch.setattr(query_runtime, "compile_semantic_builder_sql", fake_compile_semantic_builder_sql)
+    monkeypatch.setattr(query_runtime, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(normal)) is normal
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous)) is dangerous
     with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
+    assert alarm_records[0][0][0] == "select 1; drop table orders"
+    assert alarm_records[0][1]["execution_scope"] == "task_submit"
     with pytest.raises(ValueError, match="查询结果最多返回"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
     with pytest.raises(ValueError, match="必须基于指标集"):

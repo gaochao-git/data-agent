@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
 from utils import conversation
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
@@ -149,6 +150,10 @@ async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request 
         logger.info("生成的 SQL: %s...", sql[:200])
         yield _sse_event({"type": "complete", "sql": sql})
     except Exception as e:
+        emit_llm_connection_alarm_if_needed(
+            e,
+            ext1={"conversation_id": payload.conversation_id, "datasource_id": payload.datasource_id, "purpose": "quick_sql"},
+        )
         logger.error("快速SQL生成失败: %s", e, exc_info=True)
         yield _sse_error(str(e))
 

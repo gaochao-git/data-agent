@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -469,7 +470,19 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
             return business_response(msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
         llm = get_chat_data_llm(streaming=False, max_tokens=1200)
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        try:
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+        except Exception as exc:
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1={
+                    "purpose": "datasource_column_dict_generate",
+                    "datasource_id": datasource_id,
+                    "table_name": table_name,
+                    "column_name": column_name,
+                },
+            )
+            raise
         content = response.content if hasattr(response, "content") else str(response)
         column_dict = _parse_column_dict_generate_response(str(content))
         return business_response(

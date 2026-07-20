@@ -171,6 +171,17 @@ export const buildSqlFunctionExpression = (functionKey: string, columnExpression
   return matched ? matched.build(normalizedExpression) : normalizedExpression
 }
 
+export const quoteIdentifier = (name: string) => {
+  const safe = (name || '').replace(/`/g, '``')
+  return `\`${safe}\``
+}
+
+export const buildMetricExpression = (aggFunc: string, column: string) => {
+  const quotedColumn = quoteIdentifier(column)
+  if (aggFunc === 'COUNT_DISTINCT') return `COUNT(DISTINCT ${quotedColumn})`
+  return `${aggFunc}(${quotedColumn})`
+}
+
 export const SQL_EXPRESSION_FUNCTION_KEYWORDS = [
   'abs',
   'add_months',

@@ -21,10 +21,16 @@ export { buildRecentDaysDateTimeRange, formatDateTimeValue, formatLocalDateTime,
 export {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
   SQL_FUNCTION_GROUPS,
+  buildMetricExpression,
   buildSqlFunctionExpression,
   getSqlFunctionCatalog,
   getSqlFunctionOptions,
+  quoteIdentifier,
 } from './sqlFunctionCatalog'
+export {
+  getRelationshipConditions,
+  syncRelationshipColumnsFromConditions,
+} from './semanticRelationship'
 export {
   buildSemanticParamsFromDsl,
   extractGeneratedSqlFromToolCall,

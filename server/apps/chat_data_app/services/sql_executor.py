@@ -15,6 +15,8 @@ import os
 
 from utils.logger import get_logger
 from utils.crypto import decrypt_password
+from utils.alarm import emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
+from utils.db_failover import is_mysql_connection_error
 from .datasource_credentials import build_hive_connect_params, resolve_hive_credentials, resolve_mysql_credentials
 from .hive_sync import _apply_socket_timeout, SOCKET_TIMEOUT_SECONDS
 from .runtime_config import DEFAULT_ROW_LIMIT, normalize_row_limit
@@ -472,6 +474,59 @@ def _log_sql_execution_summary(source_type: str, database: str, execution_time_m
     logger.info("[%s] SQL 执行完成: database=%s elapsed_ms=%s rows=%s", source_type, database, execution_time_ms, row_count)
 
 
+def _emit_sql_execution_validation_alarm(sql: str, error_msg: str, *, source_type: str, execution_scope: str) -> None:
+    """记录执行边界拦截的高危 SQL。"""
+    emit_dangerous_sql_alarm(
+        sql,
+        error_msg,
+        source_type=source_type,
+        execution_scope=execution_scope,
+    )
+
+
+def _emit_query_database_connection_alarm(
+    source_type: str,
+    database: str,
+    err: Exception,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+) -> None:
+    """记录查询数据源连接类异常。"""
+    normalized_source_type = str(source_type or "").strip().lower()
+    if normalized_source_type == "mysql" and not is_mysql_connection_error(err):
+        return
+    if normalized_source_type == "hive" and not _is_hive_connection_exception(err):
+        return
+    emit_database_connection_alarm(
+        "查询数据源连接异常",
+        ext1={
+            "source_type": normalized_source_type,
+            "host": host or "",
+            "port": port or "",
+            "database": database or "",
+        },
+        ext2={"error_type": err.__class__.__name__, "error": str(err)},
+    )
+
+
+def _is_hive_connection_exception(err: Exception) -> bool:
+    text = f"{err.__class__.__module__}.{err.__class__.__name__} {err}".lower()
+    markers = (
+        "connect",
+        "connection",
+        "socket",
+        "transport",
+        "thrift",
+        "timeout",
+        "timed out",
+        "refused",
+        "unreachable",
+        "network",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _add_hive_http_user_params(payload: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
     """补充 Hive 外部 HTTP 请求的用户参数。"""
     normalized_user_id = str(user_id or "").strip()
@@ -570,6 +625,7 @@ class MySQLExecutor(SQLExecutor):
         # SQL 安全验证
         is_valid, error_msg = validate_sql(sql, source_type="mysql")
         if not is_valid:
+            _emit_sql_execution_validation_alarm(sql, error_msg, source_type="mysql", execution_scope="mysql_executor")
             return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
 
         try:
@@ -614,6 +670,7 @@ class MySQLExecutor(SQLExecutor):
             logger.warning("[MySQL] SQL 执行参数非法: %s", e)
             return {"success": False, "error": str(e), "columns": [], "data": [], "total_count": 0}
         except Exception as e:
+            _emit_query_database_connection_alarm("mysql", self.database, e, host=self.host, port=self.port)
             logger.error(f"[MySQL] 执行 SQL 失败: {e}")
             return {"success": False, "error": _friendly_sql_error("MySQL", e), "columns": [], "data": [], "total_count": 0}
 
@@ -626,6 +683,7 @@ class MySQLExecutor(SQLExecutor):
                     await cursor.execute("SELECT 1")
                     return True
         except Exception as e:
+            _emit_query_database_connection_alarm("mysql", self.database, e, host=self.host, port=self.port)
             logger.error(f"[MySQL] 连接测试失败: {e}")
             return False
 
@@ -690,6 +748,7 @@ class HiveExecutor(SQLExecutor):
         # SQL 安全验证
         is_valid, error_msg = validate_sql(sql, source_type="hive")
         if not is_valid:
+            _emit_sql_execution_validation_alarm(sql, error_msg, source_type="hive", execution_scope="hive_executor")
             return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
 
         # 使用线程池执行同步操作（Hive 查询通常较慢，默认60秒超时）
@@ -730,6 +789,7 @@ class HiveExecutor(SQLExecutor):
             if isinstance(e, ValueError):
                 logger.warning("[Hive] SQL 执行参数非法: %s", e)
                 return {"success": False, "error": str(e), "columns": [], "data": [], "total_count": 0}
+            _emit_query_database_connection_alarm("hive", self.database, e, host=self.host, port=self.port)
             logger.error(f"[Hive] 执行 SQL 失败: {e}")
             return {"success": False, "error": _friendly_sql_error("Hive", e), "columns": [], "data": [], "total_count": 0}
         finally:
@@ -742,6 +802,7 @@ class HiveExecutor(SQLExecutor):
         try:
             return await loop.run_in_executor(None, self._test_sync)
         except Exception as e:
+            _emit_query_database_connection_alarm("hive", self.database, e, host=self.host, port=self.port)
             logger.error(f"[Hive] 连接测试失败: {e}")
             return False
 
@@ -807,18 +868,32 @@ class HiveHttpExecutor(SQLExecutor):
             request_kwargs.get("params") or {},
             _http_payload_summary(request_kwargs.get("json")),
         )
-        async with httpx.AsyncClient(verify=HTTP_VERIFY_TLS) as client:
-            response = await client.request(method.upper(), request_url, **request_kwargs)
-            response.raise_for_status()
-            payload = response.json()
-            logger.debug(
-                "[HTTPExecutor] 对方接口返回: method=%s url=%s status_code=%s result=%s",
-                method.upper(),
-                request_url,
-                getattr(response, "status_code", None),
-                _http_response_summary(payload),
+        try:
+            async with httpx.AsyncClient(verify=HTTP_VERIFY_TLS) as client:
+                response = await client.request(method.upper(), request_url, **request_kwargs)
+                response.raise_for_status()
+                payload = response.json()
+                logger.debug(
+                    "[HTTPExecutor] 对方接口返回: method=%s url=%s status_code=%s result=%s",
+                    method.upper(),
+                    request_url,
+                    getattr(response, "status_code", None),
+                    _http_response_summary(payload),
+                )
+                return _extract_response_payload(payload)
+        except Exception as exc:
+            emit_external_api_alarm(
+                "chat_data_http_query",
+                exc,
+                method=method.upper(),
+                url=request_url,
+                ext1={
+                    "task_id": task_id,
+                    "params": request_kwargs.get("params") or {},
+                    "payload": _http_payload_summary(request_kwargs.get("json")),
+                },
             )
-            return _extract_response_payload(payload)
+            raise
 
     def _build_submit_payload(self, sql: str, limit: int, user_id: Optional[str] = None, username: Optional[str] = None) -> Dict[str, Any]:
         payload = {
@@ -884,6 +959,12 @@ class HiveHttpExecutor(SQLExecutor):
         resolved_timeout = resolve_query_timeout(self.source_type, timeout)
         is_valid, error_msg = validate_sql(sql, source_type=self.source_type)
         if not is_valid:
+            _emit_sql_execution_validation_alarm(
+                sql,
+                error_msg,
+                source_type=self.source_type,
+                execution_scope="http_executor",
+            )
             return {"success": False, "error": error_msg, "columns": [], "data": [], "total_count": 0}
         if not self.namespace:
             return {"success": False, "error": "缺少 HTTP 执行标识，请配置机构编码", "columns": [], "data": [], "total_count": 0}

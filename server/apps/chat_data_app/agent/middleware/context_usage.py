@@ -13,6 +13,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from ...services.context_budget import (
     ContextBudget,
@@ -67,11 +68,18 @@ def create_context_usage_middleware(
         records.append(record)
         _emit_context_usage(get_context_usage())
 
-        response = await handler(_override_request(
-            request,
-            system_message=SystemMessage(content=effective_system_prompt),
-            messages=edited_messages,
-        ))
+        try:
+            response = await handler(_override_request(
+                request,
+                system_message=SystemMessage(content=effective_system_prompt),
+                messages=edited_messages,
+            ))
+        except Exception as exc:
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1={"model_id": effective_model_id, "middleware": name},
+            )
+            raise
         _merge_response_usage(record, response)
         usage = get_context_usage()
         _emit_context_usage(usage)

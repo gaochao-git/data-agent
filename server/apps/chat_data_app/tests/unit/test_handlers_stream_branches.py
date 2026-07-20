@@ -187,6 +187,49 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
     assert agent.updated[0][1]["reasoning_segments"][0]["content"] == "调用 选择指标集"
 
 
+def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):
+    alarms = []
+    monkeypatch.setattr(handlers, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(handlers, "emit_llm_first_token_timeout_alarm", lambda **kwargs: alarms.append(kwargs))
+
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=SimpleNamespace(),
+        initial_state={"messages": []},
+        config={"configurable": {"thread_id": "conv_alarm", "checkpoint_ns": ""}},
+    )
+
+    adapter._emit_first_token_timeout_if_needed(handlers.time.perf_counter() - 61)
+    adapter._emit_first_token_timeout_if_needed(handlers.time.perf_counter() - 62)
+
+    assert len(alarms) == 1
+    assert alarms[0]["threshold_seconds"] == 60
+    assert alarms[0]["ext1"]["thread_id"] == "conv_alarm"
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_stream_adapter_llm_connection_alarm(monkeypatch):
+    alarms = []
+
+    class Agent:
+        async def astream(self, *_args, **_kwargs):
+            raise RuntimeError("API connection error")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(handlers, "emit_llm_connection_alarm_if_needed", lambda *args, **kwargs: alarms.append((args, kwargs)) or True)
+
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=Agent(),
+        initial_state={"messages": []},
+        config={"configurable": {"thread_id": "conv_conn", "checkpoint_ns": ""}},
+    )
+
+    with pytest.raises(RuntimeError, match="API connection error"):
+        await collect_stream(adapter.stream_events())
+
+    assert alarms[0][0][0].args[0] == "API connection error"
+    assert alarms[0][1]["ext1"]["thread_id"] == "conv_conn"
+
+
 @pytest.mark.asyncio
 async def test_persist_reasoning_segments_only_writes_delta():
     class Graph:

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from utils.database import get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
+from utils.alarm import emit_dangerous_sql_alarm
 
 from ..schema import ExecuteSqlRequest, QueryTaskCreateRequest
 from . import query_cache
@@ -55,6 +56,14 @@ def _validate_sql_before_task_submit(
     source_type = _datasource_source_type(datasource)
     is_valid, error_msg = validate_sql(sql, source_type=source_type)
     if not is_valid:
+        emit_dangerous_sql_alarm(
+            sql,
+            error_msg,
+            source_type=source_type,
+            datasource_id=str(getattr(request, "datasource_id", "") or ""),
+            user_id=str(getattr(request, "user_id", "") or ""),
+            execution_scope="task_submit",
+        )
         raise ValueError(error_msg)
     build_effective_sql(sql, getattr(request, "limit", None) or DEFAULT_ROW_LIMIT, source_type=source_type)
 

@@ -331,6 +331,8 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
     monkeypatch.setattr(execution_permission.httpx, "AsyncClient", FakeClient)
+    permission_alarms = []
+    monkeypatch.setattr(execution_permission, "emit_external_api_alarm", lambda *args, **kwargs: permission_alarms.append((args, kwargs)))
 
     result = asyncio.run(execution_permission.get_http_permission_org_codes(" user_a ", " 用户A "))
     assert result == {"ORG_A", "ORG_B"}
@@ -350,6 +352,8 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
 
     monkeypatch.setattr(execution_permission.httpx, "AsyncClient", ErrorClient)
     assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+    assert permission_alarms[0][0][0] == "chat_data_http_permission"
+    assert permission_alarms[0][1]["url"] == "http://permission.local"
 
     class BadCodeClient(FakeClient):
         async def post(self, url, json):

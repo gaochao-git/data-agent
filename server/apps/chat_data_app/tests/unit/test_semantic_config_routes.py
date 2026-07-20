@@ -30,6 +30,7 @@ from apps.chat_data_app.schema import (
 )
 from apps.chat_data_app.services.file_text_extractor import extract_text_from_file_bytes
 from apps.chat_data_app.services import semantic_config_validator
+from apps.chat_data_app.services import semantic_history_learning_service
 from apps.chat_data_app.services.semantic_history_learning_service import build_semantic_history_learning_service
 
 
@@ -118,22 +119,22 @@ def test_validate_semantic_logical_types_requires_enum_column_dict():
 
 
 def test_history_message_and_feedback_helpers():
-    assert semantic_config._history_message_text("  hello  ") == "hello"
-    assert semantic_config._history_message_text([{"text": "问题"}, {"content": "回答"}, "补充"]) == "问题\n回答\n补充"
-    assert semantic_config._history_message_text([{"text": ""}, {"content": None}]) == ""
-    assert semantic_config._history_message_text(None) == ""
-    assert semantic_config._is_negative_feedback_text("这个结果不对") is True
-    assert semantic_config._is_negative_feedback_text("") is False
-    assert semantic_config._is_negative_feedback_text("好的") is False
-    assert semantic_config._is_history_tool_error_message('{"success": false, "error": "表不存在"}') is True
-    assert semantic_config._is_history_tool_error_message('{"success": true, "error": "仍然有错误"}') is True
-    assert semantic_config._is_history_tool_error_message("") is False
-    assert semantic_config._is_history_tool_error_message("[execute_sql]\n{\"success\": true}") is False
-    assert semantic_config._is_history_tool_error_message("Traceback exception") is True
+    assert semantic_history_learning_service._history_message_text("  hello  ") == "hello"
+    assert semantic_history_learning_service._history_message_text([{"text": "问题"}, {"content": "回答"}, "补充"]) == "问题\n回答\n补充"
+    assert semantic_history_learning_service._history_message_text([{"text": ""}, {"content": None}]) == ""
+    assert semantic_history_learning_service._history_message_text(None) == ""
+    assert semantic_history_learning_service._is_negative_feedback_text("这个结果不对") is True
+    assert semantic_history_learning_service._is_negative_feedback_text("") is False
+    assert semantic_history_learning_service._is_negative_feedback_text("好的") is False
+    assert semantic_history_learning_service._is_history_tool_error_message('{"success": false, "error": "表不存在"}') is True
+    assert semantic_history_learning_service._is_history_tool_error_message('{"success": true, "error": "仍然有错误"}') is True
+    assert semantic_history_learning_service._is_history_tool_error_message("") is False
+    assert semantic_history_learning_service._is_history_tool_error_message("[execute_sql]\n{\"success\": true}") is False
+    assert semantic_history_learning_service._is_history_tool_error_message("Traceback exception") is True
 
 
 def test_compact_history_conversation_messages_keeps_useful_context():
-    compact = semantic_config._compact_history_conversation_messages([
+    compact = semantic_history_learning_service._compact_history_conversation_messages([
         {"role": "user", "content": "查询销售额", "timestamp": "t1"},
         {"role": "assistant", "content": "已查询", "timestamp": "t2"},
         {"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "字段不存在"}', "timestamp": "t3"},
@@ -170,7 +171,7 @@ def test_history_belongs_to_config_for_agent_builder_and_sql(monkeypatch):
 
 def test_history_learning_compact_sample_and_normalize_item_branches():
     long_text = "x" * ErrorCode.SUCCESS
-    compact_agent = semantic_config._compact_history_sample_for_llm({
+    compact_agent = semantic_history_learning_service._compact_history_sample_for_llm({
         "execution_id": "exec_1",
         "source": "agent",
         "status": "failed",
@@ -180,7 +181,7 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
         "executed_at": "2026-06-02",
         "conversation_context": {"user_turns": [{"content": "查销售额"}]},
     })
-    compact_builder = semantic_config._compact_history_sample_for_llm({
+    compact_builder = semantic_history_learning_service._compact_history_sample_for_llm({
         "execution_id": "exec_2",
         "source": "builder",
         "semantic_builder_config": {
@@ -194,7 +195,7 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
     })
 
     samples = [{"execution_id": "exec_1", "source": "sql"}]
-    sample_map = semantic_config._sample_map_by_execution_id(samples)
+    sample_map = semantic_history_learning_service._sample_map_by_execution_id(samples)
     datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}]}
 
     assert len(compact_agent["query_text"]) == 300
@@ -205,13 +206,13 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
     assert len(compact_builder["builder_config"]["dimensions"]) == 20
     assert len(compact_builder["builder_config"]["aggregations"]) == 20
     assert len(compact_builder["builder_config"]["orderBy"]) == 10
-    assert semantic_config._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({
+    assert semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -219,7 +220,7 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
         "name": "",
         "reason": "缺名称",
     }, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({
+    assert semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -228,7 +229,7 @@ def test_history_learning_compact_sample_and_normalize_item_branches():
         "content": "内容",
         "reason": "缺标题",
     }, "issues", sample_map, datasource) is None
-    default_text_dimension = semantic_config._normalize_history_suggestion_item({
+    default_text_dimension = semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -254,21 +255,21 @@ def test_history_learning_context_and_indexes():
         "relationships": [],
     }
 
-    table_context = semantic_config._build_history_learning_table_context(datasource, config)
-    indexes = semantic_config._build_existing_semantic_indexes(config)
+    table_context = semantic_history_learning_service._build_history_learning_table_context(datasource, config)
+    indexes = semantic_history_learning_service._build_existing_semantic_indexes(config)
 
     assert table_context == [{"table_name": "orders", "description": "订单", "columns": [{"name": "amount", "type": "decimal", "description": "金额"}]}]
     assert "销售额" in indexes["metric_names"]
     assert "orders.sum(amount)" in indexes["metric_expressions"]
     assert "orders.city" in indexes["dimension_columns"]
-    assert semantic_config._normalize_semantic_text(" `City` ") == "city"
-    assert semantic_config._normalize_semantic_expression(" SUM( `Amount` ) ") == "sum(`amount`)"
-    assert semantic_config._extract_expression_columns("SUM(orders.amount) + COUNT(DISTINCT `order_id`) + CASE WHEN status = 'x' THEN 1 END") == {"amount", "order_id", "status"}
-    assert semantic_config._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"name": "新字段"}, "unknown", indexes) is False
+    assert semantic_history_learning_service._normalize_semantic_text(" `City` ") == "city"
+    assert semantic_history_learning_service._normalize_semantic_expression(" SUM( `Amount` ) ") == "sum(`amount`)"
+    assert semantic_history_learning_service._extract_expression_columns("SUM(orders.amount) + COUNT(DISTINCT `order_id`) + CASE WHEN status = 'x' THEN 1 END") == {"amount", "order_id", "status"}
+    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "新字段"}, "unknown", indexes) is False
 
 
 def test_normalize_history_learning_result_filters_invalid_existing_and_flags_review():
@@ -298,7 +299,7 @@ def test_normalize_history_learning_result_filters_invalid_existing_and_flags_re
         }
     }
 
-    result = semantic_config._normalize_history_learning_result(raw, samples, datasource, config)
+    result = semantic_history_learning_service._normalize_history_learning_result(raw, samples, datasource, config)
 
     assert [item["name"] for item in result["metrics"]] == ["客单价"]
     assert result["metrics"][0]["needs_review"] is True
@@ -361,7 +362,7 @@ def test_prefill_parse_and_alias_helpers_cover_edge_cases():
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "role": "bad"}) is None
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_metric": True})["role"] == "metric"
     assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_dimension": True})["role"] == "dimension"
-    assert semantic_config._extract_expression_columns("SUM(.amount) + ` ` + t.price + orders.") == {"amount", "price"}
+    assert semantic_history_learning_service._extract_expression_columns("SUM(.amount) + ` ` + t.price + orders.") == {"amount", "price"}
 
 
 def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
@@ -893,13 +894,13 @@ def test_semantic_helper_edge_cases():
     assert semantic_config_validator.expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
     assert semantic_config_validator.expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
     assert semantic_config._quote_identifier("a`b") == "`a``b`"
-    assert semantic_config._parse_json_object({"a": 1}) == {"a": 1}
-    assert semantic_config._parse_json_object("{bad") == {}
-    assert semantic_config._parse_json_object("[1]") == {}
-    assert semantic_config._extract_history_task_semantic_id({"semantic_config_id": " cfg "}) == "cfg"
-    assert semantic_config._extract_history_task_query_text({"query_text": " 问题 "}) == "问题"
-    assert semantic_config._extract_history_task_conversation_id({"conversation_id": " conv "}) == "conv"
-    assert semantic_config._semantic_scope_tables({"metrics": [{}], "dimensions": [{"table": ""}], "relationships": [{"left_table": "a", "right_table": "b"}]}) == {"a", "b"}
+    assert semantic_history_learning_service._parse_json_object({"a": 1}) == {"a": 1}
+    assert semantic_history_learning_service._parse_json_object("{bad") == {}
+    assert semantic_history_learning_service._parse_json_object("[1]") == {}
+    assert semantic_history_learning_service._extract_history_task_semantic_id({"semantic_config_id": " cfg "}) == "cfg"
+    assert semantic_history_learning_service._extract_history_task_query_text({"query_text": " 问题 "}) == "问题"
+    assert semantic_history_learning_service._extract_history_task_conversation_id({"conversation_id": " conv "}) == "conv"
+    assert semantic_history_learning_service._semantic_scope_tables({"metrics": [{}], "dimensions": [{"table": ""}], "relationships": [{"left_table": "a", "right_table": "b"}]}) == {"a", "b"}
     assert semantic_config._history_belongs_to_config("sql", {}, "select 1", "cfg", {"metrics": [], "dimensions": []}, "mysql")[:2] == (False, "empty_scope")
 
 
@@ -974,25 +975,25 @@ def test_history_suggestion_normalization_invalid_and_duplicate_cases():
         "dimension_fields": {"orders.city_alias"},
     }
 
-    assert semantic_config._extract_expression_columns("") == set()
-    assert semantic_config._extract_expression_columns("SUM(`amount`) + order_time") == {"amount", "order_time"}
-    assert semantic_config._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({"table": "orders", "field_name": "city_alias"}, "dimensions", indexes) is True
-    assert semantic_config._is_existing_history_suggestion({}, "issues", indexes) is False
-    assert semantic_config._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "api"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "exec_1"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "", "reason": ""}, "metrics", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "新维度", "reason": "历史过滤", "type": "bad"}, "dimensions", sample_map, datasource) is None
-    assert semantic_config._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "title": "", "content": "", "reason": ""}, "issues", sample_map, datasource) is None
+    assert semantic_history_learning_service._extract_expression_columns("") == set()
+    assert semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + order_time") == {"amount", "order_time"}
+    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "销售额"}, "metrics", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "expression": "SUM(amount)"}, "metrics", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"name": "城市"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "column": "city"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({"table": "orders", "field_name": "city_alias"}, "dimensions", indexes) is True
+    assert semantic_history_learning_service._is_existing_history_suggestion({}, "issues", indexes) is False
+    assert semantic_history_learning_service._normalize_history_suggestion_item("bad", "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "api"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": "exec_1"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["missing"], "support_count": 1}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": "bad"}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "", "reason": ""}, "metrics", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "新维度", "reason": "历史过滤", "type": "bad"}, "dimensions", sample_map, datasource) is None
+    assert semantic_history_learning_service._normalize_history_suggestion_item({"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "title": "", "content": "", "reason": ""}, "issues", sample_map, datasource) is None
 
-    result = semantic_config._normalize_history_learning_result(
+    result = semantic_history_learning_service._normalize_history_learning_result(
         {
             "metrics": [
                 {"source": "sql", "confidence": "high", "sample_execution_ids": ["exec_1"], "support_count": 1, "name": "客单价", "table": "orders", "expression": "AVG(amount)", "reason": "历史查询"},
@@ -1557,15 +1558,15 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
 
 
 def test_semantic_config_low_level_helper_branches(monkeypatch):
-    assert semantic_config._parse_json_object("") == {}
-    assert semantic_config._parse_json_object(None) == {}
-    assert semantic_config._parse_json_object("[1, 2]") == {}
-    assert semantic_config._parse_json_object('{"a": 1}') == {"a": 1}
-    assert semantic_config._history_message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"
-    assert semantic_config._is_history_tool_error_message('["not dict"]') is False
-    assert semantic_config._is_history_tool_error_message("[tool]\nnot json but 错误") is True
+    assert semantic_history_learning_service._parse_json_object("") == {}
+    assert semantic_history_learning_service._parse_json_object(None) == {}
+    assert semantic_history_learning_service._parse_json_object("[1, 2]") == {}
+    assert semantic_history_learning_service._parse_json_object('{"a": 1}') == {"a": 1}
+    assert semantic_history_learning_service._history_message_text({"unexpected": "value"}) == "{'unexpected': 'value'}"
+    assert semantic_history_learning_service._is_history_tool_error_message('["not dict"]') is False
+    assert semantic_history_learning_service._is_history_tool_error_message("[tool]\nnot json but 错误") is True
 
-    compact = semantic_config._compact_history_conversation_messages([
+    compact = semantic_history_learning_service._compact_history_conversation_messages([
         {"role": "user", "content": [{"text": ""}, {"content": "  "}], "timestamp": "skip"},
         {"role": "assistant", "content": "带工具调用的回复", "tool_calls": [{"id": "tc"}], "timestamp": "skip"},
         {"role": "assistant", "content": "正常回复", "timestamp": "t1"},
@@ -1575,7 +1576,7 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
     assert compact["assistant_turns"] == [{"content": "正常回复", "timestamp": "t1"}]
     assert compact["tool_errors"][0]["content"] == '{"success": false, "error": "失败"}'
 
-    assert semantic_config._semantic_scope_tables({
+    assert semantic_history_learning_service._semantic_scope_tables({
         "metrics": [{"table": ""}],
         "dimensions": [{"table": "orders"}],
         "relationships": [{"left_table": "", "right_table": "users"}],
@@ -1730,7 +1731,7 @@ def test_history_learning_normalization_duplicate_and_review_branches():
         "issues": "bad",
     }
 
-    result = semantic_config._normalize_history_learning_result(raw, samples, datasource, config)
+    result = semantic_history_learning_service._normalize_history_learning_result(raw, samples, datasource, config)
 
     assert [item["name"] for item in result["metrics"]] == ["新指标", "缺字段指标"]
     assert result["metrics"][0]["needs_review"] is True
@@ -1776,7 +1777,7 @@ def test_generate_history_learning_suggestions_llm_branches(monkeypatch):
 
 
 def test_semantic_config_remaining_helper_branch_edges():
-    assert semantic_config._history_message_text(["a", 123, {"text": "b"}, {"content": "c"}, {"text": ""}]) == "a\nb\nc"
+    assert semantic_history_learning_service._history_message_text(["a", 123, {"text": "b"}, {"content": "c"}, {"text": ""}]) == "a\nb\nc"
 
     many_messages = []
     for i in range(8):
@@ -1784,12 +1785,12 @@ def test_semantic_config_remaining_helper_branch_edges():
     for i in range(5):
         many_messages.append({"role": "assistant", "content": f"助手{i}", "timestamp": str(i)})
         many_messages.append({"role": "tool", "tool_name": "execute_sql", "content": '{"success": false, "error": "失败"}', "timestamp": str(i)})
-    compact = semantic_config._compact_history_conversation_messages(many_messages)
+    compact = semantic_history_learning_service._compact_history_conversation_messages(many_messages)
     assert [item["content"] for item in compact["user_turns"]] == [f"用户{i}" for i in range(2, 8)]
     assert [item["content"] for item in compact["assistant_turns"]] == ["助手2", "助手3", "助手4"]
     assert len(compact["tool_errors"]) == 5
 
-    table_context = semantic_config._build_history_learning_table_context(
+    table_context = semantic_history_learning_service._build_history_learning_table_context(
         {
             "ds_tables": [
                 {"table_name": "orders", "columns": [{"name": ""}, {"name": "id", "hive_type": "bigint"}]},
@@ -1820,8 +1821,8 @@ def test_semantic_config_remaining_helper_branch_edges():
     assert deduped[2]["name"] == "指标"
     assert deduped[3]["name"] == "指标2"
 
-    assert semantic_config._extract_expression_columns("SUM() + orders. + `amount`") == {"amount"}
-    indexes = semantic_config._build_existing_semantic_indexes({
+    assert semantic_history_learning_service._extract_expression_columns("SUM() + orders. + `amount`") == {"amount"}
+    indexes = semantic_history_learning_service._build_existing_semantic_indexes({
         "metrics": ["bad", {"name": "", "table": "orders", "expression": ""}],
         "dimensions": ["bad", {"name": "", "table": "orders", "field_name": "city", "column": ""}],
     })
@@ -1829,7 +1830,7 @@ def test_semantic_config_remaining_helper_branch_edges():
 
     datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}]}
     sample_map = {"exec_1": {"execution_id": "exec_1", "source": "sql"}}
-    assert semantic_config._normalize_history_suggestion_item({
+    assert semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -1839,7 +1840,7 @@ def test_semantic_config_remaining_helper_branch_edges():
         "expression": "SUM(amount)",
         "reason": "缺表",
     }, "metrics", sample_map, datasource)["needs_review"] is True
-    assert semantic_config._normalize_history_suggestion_item({
+    assert semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -1851,7 +1852,7 @@ def test_semantic_config_remaining_helper_branch_edges():
         "logical_type": "text",
         "reason": "缺字段",
     }, "dimensions", sample_map, datasource)["needs_review"] is True
-    assert semantic_config._normalize_history_suggestion_item({
+    assert semantic_history_learning_service._normalize_history_suggestion_item({
         "source": "sql",
         "confidence": "high",
         "sample_execution_ids": ["exec_1"],
@@ -2044,12 +2045,12 @@ def test_history_learning_route_exception_and_cache_branches(monkeypatch):
 
 
 def test_semantic_config_remaining_history_helper_edges():
-    compact = semantic_config._compact_history_conversation_messages([
+    compact = semantic_history_learning_service._compact_history_conversation_messages([
         {"role": "tool", "content": '{"success": true}', "timestamp": "t1"},
     ])
     assert compact == {"user_turns": [], "assistant_turns": [], "negative_feedback": [], "tool_errors": []}
 
-    assert semantic_config._semantic_scope_tables({
+    assert semantic_history_learning_service._semantic_scope_tables({
         "metrics": [{"table": "orders"}],
         "dimensions": [{"table": ""}],
         "relationships": [{"left_table": "orders", "right_table": ""}],
@@ -2064,9 +2065,9 @@ def test_semantic_config_remaining_history_helper_edges():
     assert deduped[1]["name"].endswith("金额")
     assert deduped[0]["name"] != deduped[1]["name"]
 
-    assert "amount" in semantic_config._extract_expression_columns("SUM(`amount`) + t.price + 'literal_text'")
+    assert "amount" in semantic_history_learning_service._extract_expression_columns("SUM(`amount`) + t.price + 'literal_text'")
 
-    indexes = semantic_config._build_existing_semantic_indexes({
+    indexes = semantic_history_learning_service._build_existing_semantic_indexes({
         "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         "dimensions": [
             {"name": "城市", "table": "orders", "column": ""},
@@ -2079,7 +2080,7 @@ def test_semantic_config_remaining_history_helper_edges():
 
     sample_map = {"exec_1": {"execution_id": "exec_1", "source": "sql"}}
     datasource = {"ds_tables": [{"table_name": "orders", "columns": [{"name": "status"}, {"name": "amount"}]}]}
-    missing_column = semantic_config._normalize_history_suggestion_item(
+    missing_column = semantic_history_learning_service._normalize_history_suggestion_item(
         {
             "source": "sql",
             "confidence": "high",

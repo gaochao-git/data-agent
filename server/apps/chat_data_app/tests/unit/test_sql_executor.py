@@ -509,6 +509,7 @@ def test_hive_http_executor_returns_submit_msg_when_code_is_not_20000(monkeypatc
 
 def test_hive_http_executor_rejects_disallowed_sql_before_submit(monkeypatch):
     captured = {"called": False}
+    alarms = []
 
     async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
         captured["called"] = True
@@ -517,12 +518,15 @@ def test_hive_http_executor_rejects_disallowed_sql_before_submit(monkeypatch):
     monkeypatch.setattr(sql_executor, "HTTP_SUBMIT_URL", "http://hive/query-tasks")
     monkeypatch.setattr(sql_executor, "HTTP_STATUS_URL", "http://hive/query-tasks/{task_id}")
     monkeypatch.setattr(sql_executor.HiveHttpExecutor, "_request_json", fake_request_json)
+    monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
 
     result = asyncio.run(sql_executor.HiveHttpExecutor(namespace="ns_a").execute("delete from orders"))
 
     assert result["success"] is False
     assert "只允许执行以下类型" in result["error"]
     assert captured["called"] is False
+    assert alarms[0][0][0] == "delete from orders"
+    assert alarms[0][1]["execution_scope"] == "http_executor"
 
 
 def test_hive_http_executor_rejects_multiple_sql_before_submit(monkeypatch):
@@ -1075,10 +1079,15 @@ def test_mysql_executor_optional_connection_and_sync_callback_branches(monkeypat
 
 def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypatch):
     executor = sql_executor.MySQLExecutor("127.0.0.1", 3306, "demo", "u", "p")
+    dangerous_alarms = []
+    db_alarms = []
+    monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
+    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
     invalid_sql = asyncio.run(executor.execute("delete from orders"))
     assert invalid_sql["success"] is False
     assert "只允许执行以下类型" in invalid_sql["error"]
+    assert dangerous_alarms[0][1]["execution_scope"] == "mysql_executor"
 
     class TimeoutCursor(_FakeMySQLCursor):
         async def execute(self, sql):
@@ -1103,7 +1112,26 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
     failed = asyncio.run(executor.execute("select 1"))
     assert failed["success"] is False
     assert failed["error"] == "table missing"
+    assert db_alarms == []
     assert asyncio.run(executor.kill_query("abc")) == {"success": False, "error": "无效的 MySQL 连接ID"}
+
+
+def test_mysql_executor_connection_error_writes_alarm(monkeypatch):
+    executor = sql_executor.MySQLExecutor("127.0.0.1", 3306, "demo", "u", "p")
+    db_alarms = []
+
+    class ConnectionErrorCursor(_FakeMySQLCursor):
+        async def execute(self, sql):
+            raise Exception(2003, "connect failed")
+
+    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
+    monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=_FakePool(ConnectionErrorCursor())))
+
+    failed = asyncio.run(executor.execute("select 1"))
+
+    assert failed["success"] is False
+    assert db_alarms[0][0][0] == "查询数据源连接异常"
+    assert db_alarms[0][1]["ext1"]["source_type"] == "mysql"
 
 
 def test_mysql_executor_get_pool_lazy_initialization(monkeypatch):
@@ -1128,10 +1156,15 @@ def test_mysql_executor_get_pool_lazy_initialization(monkeypatch):
 
 def test_hive_executor_async_execute_timeout_error_and_test_connection_error(monkeypatch):
     executor = sql_executor.HiveExecutor("127.0.0.1", 10000, "default")
+    dangerous_alarms = []
+    db_alarms = []
+    monkeypatch.setattr(sql_executor, "emit_dangerous_sql_alarm", lambda *args, **kwargs: dangerous_alarms.append((args, kwargs)))
+    monkeypatch.setattr(sql_executor, "emit_database_connection_alarm", lambda *args, **kwargs: db_alarms.append((args, kwargs)))
 
     invalid_sql = asyncio.run(executor.execute("delete from orders"))
     assert invalid_sql["success"] is False
     assert "只允许执行以下类型" in invalid_sql["error"]
+    assert dangerous_alarms[0][1]["execution_scope"] == "hive_executor"
 
     monkeypatch.setattr(sql_executor, "resolve_query_timeout", lambda *_args, **_kwargs: 0.001)
     monkeypatch.setattr(executor, "_execute_sync", lambda *_args: __import__("time").sleep(0.02) or {"success": True})
@@ -1141,6 +1174,7 @@ def test_hive_executor_async_execute_timeout_error_and_test_connection_error(mon
 
     monkeypatch.setattr(executor, "_test_sync", lambda: (_ for _ in ()).throw(RuntimeError("connect failed")))
     assert asyncio.run(executor.test_connection()) is False
+    assert db_alarms[0][0][0] == "查询数据源连接异常"
 
 
 def test_hive_executor_connection_and_sync_generic_error(monkeypatch):
@@ -1207,6 +1241,35 @@ def test_hive_http_request_json_builds_get_and_post_requests(monkeypatch):
     assert requests[1][1] == "http://host/tasks/task_2"
     assert requests[1][2]["json"] == {"sql": "select 1"}
     assert requests[0][3] is True
+
+
+def test_hive_http_request_json_failure_writes_external_api_alarm(monkeypatch):
+    alarms = []
+
+    class FakeAsyncClient:
+        def __init__(self, verify=False):
+            self.verify = verify
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def request(self, method, url, **kwargs):
+            raise RuntimeError("network down")
+
+    import types
+    monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=FakeAsyncClient))
+    monkeypatch.setattr(sql_executor, "emit_external_api_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
+
+    executor = sql_executor.HiveHttpExecutor(namespace="ns_a")
+    with pytest.raises(RuntimeError, match="network down"):
+        asyncio.run(executor._request_json("GET", "http://host/tasks", task_id="task_1"))
+
+    assert alarms[0][0][0] == "chat_data_http_query"
+    assert alarms[0][1]["method"] == "GET"
+    assert alarms[0][1]["url"] == "http://host/tasks"
 
 
 def test_hive_http_request_json_get_without_task_id_uses_plain_url(monkeypatch):

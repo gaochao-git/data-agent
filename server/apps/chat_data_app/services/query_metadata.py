@@ -4,6 +4,7 @@ SQL查询元数据生成服务
 """
 import json
 from .llm_config import get_chat_data_llm
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,7 +66,14 @@ SQL:
 返回JSON格式（不要包含markdown代码块标记）：
 {{"title": "...", "description": "...", "category": "..."}}'''
 
-        response = await llm.ainvoke(prompt)
+        try:
+            response = await llm.ainvoke(prompt)
+        except Exception as exc:
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1={"purpose": "query_metadata"},
+            )
+            raise
         content = response.content.strip()
 
         # 移除可能的markdown代码块标记

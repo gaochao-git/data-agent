@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any, Callable
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.services.context_budget import sanitize_context_usage_for_response
@@ -633,6 +634,10 @@ async def generate_title(
         result = await chain.ainvoke({"query": query})
         title = _clean_title(result.content, query)
     except Exception as e:
+        emit_llm_connection_alarm_if_needed(
+            e,
+            ext1={"purpose": "conversation_title", "conversation_id": conversation_id},
+        )
         logger.warning(f"LLM生成标题失败: {e}")
         title = _clean_title("", query)
 

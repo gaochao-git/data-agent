@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
 from .sql_executor import HTTP_AUTH_TOKEN
 
@@ -186,17 +187,27 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
 
 async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[HiveMetaHTTP] 请求对方接口: url=%s payload=%s", url, _meta_payload_summary(payload))
-    async with httpx.AsyncClient(verify=False, timeout=META_TIMEOUT_SECONDS) as client:
-        response = await client.post(url, json=payload, headers=_build_headers())
-        response.raise_for_status()
-        response_payload = response.json()
-        logger.debug(
-            "[HiveMetaHTTP] 对方接口返回: url=%s status_code=%s result=%s",
-            url,
-            getattr(response, "status_code", None),
-            _meta_response_summary(response_payload),
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=META_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_build_headers())
+            response.raise_for_status()
+            response_payload = response.json()
+            logger.debug(
+                "[HiveMetaHTTP] 对方接口返回: url=%s status_code=%s result=%s",
+                url,
+                getattr(response, "status_code", None),
+                _meta_response_summary(response_payload),
+            )
+            return _extract_response_data(response_payload)
+    except Exception as exc:
+        emit_external_api_alarm(
+            "hive_meta_http",
+            exc,
+            method="POST",
+            url=url,
+            ext1=_meta_payload_summary(payload),
         )
-        return _extract_response_data(response_payload)
+        raise
 
 
 async def get_hive_meta_tables_async(source_config: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None) -> List[str]:

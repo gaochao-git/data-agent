@@ -12,6 +12,7 @@ from auth import AuthenticationError
 
 from utils.error_codes import ErrorCode
 from utils import conversation
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 from utils.response import business_response
@@ -477,7 +478,14 @@ async def _call_metric_recommendation_llm(
         max_metrics=max_metrics,
     )
     llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "semantic_metric_recommendation"},
+        )
+        raise
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
 
@@ -485,7 +493,14 @@ async def _call_metric_recommendation_llm(
 async def _call_prefill_llm(prompt: str, generate_business_flow: bool = False) -> Dict[str, Any]:
     """调用大模型并解析自动预填字段。"""
     llm = get_chat_data_llm(streaming=False, max_tokens=4000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "semantic_prefill"},
+        )
+        raise
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_response(str(content), generate_business_flow)
 

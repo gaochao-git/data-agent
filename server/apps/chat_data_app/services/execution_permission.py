@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 import httpx
 
 from mock.direct_org_codes import DIRECT_ORG_CODES
+from utils.alarm import emit_external_api_alarm
 from .runtime_config import read_positive_int_env
 
 HTTP_PERMISSION_URL = str(os.getenv("CHAT_DATA_HTTP_PERMISSION_URL") or "").strip()
@@ -40,7 +41,14 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
             response = await client.post(HTTP_PERMISSION_URL, json=payload)
             response.raise_for_status()
             response_payload = response.json()
-    except Exception:
+    except Exception as exc:
+        emit_external_api_alarm(
+            "chat_data_http_permission",
+            exc,
+            method="POST",
+            url=HTTP_PERMISSION_URL,
+            ext1={"userId": normalized_user_id, "username": normalized_username},
+        )
         return set()
 
     try:

@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 from langchain_core.messages import HumanMessage
 
 from utils import conversation
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.database import get_session
 from utils.logger import get_logger
@@ -547,7 +548,18 @@ async def _generate_history_learning_suggestions_by_llm(
         compact_samples=compact_samples,
     )
     factory = llm_factory or get_chat_data_llm
-    response = await factory(streaming=False, max_tokens=4000).ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await factory(streaming=False, max_tokens=4000).ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={
+                "purpose": "semantic_history_learning",
+                "datasource_id": datasource.get("id") or "",
+                "semantic_config_id": config.get("id") or config.get("semantic_config_id") or "",
+            },
+        )
+        raise
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
     if not isinstance(parsed, dict):

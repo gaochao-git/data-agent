@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
@@ -409,7 +410,14 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         semantic_config_payload=_semantic_config_prompt_payload(config),
     )
     llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "evaluation_draft_case", "config_id": config_id},
+        )
+        raise
     content = getattr(response, "content", response)
     parsed = parse_llm_json(str(content), strict=False)
     if not isinstance(parsed, dict) or not parsed.get("nl") or not isinstance(parsed.get("gold_dsl"), dict):

@@ -21,11 +21,12 @@ import {
 } from '../api'
 import {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
-  SQL_FUNCTION_GROUPS,
-  buildSqlFunctionExpression,
-  getSqlFunctionOptions,
+  buildMetricExpression,
+  quoteIdentifier,
   formatSemanticConfigOptionLabel,
+  getRelationshipConditions,
   isQuerySucceeded,
+  syncRelationshipColumnsFromConditions,
 } from '../utils'
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
@@ -36,6 +37,8 @@ import AutoPrefillDialog from './semantic/AutoPrefillDialog.vue'
 import TablePreviewDialog from './semantic/TablePreviewDialog.vue'
 import MetricExpandDialog from './semantic/MetricExpandDialog.vue'
 import AddFieldDialog from './semantic/AddFieldDialog.vue'
+import ExpressionEditorDialog from './semantic/ExpressionEditorDialog.vue'
+import RelationshipEditorDialog from './semantic/RelationshipEditorDialog.vue'
 import type {
   SemanticConfigItem,
   SemanticMetric,
@@ -703,19 +706,10 @@ const addFieldForm = ref<AddFieldForm>({ tableAlias: '', column: '', fieldName: 
 const addFieldDefaultDisplayName = ref('')
 const showExpressionEditorDialog = ref(false)
 const editingExpressionRowKey = ref('')
-const editingExpressionText = ref('')
 const showMetricExpandDialog = ref(false)
 const metricExpandSourceRowKey = ref('')
 const metricExpandOptions = ref<MetricExpandOption[]>([])
 const showOntologyRulesDialog = ref(false)
-const AGG_FUNCTION_OPTIONS = [
-  { value: 'COUNT', label: 'COUNT', desc: '计数' },
-  { value: 'COUNT_DISTINCT', label: 'COUNT DISTINCT', desc: '去重计数' },
-  { value: 'SUM', label: 'SUM', desc: '求和' },
-  { value: 'AVG', label: 'AVG', desc: '平均值' },
-  { value: 'MAX', label: 'MAX', desc: '最大值' },
-  { value: 'MIN', label: 'MIN', desc: '最小值' },
-]
 const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
   { value: 'text', label: '文本' },
   { value: 'number', label: '数值' },
@@ -724,17 +718,6 @@ const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }>
   { value: 'enum', label: '枚举' },
 ]
 
-const dimensionFunctionOptions = computed(() => (
-  getSqlFunctionOptions(props.datasourceType, true).filter(item => item.usesExpression !== false)
-))
-const visibleDimensionFunctionGroups = computed(() => {
-  return SQL_FUNCTION_GROUPS
-    .map(group => ({
-      ...group,
-      items: dimensionFunctionOptions.value.filter(item => item.group === group.key),
-    }))
-    .filter(group => group.items.length > 0)
-})
 const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(rows.map(row => ({
   key: row.key,
   table: row.table,
@@ -797,11 +780,6 @@ const activeConfigSaveDisabledReason = computed(() => {
 })
 
 const canSaveActiveConfig = computed(() => !activeConfigSaveDisabledReason.value)
-
-const quoteIdentifier = (name: string) => {
-  const safe = (name || '').replace(/`/g, '``')
-  return `\`${safe}\``
-}
 
 const normalizeExpressionColumn = (value: string) => {
   const cleaned = (value || '').trim().replace(/`/g, '')
@@ -1002,33 +980,6 @@ const saveDimension = () => {
 }
 
 // ============ 关系操作 ============
-const getRelationshipConditions = (rel: SemanticRelationship) => {
-  if (rel.join_conditions && rel.join_conditions.length > 0) {
-    return rel.join_conditions
-  }
-  return [{ left_column: rel.left_column || '', right_column: rel.right_column || '' }]
-}
-
-const syncRelationshipColumnsFromConditions = (rel: SemanticRelationship) => {
-  const first = (rel.join_conditions || [])[0]
-  rel.left_column = first?.left_column || ''
-  rel.right_column = first?.right_column || ''
-}
-
-const handleRelationshipLeftAliasChange = () => {
-  if (!editingRelationship.value || !editingConfigId.value) return
-  const entry = getScopeEntryByAlias(editingConfigId.value, editingRelationship.value.left_alias)
-  editingRelationship.value.left_table = entry?.table || ''
-  ;(editingRelationship.value.join_conditions || []).forEach(c => { c.left_column = '' })
-}
-
-const handleRelationshipRightAliasChange = () => {
-  if (!editingRelationship.value || !editingConfigId.value) return
-  const entry = getScopeEntryByAlias(editingConfigId.value, editingRelationship.value.right_alias)
-  editingRelationship.value.right_table = entry?.table || ''
-  ;(editingRelationship.value.join_conditions || []).forEach(c => { c.right_column = '' })
-}
-
 const addRelationship = (configId: string) => {
   const scope = getScopeEntries(configId)
   if (scope.length < 2) {
@@ -1160,6 +1111,24 @@ const confirmRelationshipEditor = () => {
     showRelationshipEditor.value = false
   }
 }
+
+const relationshipEditorScopeEntries = computed(() => {
+  const configId = editingConfigId.value || activeConfig.value?.id || ''
+  return getScopeEntries(configId).map(entry => ({
+    alias: entry.alias,
+    table: entry.table,
+    label: getScopeEntryLabel(entry),
+  }))
+})
+
+const relationshipEditorColumnsByAlias = computed(() => {
+  const configId = editingConfigId.value || activeConfig.value?.id || ''
+  const result: Record<string, string[]> = {}
+  getScopeEntries(configId).forEach(entry => {
+    result[entry.alias] = getColumnsByScopeAlias(configId, entry.alias).map(col => col.name)
+  })
+  return result
+})
 
 const activeRelationshipCards = computed(() => {
   if (!activeConfig.value) return [] as Array<{ rel: SemanticRelationship; relIndex: number; nextEntry: TableScopeEntry }>
@@ -1330,23 +1299,6 @@ const openLinkTableEditor = (configId: string, targetAlias: string) => {
   showRelationshipEditor.value = true
 }
 
-const addJoinCondition = () => {
-  if (!editingRelationship.value) return
-  const next = getRelationshipConditions(editingRelationship.value).map(c => ({ ...c }))
-  next.push({ left_column: '', right_column: '' })
-  editingRelationship.value.join_conditions = next
-  syncRelationshipColumnsFromConditions(editingRelationship.value)
-}
-
-const removeJoinCondition = (index: number) => {
-  if (!editingRelationship.value) return
-  const current = getRelationshipConditions(editingRelationship.value).map(c => ({ ...c }))
-  if (current.length <= 1) return
-  current.splice(index, 1)
-  editingRelationship.value.join_conditions = current
-  syncRelationshipColumnsFromConditions(editingRelationship.value)
-}
-
 // 获取表的字段列表
 const getTableColumns = (tableName: string) => {
   const table = props.tables.find(t => t.table_name === tableName)
@@ -1365,12 +1317,6 @@ const isEditing = (configId: string, type: EditingType) => {
 
 const hasMultiTables = (configId: string) => {
   return getScopeEntries(configId).length > 1
-}
-
-const buildMetricExpression = (aggFunc: string, column: string) => {
-  const quotedColumn = quoteIdentifier(column)
-  if (aggFunc === 'COUNT_DISTINCT') return `COUNT(DISTINCT ${quotedColumn})`
-  return `${aggFunc}(${quotedColumn})`
 }
 
 const AGG_DISPLAY_SUFFIX_MAP: Record<string, string> = {
@@ -2182,11 +2128,6 @@ const viewColumnDict = (row: FieldConfigRow) => {
   showColumnDictDialog.value = true
 }
 
-const buildDimensionExpression = (func: string, column: string) => {
-  const quoted = quoteIdentifier(column)
-  return buildSqlFunctionExpression(func, quoted, props.datasourceType)
-}
-
 const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
   const config = configs.value.find(c => c.id === configId)
   if (!config) return []
@@ -2586,7 +2527,6 @@ const handleExpressionInput = (row: FieldConfigRow, expression: string) => {
 const openExpressionEditorDialog = (row: FieldConfigRow) => {
   if (row.isMissingPhysical || (!row.isMetric && !row.isDimension)) return
   editingExpressionRowKey.value = row.key
-  editingExpressionText.value = row.expression || quoteIdentifier(row.sourceColumn || row.column)
   showExpressionEditorDialog.value = true
 }
 
@@ -2594,18 +2534,12 @@ const editingExpressionRow = computed(() => {
   return fieldRows.value.find(item => item.key === editingExpressionRowKey.value) || null
 })
 
-const saveExpressionEditor = () => {
+const saveExpressionEditor = (expression: string) => {
   const row = editingExpressionRow.value
   if (row) {
-    handleExpressionInput(row, editingExpressionText.value.trim())
+    handleExpressionInput(row, expression)
   }
-  showExpressionEditorDialog.value = false
   editingExpressionRowKey.value = ''
-  editingExpressionText.value = ''
-}
-
-const insertExpressionFromEditor = (expression: string) => {
-  editingExpressionText.value = expression
 }
 
 const openOntologyRulesDialog = () => {
@@ -3225,175 +3159,21 @@ const saveOntologyRules = (ontologyRules: string) => {
       :admin-mode="props.adminMode"
     />
 
-    <el-dialog v-model="showRelationshipEditor" width="820px" title="连接方式" @close="closeRelationshipEditor">
-      <div v-if="editingRelationship" class="overflow-x-auto">
-        <div class="min-w-[680px] space-y-4">
-        <div class="flex items-center gap-2">
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'inner' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'inner'"
-          >
-            <span>内连接</span>
-            <span class="text-[10px] opacity-70">INNER</span>
-          </button>
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'left' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'left'"
-          >
-            <span>左连接</span>
-            <span class="text-[10px] opacity-70">LEFT</span>
-          </button>
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'right' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'right'"
-          >
-            <span>右连接</span>
-            <span class="text-[10px] opacity-70">RIGHT</span>
-          </button>
-        </div>
-        <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-          <select
-            v-model="editingRelationship.left_alias"
-            class="px-2.5 py-2 border border-gray-200 rounded text-sm"
-            @change="handleRelationshipLeftAliasChange"
-          >
-            <option v-for="entry in getScopeEntries(editingConfigId || activeConfig?.id || '')" :key="entry.alias" :value="entry.alias">{{ getScopeEntryLabel(entry) }}</option>
-          </select>
-          <div class="text-sm text-gray-400">→</div>
-          <select
-            v-model="editingRelationship.right_alias"
-            class="px-2.5 py-2 border border-gray-200 rounded text-sm"
-            @change="handleRelationshipRightAliasChange"
-          >
-            <option v-for="entry in getScopeEntries(editingConfigId || activeConfig?.id || '')" :key="entry.alias" :value="entry.alias">{{ getScopeEntryLabel(entry) }}</option>
-          </select>
-        </div>
-        <div class="rounded-md border border-gray-200 bg-gray-50/50 p-3">
-          <div class="mb-2 flex items-center justify-between">
-            <div class="text-xs font-medium text-gray-600">关联字段</div>
-            <button
-              class="px-2 py-1 border border-gray-200 rounded bg-white text-gray-600 text-xs hover:border-blue-200 hover:text-blue-600"
-              @click="addJoinCondition"
-            >
-              <i class="fa-solid fa-plus mr-1"></i>新增条件
-            </button>
-          </div>
-          <div
-            v-for="(cond, condIndex) in (editingRelationship.join_conditions || [])"
-            :key="`join-cond-${condIndex}`"
-            class="space-y-1.5"
-          >
-            <div v-if="condIndex > 0" class="text-[11px] font-semibold text-blue-500">AND</div>
-            <div class="grid grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
-              <select v-model="cond.left_column" class="px-2.5 py-2 border border-gray-200 rounded text-sm bg-white">
-                <option value="">请选择左表字段</option>
-                <option v-for="col in getColumnsByScopeAlias(editingConfigId || activeConfig?.id || '', editingRelationship.left_alias)" :key="col.name" :value="col.name">{{ col.name }}</option>
-              </select>
-              <div class="text-sm font-semibold text-gray-500">=</div>
-              <select v-model="cond.right_column" class="px-2.5 py-2 border border-gray-200 rounded text-sm bg-white">
-                <option value="">请选择右表字段</option>
-                <option v-for="col in getColumnsByScopeAlias(editingConfigId || activeConfig?.id || '', editingRelationship.right_alias)" :key="col.name" :value="col.name">{{ col.name }}</option>
-              </select>
-              <button
-                class="w-8 h-8 border border-gray-200 rounded bg-white text-gray-400 hover:text-red-500 hover:border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                :disabled="(editingRelationship.join_conditions || []).length <= 1"
-                @click="removeJoinCondition(condIndex)"
-              >
-                <i class="fa-solid fa-minus text-[11px]"></i>
-              </button>
-            </div>
-          </div>
-        </div>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded border border-gray-200 bg-white text-gray-600" @click="closeRelationshipEditor">取消</button>
-          <button class="px-3 py-1.5 rounded border-none bg-blue-500 text-white" @click="confirmRelationshipEditor">确定</button>
-        </div>
-      </template>
-    </el-dialog>
+    <RelationshipEditorDialog
+      v-model:visible="showRelationshipEditor"
+      v-model:relationship="editingRelationship"
+      :scope-entries="relationshipEditorScopeEntries"
+      :columns-by-alias="relationshipEditorColumnsByAlias"
+      @confirm="confirmRelationshipEditor"
+      @cancel="closeRelationshipEditor"
+    />
 
-    <el-dialog v-model="showExpressionEditorDialog" width="760px" title="编辑表达式">
-      <div class="space-y-3">
-        <div v-if="editingExpressionRow" class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
-          {{ editingExpressionRow.table }}.{{ editingExpressionRow.sourceColumn || editingExpressionRow.column }}
-        </div>
-        <textarea
-          v-model="editingExpressionText"
-          rows="8"
-          class="w-full rounded-md border border-gray-200 px-3 py-2 font-mono text-[13px] leading-relaxed text-gray-700 outline-none focus:border-blue-500"
-          placeholder="请输入字段表达式"
-        ></textarea>
-        <div
-          v-if="editingExpressionRow"
-          :class="[
-            'grid gap-3',
-            editingExpressionRow.isMetric && editingExpressionRow.isDimension ? 'grid-cols-2' : 'grid-cols-1'
-          ]"
-        >
-          <div v-if="editingExpressionRow.isMetric" class="rounded-md border border-gray-200 p-3">
-            <div class="mb-1.5 text-xs font-medium text-gray-600">聚合函数</div>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="fn in AGG_FUNCTION_OPTIONS"
-                :key="`expr-agg-${fn.value}`"
-                class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                @click="insertExpressionFromEditor(buildMetricExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
-              >
-                {{ fn.label }}
-              </button>
-            </div>
-          </div>
-          <div v-if="editingExpressionRow.isDimension" class="rounded-md border border-gray-200 p-3">
-            <div class="mb-1.5 text-xs font-medium text-gray-600">常用函数</div>
-            <div class="max-h-[220px] overflow-auto pr-1">
-              <div
-                v-for="group in visibleDimensionFunctionGroups"
-                :key="`expr-dim-group-${group.key}`"
-                class="mb-2 last:mb-0"
-              >
-                <div class="mb-1 text-[11px] font-medium text-gray-400">{{ group.label }}</div>
-                <div class="flex flex-wrap gap-1.5">
-                  <button
-                    v-for="fn in group.items"
-                    :key="`expr-dim-${fn.value}`"
-                    class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                    :title="fn.desc"
-                    @click="insertExpressionFromEditor(buildDimensionExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
-                  >
-                    {{ fn.label }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <button
-          class="px-3 py-1.5 border border-gray-200 rounded bg-white text-xs text-gray-600 hover:bg-gray-50"
-          @click="showExpressionEditorDialog = false"
-        >
-          取消
-        </button>
-        <button
-          class="ml-2 px-3 py-1.5 border-none rounded bg-[#1677FF] text-xs text-white hover:bg-[#0958D9]"
-          @click="saveExpressionEditor"
-        >
-          保存
-        </button>
-      </template>
-    </el-dialog>
+    <ExpressionEditorDialog
+      v-model:visible="showExpressionEditorDialog"
+      :row="editingExpressionRow"
+      :datasource-type="props.datasourceType"
+      @save="saveExpressionEditor"
+    />
 
     <OntologyRulesDialog
       v-model:visible="showOntologyRulesDialog"

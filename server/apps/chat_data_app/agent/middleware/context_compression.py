@@ -10,6 +10,7 @@ from langchain.agents.middleware import before_model
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from ...services.context_budget import ToolResultBudget, count_messages_tokens
 from ...services.llm_config import get_chat_data_llm
@@ -223,7 +224,14 @@ async def _summarize_messages_with_llm(messages: list[BaseMessage], *, model_id:
         max_tokens=SUMMARY_MAX_TOKENS,
         enable_thinking=False,
     )
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"model_id": model_id or "", "purpose": "context_compression"},
+        )
+        raise
     content = getattr(response, "content", response)
     if isinstance(content, list):
         content = "\n".join(str(item.get("text") if isinstance(item, dict) else item) for item in content)

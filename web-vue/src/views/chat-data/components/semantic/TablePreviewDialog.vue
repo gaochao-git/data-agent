@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { createQueryTask, getQueryTask } from '../../api'
-import { isQuerySucceeded } from '../../utils'
+import { isQuerySucceeded, quoteIdentifier } from '../../utils'
 
 const props = defineProps<{
   datasourceId: string
@@ -29,11 +29,6 @@ const tablePreviewJsonText = computed(() => {
   if (tablePreviewRows.value.length === 0) return '[]'
   return formatJsonPreview(tablePreviewRows.value.length === 1 ? tablePreviewRows.value[0] : tablePreviewRows.value)
 })
-
-const quoteIdentifier = (name: string) => {
-  const safe = (name || '').replace(/`/g, '``')
-  return `\`${safe}\``
-}
 
 const quoteTableIdentifier = (name: string) => {
   return (name || '')
