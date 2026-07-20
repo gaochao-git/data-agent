@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageSegment, ToolCallInfo } from '../types'
@@ -46,10 +46,9 @@ const getThinkingSegment = (message: Message, thinkingSegmentId: string) => (
   message.thinkingSegments?.find(segment => segment.id === thinkingSegmentId) || null
 )
 
-const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => {
-  if (message.isStreaming) return false
-  return collapsedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
-}
+const isThinkingSegmentCollapsed = (message: Message, thinkingSegmentId: string): boolean => (
+  collapsedThinkingSegmentKeys.value.has(getThinkingSegmentKey(message.id, thinkingSegmentId))
+)
 
 const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
   if (!getThinkingSegment(message, thinkingSegmentId)) return
@@ -59,6 +58,57 @@ const toggleThinkingSegment = (message: Message, thinkingSegmentId: string) => {
   else next.add(key)
   collapsedThinkingSegmentKeys.value = next
 }
+
+const getActiveThinkingSegmentId = (message: Message): string | null => {
+  if (!message.isStreaming) return null
+  const segments = message.segments || []
+  const lastSegment = segments[segments.length - 1]
+  return lastSegment?.type === 'thinkingSegment' ? lastSegment.thinkingSegmentId : null
+}
+
+interface ThinkingMessageState {
+  id: string
+  activeThinkingSegmentId: string | null
+  thinkingSegmentIds: string[]
+}
+
+const getThinkingMessageStates = (): ThinkingMessageState[] => (
+  props.messages.map(message => ({
+    id: message.id,
+    activeThinkingSegmentId: getActiveThinkingSegmentId(message),
+    thinkingSegmentIds: message.thinkingSegments?.map(segment => segment.id) || [],
+  }))
+)
+
+watch(
+  getThinkingMessageStates,
+  (currentStates, previousStates = []) => {
+    const nextCollapsedKeys = new Set(collapsedThinkingSegmentKeys.value)
+    const previousStateByMessageId = new Map(previousStates.map(state => [state.id, state]))
+
+    for (const currentState of currentStates) {
+      const previousState = previousStateByMessageId.get(currentState.id)
+      if (!previousState) {
+        for (const thinkingSegmentId of currentState.thinkingSegmentIds) {
+          if (thinkingSegmentId !== currentState.activeThinkingSegmentId) {
+            nextCollapsedKeys.add(getThinkingSegmentKey(currentState.id, thinkingSegmentId))
+          }
+        }
+      } else if (
+        previousState.activeThinkingSegmentId
+        && previousState.activeThinkingSegmentId !== currentState.activeThinkingSegmentId
+      ) {
+        nextCollapsedKeys.add(getThinkingSegmentKey(currentState.id, previousState.activeThinkingSegmentId))
+      }
+
+      if (currentState.activeThinkingSegmentId) {
+        nextCollapsedKeys.delete(getThinkingSegmentKey(currentState.id, currentState.activeThinkingSegmentId))
+      }
+    }
+    collapsedThinkingSegmentKeys.value = nextCollapsedKeys
+  },
+  { immediate: true },
+)
 
 const resolveToolCall = (message: Message, toolCallId: string): ToolCallInfo | null => (
   props.resolveToolCall(message, toolCallId)
