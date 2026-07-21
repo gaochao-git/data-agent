@@ -40,7 +40,7 @@ def test_update_datasource_mapped_modules_api_contract(client, fake_datasource_m
 def test_table_groups_read_and_save_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
     patch_datasource_manager(fake_datasource_manager)
 
-    list_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups")
+    list_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups", headers=auth_headers)
     save_response = client.put(
         "/api/chatdata/admin/datasources/ds_a/table-groups",
         json={"groups": [{"table_group_name": "订单域", "table_names": ["orders"]}]},
@@ -55,6 +55,20 @@ def test_table_groups_read_and_save_api_contract(client, fake_datasource_manager
     assert payload["data"]["groups"] == [{"table_group_name": "订单域", "table_names": ["orders"]}]
     assert fake_datasource_manager.replaced_table_groups == [{"table_group_name": "订单域", "table_names": ["orders"]}]
     assert fake_datasource_manager.replaced_table_groups_operator == "user_a"
+
+
+def test_admin_datasource_read_routes_require_auth(client, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
+
+    table_groups_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups")
+    semantic_health_response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-health")
+
+    assert table_groups_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert table_groups_response.json()["status"] == "error"
+    assert table_groups_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+    assert semantic_health_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert semantic_health_response.json()["status"] == "error"
+    assert semantic_health_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
 
 
 def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, patch_datasource_manager, auth_headers):

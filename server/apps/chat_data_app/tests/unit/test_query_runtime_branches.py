@@ -16,13 +16,13 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 from apps.chat_data_app.schema import ExecuteSqlRequest
-from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services import query_cache, query_runtime
 
 
 def test_query_runtime_cache_identity_and_flags(monkeypatch):
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
 
-    identity = query_runtime.build_sql_result_cache_identity(
+    identity = query_cache.build_sql_result_cache_identity(
         {
             "id": "ds_fallback",
             "member_datasource_id": "m1",
@@ -32,21 +32,21 @@ def test_query_runtime_cache_identity_and_flags(monkeypatch):
         " select 1 ",
         datasource_id="ds_a",
     )
-    fallback_identity = query_runtime.build_sql_result_cache_identity({"id": "ds_fallback"}, "select 1")
+    fallback_identity = query_cache.build_sql_result_cache_identity({"id": "ds_fallback"}, "select 1")
 
-    assert query_runtime.is_http_execution_target({"query_executor_type": " HTTP "}) is True
-    assert query_runtime.is_http_execution_target({"query_executor_type": "direct"}) is False
-    assert query_runtime.is_http_remote_ref_cache(None) is False
-    assert query_runtime.is_http_remote_ref_cache({"cache_type": "http_remote_ref", "remote_task_id": ""}) is False
-    assert query_runtime.is_http_remote_ref_cache({"cache_type": "HTTP_REMOTE_REF", "remote_task_id": "rt1"}) is True
-    assert query_runtime.normalize_sql_cache_text(" select 1 ") == "select 1"
+    assert query_cache.is_http_execution_target({"query_executor_type": " HTTP "}) is True
+    assert query_cache.is_http_execution_target({"query_executor_type": "direct"}) is False
+    assert query_cache.is_http_remote_ref_cache(None) is False
+    assert query_cache.is_http_remote_ref_cache({"cache_type": "http_remote_ref", "remote_task_id": ""}) is False
+    assert query_cache.is_http_remote_ref_cache({"cache_type": "HTTP_REMOTE_REF", "remote_task_id": "rt1"}) is True
+    assert query_cache.normalize_sql_cache_text(" select 1 ") == "select 1"
     assert identity["datasource_id"] == "ds_a"
     assert identity["executor_type"] == "http"
     assert identity["source_type"] == "hive"
     assert identity["sql_text"] == " select 1 "
     assert fallback_identity["datasource_id"] == "ds_fallback"
-    assert query_runtime.is_sql_result_cache_enabled(False) is True
-    assert query_runtime.is_sql_result_cache_enabled(True) is False
+    assert query_cache.is_sql_result_cache_enabled(False) is True
+    assert query_cache.is_sql_result_cache_enabled(True) is False
 
 
 def test_load_remote_tasks_and_query_task_response_branches():
@@ -110,7 +110,7 @@ def test_persistent_query_task_result_payload_filters_http_members():
 
     assert all_http is None
     assert no_http is result_data
-    assert only_local_failed["success"] is False
+    assert only_local_failed["status"] == "failed"
     assert only_local_failed["sql"] == "select local"
     assert only_local_failed["error"] == "本地失败"
     assert only_local_failed["results"][0]["member_datasource_id"] == "local_1"
@@ -129,12 +129,13 @@ def test_persistent_query_task_result_payload_local_success_and_error_fallback()
         {"http_1"},
     )
     success = query_runtime.build_persistent_query_task_result_payload(result_data, {"http_1"})
+    success_member = next(item for item in success["results"] if item["member_datasource_id"] == "local_2")
 
     assert failed_without_error["error"] == "整体失败"
-    assert success["success"] is True
-    assert success["columns"] == ["id"]
-    assert success["cache_hit"] is True
-    assert success["cache_age_seconds"] == 10
+    assert success["status"] == "succeeded"
+    assert success_member["columns"] == ["id"]
+    assert success_member["cache_hit"] is True
+    assert success_member["cache_age_seconds"] == 10
 
 
 def test_has_running_member_result_detects_unfinished_members():
@@ -193,7 +194,10 @@ def test_runtime_task_operator_and_execution_id_helpers():
 
 
 def test_prepare_sql_request_for_execution_branches(monkeypatch):
+    alarm_records = []
     normal = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
+    dangerous = ExecuteSqlRequest(sql="select 1; drop table orders", datasource_id="ds_a")
+    oversized_limit = ExecuteSqlRequest(sql="select * from orders limit 100000", datasource_id="ds_a")
     no_semantic_config = ExecuteSqlRequest(
         sql="select bad",
         datasource_id="ds_a",
@@ -220,8 +224,16 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
         return {"sql": "select city from orders"}
 
     monkeypatch.setattr(query_runtime, "compile_semantic_builder_sql", fake_compile_semantic_builder_sql)
+    monkeypatch.setattr(query_runtime, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(normal)) is normal
+    assert asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous)) is dangerous
+    with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
+    assert alarm_records[0][0][0] == "select 1; drop table orders"
+    assert alarm_records[0][1]["execution_scope"] == "task_submit"
+    with pytest.raises(ValueError, match="查询结果最多返回"):
+        asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
     with pytest.raises(ValueError, match="必须基于指标集"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):
@@ -265,7 +277,8 @@ def test_remote_ref_cache_result_branches(monkeypatch):
         "cache_age_seconds": 3,
         "cache_expires_in_seconds": 9,
     }))
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
+    assert "success" not in success
     assert success["remote_task_id"] == "rt3"
     assert success["cache_hit"] is True
     assert success["cache_age_seconds"] == 3
@@ -280,16 +293,16 @@ def test_build_persistent_query_task_result_for_request_branches(monkeypatch):
         ],
     }
 
-    async def all_http_true(_request):
+    async def all_http_true(_request, **_kwargs):
         return True
 
-    async def all_http_raise(_request):
+    async def all_http_raise(_request, **_kwargs):
         raise RuntimeError("all http failed")
 
-    async def member_ids_raise(_request):
+    async def member_ids_raise(_request, **_kwargs):
         raise RuntimeError("member failed")
 
-    async def member_ids_ok(_request):
+    async def member_ids_ok(_request, **_kwargs):
         return {"http_1"}
 
     monkeypatch.setattr(query_runtime, "are_all_sql_execution_targets_http", all_http_true)
@@ -307,7 +320,13 @@ def test_build_persistent_query_task_result_for_request_branches(monkeypatch):
 
 def test_execution_target_queries_use_manager(monkeypatch):
     class Manager:
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             assert datasource_id == "ds_a"
             return [
                 {"member_datasource_id": "m1", "query_executor_type": "http"},
@@ -415,7 +434,7 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
     async def execution_status(_execution_id):
         return next(status_values)
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", execution_status)
@@ -436,7 +455,8 @@ def test_execute_sql_for_member_callbacks_skip_cache_and_post_execute_cancel(mon
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is False
+    assert result["status"] == "cancelled"
+    assert "success" not in result
     assert result["error"] == "已人工取消"
     assert result["sql"] == "select 1 LIMIT 10"
     assert remote_tasks == [("task_1", {
@@ -499,8 +519,8 @@ def test_execute_sql_for_member_http_remote_ref_cache_hit(monkeypatch):
     async def update_query_execution(_execution_id, **_kwargs):
         return None
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", get_sql_result_cache)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", get_sql_result_cache)
     monkeypatch.setattr(query_runtime, "fetch_http_remote_ref_cache_result", fetch_remote_ref)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: (_ for _ in ()).throw(AssertionError("cache hit should not execute")))
     monkeypatch.setattr(query_runtime, "append_query_task_remote_task", append_query_task_remote_task)
@@ -520,7 +540,8 @@ def test_execute_sql_for_member_http_remote_ref_cache_hit(monkeypatch):
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["cache_hit"] is True
     assert result["remote_task_id"] == "remote_cached"
     assert remote_tasks == [("task_http", {
@@ -580,14 +601,14 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
     async def save_sql_result_cache(_cache_identity, _query_result, operator_id=None, operator_name=None):
         cache_writes.append(("direct", operator_id, operator_name))
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", running_status)
     monkeypatch.setattr(query_runtime, "update_query_execution", update_query_execution)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", update_query_execution_from_result)
-    monkeypatch.setattr(query_runtime, "save_http_remote_ref_sql_result_cache", save_http_remote_ref_sql_result_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", save_sql_result_cache)
+    monkeypatch.setattr(query_cache, "save_http_remote_ref_sql_result_cache", save_http_remote_ref_sql_result_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", save_sql_result_cache)
 
     async def unavailable_ref(_cached_result, user_id=None, username=None):
         return {"_cache_ref_unavailable": True, "success": False, "status": "failed", "error": "远端结果已过期"}
@@ -596,7 +617,7 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
         return {"cache_type": "http_remote_ref", "remote_task_id": "remote_old", "source_type": "hive"}
 
     monkeypatch.setattr(query_runtime, "fetch_http_remote_ref_cache_result", unavailable_ref)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", http_ref_cache)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", http_ref_cache)
     http_result = asyncio.run(query_runtime.execute_sql_for_member(
         execution_target={"member_datasource_id": "m_http", "member_name": "HTTP成员", "source_type": "hive", "query_executor_type": "http"},
         sql="select 1",
@@ -619,8 +640,10 @@ def test_execute_sql_for_member_cache_miss_and_ref_unavailable_paths(monkeypatch
         datasource_id="ds_a",
     ))
 
-    assert http_result["success"] is True
-    assert direct_result["success"] is True
+    assert http_result["status"] == "succeeded"
+    assert direct_result["status"] == "succeeded"
+    assert "success" not in http_result
+    assert "success" not in direct_result
     assert execute_calls == [("select 1", "测试用户"), ("select 1", "测试用户")]
     assert ("http", "user_1", "测试用户") in cache_writes
     assert ("direct", "user_1", "测试用户") in cache_writes
@@ -648,9 +671,9 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
     async def run_with_limit(_user_id, _execution_target, query_fn):
         return await query_fn()
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", get_sql_result_cache)
-    monkeypatch.setattr(query_runtime, "save_sql_result_cache", save_sql_result_cache)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", get_sql_result_cache)
+    monkeypatch.setattr(query_cache, "save_sql_result_cache", save_sql_result_cache)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
 
@@ -664,7 +687,8 @@ def test_execute_sql_for_member_cache_read_and_write_errors_are_ignored(monkeypa
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert result["data"] == [{"id": 1}]
 
 
@@ -674,30 +698,30 @@ def test_sql_result_cache_save_short_circuits_and_http_delegation(monkeypatch):
     async def upsert(cache_identity, payload, result_row_count, operator_id=None, operator_name=None):
         upserts.append((cache_identity, payload, result_row_count, operator_id, operator_name))
 
-    monkeypatch.setattr(query_runtime, "_upsert_sql_result_cache_payload", upsert)
+    monkeypatch.setattr(query_cache, "_upsert_sql_result_cache_payload", upsert)
 
-    asyncio.run(query_runtime.save_sql_result_cache(
+    asyncio.run(query_cache.save_sql_result_cache(
         {"executor_type": "direct"},
         {"success": False, "columns": ["id"], "data": [{"id": 1}], "total_count": 1},
     ))
-    asyncio.run(query_runtime.save_http_remote_ref_sql_result_cache(
+    asyncio.run(query_cache.save_http_remote_ref_sql_result_cache(
         {"source_type": "hive"},
         {"success": True, "remote_task_id": ""},
     ))
-    asyncio.run(query_runtime.save_http_remote_ref_sql_result_cache(
+    asyncio.run(query_cache.save_http_remote_ref_sql_result_cache(
         {"source_type": "mysql"},
         {"success": False, "remote_task_id": "rt_skip"},
     ))
 
     assert upserts == []
 
-    asyncio.run(query_runtime.save_sql_result_cache(
+    asyncio.run(query_cache.save_sql_result_cache(
         {"executor_type": "http", "source_type": "hive"},
         {"success": True, "remote_task_id": "remote_1", "execution_time_ms": 3},
         operator_id="u1",
         operator_name="张三",
     ))
-    asyncio.run(query_runtime.save_sql_result_cache(
+    asyncio.run(query_cache.save_sql_result_cache(
         {"executor_type": "direct"},
         {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1, "execution_time_ms": 5},
         operator_id="u2",
@@ -736,7 +760,7 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     async def update_query_execution_from_result(execution_id, result, store_result_payload=True):
         final_updates.append((execution_id, result, store_result_payload))
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", False)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", False)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FailingExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "get_query_execution_status", running_status)
@@ -753,7 +777,8 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert "success" not in result
     assert result["error"] == "executor failed"
     assert result["columns"] == []
     assert result["data"] == []
@@ -808,12 +833,13 @@ def _patch_query_runtime_session(monkeypatch, session):
         yield session
 
     monkeypatch.setattr(query_runtime, "get_session", fake_get_session)
+    monkeypatch.setattr(query_cache, "get_session", fake_get_session)
 
 
 def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     no_cache_session = _SessionQueue(_ScalarResult(None))
     _patch_query_runtime_session(monkeypatch, no_cache_session)
-    assert asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "missing"})) is None
+    assert asyncio.run(query_cache.get_sql_result_cache({"cache_key": "missing"})) is None
 
     bad_cache = SimpleNamespace(
         result_payload="{bad",
@@ -826,7 +852,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     )
     bad_session = _SessionQueue(_ScalarResult(bad_cache))
     _patch_query_runtime_session(monkeypatch, bad_session)
-    assert asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "bad"})) is None
+    assert asyncio.run(query_cache.get_sql_result_cache({"cache_key": "bad"})) is None
     assert bad_cache.delete_flag == 1
     assert bad_session.commits == 1
 
@@ -840,7 +866,7 @@ def test_sql_result_cache_reads_miss_bad_json_and_hit(monkeypatch):
     )
     hit_session = _SessionQueue(_ScalarResult(hit_cache))
     _patch_query_runtime_session(monkeypatch, hit_session)
-    payload = asyncio.run(query_runtime.get_sql_result_cache({"cache_key": "hit"}))
+    payload = asyncio.run(query_cache.get_sql_result_cache({"cache_key": "hit"}))
 
     assert payload["cache_hit"] is True
     assert payload["cache_age_seconds"] >= 0
@@ -1114,8 +1140,8 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
     async def update_query_execution_from_result(execution_id, result, store_result_payload=True):
         final_updates.append((execution_id, result, store_result_payload))
 
-    monkeypatch.setattr(query_runtime, "QUERY_CACHE_ENABLED", True)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", non_ref_cache)
+    monkeypatch.setattr(query_cache, "QUERY_CACHE_ENABLED", True)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", non_ref_cache)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: CallbackExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
     monkeypatch.setattr(query_runtime, "update_query_execution_from_result", update_query_execution_from_result)
@@ -1130,7 +1156,8 @@ def test_execute_sql_for_member_http_cache_non_ref_and_no_callback_targets(monke
         datasource_id="ds_a",
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
     assert execute_calls == ["select 1"]
     assert final_updates == []
 
@@ -1154,8 +1181,8 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
     async def cache_miss(_identity):
         return None
 
-    monkeypatch.setattr(query_runtime, "is_sql_result_cache_enabled", cache_enabled)
-    monkeypatch.setattr(query_runtime, "get_sql_result_cache", cache_miss)
+    monkeypatch.setattr(query_cache, "is_sql_result_cache_enabled", cache_enabled)
+    monkeypatch.setattr(query_cache, "get_sql_result_cache", cache_miss)
     monkeypatch.setattr(query_runtime, "get_executor", lambda _target: FakeExecutor())
     monkeypatch.setattr(query_runtime, "run_with_sql_user_datasource_limit", run_with_limit)
 
@@ -1166,7 +1193,8 @@ def test_execute_sql_for_member_cache_toggle_inside_update_path(monkeypatch):
         timeout=None,
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert "success" not in result
 
 
 def test_run_sql_query_task_cancel_after_running(monkeypatch):
@@ -1189,41 +1217,24 @@ def test_run_sql_query_task_cancel_after_running(monkeypatch):
     assert updates[0][1]["status"] == "running"
 
 
-def test_execute_sql_request_with_task_marks_failed_before_reraising(monkeypatch):
-    updates = []
-    request = ExecuteSqlRequest(sql="select 1", datasource_id="ds_a")
-
-    async def create_task_for_execute_request(_request, query_type=None, operator_name=None):
-        return {"task_id": "task_1"}
-
-    async def create_query_executions_for_task(*_args, **_kwargs):
-        raise RuntimeError("create executions failed")
-
-    async def update_query_task(task_id, **kwargs):
-        updates.append((task_id, kwargs))
-
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_for_execute_request)
-    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_query_executions_for_task)
-    monkeypatch.setattr(query_runtime, "update_query_task", update_query_task)
-
-    with pytest.raises(RuntimeError, match="create executions failed"):
-        asyncio.run(query_runtime.execute_sql_request_with_task(request, operator_name="张三"))
-
-    assert len(updates) == 1
-    assert updates[0][0] == "task_1"
-    assert updates[0][1]["status"] == "failed"
-    assert updates[0][1]["error_message"] == "create executions failed"
-
-
-def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch):
+def test_execute_agent_sql_task_persist_and_error_branches(monkeypatch):
     class Manager:
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id}
 
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             return [{"member_datasource_id": "m1", "member_name": "成员1"}]
 
+    execute_calls = []
+
     async def execute_sql_for_member(**_kwargs):
+        execute_calls.append(_kwargs)
         return {"success": True, "sql": "select 1", "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
     async def create_task_raises(*_args, **_kwargs):
@@ -1233,8 +1244,10 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
     monkeypatch.setattr(query_runtime, "execute_sql_for_member", execute_sql_for_member)
 
-    fallback = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
-    assert fallback["success"] is True
+    task_failed = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
+    assert task_failed["status"] == "failed"
+    assert task_failed["error"] == "task unavailable"
+    assert execute_calls == []
 
     updates = []
 
@@ -1256,39 +1269,46 @@ def test_execute_agent_sql_task_fallback_persist_and_error_branches(monkeypatch)
     monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", persist_raises)
 
     persisted = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a", operator_name="张三"))
-    assert persisted["success"] is True
+    assert persisted["status"] == "succeeded"
     assert updates[-1][1]["status"] == "succeeded"
     assert updates[-1][1]["result_payload"] is None
 
     class ValueErrorManager(Manager):
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             raise ValueError("unsupported")
 
-    async def update_raises(*_args, **_kwargs):
+    update_raise_calls = []
+
+    async def update_raises_after_running(*_args, **kwargs):
+        update_raise_calls.append(kwargs)
+        if len(update_raise_calls) == 1 and kwargs.get("status") == "running":
+            return None
         raise RuntimeError("update failed")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
-    monkeypatch.setattr(query_runtime, "update_query_task", update_raises)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_raises_after_running)
     value_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert value_error_result["success"] is False
+    assert value_error_result["status"] == "failed"
     assert value_error_result["error"] == "unsupported"
 
     class RuntimeErrorManager(Manager):
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids):
+        async def get_authorized_execution_datasources_async(
+            self,
+            datasource_id,
+            member_datasource_ids,
+            user_id=None,
+            username=None,
+        ):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
+    monkeypatch.setattr(query_runtime, "update_query_task", update_ok)
     generic_error_result = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert generic_error_result["success"] is False
+    assert generic_error_result["status"] == "failed"
     assert generic_error_result["error"] == "执行失败: boom"
-
-    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: ValueErrorManager())
-    monkeypatch.setattr(query_runtime, "create_task_for_execute_request", create_task_raises)
-    no_task_value_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert no_task_value_error["success"] is False
-    assert no_task_value_error["error"] == "unsupported"
-
-    monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: RuntimeErrorManager())
-    no_task_generic_error = asyncio.run(query_runtime.execute_agent_sql("select 1", "ds_a"))
-    assert no_task_generic_error["success"] is False
-    assert no_task_generic_error["error"] == "执行失败: boom"

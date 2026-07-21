@@ -13,8 +13,10 @@ from typing import Optional, List, Dict, Any, Callable
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
+from apps.chat_data_app.services.context_budget import sanitize_context_usage_for_response
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from .checkpoint import get_checkpointer
 from .database import get_session
@@ -157,6 +159,9 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                 semantic_config_selection = _serialize_semantic_config_selection(msg.additional_kwargs.get("semantic_config_selection"))
                 if semantic_config_selection:
                     msg_data["semantic_config_selection"] = semantic_config_selection
+                reasoning_turn_id = str(msg.additional_kwargs.get("reasoning_turn_id") or "").strip()
+                if reasoning_turn_id:
+                    msg_data["reasoning_turn_id"] = reasoning_turn_id
 
             serialized.append(msg_data)
 
@@ -256,11 +261,15 @@ def _serialize_reasoning_segments(reasoning_segments: Any) -> List[Dict[str, Any
             normalized_tool_call_count = max(0, int(tool_call_count))
         except (TypeError, ValueError):
             normalized_tool_call_count = 0
-        serialized.append({
+        segment = {
             "id": str(item.get("id") or f"reasoning-history-{index}"),
             "content": content,
             "tool_call_count": normalized_tool_call_count,
-        })
+        }
+        reasoning_turn_id = str(item.get("reasoning_turn_id") or item.get("reasoningTurnId") or "").strip()
+        if reasoning_turn_id:
+            segment["reasoning_turn_id"] = reasoning_turn_id
+        serialized.append(segment)
     return serialized
 
 
@@ -427,52 +436,6 @@ async def sync_thread_to_db(
         logger.warning(f"同步会话到 user_threads 失败: {e}")
 
 
-def _get_interrupt_info(state) -> Optional[Dict[str, Any]]:
-    """
-    从状态中提取中断信息（由工具内部的 interrupt() 触发）
-
-    Returns:
-        如果有中断: {"tool_name", "tool_call_id", "args", "message", ...}
-        否则: None
-    """
-    if not state or not state.tasks:
-        return None
-
-    # 从 tasks 中找到第一个 interrupt
-    for task in state.tasks:
-        if not (hasattr(task, 'interrupts') and task.interrupts):
-            continue
-
-        interrupt = task.interrupts[0]  # 取第一个中断
-        if not hasattr(interrupt, 'value'):
-            continue
-
-        value = interrupt.value
-        if not isinstance(value, dict):
-            continue
-
-        # 从最后一条消息的 tool_calls 中获取 tool_call_id 和 tool_name
-        tool_call_id = None
-        tool_name = None
-        messages = state.values.get("messages", []) if state.values else []
-        if messages:
-            last_msg = messages[-1]
-            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-                tc = last_msg.tool_calls[0]
-                tool_call_id = tc.get("id")
-                tool_name = tc.get("name")
-
-        # 返回中断信息
-        return {
-            "tool_name": tool_name or "unknown_tool",
-            "tool_call_id": tool_call_id,
-            "args": value.get("args", {}),
-            "message": value.get("message"),
-        }
-
-    return None
-
-
 def _get_checkpoint_datasource_id(values: Dict[str, Any] | None) -> Optional[str]:
     """从 LangGraph state 读取会话首次绑定的数据源组。"""
     datasource_id = str((values or {}).get("conversation_datasource_id") or "").strip()
@@ -485,13 +448,31 @@ async def get_checkpoint_datasource_id(
     get_checkpointer_fn: Callable,
 ) -> Optional[str]:
     """读取会话 checkpoint 中绑定的数据源组。"""
-    if get_graph is None:
+    if get_checkpointer_fn is None:
         return None
     config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
     async with get_checkpointer_fn() as checkpointer:
+        tuple_read, datasource_id = await _get_checkpoint_datasource_id_from_tuple(checkpointer, config)
+        if tuple_read or get_graph is None:
+            return datasource_id
         graph = get_graph(checkpointer)
         state = await graph.aget_state(config)
     return _get_checkpoint_datasource_id(state.values if state and state.values else None)
+
+
+async def _get_checkpoint_datasource_id_from_tuple(checkpointer: Any, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """直接读取 checkpoint channel_values，避免仅查绑定数据源时创建完整 agent。"""
+    getter = getattr(checkpointer, "aget_tuple", None)
+    if not callable(getter):
+        return False, None
+    try:
+        checkpoint_tuple = await getter(config)
+    except Exception as err:
+        logger.warning("直接读取 checkpoint 绑定数据源失败，回退 graph state: %s", err)
+        return False, None
+    checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple else None
+    values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+    return True, _get_checkpoint_datasource_id(values if isinstance(values, dict) else None)
 
 
 async def get_detail(
@@ -511,7 +492,7 @@ async def get_detail(
         get_checkpointer_fn: 获取checkpointer的函数
 
     Returns:
-        {"id": "...", "title": "...", "messages": [...], "is_favorited": bool, "pending_tool": {...} | null} 或 None
+        {"id": "...", "title": "...", "messages": [...], "is_favorited": bool} 或 None
     """
     # 从数据库获取会话元信息
     thread = await conversation_dao.get_thread(conversation_id, user_id)
@@ -525,7 +506,6 @@ async def get_detail(
     task_stages = []
     reasoning_segments = []
     token_usage = None
-    pending_tool = None
     state = None
 
     # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
@@ -542,9 +522,7 @@ async def get_detail(
                 reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
                 raw_token_usage = state.values.get("token_usage")
                 if isinstance(raw_token_usage, dict):
-                    token_usage = raw_token_usage
-                # 检查是否有待确认的工具
-                pending_tool = _get_interrupt_info(state)
+                    token_usage = sanitize_context_usage_for_response(raw_token_usage)
 
     return {
         "id": conversation_id,
@@ -555,7 +533,6 @@ async def get_detail(
         "reasoning_segments": reasoning_segments,
         "token_usage": token_usage,
         "is_favorited": is_favorited,
-        "pending_tool": pending_tool
     }
 
 
@@ -664,6 +641,10 @@ async def generate_title(
         result = await chain.ainvoke({"query": query})
         title = _clean_title(result.content, query)
     except Exception as e:
+        emit_llm_connection_alarm_if_needed(
+            e,
+            ext1={"purpose": "conversation_title", "conversation_id": conversation_id},
+        )
         logger.warning(f"LLM生成标题失败: {e}")
         title = _clean_title("", query)
 

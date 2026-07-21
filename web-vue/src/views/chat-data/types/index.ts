@@ -3,6 +3,7 @@
  */
 
 import type { ChartType } from '../chartTypes'
+export type { MemberQueryResult, QueryResult } from './query'
 
 // 表信息
 export interface TableInfo {
@@ -100,6 +101,7 @@ export interface SkillInfo {
   owner_user_id?: string
   creator_id?: string
   creator_name?: string
+  create_by_name?: string
   can_manage?: boolean
   favorite?: boolean
   enabled?: boolean
@@ -187,6 +189,7 @@ export interface ChatDataTokenUsage {
   input_budget_tokens?: number
   input_budget_trigger_ratio?: number
   estimated?: boolean
+  context_compression?: ChatDataContextCompressionInfo | null
   llm_calls?: Array<{
     index: number
     model?: string | null
@@ -200,9 +203,23 @@ export interface ChatDataTokenUsage {
     total_tokens?: number
     estimated?: boolean
     message_count?: number
+    context_compression?: ChatDataContextCompressionInfo | null
     breakdown?: ChatDataTokenUsageBreakdown[]
   }>
   breakdown?: ChatDataTokenUsageBreakdown[]
+}
+
+export interface ChatDataContextCompressionInfo {
+  enabled?: boolean
+  triggered?: boolean
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  threshold_tokens?: number
+  trigger_ratio?: number
+  compressed_messages?: number
+  summary_chars?: number
+  compression_skipped_reason?: string
 }
 
 export interface ChatDataMessageEndPayload {
@@ -243,19 +260,11 @@ export interface LangGraphMessage {
   timestamp?: string
 }
 
-export interface TaskStageInfo {
-  stage: 'thinking' | 'plan' | 'execute' | 'done'
-  status: 'running' | 'completed' | 'error'
-  title?: string
-  content?: string
-  steps?: string[]
-  source?: 'reasoning' | 'task_stage'
-}
-
 export interface ThinkingSegment {
   id: string
   content: string
   toolCallCount: number
+  reasoningTurnId?: string
 }
 
 export interface SemanticConfigSelectionInfo {
@@ -291,7 +300,6 @@ export interface Message {
   error?: string
   isStreaming?: boolean
   dashboardSpec?: DashboardSpecPayload
-  taskStages?: TaskStageInfo[]
   semanticConfigSelection?: SemanticConfigSelectionInfo
   skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
   // tool 消息专用字段
@@ -354,37 +362,8 @@ export interface ToolCallInfo {
 // 消息内容片段（用于按顺序渲染文本和工具调用）
 export type MessageSegment =
   | { type: 'text'; content: string }
+  | { type: 'thinkingSegment'; thinkingSegmentId: string }
   | { type: 'toolCall'; toolCallId: string }
-  | { type: 'taskStage'; stageIndex: number }
-
-// 查询结果
-export interface QueryResult {
-  success: boolean
-  sql?: string
-  columns?: string[]
-  data?: Record<string, unknown>[]
-  total_count?: number
-  execution_time_ms?: number
-  error?: string
-}
-
-export interface MemberQueryResult {
-  member_datasource_id?: string
-  member_name?: string
-  success: boolean
-  status?: string | null
-  sql?: string
-  columns: string[]
-  data: Record<string, unknown>[]
-  total_count: number
-  execution_time_ms?: number
-  started_time?: string | null
-  finished_time?: string | null
-  error?: string
-  cache_hit?: boolean
-  cache_age_seconds?: number | null
-  cache_expires_in_seconds?: number | null
-}
 
 export interface SqlHistoryItem {
   id: number | string
@@ -485,10 +464,10 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec' | 'task_stage' | 'task_stage_delta'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
 
 // 工具状态
-export type ToolStatus = 'pending' | 'running' | 'completed'
+export type ToolStatus = 'running' | 'completed'
 
 // 工具事件数据
 export interface ToolEventData {
@@ -620,4 +599,53 @@ export interface OrderByItem {
   tableAlias?: string
   column: string
   direction: 'ASC' | 'DESC'
+}
+
+// QueryBuilder 拖拽载荷：表
+export interface BuilderDragTableData {
+  name: string
+  alias: string
+  label: string
+}
+
+// 语义配置-扩展聚合指标选项
+export interface MetricExpandOption {
+  aggFunc: string
+  label: string
+  fieldName: string
+  displayName: string
+  expression: string
+  exists: boolean
+  selected: boolean
+}
+
+// 语义配置-新增字段表单
+export interface AddFieldForm {
+  tableAlias: string
+  column: string
+  fieldName: string
+  displayName: string
+  mode: 'dimension' | 'metric'
+}
+
+// 语义配置-新增字段弹窗的表选项
+export interface AddFieldTableOption {
+  alias: string
+  table: string
+  description?: string
+  columns: Array<{ name: string; description?: string }>
+}
+
+// QueryBuilder 拖拽载荷：字段（数据表字段或语义维度/指标）
+export interface BuilderDragFieldData {
+  table: string
+  tableAlias?: string
+  tableLabel?: string
+  column: string
+  label?: string
+  semanticName?: string
+  expression?: string
+  displayName?: string
+  aggFunc?: string
+  type?: string
 }

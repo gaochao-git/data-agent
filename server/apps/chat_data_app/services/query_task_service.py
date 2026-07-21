@@ -13,6 +13,7 @@ from utils.models import ChatDataQueryExecution
 
 from ..schema import QueryTaskCreateRequest
 from . import dashboard_runtime, query_runtime
+from .query_result import build_query_result_payload, query_result_status, query_result_succeeded
 from .query_history_service import QueryHistoryService, QUERY_TASK_FINAL_STATUSES
 
 logger = get_logger(__name__)
@@ -193,7 +194,7 @@ class QueryTaskService:
         response_data = await self.merge_live_remote_sql_result(response_data, executions)
         result_payload = response_data["result_payload"]
         task_type = response_data["task_type"]
-        return {
+        task_response = {
             "task_id": response_data["task_id"],
             "task_type": task_type,
             "datasource_id": response_data["datasource_id"],
@@ -201,15 +202,207 @@ class QueryTaskService:
             "status": response_data["status"],
             "progress_text": response_data["progress_text"],
             "remote_tasks": response_data["remote_tasks"],
-            "executions": executions,
-            "result": result_payload if task_type != "sql" else None,
-            "results": (result_payload or {}).get("results") if task_type == "sql" and isinstance(result_payload, dict) else None,
             "error_message": response_data["error_message"],
             "started_time": response_data["started_time"],
             "finished_time": response_data["finished_time"],
             "create_time": response_data["create_time"],
             "update_time": response_data["update_time"],
         }
+        if task_type == "sql":
+            task_response["results"] = self.build_sql_task_results(result_payload, executions)
+        else:
+            task_response["executions"] = self.build_query_task_execution_views(executions)
+            task_response["result"] = result_payload
+        return task_response
+
+    @staticmethod
+    def build_query_task_execution_views(executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """构造任务状态接口使用的轻量执行视图，避免和 results[] 重复返回业务结果。"""
+        view_fields = (
+            "execution_id",
+            "task_id",
+            "datasource_id",
+            "member_datasource_id",
+            "member_name",
+            "executor_type",
+            "sql_status",
+            "remote_task_id",
+            "db_connection_id",
+            "started_time",
+            "finished_time",
+            "operator_name",
+        )
+        views: List[Dict[str, Any]] = []
+        for execution in executions or []:
+            source = execution if isinstance(execution, dict) else execution.to_dict()
+            views.append({field: source.get(field) for field in view_fields if field in source})
+        return views
+
+    @classmethod
+    def build_sql_task_results(
+        cls,
+        result_payload: Any,
+        executions: List[Dict[str, Any]],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """构造 SQL/可视化任务统一成员结果，执行明细并入 results[]。"""
+        if not isinstance(result_payload, dict):
+            return cls.build_sql_task_results_from_executions(executions)
+
+        raw_result_items = result_payload.get("results")
+        result_items = list(raw_result_items) if isinstance(raw_result_items, list) else []
+        execution_views = cls.build_sql_task_execution_result_views(executions)
+        if not result_items and execution_views:
+            return cls.normalize_sql_task_results(execution_views, result_payload)
+        if not result_items:
+            return []
+
+        task_sql = (result_payload or {}).get("sql")
+        execution_map = {
+            str(item.get("member_datasource_id") or "").strip(): item
+            for item in execution_views
+            if str(item.get("member_datasource_id") or "").strip()
+        }
+        merged_results = [
+            cls.fill_sql_task_result_defaults(
+                cls.merge_sql_task_result_execution(
+                    result,
+                    cls.resolve_sql_task_execution_view(result, index, execution_views, execution_map),
+                ),
+                task_sql,
+            )
+            for index, result in enumerate(result_items)
+        ]
+        return cls.normalize_sql_task_results(merged_results, result_payload)
+
+    @classmethod
+    def build_sql_task_results_from_executions(cls, executions: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+        """任务尚未写入结果时，用执行记录返回成员运行状态。"""
+        execution_views = cls.build_sql_task_execution_result_views(executions)
+        if not execution_views:
+            return None
+        return cls.normalize_sql_task_results(execution_views, {})
+
+    @classmethod
+    def build_sql_task_execution_result_views(cls, executions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """将执行记录转换为可并入成员结果的轻量字段。"""
+        result_fields = (
+            "execution_id",
+            "member_datasource_id",
+            "member_name",
+            "executor_type",
+            "remote_task_id",
+            "db_connection_id",
+            "started_time",
+            "finished_time",
+        )
+        views: List[Dict[str, Any]] = []
+        for execution in executions or []:
+            source = execution if isinstance(execution, dict) else execution.to_dict()
+            view = {field: source.get(field) for field in result_fields if field in source}
+            if source.get("sql_status"):
+                view["status"] = source.get("sql_status")
+            execution_sql = source.get("query") or source.get("sql_text")
+            if execution_sql:
+                view["sql"] = execution_sql
+            if source.get("execution_time_ms") is not None:
+                view["execution_time_ms"] = source.get("execution_time_ms")
+            if source.get("result_row_count") is not None:
+                view["total_count"] = source.get("result_row_count")
+            if source.get("error_message"):
+                view["error"] = source.get("error_message")
+            execution_payload = source.get("result_payload")
+            if isinstance(execution_payload, dict):
+                cls.fill_sql_task_execution_payload_defaults(view, execution_payload)
+            view.setdefault("columns", [])
+            view.setdefault("data", [])
+            view.setdefault("total_count", 0)
+            view.setdefault("error", None)
+            views.append(view)
+        return views
+
+    @staticmethod
+    def fill_sql_task_execution_payload_defaults(view: Dict[str, Any], execution_payload: Dict[str, Any]) -> None:
+        """执行明细已落库但任务结果未落库时，保留成员查询结果。"""
+        for field in (
+            "status",
+            "columns",
+            "data",
+            "total_count",
+            "execution_time_ms",
+            "error",
+            "cache_hit",
+            "cache_age_seconds",
+            "cache_expires_in_seconds",
+        ):
+            value = execution_payload.get(field)
+            if value is not None and (field not in view or view.get(field) in (None, [], "")):
+                view[field] = value
+
+    @staticmethod
+    def resolve_sql_task_execution_view(
+        result: Dict[str, Any],
+        index: int,
+        execution_views: List[Dict[str, Any]],
+        execution_map: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """按成员 ID 匹配执行记录；单成员无 ID 时按位置兜底。"""
+        member_datasource_id = str((result or {}).get("member_datasource_id") or "").strip()
+        if member_datasource_id:
+            return execution_map.get(member_datasource_id)
+        if len(execution_views) == 1:
+            return execution_views[0]
+        if index < len(execution_views):
+            return execution_views[index]
+        return None
+
+    @staticmethod
+    def merge_sql_task_result_execution(
+        result: Dict[str, Any],
+        execution_view: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """把执行标识、运行时间等元数据合并到成员结果。"""
+        merged = dict(result or {})
+        if execution_view:
+            for field, value in execution_view.items():
+                if field == "status":
+                    if not merged.get("status"):
+                        merged["status"] = value
+                    continue
+                if field in {"member_datasource_id", "member_name", "sql"}:
+                    if not merged.get(field):
+                        merged[field] = value
+                    continue
+                if field not in merged or merged.get(field) is None:
+                    merged[field] = value
+        merged.setdefault("columns", [])
+        merged.setdefault("data", [])
+        merged["total_count"] = int(merged.get("total_count") or 0)
+        merged.setdefault("error", None)
+        return merged
+
+    @staticmethod
+    def fill_sql_task_result_defaults(
+        merged: Dict[str, Any],
+        task_sql: Any,
+    ) -> Dict[str, Any]:
+        """补齐成员结果的任务级默认字段。"""
+        if not merged.get("sql") and task_sql:
+            merged["sql"] = task_sql
+        return merged
+
+    @staticmethod
+    def normalize_sql_task_results(
+        results: List[Dict[str, Any]],
+        result_payload: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """复用统一结果规范，清理 success 等旧字段。"""
+        normalized_payload = build_query_result_payload(
+            sql=str((result_payload or {}).get("sql") or ""),
+            member_results=results,
+            fallback_error=(result_payload or {}).get("error"),
+            fallback_execution_time_ms=(result_payload or {}).get("execution_time_ms"),
+        )
+        return normalized_payload["results"]
 
     async def cancel_query_task_for_user(
         self,
@@ -236,7 +429,7 @@ class QueryTaskService:
                 data={
                     "task_id": task_id,
                     "status": task_data.get("status"),
-                    "executions": [item.to_dict() for item in executions],
+                    "executions": self.build_query_task_execution_views(executions),
                 },
                 message="任务已结束",
             )
@@ -311,23 +504,15 @@ class QueryTaskService:
         remote_results = await self.fetch_remote_member_results(response_data, remote_tasks, executions or [])
         merged_results = self.merge_direct_and_remote_results(response_data, remote_tasks, remote_results)
         task_status, progress_text, error_message = self.resolve_live_result_status(remote_results, merged_results)
-        primary_result = next((item for item in merged_results if item.get("success")), merged_results[0] if merged_results else {})
         return {
             "status": task_status,
             "progress_text": progress_text,
             "error_message": error_message,
-            "result_payload": {
-                "success": bool([item for item in merged_results if item.get("success")]) and task_status != "running",
-                "sql": primary_result.get("sql") or ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "columns": primary_result.get("columns") or [],
-                "data": primary_result.get("data") or [],
-                "total_count": int(primary_result.get("total_count") or 0),
-                "execution_time_ms": primary_result.get("execution_time_ms"),
-                "member_datasource_id": primary_result.get("member_datasource_id"),
-                "member_name": primary_result.get("member_name"),
-                "error": error_message,
-                "results": merged_results,
-            },
+            "result_payload": build_query_result_payload(
+                sql=((response_data.get("request_payload") or {}).get("sql") or ""),
+                member_results=merged_results,
+                fallback_error=error_message,
+            ),
         }
 
     async def fetch_remote_member_results(
@@ -377,7 +562,6 @@ class QueryTaskService:
                 "member_datasource_id": remote_task.get("member_datasource_id"),
                 "member_name": remote_task.get("member_name"),
                 "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-                "success": False,
                 "status": local_status,
                 "columns": [],
                 "data": [],
@@ -391,8 +575,7 @@ class QueryTaskService:
             "member_datasource_id": remote_task.get("member_datasource_id"),
             "member_name": remote_task.get("member_name"),
             "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),
-            "success": bool(remote_result.get("success")),
-            "status": remote_result.get("status"),
+            "status": query_result_status(remote_result),
             "columns": remote_result.get("columns") or [],
             "data": remote_result.get("data") or [],
             "total_count": int(remote_result.get("total_count") or 0),
@@ -433,14 +616,14 @@ class QueryTaskService:
             return "running", "SQL 执行中", None
         if statuses and statuses <= {"cancelled"}:
             return "cancelled", "已停止", self.resolve_live_error_message("cancelled", merged_results)
-        if any(item.get("success") for item in merged_results):
+        if any(query_result_succeeded(item) for item in merged_results):
             return "succeeded", "执行完成", None
         return "failed", "执行失败", self.resolve_live_error_message("failed", merged_results)
 
     @staticmethod
     def resolve_live_error_message(task_status: str, merged_results: List[Dict[str, Any]]) -> Optional[str]:
         """汇总远端实时结果错误信息。"""
-        if task_status == "running" or any(item.get("success") for item in merged_results):
+        if task_status == "running" or any(query_result_succeeded(item) for item in merged_results):
             return None
         error_messages = [
             str(item.get("error") or "").strip()

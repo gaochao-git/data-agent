@@ -2,36 +2,24 @@
 智能问数 Agent
 
 标准 LangGraph 目录结构:
-- state.py: 状态定义和 reducer
-- nodes.py: 节点函数
-- chat_data_graph.py: chat_data 主图定义
+- chat_data_agent.py: 智能问数 agent 定义
+- analyze_data_agent.py: 智能分析 agent 定义
+- agent_runtime.py: 问数和分析共用运行时工具
+- prompts/chat_data_builder.py: 智能问数 system prompt 构建
+- middleware/: create_agent middleware
 - prompts/: 提示词包
 - tools/: 工具包
 """
 
-from .state import ChatDataAgentState
-from .chat_data_graph import get_chat_data_graph
-from .nodes import agent_node, create_agent_node
-from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE, TABLE_SELECTOR_PROMPT
+from .chat_data_agent import ChatDataAgentState, create_chat_data_agent, get_chat_data_graph
+from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
 from utils.checkpoint import get_checkpointer, DB_PATH
-from .tools import (
-    get_all_tables_async,
-    get_tables_name_comment,
-    get_tables_create_format,
-    llm_select_tables,
-)
 
 __all__ = [
     "ChatDataAgentState",
+    "create_chat_data_agent",
     "get_chat_data_graph",
     "get_checkpointer",
-    "agent_node",
-    "create_agent_node",
     "DB_PATH",
-    "TABLE_SELECTOR_PROMPT",
     "SQL_GENERATOR_PROMPT_GENERATE",
-    "get_all_tables_async",
-    "get_tables_name_comment",
-    "get_tables_create_format",
-    "llm_select_tables",
 ]

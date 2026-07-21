@@ -217,7 +217,8 @@ async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config
         raise ValueError("未找到可用语义配置，无法生成看板 SQL")
     result = dict(selected)
     result["source_type"] = datasource.get("source_type") or selected.get("source_type") or "mysql"
-    result["tables"] = datasource.get("ds_tables") or result.get("tables") or []
+    cached_tables = await ds_manager.get_cached_schema_async(datasource_id)
+    result["tables"] = cached_tables or result.get("tables") or []
     if result.get("relationships") and not result.get("joins"):
         result["joins"] = result.get("relationships")
     return result
@@ -360,7 +361,12 @@ def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGene
 async def execute_dashboard_panel_sql_preflight(datasource_id: str, sql: str, user_id: str = "system", username: Optional[str] = None) -> tuple[bool, str]:
     """写入看板前实际执行 SQL，避免不可执行面板进入看板。"""
     ds_manager = get_datasource_manager()
-    execution_targets = await ds_manager.get_execution_datasources_async(datasource_id, None)
+    execution_targets = await ds_manager.get_authorized_execution_datasources_async(
+        datasource_id,
+        None,
+        user_id=user_id,
+        username=username,
+    )
     if not execution_targets:
         return False, "当前数据源组下没有可执行的数据源"
     execution_target = execution_targets[0]

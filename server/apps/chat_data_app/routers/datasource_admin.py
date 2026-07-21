@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -25,20 +26,12 @@ from ..schema import (
     DatasourceUpdateRequest,
 )
 from ..services.semantic_json_parser import parse_llm_json
-from ..services.datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials
-from ..services.datasource_manager import get_datasource_manager
-from ..services.hive_meta_http import get_hive_meta_tables_async
-from ..services.hive_sync import HiveSyncService
+from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.mysql_sync import MySQLSyncService
 from .dependencies import _get_current_user
 from .datasource_helpers import (
-    DATASOURCE_SYNC_TIMEOUT_SECONDS,
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
-    _get_datasource_physical_source_config,
-    _get_optional_request_user_http_params,
-    _load_tables_from_source,
     _merge_health_status,
     _normalize_source_item,
 )
@@ -116,6 +109,8 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
         return business_response(data=datasource, msg="创建成功")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"创建数据源组失败: {str(e)}", exc_info=True)
         return business_response(msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -150,6 +145,8 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
         if not updated:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=updated, msg="更新成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"更新数据源失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -193,6 +190,8 @@ async def update_datasource_group_config(datasource_id: str, body: DatasourceGro
         return business_response(data=updated, msg="更新成功")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"更新数据源组失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -204,29 +203,21 @@ async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGro
     try:
         current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
-        if not datasource:
-            return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
         selected_table_names = _selected_table_names(body.template_table_names)
         if not selected_table_names:
             return business_response(msg="请选择需要同步的表", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
-        tables = await _load_tables_from_source(
-            datasource.get("source_type"),
-            _get_datasource_physical_source_config(datasource),
-            selected_table_names,
+        updated = await ds_manager.sync_datasource_schema_from_source_async(
+            datasource_id=datasource_id,
+            table_names=selected_table_names,
+            update_by=str(current_user.user_id),
+            update_by_name=str(current_user.username or ""),
             user_id=current_user.user_id,
             username=current_user.username,
         )
-        updated = await ds_manager.sync_datasource_tables_async(
-            datasource_id=datasource_id,
-            tables=tables,
-            update_by=str(current_user.user_id),
-            update_by_name=str(current_user.username or ""),
-        )
         if not updated:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        tables = updated.get("ds_tables") or []
         return business_response(
             data={"datasource": updated, "table_count": len(tables)},
             msg=f"同步成功，共 {len(tables)} 个表",
@@ -240,6 +231,15 @@ async def sync_datasource_group_metadata(datasource_id: str, body: DatasourceGro
             code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
             status="error",
         )
+    except ConnectionError as e:
+        logger.error("同步数据源组元数据连接失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(
+            msg="同步失败，请检查模板数据源配置或稍后重试",
+            code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
+            status="error",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"同步数据源组元数据失败: {str(e)}", exc_info=True)
         return business_response(msg="同步失败，请检查模板数据源配置或稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -261,36 +261,55 @@ async def update_mapped_modules(datasource_id: str, body: dict, request: Request
         if not updated:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data={"datasource_id": datasource_id, "mapped_modules": mapped_modules}, msg="更新成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"更新模块映射失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
 @router.get("/admin/datasources/{datasource_id}/table-groups")
-async def get_datasource_table_groups(datasource_id: str):
+async def get_datasource_table_groups(datasource_id: str, request: Request):
     """获取数据源内表分组。"""
     try:
+        _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         groups = await ds_manager.get_table_groups_async(datasource_id)
         return business_response(data={"datasource_id": datasource_id, "groups": groups}, msg="获取成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取表分组失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
 @router.get("/admin/datasources/{datasource_id}/semantic-health")
-async def get_datasource_semantic_health(datasource_id: str):
+async def get_datasource_semantic_health(datasource_id: str, request: Request):
     """校验数据源物理表结构与指标集配置是否一致。"""
     try:
+        current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         configs = await ds_manager.get_semantic_configs_async(datasource_id)
-        schema_health = await _build_datasource_schema_health(datasource)
+        schema_health = None
+        if datasource.get("source_type") in ("mysql", "hive"):
+            try:
+                physical_tables = await ds_manager.get_live_schema_async(
+                    datasource_id,
+                    user_id=str(current_user.user_id),
+                    username=str(current_user.username or ""),
+                )
+                schema_health = _build_datasource_schema_health(datasource, physical_tables=physical_tables)
+            except Exception as e:
+                logger.error("物理表结构校验失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+                schema_health = _build_datasource_schema_health(datasource, error=e)
+        else:
+            schema_health = _build_datasource_schema_health(datasource)
         semantic_health = _build_datasource_semantic_health(datasource, configs)
         return business_response(
             data={
@@ -301,6 +320,8 @@ async def get_datasource_semantic_health(datasource_id: str):
             },
             msg="校验完成"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("指标集健康校验失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg=f"校验失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -318,6 +339,8 @@ async def update_datasource_table_groups(datasource_id: str, body: DatasourceTab
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         saved_groups = await ds_manager.get_table_groups_async(datasource_id)
         return business_response(data={"datasource_id": datasource_id, "groups": saved_groups}, msg="保存成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("保存表分组失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -339,6 +362,8 @@ async def update_datasource_table_business_desc(datasource_id: str, table_name: 
         if table is None:
             return business_response(msg=f"数据源或表不存在: {datasource_id}/{table_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data={"datasource_id": datasource_id, "table": table}, msg="保存成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("保存表业务说明失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
         return business_response(msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -445,7 +470,19 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
             return business_response(msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         prompt = _build_column_dict_generate_prompt(table_name, column_name, target_column, body.text)
         llm = get_chat_data_llm(streaming=False, max_tokens=1200)
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        try:
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+        except Exception as exc:
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1={
+                    "purpose": "datasource_column_dict_generate",
+                    "datasource_id": datasource_id,
+                    "table_name": table_name,
+                    "column_name": column_name,
+                },
+            )
+            raise
         content = response.content if hasattr(response, "content") else str(response)
         column_dict = _parse_column_dict_generate_response(str(content))
         return business_response(
@@ -474,6 +511,8 @@ async def set_default_datasource(datasource_id: str, request: Request):
         if not success:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data={"datasource_id": datasource_id, "is_default": True}, msg="设置成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"设置默认数据源失败: {str(e)}", exc_info=True)
         return business_response(msg=f"设置失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -489,6 +528,8 @@ async def clear_default_datasource(datasource_id: str, request: Request):
         if not success:
             return business_response(msg=f"数据源不存在或非默认数据源: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data={"datasource_id": datasource_id, "is_default": False}, msg="取消成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"取消默认数据源失败: {str(e)}", exc_info=True)
         return business_response(msg=f"取消失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
@@ -507,6 +548,8 @@ async def delete_datasource(datasource_id: str, request: Request):
         if not success:
             return business_response(msg="删除失败，数据源不存在或无法删除", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
         return business_response(data={"datasource_id": datasource_id}, msg="删除成功")
+    except HTTPException:
+        raise
     except Exception as e:
         if isinstance(e, ValueError):
             return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
@@ -515,11 +558,15 @@ async def delete_datasource(datasource_id: str, request: Request):
 
 
 @router.post("/admin/datasources/db-tables")
-async def get_db_tables(request: DbConnectionRequest, http_request: Request = None):
+async def get_db_tables(request: DbConnectionRequest, http_request: Request):
     """获取数据库中的表列表（用于选择要同步的表）。"""
     port = request.port
     try:
-        user_params = _get_optional_request_user_http_params(http_request)
+        current_user = _get_current_user(http_request)
+        user_params = {
+            "user_id": str(current_user.user_id),
+            "username": str(current_user.username or ""),
+        }
         source_type = request.source_type
         if request.query_executor_type == "direct" and port is None:
             port = 10000 if source_type == "hive" else 3306
@@ -534,45 +581,20 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
             request.org_code,
         )
 
-        if source_type == "hive":
-            source_config = {
-                "database": request.database,
-                "org_code": request.org_code,
-                "org_name": request.org_name,
-                "query_executor_type": request.query_executor_type,
-            }
-            if request.query_executor_type == "http":
-                tables = await get_hive_meta_tables_async(source_config, **user_params)
-            else:
-                source_config["host"] = request.host
-                source_config["port"] = port
-                hive_credentials = resolve_hive_credentials(source_config)
-                service = HiveSyncService(
-                    host=request.host,
-                    port=port,
-                    database=request.database,
-                    username=hive_credentials.get("username"),
-                    password=hive_credentials.get("password"),
-                )
-                tables = await asyncio.wait_for(
-                    service.get_tables_async(),
-                    timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-                )
-        else:
-            if request.query_executor_type == "http":
-                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-            mysql_credentials = resolve_mysql_credentials({})
-            service = MySQLSyncService(
-                host=request.host,
-                port=port,
-                database=request.database,
-                user=mysql_credentials["user"],
-                password=mysql_credentials["password"]
-            )
-            tables = await asyncio.wait_for(
-                service.get_tables_async(),
-                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-            )
+        source_config = {
+            "database": request.database,
+            "org_code": request.org_code,
+            "org_name": request.org_name,
+            "query_executor_type": request.query_executor_type,
+        }
+        if request.query_executor_type == "direct":
+            source_config["host"] = request.host
+            source_config["port"] = port
+        tables = await get_datasource_manager().get_physical_table_names_async(
+            source_type,
+            source_config,
+            **user_params,
+        )
 
         return business_response(data={"tables": tables, "total": len(tables)}, msg=f"获取成功，共 {len(tables)} 个表")
     except ValueError as e:
@@ -591,6 +613,8 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request = No
             code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED,
             status="error"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取表列表失败: {str(e)}", exc_info=True)
         return business_response(msg="连接失败，请检查数据源配置或稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_CONNECTION_FAILED, status="error")

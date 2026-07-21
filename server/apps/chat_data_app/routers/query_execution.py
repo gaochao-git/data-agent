@@ -13,19 +13,17 @@ from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
 from utils import conversation
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
 from .. import agent as agent_module
-from ..agent import get_all_tables_async, get_tables_create_format
-from ..agent.sql_assist_graph import get_sql_assist_graph
+from ..agent.sql_assist_agent import create_sql_assist_agent
 from ..schema import (
     CompileSemanticBuilderSqlRequest,
-    ExecuteSqlRequest,
     QueryTaskCreateRequest,
     QuickSqlRequest,
 )
-from ..services import query_runtime
 from ..services.datasource_manager import get_datasource_manager
 from ..services.query_task_service import (
     QueryTaskNotFoundError,
@@ -34,6 +32,7 @@ from ..services.query_task_service import (
 )
 from ..services.query_providers import get_query_task_service
 from ..services.semantic_builder_compiler import compile_semantic_builder_sql
+from ..services.sql_assist_context import get_all_tables_async, get_tables_create_format
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
@@ -91,7 +90,7 @@ async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Req
     return None
 
 
-def _quick_sql_initial_state(payload: QuickSqlRequest, tables_ddl_info: str) -> dict[str, Any]:
+def _quick_sql_initial_state(payload: QuickSqlRequest) -> dict[str, Any]:
     return {
         "messages": [
             HumanMessage(
@@ -99,7 +98,6 @@ def _quick_sql_initial_state(payload: QuickSqlRequest, tables_ddl_info: str) -> 
                 additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             )
         ],
-        "tables_ddl_info": tables_ddl_info,
     }
 
 
@@ -116,13 +114,17 @@ async def _stream_sql_assist_chunks(
 ):
     config = {"configurable": {"thread_id": payload.conversation_id, "checkpoint_ns": ""}}
     async with agent_module.get_checkpointer() as checkpointer:
-        graph = get_sql_assist_graph(checkpointer, sql_dialect=source_type)
-        async for chunk, metadata in graph.astream(
-            _quick_sql_initial_state(payload, tables_ddl_info),
+        agent = create_sql_assist_agent(
+            checkpointer,
+            sql_dialect=source_type,
+            tables_ddl_info=tables_ddl_info,
+        )
+        async for chunk, metadata in agent.astream(
+            _quick_sql_initial_state(payload),
             config=config,
             stream_mode="messages",
         ):
-            if metadata.get("langgraph_node") == "sql_assist" and getattr(chunk, "content", None):
+            if metadata.get("langgraph_node") == "model" and getattr(chunk, "content", None):
                 yield chunk.content
 
 
@@ -148,6 +150,10 @@ async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request 
         logger.info("生成的 SQL: %s...", sql[:200])
         yield _sse_event({"type": "complete", "sql": sql})
     except Exception as e:
+        emit_llm_connection_alarm_if_needed(
+            e,
+            ext1={"conversation_id": payload.conversation_id, "datasource_id": payload.datasource_id, "purpose": "quick_sql"},
+        )
         logger.error("快速SQL生成失败: %s", e, exc_info=True)
         yield _sse_error(str(e))
 
@@ -234,41 +240,6 @@ async def cancel_query_task(
     except Exception as e:
         logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
         return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
-@router.post("/execute-sql")
-async def execute_sql_direct(
-    request: Request,
-    body: ExecuteSqlRequest,
-):
-    """直接执行 SQL（用于 SQL 编辑器模式）。"""
-    try:
-        current_user = _resolve_current_user(request, None)
-        body = body.model_copy(update={"user_id": current_user.user_id})
-        body = await query_runtime.prepare_sql_request_for_execution(body)
-        logger.info("execute-sql request: datasource_id=%s", body.datasource_id)
-        result_data = await query_runtime.execute_sql_request_with_task(
-            body,
-            query_type=body.query_type or "sql",
-            operator_name=current_user.username,
-        )
-        if not result_data.get("success"):
-            return business_response(
-                data=result_data,
-                msg=result_data.get("error") or "SQL 执行失败，请稍后重试或联系管理员",
-                code=ErrorCode.CHATDATA_SERVICE_ERROR,
-                status="error",
-            )
-        return business_response(data=result_data, msg="执行完成")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except Exception as e:
-        logger.error("执行 SQL 失败: %s", e, exc_info=True)
-        return business_response(msg="SQL 执行失败，请稍后重试或联系管理员", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.post("/compile-semantic-builder-sql")

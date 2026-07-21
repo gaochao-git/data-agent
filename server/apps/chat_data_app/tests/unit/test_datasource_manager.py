@@ -11,6 +11,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
+from apps.chat_data_app.services import datasource_manager as datasource_manager_module
+from apps.chat_data_app.services import execution_permission
 from apps.chat_data_app.services.datasource_manager import (
     _build_member_source_identity,
     _build_member_source_text_line,
@@ -202,6 +204,15 @@ class _FakeStore:
     async def replace_table_group_relations_async(self, group_id: str, groups: list[dict], create_by: str = "", update_by: str = "", create_by_name: str = "", update_by_name: str = ""):
         self.replace_table_group_relations(group_id, groups, create_by=create_by, update_by=update_by, create_by_name=create_by_name, update_by_name=update_by_name)
 
+    def replace_datasource_tables(self, group_id: str, tables: list[dict], **kwargs):
+        self.replaced_datasource_tables = {"group_id": group_id, "tables": list(tables or []), **kwargs}
+        for item in self.datasources.values():
+            if item.get("group_id") == group_id:
+                item["ds_tables"] = list(tables or [])
+
+    async def replace_datasource_tables_async(self, group_id: str, tables: list[dict], **kwargs):
+        self.replace_datasource_tables(group_id, tables, **kwargs)
+
     def soft_delete_semantic_config(self, config_id: str, update_by: str = "", update_by_name: str = ""):
         self.deleted_config_id = config_id
 
@@ -214,6 +225,192 @@ def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager.base_dir = None
     manager.datasource_dao = fake_store
     return manager
+
+
+def test_normalize_org_codes_accepts_string_list_only():
+    assert execution_permission.normalize_org_codes([
+        " ORG_A ",
+        "ORG_B",
+        {"orgCode": "ORG_C"},
+        None,
+        "",
+    ]) == {"ORG_A", "ORG_B"}
+    assert execution_permission.normalize_org_codes({"data": ["ORG_A"]}) == set()
+
+
+def test_authorized_datasources_filter_http_missing_permission_and_direct_allowlist(monkeypatch):
+    store = _FakeStore()
+    store.datasources["ds_a"].update({
+        "template_datasource_id": "m_direct_allowed",
+        "member_datasource_ids": ["m_direct_allowed", "m_direct_denied", "m_http_allowed", "m_http_denied"],
+        "member_sources": [
+            {"member_datasource_id": "m_direct_allowed", "org_code": "ORG_CODE1", "query_executor_type": "direct"},
+            {"member_datasource_id": "m_direct_denied", "org_code": "ORG_DENIED", "query_executor_type": "direct"},
+            {"member_datasource_id": "m_http_allowed", "org_code": "ORG_HTTP_ALLOWED", "query_executor_type": "http"},
+            {"member_datasource_id": "m_http_denied", "org_code": "ORG_HTTP_DENIED", "query_executor_type": "http"},
+        ],
+    })
+    manager = _build_manager(store)
+
+    async def allowed_without_http(_user_id=None, _username=None):
+        return {"direct": {"ORG_CODE1"}, "http": set()}
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", allowed_without_http)
+    datasources = asyncio.run(manager.get_authorized_datasources_async(user_id="u1", username="用户1"))
+    assert [item["id"] for item in datasources] == ["ds_a"]
+    assert [item["member_datasource_id"] for item in datasources[0]["member_sources"]] == ["m_direct_allowed"]
+    assert datasources[0]["member_datasource_ids"] == ["m_direct_allowed"]
+    assert datasources[0]["template_datasource_id"] == "m_direct_allowed"
+
+
+def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
+    store = _FakeStore()
+    store.datasources["ds_a"].update({
+        "template_datasource_id": "m_http_allowed",
+        "member_datasource_ids": ["m_http_allowed", "m_http_denied"],
+        "member_sources": [
+            {
+                "member_datasource_id": "m_http_allowed",
+                "org_code": "ORG_HTTP_ALLOWED",
+                "org_name": "HTTP机构A",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+            {
+                "member_datasource_id": "m_http_denied",
+                "org_code": "ORG_HTTP_DENIED",
+                "org_name": "HTTP机构B",
+                "query_executor_type": "http",
+                "source_type": "hive",
+            },
+        ],
+    })
+    manager = _build_manager(store)
+
+    async def allowed_http(_user_id=None, _username=None):
+        return {"direct": set(), "http": {"ORG_HTTP_ALLOWED"}}
+
+    monkeypatch.setattr(datasource_manager_module, "get_allowed_org_codes_by_executor", allowed_http)
+    targets = asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", user_id="u1", username="用户1"))
+    assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
+    assert targets[0]["member_name"] == "HTTP机构A"
+    with pytest.raises(ValueError, match="成员数据源不存在或不属于当前组"):
+        asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", ["m_http_denied"], user_id="u1", username="用户1"))
+
+
+def test_execution_permission_http_provider_success_and_failure(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            if self.payload == "raise_status":
+                raise RuntimeError("status error")
+
+        def json(self):
+            if self.payload == "bad_json":
+                raise ValueError("bad json")
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            calls.append(("init", timeout))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json):
+            calls.append(("post", url, json))
+            return FakeResponse({"code": 20000, "data": ["ORG_A", "ORG_B"]})
+
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", FakeClient)
+    permission_alarms = []
+    monkeypatch.setattr(execution_permission, "emit_external_api_alarm", lambda *args, **kwargs: permission_alarms.append((args, kwargs)))
+
+    result = asyncio.run(execution_permission.get_http_permission_org_codes(" user_a ", " 用户A "))
+    assert result == {"ORG_A", "ORG_B"}
+    assert calls == [
+        ("init", 9),
+        ("post", "http://permission.local", {"userId": "user_a", "username": "用户A"}),
+    ]
+
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "")
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+    monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("", "用户A")) == set()
+
+    class ErrorClient(FakeClient):
+        async def post(self, url, json):
+            raise RuntimeError("network error")
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", ErrorClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+    assert permission_alarms[0][0][0] == "chat_data_http_permission"
+    assert permission_alarms[0][1]["url"] == "http://permission.local"
+
+    class BadCodeClient(FakeClient):
+        async def post(self, url, json):
+            return FakeResponse({"code": 50000, "data": ["ORG_A"]})
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", BadCodeClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+
+    class MissingCodeClient(FakeClient):
+        async def post(self, url, json):
+            return FakeResponse({"data": ["ORG_A"]})
+
+    monkeypatch.setattr(execution_permission.httpx, "AsyncClient", MissingCodeClient)
+    assert asyncio.run(execution_permission.get_http_permission_org_codes("user_a", "用户A")) == set()
+
+
+def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
+    async def fake_http_codes(user_id, username):
+        assert user_id == "u1"
+        assert username == "用户1"
+        return {"ORG_HTTP"}
+
+    monkeypatch.setattr(execution_permission, "get_http_permission_org_codes", fake_http_codes)
+    allowed = asyncio.run(execution_permission.get_allowed_org_codes_by_executor("u1", "用户1"))
+    assert "ORG_CODE1" in allowed["direct"]
+    assert allowed["http"] == {"ORG_HTTP"}
+
+    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
+        {"member_sources": []},
+        {"direct": {"ORG_A"}, "http": set()},
+    ) is None
+
+    datasource = {
+        "source_type": " mysql ",
+        "query_executor_type": "unknown",
+        "template_datasource_id": "missing_template",
+        "member_datasource_ids": ["m1", "m2"],
+        "member_sources": [
+            {"member_datasource_id": "m1", "org_code": "ORG_A", "query_executor_type": "unknown"},
+            {"member_datasource_id": "m2", "org_code": "ORG_B", "query_executor_type": "direct"},
+            {"member_datasource_id": "m3", "org_code": "", "query_executor_type": "direct"},
+        ],
+    }
+    filtered = execution_permission.filter_datasource_members_by_allowed_org_codes(
+        datasource,
+        {"direct": {"ORG_A"}, "http": set()},
+    )
+    assert filtered is not None
+    assert filtered["source_type"] == "mysql"
+    assert [item["member_datasource_id"] for item in filtered["member_sources"]] == ["m1"]
+    assert filtered["member_datasource_ids"] == ["m1"]
+    assert filtered["template_datasource_id"] == "m1"
+
+    assert execution_permission.filter_datasource_members_by_allowed_org_codes(
+        datasource,
+        {"direct": {"ORG_MISSING"}, "http": set()},
+    ) is None
 
 
 def test_create_semantic_config_rejects_active_duplicate_name():
@@ -1309,19 +1506,19 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
 
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", FakeMySQLSyncService)
-    monkeypatch.setattr("apps.chat_data_app.services.hive_sync.HiveSyncService", FakeHiveSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
 
     async def run_checks():
-        assert await manager.get_schema_async("ds_a", source="cache", table_names=["users"]) == [{"table_name": "users"}]
-        mysql_schema = await manager.get_schema_async("ds_a", source="live", table_names=["orders"])
+        assert await manager.get_cached_schema_async("ds_a", table_names=["users"]) == [{"table_name": "users"}]
+        mysql_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert mysql_schema == [{"table_name": "orders"}]
         assert FakeMySQLSyncService.kwargs["user"] == "mysql_user"
 
         store.datasources["ds_a"]["source_type"] = "hive"
         store.datasources["ds_a"]["query_executor_type"] = "direct"
         store.datasources["ds_a"]["source_config"] = {"host": "127.0.0.1", "port": 10000, "database": "dw"}
-        hive_schema = await manager.get_schema_async("ds_a", source="live", table_names=["orders"])
+        hive_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert hive_schema == [{"table_name": "orders"}]
         assert FakeHiveSyncService.kwargs["username"] == "hive_user"
 
@@ -1329,18 +1526,98 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
         store.datasources["ds_a"]["member_sources"] = [{"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http"}]
         store.datasources["ds_a"]["template_datasource_id"] = "ORG_A"
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_schema_async", fake_hive_http_schema)
-        assert await manager.get_schema_async("ds_a", source="live", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
+        assert await manager.get_live_schema_async("ds_a", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
 
-        assert await manager.get_schema_async("ds_a", source="cache", table_names=["missing"]) == []
+        assert await manager.get_cached_schema_async("ds_a", table_names=["missing"]) == []
         with pytest.raises(ValueError, match="数据源不存在"):
-            await manager.get_schema_async("missing")
+            await manager.get_cached_schema_async("missing")
         store.datasources["ds_a"]["source_type"] = "sqlite"
         with pytest.raises(ValueError, match="不支持实时获取"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
         store.datasources["ds_a"]["source_type"] = "mysql"
         store.datasources["ds_a"]["source_config"] = {}
         with pytest.raises(ValueError, match="连接配置不完整"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
+
+    asyncio.run(run_checks())
+
+
+def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
+    store = _FakeStore()
+    manager = _build_manager(store)
+    calls = []
+
+    class FakeMySQLSyncService:
+        def __init__(self, **kwargs):
+            calls.append(("mysql_init", kwargs))
+
+        async def get_tables_async(self):
+            return ["orders", "users"]
+
+    class FakeHiveSyncService:
+        def __init__(self, **kwargs):
+            calls.append(("hive_init", kwargs))
+
+        async def get_tables_async(self):
+            return [{"table_name": "hive_orders"}]
+
+    async def fake_hive_http_tables(source_config, user_id=None, username=None):
+        calls.append(("hive_http_tables", dict(source_config), user_id, username))
+        return ["http_orders"]
+
+    async def fake_live_schema(datasource_id, table_names=None, **kwargs):
+        calls.append(("live_schema", datasource_id, list(table_names or []), kwargs))
+        return [{"table_name": name, "columns": [{"name": "id"}]} for name in table_names or []]
+
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_tables_async", fake_hive_http_tables)
+
+    async def run_checks():
+        mysql_tables = await manager.get_physical_table_names_async(
+            "mysql",
+            {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"},
+        )
+        assert mysql_tables == ["orders", "users"]
+        assert calls[-1] == ("mysql_init", {"host": "127.0.0.1", "port": 3307, "database": "demo", "user": "mysql_user", "password": "mysql_pwd"})
+
+        hive_tables = await manager.get_physical_table_names_async(
+            "hive",
+            {"host": "127.0.0.2", "port": 10001, "database": "dw", "query_executor_type": "direct"},
+        )
+        assert hive_tables == [{"table_name": "hive_orders"}]
+        assert calls[-1] == ("hive_init", {"host": "127.0.0.2", "port": 10001, "database": "dw", "username": "hive_user", "password": "hive_pwd"})
+
+        http_tables = await manager.get_physical_table_names_async(
+            "hive",
+            {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"},
+            user_id="user_a",
+            username="测试用户",
+        )
+        assert http_tables == ["http_orders"]
+        assert calls[-1] == ("hive_http_tables", {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"}, "user_a", "测试用户")
+
+        manager.get_live_schema_async = fake_live_schema
+        synced = await manager.sync_datasource_schema_from_source_async(
+            "ds_a",
+            table_names=["orders", "users"],
+            update_by="u1",
+            update_by_name="用户1",
+            user_id="user_a",
+            username="测试用户",
+        )
+        assert [table["table_name"] for table in synced["ds_tables"]] == ["orders", "users"]
+        assert store.datasources["ds_a"]["ds_tables"] == [
+            {"table_name": "orders", "columns": [{"name": "id"}]},
+            {"table_name": "users", "columns": [{"name": "id"}]},
+        ]
+        assert calls[-1] == ("live_schema", "ds_a", ["orders", "users"], {"user_id": "user_a", "username": "测试用户"})
+        assert await manager.sync_datasource_schema_from_source_async("missing", table_names=["orders"]) is None
+
+        with pytest.raises(ValueError, match="HTTP 元数据模式当前仅支持 Hive 数据源"):
+            await manager.get_physical_table_names_async("mysql", {"database": "demo", "query_executor_type": "http"})
 
     asyncio.run(run_checks())
 
@@ -1367,14 +1644,14 @@ def test_datasource_manager_get_schema_timeout_and_connection_error(monkeypatch)
     async def run_checks():
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "u", "password": "p"})
-        monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", TimeoutMySQLSyncService)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", TimeoutMySQLSyncService)
         with pytest.raises(ConnectionError, match="数据库连接超时"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
 
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
-        monkeypatch.setattr("apps.chat_data_app.services.mysql_sync.MySQLSyncService", FailingMySQLSyncService)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FailingMySQLSyncService)
         with pytest.raises(ConnectionError, match="数据库连接失败"):
-            await manager.get_schema_async("ds_a", source="live")
+            await manager.get_live_schema_async("ds_a")
 
     asyncio.run(run_checks())
 
@@ -1982,7 +2259,7 @@ def test_datasource_manager_async_default_and_cache_schema_branches():
     manager = _build_manager(store)
 
     async def run_checks():
-        assert await manager.get_schema_async("ds_a", source="cache") == [{"table_name": "orders"}, {"table_name": "users"}]
+        assert await manager.get_cached_schema_async("ds_a") == [{"table_name": "orders"}, {"table_name": "users"}]
         store.datasources["ds_a"]["is_default"] = False
         assert await manager.clear_default_datasource_async("ds_a") is False
         assert await manager.set_default_datasource_async("ds_b") is True

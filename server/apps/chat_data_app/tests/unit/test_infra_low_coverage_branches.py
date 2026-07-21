@@ -21,6 +21,7 @@ from apps.chat_data_app.services import semantic_common
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
+from utils import alarm as alarm_module
 from utils import response as response_module
 from utils import logger as logger_module
 from utils import checkpoint, common_util, database, llm
@@ -73,6 +74,33 @@ def test_error_code_values_are_unique():
         else:
             seen[value] = name
     assert duplicates == []
+
+
+def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monkeypatch):
+    records = []
+    monkeypatch.setattr(alarm_module, "get_alarm_logger", lambda: SimpleNamespace(error=lambda *args, **kwargs: records.append((args, kwargs))))
+
+    alarm_module.emit_alarm(
+        "boom" * 200,
+        alarm_id="TEST_ALARM",
+        request_type="TEST",
+        ext1={"sql": "select 1", "nested": {"source": "unit"}},
+        ext2="x" * 1200,
+    )
+
+    assert records[0][0][0].endswith("(truncated,total=800)")
+    assert records[0][1]["extra"]["alarm_id"] == "TEST_ALARM"
+    assert records[0][1]["extra"]["request_type"] == "TEST"
+    assert records[0][1]["extra"]["ext1"] == "sql=select 1 nested.source=unit"
+    assert "(truncated,total=1200)" in records[0][1]["extra"]["ext2"]
+    alarm_module.emit_alarm("boom", alarm_id="TEST_ALARM", request_type="TEST")
+    alarm_module.emit_alarm("boom", alarm_id="TEST_ALARM", request_type="TEST")
+    assert len(records) == 3
+
+    llm_error = RuntimeError("API connection error")
+    assert alarm_module.is_llm_connection_exception(llm_error) is True
+    assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is True
+    assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
 
 
 def test_authenticate_request_success_and_error_branches(monkeypatch):
@@ -305,6 +333,8 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
         "_endpoint_selector",
         DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")),
     )
+    alarm_records = []
+    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class FakeContext:
         def __init__(self, conn_string):
@@ -342,6 +372,7 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
     ]
     assert FakeSaver.enter_calls == FakeSaver.create_calls
     assert checkpointer_obj["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.2:3307/db"
+    assert alarm_records == []
 
 
 def test_checkpoint_mysql_failover_raises_non_connection_enter_error(monkeypatch):
@@ -370,6 +401,8 @@ def test_checkpoint_mysql_failover_raises_non_connection_enter_error(monkeypatch
 def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypatch):
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
+    alarm_records = []
+    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     class Context:
         async def __aenter__(self):
@@ -391,6 +424,7 @@ def test_checkpoint_mysql_failover_advances_after_body_connection_error(monkeypa
         asyncio.run(use_context())
 
     assert selector.current().label() == "127.0.0.2:3307"
+    assert alarm_records == []
 
 
 def test_checkpoint_context_noop_exit_and_stale_endpoint(monkeypatch):
@@ -504,9 +538,12 @@ def test_select_available_checkpointer_endpoint_raises_when_all_nodes_fail(monke
 
     monkeypatch.setattr(checkpoint, "_endpoint_selector", selector)
     monkeypatch.setattr(checkpoint, "_build_mysql_checkpointer_context_factory", lambda: Context)
+    alarm_records = []
+    monkeypatch.setattr(checkpoint, "emit_checkpoint_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
 
     with pytest.raises(ValueError, match="所有 checkpoint 库节点均不可用"):
         asyncio.run(checkpoint.select_available_checkpointer_endpoint())
+    assert alarm_records[0][0][0] == "checkpoint库启动探测失败"
 
 
 def test_database_session_commit_rollback_and_info(monkeypatch):
@@ -594,7 +631,7 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
     database._engine = None
     database._session_factory = None
     alarm_records = []
-    monkeypatch.setattr(database.alarm_logger, "error", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
     selector = DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307"))
     monkeypatch.setattr(database, "_endpoint_selector", selector)
 
@@ -639,16 +676,12 @@ def test_database_session_connection_error_advances_endpoint(monkeypatch):
     assert database._engine is None
     assert database._session_factory is None
     assert selector.current().label() == "127.0.0.2:3307"
-    assert alarm_records[0][0][0] == "业务库运行中连接失败"
-    assert alarm_records[0][1]["extra"] == {
-        "request_type": "DATABASE",
-        "error_code": "DATABASE_CONNECTION_FAILED",
-    }
+    assert alarm_records == []
 
 
 def test_database_startup_probe_failure_writes_alarm(monkeypatch):
     alarm_records = []
-    monkeypatch.setattr(database.alarm_logger, "error", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
+    monkeypatch.setattr(database, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs)))
     monkeypatch.setattr(database, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306,127.0.0.2:3307")))
     monkeypatch.setattr(database, "_probe_database_endpoint", lambda _endpoint: asyncio.sleep(0, result=False))
 
@@ -656,10 +689,7 @@ def test_database_startup_probe_failure_writes_alarm(monkeypatch):
         asyncio.run(database.select_available_database_endpoint())
 
     assert alarm_records[0][0][0] == "业务库启动探测失败"
-    assert alarm_records[0][1]["extra"] == {
-        "request_type": "DATABASE",
-        "error_code": "DATABASE_CONNECTION_FAILED",
-    }
+    assert alarm_records[0][1]["ext1"] == {"endpoints": ["127.0.0.1:3306", "127.0.0.2:3307"]}
 
 
 def test_database_session_rollback_connection_error_advances_endpoint(monkeypatch):
@@ -1084,8 +1114,8 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeypatch):
-    records = {"set": [], "clear": 0, "access_info": [], "exception": []}
+async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatch):
+    records = {"set": [], "clear": 0, "access_info": [], "exception": [], "alarm": []}
 
     monkeypatch.setattr(api_logging_module, "logger", SimpleNamespace(
         exception=lambda msg, *args, **kwargs: records["exception"].append((msg, args, kwargs)),
@@ -1093,6 +1123,7 @@ async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeyp
     monkeypatch.setattr(api_logging_module, "access_logger", SimpleNamespace(
         info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
     ))
+    monkeypatch.setattr(api_logging_module, "emit_api_call_alarm", lambda *args, **kwargs: records["alarm"].append((args, kwargs)))
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
     monkeypatch.setattr(api_logging_module, "clear_log_context", lambda: records.__setitem__("clear", records["clear"] + 1))
     monkeypatch.setattr(api_logging_module, "dump_masked_payload", lambda payload: payload)
@@ -1124,6 +1155,8 @@ async def test_api_access_log_middleware_logs_access_error_without_alarm(monkeyp
     assert records["clear"] == 1
     assert len(records["access_info"]) == 1
     assert records["access_info"][0][0] == "api_access_error"
+    assert records["alarm"][0][0][0] == "/fail"
+    assert records["alarm"][0][1]["method"] == "POST"
     assert records["exception"][0][0] == "[api_access] unhandled_error request_id=%s"
 
 

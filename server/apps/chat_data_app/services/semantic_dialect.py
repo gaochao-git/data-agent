@@ -5,7 +5,7 @@ SQL 方言适配
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Any, Dict
+from typing import List, Dict
 import logging
 
 logger = logging.getLogger(__name__)

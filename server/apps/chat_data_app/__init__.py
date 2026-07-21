@@ -19,8 +19,8 @@ def _init_app() -> None:
     try:
         from .routes import router as app_router
         from .agent import get_chat_data_graph
-        from .agent.data_analyze_graph import get_data_analyze_graph
-        from .agent.sql_assist_graph import get_sql_assist_graph
+        from .agent.analyze_data_agent import get_data_analyze_graph
+        from .agent.sql_assist_agent import create_sql_assist_agent
         from .handlers import data_analyze_completion_handler, sql_completion_handler
         from .services.feature_gate import get_data_analyze_availability
         from .routers.conversations import (
@@ -34,7 +34,7 @@ def _init_app() -> None:
 
     router = app_router
     register_agent(agent_id=AGENT_ID, get_graph=get_chat_data_graph)
-    register_agent(agent_id=SQL_ASSIST_AGENT_ID, get_graph=get_sql_assist_graph)
+    register_agent(agent_id=SQL_ASSIST_AGENT_ID, get_graph=create_sql_assist_agent)
     register_agent(agent_id=DATA_ANALYZE_AGENT_ID, get_graph=get_data_analyze_graph)
     register_agent_availability_checker(
         DATA_ANALYZE_AGENT_ID,

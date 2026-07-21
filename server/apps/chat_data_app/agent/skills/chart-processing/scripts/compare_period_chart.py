@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from numeric_utils import to_safe_number as to_number
+
 
 def load_json(path: str) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -29,17 +31,6 @@ def rows_from_query_result(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [row for row in payload if isinstance(row, dict)]
     raise ValueError("input must be a query result object with data[] or a row array")
-
-
-def to_number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value))
-    except ValueError:
-        return None
 
 
 def build_value_map(rows: list[dict[str, Any]], key_field: str, value_field: str) -> dict[str, float | None]:

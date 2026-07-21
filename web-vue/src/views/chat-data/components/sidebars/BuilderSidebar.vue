@@ -4,7 +4,7 @@
  * 仅支持指标集模式，拖拽维度和指标
  */
 import SemanticDatasetPanel from './SemanticDatasetPanel.vue'
-import type { SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
+import type { BuilderDragFieldData, SemanticConfigItem, SemanticDimension, TableInfo } from '../../types'
 
 interface DataSource {
   id: string
@@ -29,10 +29,10 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
-  dragStart: [type: 'field', data: any, event: DragEvent]
+  dragStart: [type: 'field', data: BuilderDragFieldData, event: DragEvent]
   dragEnd: []
-  addDimension: [data: any]
-  addMetric: [data: any]
+  addDimension: [data: BuilderDragFieldData]
+  addMetric: [data: BuilderDragFieldData]
   datasetChange: [datasetId: string]
   refreshSemanticConfigs: []
 }>()

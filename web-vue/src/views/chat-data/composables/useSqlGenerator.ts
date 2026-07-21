@@ -10,7 +10,6 @@ import type {
   LangGraphMessage,
   SSEEventType,
   DashboardSpecPayload,
-  TaskStageInfo,
   ChatDataTokenUsage,
   ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
@@ -85,7 +84,6 @@ export function useSqlGenerator() {
     agentId: string = 'chat_data',
     skillName?: string | null,
     onDashboardSpec?: (payload: DashboardSpecPayload) => void,
-    onTaskStage?: (payload: TaskStageInfo) => void,
     onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
     onTokenUsage?: (payload: ChatDataTokenUsage) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
@@ -181,26 +179,6 @@ export function useSqlGenerator() {
               // 保留原始文本。
             }
             throw new Error(errorMsg)
-          }
-
-          if (event === 'task_stage') {
-            try {
-              const data = JSON.parse(dataStr)
-              onTaskStage?.(data as TaskStageInfo)
-            } catch (err) {
-              console.error('解析 task_stage 数据失败:', err, dataStr)
-            }
-            continue
-          }
-
-          if (event === 'task_stage_delta') {
-            try {
-              const data = JSON.parse(dataStr)
-              onTaskStage?.(data as TaskStageInfo)
-            } catch (err) {
-              console.error('解析 task_stage_delta 数据失败:', err, dataStr)
-            }
-            continue
           }
 
           if (event === 'message_end') {

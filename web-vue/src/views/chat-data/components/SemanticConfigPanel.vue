@@ -17,27 +17,37 @@ import {
   toggleAdminSemanticConfig,
   toggleSemanticConfig,
   autoPrefillSemanticFields,
-  parseSemanticPrefillContextFile,
-  executeSql,
-  getDatasourceColumnDict,
   getDatasourceTableColumnDicts,
 } from '../api'
 import {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
-  SQL_FUNCTION_GROUPS,
-  buildSqlFunctionExpression,
-  getSqlFunctionOptions,
+  buildMetricExpression,
+  quoteIdentifier,
   formatSemanticConfigOptionLabel,
+  getRelationshipConditions,
+  isQuerySucceeded,
+  syncRelationshipColumnsFromConditions,
 } from '../utils'
 import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
+import OntologyRulesDialog from './semantic/OntologyRulesDialog.vue'
+import ColumnDictDialog from './semantic/ColumnDictDialog.vue'
+import AutoPrefillDialog from './semantic/AutoPrefillDialog.vue'
+import TablePreviewDialog from './semantic/TablePreviewDialog.vue'
+import MetricExpandDialog from './semantic/MetricExpandDialog.vue'
+import AddFieldDialog from './semantic/AddFieldDialog.vue'
+import ExpressionEditorDialog from './semantic/ExpressionEditorDialog.vue'
+import RelationshipEditorDialog from './semantic/RelationshipEditorDialog.vue'
 import type {
   SemanticConfigItem,
   SemanticMetric,
   SemanticDimension,
   SemanticRelationship,
   TableInfo,
+  MetricExpandOption,
+  AddFieldForm,
+  AddFieldTableOption,
 } from '../types'
 
 type SemanticLogicalType = NonNullable<SemanticDimension['logical_type']>
@@ -140,15 +150,6 @@ const isActiveConfigDirty = computed(() => {
 
 const hasUnsavedSemanticConfig = computed(() => isActiveConfigDirty.value || isFieldRowsDirty.value)
 const canOpenEvaluation = computed(() => Boolean(activeConfig.value && props.datasourceId))
-
-const formatJsonPreview = (value: unknown) => {
-  if (value === null || value === undefined) return '—'
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch (_err) {
-    return String(value)
-  }
-}
 
 const normalizeSqlAliasBase = (tableName: string) => {
   const normalized = String(tableName || '').trim().replace(/[^\w]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
@@ -686,24 +687,6 @@ interface FieldConfigRow {
   isMissingPhysical?: boolean
 }
 
-interface AddFieldForm {
-  tableAlias: string
-  column: string
-  fieldName: string
-  displayName: string
-  mode: 'dimension' | 'metric'
-}
-
-interface MetricExpandOption {
-  aggFunc: string
-  label: string
-  fieldName: string
-  displayName: string
-  expression: string
-  exists: boolean
-  selected: boolean
-}
-
 const fieldRows = ref<FieldConfigRow[]>([])
 const fieldRowsSnapshot = ref('')
 const fieldRowsConfigId = ref<string | null>(null)
@@ -711,46 +694,22 @@ const showFieldPhysicalDetails = ref(false)
 const showAddFieldDialog = ref(false)
 const autoPrefillLoading = ref(false)
 const showAutoPrefillModeDialog = ref(false)
-const autoPrefillBusinessContext = ref('')
-const autoPrefillContextFileInputRef = ref<HTMLInputElement | null>(null)
-const parsingPrefillContextFile = ref(false)
 const previewingTableName = ref('')
 const showTablePreviewDialog = ref(false)
-const tablePreviewTitle = ref('')
-const tablePreviewColumns = ref<string[]>([])
-const tablePreviewRows = ref<Record<string, unknown>[]>([])
-const tablePreviewError = ref('')
-const tablePreviewMode = ref<'table' | 'json'>('table')
+const tablePreviewTarget = ref('')
 const showColumnDictDialog = ref(false)
-const loadingColumnDict = ref(false)
-const columnDictDialogTitle = ref('')
-const columnDictPayload = ref<DatasourceColumnDictPayload | null>(null)
-const columnDictError = ref('')
+const columnDictTarget = ref({ tableName: '', columnName: '' })
 const columnDictVisibleMap = ref<Record<string, boolean>>({})
 const columnDictEnumVisibleMap = ref<Record<string, boolean>>({})
 let columnDictLoadSeq = 0
-const tablePreviewJsonText = computed(() => {
-  if (tablePreviewRows.value.length === 0) return '[]'
-  return formatJsonPreview(tablePreviewRows.value.length === 1 ? tablePreviewRows.value[0] : tablePreviewRows.value)
-})
 const addFieldForm = ref<AddFieldForm>({ tableAlias: '', column: '', fieldName: '', displayName: '', mode: 'metric' })
 const addFieldDefaultDisplayName = ref('')
 const showExpressionEditorDialog = ref(false)
 const editingExpressionRowKey = ref('')
-const editingExpressionText = ref('')
 const showMetricExpandDialog = ref(false)
 const metricExpandSourceRowKey = ref('')
 const metricExpandOptions = ref<MetricExpandOption[]>([])
 const showOntologyRulesDialog = ref(false)
-const editingBusinessFlowText = ref('')
-const AGG_FUNCTION_OPTIONS = [
-  { value: 'COUNT', label: 'COUNT', desc: '计数' },
-  { value: 'COUNT_DISTINCT', label: 'COUNT DISTINCT', desc: '去重计数' },
-  { value: 'SUM', label: 'SUM', desc: '求和' },
-  { value: 'AVG', label: 'AVG', desc: '平均值' },
-  { value: 'MAX', label: 'MAX', desc: '最大值' },
-  { value: 'MIN', label: 'MIN', desc: '最小值' },
-]
 const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }> = [
   { value: 'text', label: '文本' },
   { value: 'number', label: '数值' },
@@ -759,17 +718,6 @@ const LOGICAL_TYPE_OPTIONS: Array<{ value: SemanticLogicalType; label: string }>
   { value: 'enum', label: '枚举' },
 ]
 
-const dimensionFunctionOptions = computed(() => (
-  getSqlFunctionOptions(props.datasourceType, true).filter(item => item.usesExpression !== false)
-))
-const visibleDimensionFunctionGroups = computed(() => {
-  return SQL_FUNCTION_GROUPS
-    .map(group => ({
-      ...group,
-      items: dimensionFunctionOptions.value.filter(item => item.group === group.key),
-    }))
-    .filter(group => group.items.length > 0)
-})
 const buildFieldRowsEditSignature = (rows: FieldConfigRow[]) => JSON.stringify(rows.map(row => ({
   key: row.key,
   table: row.table,
@@ -832,18 +780,6 @@ const activeConfigSaveDisabledReason = computed(() => {
 })
 
 const canSaveActiveConfig = computed(() => !activeConfigSaveDisabledReason.value)
-
-const quoteIdentifier = (name: string) => {
-  const safe = (name || '').replace(/`/g, '``')
-  return `\`${safe}\``
-}
-
-const quoteTableIdentifier = (name: string) => {
-  return (name || '')
-    .split('.')
-    .map(part => quoteIdentifier(part.trim()))
-    .join('.')
-}
 
 const normalizeExpressionColumn = (value: string) => {
   const cleaned = (value || '').trim().replace(/`/g, '')
@@ -1044,33 +980,6 @@ const saveDimension = () => {
 }
 
 // ============ 关系操作 ============
-const getRelationshipConditions = (rel: SemanticRelationship) => {
-  if (rel.join_conditions && rel.join_conditions.length > 0) {
-    return rel.join_conditions
-  }
-  return [{ left_column: rel.left_column || '', right_column: rel.right_column || '' }]
-}
-
-const syncRelationshipColumnsFromConditions = (rel: SemanticRelationship) => {
-  const first = (rel.join_conditions || [])[0]
-  rel.left_column = first?.left_column || ''
-  rel.right_column = first?.right_column || ''
-}
-
-const handleRelationshipLeftAliasChange = () => {
-  if (!editingRelationship.value || !editingConfigId.value) return
-  const entry = getScopeEntryByAlias(editingConfigId.value, editingRelationship.value.left_alias)
-  editingRelationship.value.left_table = entry?.table || ''
-  ;(editingRelationship.value.join_conditions || []).forEach(c => { c.left_column = '' })
-}
-
-const handleRelationshipRightAliasChange = () => {
-  if (!editingRelationship.value || !editingConfigId.value) return
-  const entry = getScopeEntryByAlias(editingConfigId.value, editingRelationship.value.right_alias)
-  editingRelationship.value.right_table = entry?.table || ''
-  ;(editingRelationship.value.join_conditions || []).forEach(c => { c.right_column = '' })
-}
-
 const addRelationship = (configId: string) => {
   const scope = getScopeEntries(configId)
   if (scope.length < 2) {
@@ -1202,6 +1111,24 @@ const confirmRelationshipEditor = () => {
     showRelationshipEditor.value = false
   }
 }
+
+const relationshipEditorScopeEntries = computed(() => {
+  const configId = editingConfigId.value || activeConfig.value?.id || ''
+  return getScopeEntries(configId).map(entry => ({
+    alias: entry.alias,
+    table: entry.table,
+    label: getScopeEntryLabel(entry),
+  }))
+})
+
+const relationshipEditorColumnsByAlias = computed(() => {
+  const configId = editingConfigId.value || activeConfig.value?.id || ''
+  const result: Record<string, string[]> = {}
+  getScopeEntries(configId).forEach(entry => {
+    result[entry.alias] = getColumnsByScopeAlias(configId, entry.alias).map(col => col.name)
+  })
+  return result
+})
 
 const activeRelationshipCards = computed(() => {
   if (!activeConfig.value) return [] as Array<{ rel: SemanticRelationship; relIndex: number; nextEntry: TableScopeEntry }>
@@ -1372,23 +1299,6 @@ const openLinkTableEditor = (configId: string, targetAlias: string) => {
   showRelationshipEditor.value = true
 }
 
-const addJoinCondition = () => {
-  if (!editingRelationship.value) return
-  const next = getRelationshipConditions(editingRelationship.value).map(c => ({ ...c }))
-  next.push({ left_column: '', right_column: '' })
-  editingRelationship.value.join_conditions = next
-  syncRelationshipColumnsFromConditions(editingRelationship.value)
-}
-
-const removeJoinCondition = (index: number) => {
-  if (!editingRelationship.value) return
-  const current = getRelationshipConditions(editingRelationship.value).map(c => ({ ...c }))
-  if (current.length <= 1) return
-  current.splice(index, 1)
-  editingRelationship.value.join_conditions = current
-  syncRelationshipColumnsFromConditions(editingRelationship.value)
-}
-
 // 获取表的字段列表
 const getTableColumns = (tableName: string) => {
   const table = props.tables.find(t => t.table_name === tableName)
@@ -1407,12 +1317,6 @@ const isEditing = (configId: string, type: EditingType) => {
 
 const hasMultiTables = (configId: string) => {
   return getScopeEntries(configId).length > 1
-}
-
-const buildMetricExpression = (aggFunc: string, column: string) => {
-  const quotedColumn = quoteIdentifier(column)
-  if (aggFunc === 'COUNT_DISTINCT') return `COUNT(DISTINCT ${quotedColumn})`
-  return `${aggFunc}(${quotedColumn})`
 }
 
 const AGG_DISPLAY_SUFFIX_MAP: Record<string, string> = {
@@ -1613,54 +1517,22 @@ const addFieldTables = computed(() => {
   return getScopeEntries(configId)
 })
 
-const addFieldLabelMode = ref<'name' | 'description'>('name')
-const addFieldTableKeyword = ref('')
-const addFieldColumnKeyword = ref('')
+const addFieldTableOptions = computed<AddFieldTableOption[]>(() =>
+  addFieldTables.value.map(entry => {
+    const table = getScopeTableInfo(entry)
+    return {
+      alias: entry.alias,
+      table: entry.table,
+      description: table?.description,
+      columns: table?.columns || [],
+    }
+  })
+)
 
 const addFieldColumns = computed(() => {
-  const entry = addFieldTables.value.find(t => t.alias === addFieldForm.value.tableAlias)
-  const table = entry ? getScopeTableInfo(entry) : null
-  return table?.columns || []
+  const entry = addFieldTableOptions.value.find(t => t.alias === addFieldForm.value.tableAlias)
+  return entry?.columns || []
 })
-
-const filteredAddFieldTables = computed(() => {
-  const keyword = addFieldTableKeyword.value.trim().toLowerCase()
-  if (!keyword) return addFieldTables.value
-  return addFieldTables.value.filter(entry => {
-    const table = getScopeTableInfo(entry)
-    return entry.alias.toLowerCase().includes(keyword) ||
-      entry.table.toLowerCase().includes(keyword) ||
-      (table?.description || '').toLowerCase().includes(keyword)
-  })
-})
-
-const filteredAddFieldColumns = computed(() => {
-  const keyword = addFieldColumnKeyword.value.trim().toLowerCase()
-  if (!keyword) return addFieldColumns.value
-  return addFieldColumns.value.filter(c =>
-    c.name.toLowerCase().includes(keyword) ||
-    (c.description || '').toLowerCase().includes(keyword)
-  )
-})
-
-const getAddFieldTableLabel = (entry: TableScopeEntry) => {
-  const table = getScopeTableInfo(entry)
-  const base = addFieldLabelMode.value === 'description' ? (table?.description || entry.table) : entry.alias
-  return entry.alias === entry.table ? base : `${base}（${entry.table}）`
-}
-
-const getAddFieldColumnLabel = (col: { name: string; description?: string }) => {
-  if (addFieldLabelMode.value === 'description') return col.description || col.name
-  return col.name
-}
-
-const handleAddFieldTableFilter = (keyword: string) => {
-  addFieldTableKeyword.value = keyword
-}
-
-const handleAddFieldColumnFilter = (keyword: string) => {
-  addFieldColumnKeyword.value = keyword
-}
 
 const openAddFieldDialog = () => {
   if (addFieldTables.value.length === 0) {
@@ -1669,8 +1541,6 @@ const openAddFieldDialog = () => {
   }
   const firstEntry = addFieldTables.value[0]
   if (!firstEntry) return
-  addFieldTableKeyword.value = ''
-  addFieldColumnKeyword.value = ''
   addFieldForm.value.tableAlias = firstEntry.alias
   addFieldForm.value.column = addFieldColumns.value[0]?.name || ''
   addFieldForm.value.fieldName = getUniqueCustomFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
@@ -1683,7 +1553,6 @@ const openAddFieldDialog = () => {
 
 const handleAddFieldTableChange = () => {
   const entry = addFieldTables.value.find(item => item.alias === addFieldForm.value.tableAlias)
-  addFieldColumnKeyword.value = ''
   addFieldForm.value.column = addFieldColumns.value[0]?.name || ''
   addFieldForm.value.fieldName = getUniqueCustomFieldName(addFieldForm.value.tableAlias, addFieldForm.value.column)
   const firstCol = addFieldColumns.value[0]
@@ -1898,50 +1767,6 @@ const confirmMetricExpand = () => {
   ElMessage.success(`已扩展 ${selectedOptions.length} 个指标，保存后生效`)
 }
 
-const appendAutoPrefillBusinessContext = (text: string, filename?: string) => {
-  const normalized = (text || '').trim()
-  if (!normalized) return
-  const prefix = filename ? `【${filename}】\n` : ''
-  const current = autoPrefillBusinessContext.value.trim()
-  autoPrefillBusinessContext.value = (current ? `${current}\n\n${prefix}${normalized}` : `${prefix}${normalized}`).slice(0, 20000)
-}
-
-const selectAutoPrefillContextFiles = () => {
-  autoPrefillContextFileInputRef.value?.click()
-}
-
-const handleAutoPrefillContextFilesChange = async (event: Event) => {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || [])
-  input.value = ''
-  if (files.length === 0) return
-  const oversized = files.find(file => file.size > 10 * 1024 * 1024)
-  if (oversized) {
-    ElMessage.warning(`文件不能超过 10MB：${oversized.name}`)
-    return
-  }
-  parsingPrefillContextFile.value = true
-  try {
-    let successCount = 0
-    for (const file of files) {
-      const res = await parseSemanticPrefillContextFile(file)
-      if (res.status !== 'success') {
-        ElMessage.warning(res.msg || `解析失败：${file.name}`)
-        continue
-      }
-      appendAutoPrefillBusinessContext(res.data?.text || '', res.data?.filename || file.name)
-      successCount += 1
-    }
-    if (successCount > 0) {
-      ElMessage.success(`已上传并解析 ${successCount} 个文件`)
-    }
-  } catch (err) {
-    ElMessage.error('解析文件失败')
-  } finally {
-    parsingPrefillContextFile.value = false
-  }
-}
-
 const buildAutoPrefillMetricFieldName = (tableAlias: string, sourceColumn: string, aggFunc: string, fieldName?: string) => {
   const normalized = normalizeFieldName(fieldName || `${sourceColumn}_${aggFunc.toLowerCase()}`)
   return getUniqueCustomFieldName(tableAlias, normalized)
@@ -2004,11 +1829,10 @@ const openAutoPrefillModeDialog = () => {
     ElMessage.warning('请先在左侧选择数据表')
     return
   }
-  autoPrefillBusinessContext.value = ''
   showAutoPrefillModeDialog.value = true
 }
 
-const handleAutoPrefillFields = async () => {
+const handleAutoPrefillFields = async (businessContext: string) => {
   if (!activeConfig.value) return
   const selectedTables = getScopeEntries(activeConfig.value.id)
   if (selectedTables.length === 0) {
@@ -2045,7 +1869,7 @@ const handleAutoPrefillFields = async () => {
       datasource_id: props.datasourceId,
       config_id: activeConfig.value.id,
       table_model_type: 'detail',
-      business_context: autoPrefillBusinessContext.value.trim(),
+      business_context: businessContext,
       tables: targetTables,
     }, { adminMode: props.adminMode })
     if (res.status !== 'success') {
@@ -2205,45 +2029,10 @@ const removeFieldRow = (row: FieldConfigRow) => {
   fieldRows.value = fieldRows.value.filter(item => item.key !== row.key)
 }
 
-const previewTableData = async (tableName: string) => {
+const previewTableData = (tableName: string) => {
   if (!props.datasourceId || !tableName) return
-  previewingTableName.value = tableName
-  tablePreviewTitle.value = tableName
-  tablePreviewColumns.value = []
-  tablePreviewRows.value = []
-  tablePreviewError.value = ''
-  tablePreviewMode.value = 'table'
+  tablePreviewTarget.value = tableName
   showTablePreviewDialog.value = true
-  try {
-    const res = await executeSql({
-      datasource_id: props.datasourceId,
-      sql: `SELECT * FROM ${quoteTableIdentifier(tableName)} LIMIT 1`,
-      limit: 1,
-    })
-    if (res.status !== 'success' || !res.data) {
-      tablePreviewError.value = res.msg || '查询失败'
-      return
-    }
-    const firstResult = Array.isArray(res.data.results) && res.data.results.length > 0
-      ? res.data.results[0]
-      : res.data
-    if (firstResult && firstResult.success === false) {
-      tablePreviewError.value = firstResult.error || '查询失败'
-      return
-    }
-    const rows = firstResult?.data || []
-    const columns = firstResult?.columns?.length
-      ? firstResult.columns
-      : Object.keys(rows[0] || {})
-    tablePreviewColumns.value = columns
-    tablePreviewRows.value = rows.slice(0, 1)
-  } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    tablePreviewError.value = apiMsg || apiDetail || (err instanceof Error ? err.message : '查询失败')
-  } finally {
-    previewingTableName.value = ''
-  }
 }
 
 const getFieldPhysicalColumn = (row: FieldConfigRow) => String(row.sourceColumn || row.column || '').trim()
@@ -2328,37 +2117,15 @@ const refreshFieldColumnDictVisibleMap = async () => {
   columnDictEnumVisibleMap.value = Object.fromEntries(flattened.map(([key, value]) => [key, value.enumVisible]))
 }
 
-const viewColumnDict = async (row: FieldConfigRow) => {
+const viewColumnDict = (row: FieldConfigRow) => {
   const tableName = String(row.table || '').trim()
   const columnName = getFieldPhysicalColumn(row)
   if (!props.datasourceId || !tableName || !columnName || row.isMissingPhysical) {
     ElMessage.warning('无法定位物理字段')
     return
   }
-  columnDictDialogTitle.value = `${tableName}.${columnName}`
-  columnDictPayload.value = null
-  columnDictError.value = ''
+  columnDictTarget.value = { tableName, columnName }
   showColumnDictDialog.value = true
-  loadingColumnDict.value = true
-  try {
-    const res = await getDatasourceColumnDict(props.datasourceId, tableName, columnName)
-    if (res.status !== 'success') {
-      columnDictError.value = res.msg || '获取字段字典失败'
-      return
-    }
-    columnDictPayload.value = res.data?.dict || null
-  } catch (err) {
-    const apiMsg = (err as any)?.response?.data?.msg
-    const apiDetail = (err as any)?.response?.data?.detail
-    columnDictError.value = apiMsg || apiDetail || (err instanceof Error ? err.message : '获取字段字典失败')
-  } finally {
-    loadingColumnDict.value = false
-  }
-}
-
-const buildDimensionExpression = (func: string, column: string) => {
-  const quoted = quoteIdentifier(column)
-  return buildSqlFunctionExpression(func, quoted, props.datasourceType)
 }
 
 const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
@@ -2760,7 +2527,6 @@ const handleExpressionInput = (row: FieldConfigRow, expression: string) => {
 const openExpressionEditorDialog = (row: FieldConfigRow) => {
   if (row.isMissingPhysical || (!row.isMetric && !row.isDimension)) return
   editingExpressionRowKey.value = row.key
-  editingExpressionText.value = row.expression || quoteIdentifier(row.sourceColumn || row.column)
   showExpressionEditorDialog.value = true
 }
 
@@ -2768,57 +2534,22 @@ const editingExpressionRow = computed(() => {
   return fieldRows.value.find(item => item.key === editingExpressionRowKey.value) || null
 })
 
-const saveExpressionEditor = () => {
+const saveExpressionEditor = (expression: string) => {
   const row = editingExpressionRow.value
   if (row) {
-    handleExpressionInput(row, editingExpressionText.value.trim())
+    handleExpressionInput(row, expression)
   }
-  showExpressionEditorDialog.value = false
   editingExpressionRowKey.value = ''
-  editingExpressionText.value = ''
-}
-
-const insertExpressionFromEditor = (expression: string) => {
-  editingExpressionText.value = expression
-}
-
-const splitOntologyRules = (text: string) => {
-  const content = (text || '').trim()
-  if (!content) return { businessFlow: '' }
-  const businessMatch = content.match(/【业务运转说明】\s*([\s\S]*?)(?=【元数据补充】|$)/)
-  if (businessMatch) {
-    return {
-      businessFlow: (businessMatch?.[1] || '').trim(),
-    }
-  }
-  if (content.includes('【元数据补充】')) {
-    return { businessFlow: '' }
-  }
-  return { businessFlow: content }
-}
-
-const buildOntologyRulesTextFromParts = (businessFlowText: string) => {
-  const businessFlow = businessFlowText.trim()
-  const sections: string[] = []
-  if (businessFlow) sections.push(`【业务运转说明】\n${businessFlow}`)
-  return sections.join('\n\n')
-}
-
-const buildOntologyRulesText = () => {
-  return buildOntologyRulesTextFromParts(editingBusinessFlowText.value)
 }
 
 const openOntologyRulesDialog = () => {
   if (!activeConfig.value) return
-  const parsed = splitOntologyRules(activeConfig.value.ontology_rules || '')
-  editingBusinessFlowText.value = parsed.businessFlow
   showOntologyRulesDialog.value = true
 }
 
-const saveOntologyRules = () => {
+const saveOntologyRules = (ontologyRules: string) => {
   if (!activeConfig.value) return
-  updateConfig(activeConfig.value.id, { ontology_rules: buildOntologyRulesText() })
-  showOntologyRulesDialog.value = false
+  updateConfig(activeConfig.value.id, { ontology_rules: ontologyRules })
 }
 
 </script>
@@ -3428,204 +3159,28 @@ const saveOntologyRules = () => {
       :admin-mode="props.adminMode"
     />
 
-    <el-dialog v-model="showRelationshipEditor" width="820px" title="连接方式" @close="closeRelationshipEditor">
-      <div v-if="editingRelationship" class="overflow-x-auto">
-        <div class="min-w-[680px] space-y-4">
-        <div class="flex items-center gap-2">
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'inner' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'inner'"
-          >
-            <span>内连接</span>
-            <span class="text-[10px] opacity-70">INNER</span>
-          </button>
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'left' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'left'"
-          >
-            <span>左连接</span>
-            <span class="text-[10px] opacity-70">LEFT</span>
-          </button>
-          <button
-            :class="[
-              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-              editingRelationship.join_type === 'right' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-            ]"
-            @click="editingRelationship.join_type = 'right'"
-          >
-            <span>右连接</span>
-            <span class="text-[10px] opacity-70">RIGHT</span>
-          </button>
-        </div>
-        <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-          <select
-            v-model="editingRelationship.left_alias"
-            class="px-2.5 py-2 border border-gray-200 rounded text-sm"
-            @change="handleRelationshipLeftAliasChange"
-          >
-            <option v-for="entry in getScopeEntries(editingConfigId || activeConfig?.id || '')" :key="entry.alias" :value="entry.alias">{{ getScopeEntryLabel(entry) }}</option>
-          </select>
-          <div class="text-sm text-gray-400">→</div>
-          <select
-            v-model="editingRelationship.right_alias"
-            class="px-2.5 py-2 border border-gray-200 rounded text-sm"
-            @change="handleRelationshipRightAliasChange"
-          >
-            <option v-for="entry in getScopeEntries(editingConfigId || activeConfig?.id || '')" :key="entry.alias" :value="entry.alias">{{ getScopeEntryLabel(entry) }}</option>
-          </select>
-        </div>
-        <div class="rounded-md border border-gray-200 bg-gray-50/50 p-3">
-          <div class="mb-2 flex items-center justify-between">
-            <div class="text-xs font-medium text-gray-600">关联字段</div>
-            <button
-              class="px-2 py-1 border border-gray-200 rounded bg-white text-gray-600 text-xs hover:border-blue-200 hover:text-blue-600"
-              @click="addJoinCondition"
-            >
-              <i class="fa-solid fa-plus mr-1"></i>新增条件
-            </button>
-          </div>
-          <div
-            v-for="(cond, condIndex) in (editingRelationship.join_conditions || [])"
-            :key="`join-cond-${condIndex}`"
-            class="space-y-1.5"
-          >
-            <div v-if="condIndex > 0" class="text-[11px] font-semibold text-blue-500">AND</div>
-            <div class="grid grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
-              <select v-model="cond.left_column" class="px-2.5 py-2 border border-gray-200 rounded text-sm bg-white">
-                <option value="">请选择左表字段</option>
-                <option v-for="col in getColumnsByScopeAlias(editingConfigId || activeConfig?.id || '', editingRelationship.left_alias)" :key="col.name" :value="col.name">{{ col.name }}</option>
-              </select>
-              <div class="text-sm font-semibold text-gray-500">=</div>
-              <select v-model="cond.right_column" class="px-2.5 py-2 border border-gray-200 rounded text-sm bg-white">
-                <option value="">请选择右表字段</option>
-                <option v-for="col in getColumnsByScopeAlias(editingConfigId || activeConfig?.id || '', editingRelationship.right_alias)" :key="col.name" :value="col.name">{{ col.name }}</option>
-              </select>
-              <button
-                class="w-8 h-8 border border-gray-200 rounded bg-white text-gray-400 hover:text-red-500 hover:border-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                :disabled="(editingRelationship.join_conditions || []).length <= 1"
-                @click="removeJoinCondition(condIndex)"
-              >
-                <i class="fa-solid fa-minus text-[11px]"></i>
-              </button>
-            </div>
-          </div>
-        </div>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded border border-gray-200 bg-white text-gray-600" @click="closeRelationshipEditor">取消</button>
-          <button class="px-3 py-1.5 rounded border-none bg-blue-500 text-white" @click="confirmRelationshipEditor">确定</button>
-        </div>
-      </template>
-    </el-dialog>
+    <RelationshipEditorDialog
+      v-model:visible="showRelationshipEditor"
+      v-model:relationship="editingRelationship"
+      :scope-entries="relationshipEditorScopeEntries"
+      :columns-by-alias="relationshipEditorColumnsByAlias"
+      @confirm="confirmRelationshipEditor"
+      @cancel="closeRelationshipEditor"
+    />
 
-    <el-dialog v-model="showExpressionEditorDialog" width="760px" title="编辑表达式">
-      <div class="space-y-3">
-        <div v-if="editingExpressionRow" class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
-          {{ editingExpressionRow.table }}.{{ editingExpressionRow.sourceColumn || editingExpressionRow.column }}
-        </div>
-        <textarea
-          v-model="editingExpressionText"
-          rows="8"
-          class="w-full rounded-md border border-gray-200 px-3 py-2 font-mono text-[13px] leading-relaxed text-gray-700 outline-none focus:border-blue-500"
-          placeholder="请输入字段表达式"
-        ></textarea>
-        <div
-          v-if="editingExpressionRow"
-          :class="[
-            'grid gap-3',
-            editingExpressionRow.isMetric && editingExpressionRow.isDimension ? 'grid-cols-2' : 'grid-cols-1'
-          ]"
-        >
-          <div v-if="editingExpressionRow.isMetric" class="rounded-md border border-gray-200 p-3">
-            <div class="mb-1.5 text-xs font-medium text-gray-600">聚合函数</div>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="fn in AGG_FUNCTION_OPTIONS"
-                :key="`expr-agg-${fn.value}`"
-                class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                @click="insertExpressionFromEditor(buildMetricExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
-              >
-                {{ fn.label }}
-              </button>
-            </div>
-          </div>
-          <div v-if="editingExpressionRow.isDimension" class="rounded-md border border-gray-200 p-3">
-            <div class="mb-1.5 text-xs font-medium text-gray-600">常用函数</div>
-            <div class="max-h-[220px] overflow-auto pr-1">
-              <div
-                v-for="group in visibleDimensionFunctionGroups"
-                :key="`expr-dim-group-${group.key}`"
-                class="mb-2 last:mb-0"
-              >
-                <div class="mb-1 text-[11px] font-medium text-gray-400">{{ group.label }}</div>
-                <div class="flex flex-wrap gap-1.5">
-                  <button
-                    v-for="fn in group.items"
-                    :key="`expr-dim-${fn.value}`"
-                    class="rounded border border-gray-200 bg-white px-2 py-1 text-[12px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
-                    :title="fn.desc"
-                    @click="insertExpressionFromEditor(buildDimensionExpression(fn.value, editingExpressionRow.sourceColumn || editingExpressionRow.column))"
-                  >
-                    {{ fn.label }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <button
-          class="px-3 py-1.5 border border-gray-200 rounded bg-white text-xs text-gray-600 hover:bg-gray-50"
-          @click="showExpressionEditorDialog = false"
-        >
-          取消
-        </button>
-        <button
-          class="ml-2 px-3 py-1.5 border-none rounded bg-[#1677FF] text-xs text-white hover:bg-[#0958D9]"
-          @click="saveExpressionEditor"
-        >
-          保存
-        </button>
-      </template>
-    </el-dialog>
+    <ExpressionEditorDialog
+      v-model:visible="showExpressionEditorDialog"
+      :row="editingExpressionRow"
+      :datasource-type="props.datasourceType"
+      @save="saveExpressionEditor"
+    />
 
-    <el-dialog v-model="showOntologyRulesDialog" width="760px" title="业务说明">
-      <div class="space-y-2">
-        <div class="text-[13px] font-medium text-gray-700">业务运转说明</div>
-        <div class="min-h-[40px] text-[12px] leading-5 text-gray-500">描述这个业务是怎么工作的，例如订单、支付、发货、退款等业务过程和对象关系。</div>
-        <textarea
-          v-model="editingBusinessFlowText"
-          wrap="off"
-          class="h-[320px] w-full overflow-auto whitespace-pre px-3 py-2 border border-gray-200 rounded-md text-[13px] leading-relaxed text-gray-700 outline-none resize-none focus:border-blue-500"
-          placeholder="例如：用户下单后生成 orders 记录，订单可包含多个 order_items；支付成功后记录支付时间，退款订单不计入有效成交。"
-        ></textarea>
-      </div>
-      <template #footer>
-        <button
-          class="px-3 py-1.5 border border-gray-200 rounded bg-white text-xs text-gray-600 hover:bg-gray-50"
-          @click="showOntologyRulesDialog = false"
-        >
-          取消
-        </button>
-        <button
-          class="ml-2 px-3 py-1.5 border-none rounded bg-[#1677FF] text-xs text-white hover:bg-[#0958D9] disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="!canManageConfig(activeConfig)"
-          title="保存业务说明"
-          @click="saveOntologyRules"
-        >
-          保存
-        </button>
-      </template>
-    </el-dialog>
+    <OntologyRulesDialog
+      v-model:visible="showOntologyRulesDialog"
+      :config="activeConfig"
+      :can-manage="canManageConfig(activeConfig)"
+      @save="saveOntologyRules"
+    />
 
     <SemanticHistoryLearningDialog
       v-model:visible="showHistoryLearningDialog"
@@ -3636,263 +3191,40 @@ const saveOntologyRules = () => {
       @accept-dimension="acceptHistoryDimension"
     />
 
-    <el-dialog v-model="showAddFieldDialog" width="560px" title="新增字段">
-      <div class="space-y-3">
-        <div class="flex items-center justify-end">
-          <el-radio-group v-model="addFieldLabelMode" size="small">
-            <el-radio-button value="description">中文</el-radio-button>
-            <el-radio-button value="name">英文</el-radio-button>
-          </el-radio-group>
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <div class="text-xs text-gray-600 mb-1">表</div>
-            <el-select
-              v-model="addFieldForm.tableAlias"
-              filterable
-              placeholder="请选择表"
-              :filter-method="handleAddFieldTableFilter"
-              @change="handleAddFieldTableChange"
-            >
-              <el-option
-                v-for="entry in filteredAddFieldTables"
-                :key="entry.alias"
-                :label="getAddFieldTableLabel(entry)"
-                :value="entry.alias"
-              />
-            </el-select>
-          </div>
-          <div>
-            <div class="text-xs text-gray-600 mb-1">字段</div>
-            <el-select
-              v-model="addFieldForm.column"
-              filterable
-              placeholder="请选择字段"
-              :filter-method="handleAddFieldColumnFilter"
-              @change="handleAddFieldColumnChange"
-            >
-              <el-option
-                v-for="c in filteredAddFieldColumns"
-                :key="c.name"
-                :label="getAddFieldColumnLabel(c)"
-                :value="c.name"
-              />
-            </el-select>
-          </div>
-        </div>
-        <div>
-          <div class="text-xs text-gray-600 mb-1">字段名</div>
-          <el-input v-model="addFieldForm.fieldName" placeholder="请输入逻辑字段名（同表内唯一）" />
-        </div>
-        <div>
-          <div class="text-xs text-gray-600 mb-1">显示名称</div>
-          <el-input v-model="addFieldForm.displayName" placeholder="请输入显示名称（同指标集内唯一）" />
-        </div>
-        <div>
-          <div class="text-xs text-gray-600 mb-1">新增类型</div>
-          <el-radio-group v-model="addFieldForm.mode">
-            <el-radio-button value="metric">指标</el-radio-button>
-            <el-radio-button value="dimension">维度</el-radio-button>
-          </el-radio-group>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <el-button @click="showAddFieldDialog = false">取消</el-button>
-          <el-button type="primary" @click="confirmAddField">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+    <AddFieldDialog
+      v-model:visible="showAddFieldDialog"
+      v-model:form="addFieldForm"
+      :tables="addFieldTableOptions"
+      @table-change="handleAddFieldTableChange"
+      @column-change="handleAddFieldColumnChange"
+      @confirm="confirmAddField"
+    />
 
-    <el-dialog v-model="showMetricExpandDialog" width="640px" title="扩展聚合指标">
-      <div class="space-y-3">
-        <div class="text-xs leading-5 text-gray-500">
-          基于当前物理字段生成其他聚合指标，已存在的同字段同聚合不会重复生成。
-        </div>
-        <div class="overflow-hidden rounded-md border border-gray-200">
-          <table class="w-full border-collapse text-[12px]">
-            <thead class="bg-gray-50 text-gray-600">
-              <tr>
-                <th class="w-[52px] border border-gray-200 px-3 py-2 text-center">选择</th>
-                <th class="border border-gray-200 px-3 py-2 text-left">表达式</th>
-                <th class="border border-gray-200 px-3 py-2 text-left">字段名</th>
-                <th class="border border-gray-200 px-3 py-2 text-left">显示名称</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="option in metricExpandOptions" :key="option.aggFunc" :class="option.exists ? 'bg-gray-50 text-gray-400' : ''">
-                <td class="border border-gray-200 px-3 py-2 text-center">
-                  <input v-model="option.selected" type="checkbox" :disabled="option.exists" />
-                </td>
-                <td class="border border-gray-200 px-3 py-2 font-mono">{{ option.label }}</td>
-                <td class="border border-gray-200 px-3 py-2">
-                  <el-input v-model="option.fieldName" size="small" :disabled="option.exists" />
-                </td>
-                <td class="border border-gray-200 px-3 py-2">
-                  <div class="flex items-center gap-2">
-                    <el-input v-model="option.displayName" size="small" :disabled="option.exists" />
-                    <span v-if="option.exists" class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">已存在</span>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <el-button @click="showMetricExpandDialog = false">取消</el-button>
-          <el-button type="primary" @click="confirmMetricExpand">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+    <MetricExpandDialog
+      v-model:visible="showMetricExpandDialog"
+      v-model:options="metricExpandOptions"
+      @confirm="confirmMetricExpand"
+    />
 
-    <el-dialog v-model="showAutoPrefillModeDialog" width="820px" title="自动预填">
-      <div class="space-y-4">
-        <div class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm leading-6 text-blue-700">
-          将所选表的物理字段预填为维度，并结合字段说明和业务补充推荐最多 10 个常用原子指标。
-        </div>
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <span class="text-sm font-medium text-gray-700">业务补充</span>
-            <div class="flex items-center gap-2">
-              <input
-                ref="autoPrefillContextFileInputRef"
-                class="hidden"
-                type="file"
-                multiple
-                accept=".txt,.docx,.pdf"
-                @change="handleAutoPrefillContextFilesChange"
-              />
-              <el-button size="small" :loading="parsingPrefillContextFile" @click="selectAutoPrefillContextFiles">
-                <i class="fa-solid fa-paperclip mr-1"></i>
-                上传文件
-              </el-button>
-            </div>
-          </div>
-          <el-input
-            v-model="autoPrefillBusinessContext"
-            type="textarea"
-            :rows="8"
-            maxlength="20000"
-            show-word-limit
-            placeholder="可补充业务口径、常分析的字段、金额/数量等指标习惯。支持上传 txt、docx、pdf 文件后追加到这里。"
-          />
-          <div class="mt-1 text-xs text-gray-400">文件仅用于本次解析，不会保存；单个文件不能超过 10MB。</div>
-        </div>
-      </div>
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <el-button @click="showAutoPrefillModeDialog = false">取消</el-button>
-          <el-button type="primary" :loading="autoPrefillLoading" @click="handleAutoPrefillFields">开始预填</el-button>
-        </div>
-      </template>
-    </el-dialog>
+    <AutoPrefillDialog
+      v-model:visible="showAutoPrefillModeDialog"
+      :loading="autoPrefillLoading"
+      @submit="handleAutoPrefillFields"
+    />
 
-    <el-dialog v-model="showTablePreviewDialog" width="820px" :title="`表数据预览 - ${tablePreviewTitle}`">
-      <div v-if="previewingTableName" class="flex h-32 items-center justify-center text-sm text-gray-400">
-        <i class="fa-solid fa-spinner fa-spin mr-2"></i>查询中...
-      </div>
-      <div v-else-if="tablePreviewError" class="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
-        {{ tablePreviewError }}
-      </div>
-      <div v-else-if="tablePreviewRows.length === 0" class="flex h-32 items-center justify-center text-sm text-gray-400">
-        暂无数据
-      </div>
-      <div v-else class="space-y-2">
-        <div class="flex justify-end">
-          <div class="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-[12px]">
-            <button
-              :class="[
-                'rounded px-2.5 py-1 transition-colors',
-                tablePreviewMode === 'table' ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:text-blue-600'
-              ]"
-              @click="tablePreviewMode = 'table'"
-            >
-              表格
-            </button>
-            <button
-              :class="[
-                'rounded px-2.5 py-1 transition-colors',
-                tablePreviewMode === 'json' ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:text-blue-600'
-              ]"
-              @click="tablePreviewMode = 'json'"
-            >
-              JSON
-            </button>
-          </div>
-        </div>
-        <div v-if="tablePreviewMode === 'table'" class="max-h-[420px] overflow-auto rounded-md border border-gray-200">
-          <table class="min-w-full border-collapse text-[12px]">
-            <thead class="sticky top-0 bg-gray-50 text-gray-600">
-              <tr>
-                <th
-                  v-for="column in tablePreviewColumns"
-                  :key="`preview-head-${column}`"
-                  class="border border-gray-200 px-3 py-2 text-left font-medium whitespace-nowrap"
-                >
-                  {{ column }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, rowIndex) in tablePreviewRows" :key="`preview-row-${rowIndex}`">
-                <td
-                  v-for="column in tablePreviewColumns"
-                  :key="`preview-cell-${rowIndex}-${column}`"
-                  class="max-w-[260px] truncate border border-gray-200 px-3 py-2 text-gray-700"
-                  :title="String(row[column] ?? '')"
-                >
-                  {{ row[column] ?? '' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <pre v-else class="max-h-[420px] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-[12px] leading-relaxed text-gray-700">{{ tablePreviewJsonText }}</pre>
-      </div>
-    </el-dialog>
+    <TablePreviewDialog
+      v-model:visible="showTablePreviewDialog"
+      v-model:previewing-table-name="previewingTableName"
+      :datasource-id="props.datasourceId"
+      :table-name="tablePreviewTarget"
+    />
 
-    <el-dialog v-model="showColumnDictDialog" width="620px" :title="`字段字典 - ${columnDictDialogTitle}`">
-      <div v-if="loadingColumnDict" class="flex h-32 items-center justify-center text-sm text-gray-400">
-        <i class="fa-solid fa-spinner fa-spin mr-2"></i>加载中...
-      </div>
-      <div v-else-if="columnDictError" class="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
-        {{ columnDictError }}
-      </div>
-      <div v-else-if="!hasColumnDictContent(columnDictPayload)" class="flex h-32 items-center justify-center text-sm text-gray-400">
-        暂无字段字典
-      </div>
-      <div v-else class="max-h-[460px] space-y-3 overflow-auto text-[12px]">
-        <div v-if="columnDictPayload?.enum_values?.length" class="rounded-md border border-gray-200">
-          <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 font-medium text-gray-600">枚举值</div>
-          <table class="min-w-full border-collapse">
-            <thead class="bg-gray-50 text-gray-500">
-              <tr>
-                <th class="border border-gray-200 px-3 py-2 text-left font-medium">枚举值</th>
-                <th class="border border-gray-200 px-3 py-2 text-left font-medium">枚举含义</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in columnDictPayload.enum_values" :key="item.value">
-                <td class="border border-gray-200 px-3 py-2 font-mono text-gray-700">{{ item.value }}</td>
-                <td class="border border-gray-200 px-3 py-2 text-gray-700">{{ item.label || '-' }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div v-if="columnDictPayload?.storage_format || columnDictPayload?.unit" class="grid grid-cols-2 gap-3">
-          <div v-if="columnDictPayload?.storage_format" class="rounded-md border border-gray-200">
-            <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 font-medium text-gray-600">数据存储格式</div>
-            <div class="px-3 py-2 text-gray-700">{{ columnDictPayload.storage_format }}</div>
-          </div>
-          <div v-if="columnDictPayload?.unit" class="rounded-md border border-gray-200">
-            <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 font-medium text-gray-600">单位</div>
-            <div class="px-3 py-2 text-gray-700">{{ columnDictPayload.unit }}</div>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
+    <ColumnDictDialog
+      v-model:visible="showColumnDictDialog"
+      :datasource-id="props.datasourceId"
+      :table-name="columnDictTarget.tableName"
+      :column-name="columnDictTarget.columnName"
+    />
 
   </div>
 </template>

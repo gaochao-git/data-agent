@@ -13,7 +13,8 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.agent import state
+from apps.chat_data_app.agent import agent_runtime, chat_data_agent
+from apps.chat_data_app.agent.tools import semantic_query as sql_tools
 from apps.chat_data_app.agent.tools import common
 from utils import conversation
 
@@ -25,17 +26,54 @@ def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
         captured["save"] = (artifact_type, data, artifact_id, conversation_id)
         return "result_1"
 
-    monkeypatch.setattr(state, "save_artifact", fake_save_artifact)
+    monkeypatch.setattr(sql_tools, "save_artifact", fake_save_artifact)
 
-    assert state.save_query_result({"rows": []}, conversation_id="conv_a") == "result_1"
-    assert captured["save"] == (state.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
+    assert sql_tools.save_query_result({"rows": []}, conversation_id="conv_a") == "result_1"
+    assert captured["save"] == (sql_tools.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
 
 
 def test_state_reducers_keep_first_conversation_datasource():
-    assert state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
-    assert state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
-    assert state.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
-    assert state.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
+    assert chat_data_agent.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
+    assert chat_data_agent.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
+    assert chat_data_agent.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
+    assert chat_data_agent.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
+
+
+def test_agent_runtime_helpers_build_shared_agent_bits():
+    model_calls = []
+    selection_kwargs = {}
+
+    def fake_llm_factory(**kwargs):
+        model_calls.append(kwargs)
+        return {"llm": kwargs.get("model")}
+
+    def fake_selection_factory(**kwargs):
+        selection_kwargs.update(kwargs)
+        return ["select_semantic_config_tool"]
+
+    assert agent_runtime.create_streaming_chat_model(
+        model_id="m1",
+        enable_thinking=True,
+        stream_usage=True,
+        llm_factory=fake_llm_factory,
+    ) == {"llm": "m1"}
+    assert model_calls[-1]["streaming"] is True
+    assert model_calls[-1]["stream_usage"] is True
+    assert model_calls[-1]["enable_thinking"] is True
+
+    tools = agent_runtime.create_semantic_selection_tools_bundle(
+        model_id="m1",
+        datasource_id="ds_a",
+        semantic_config={"id": "sc_a"},
+        user_id="u1",
+        include_query_tools=False,
+        selection_tool_factory=fake_selection_factory,
+    )
+    assert tools == ["select_semantic_config_tool"]
+    assert selection_kwargs["model_id"] == "m1"
+    assert selection_kwargs["datasource_id"] == "ds_a"
+    assert selection_kwargs["semantic_config"] == {"id": "sc_a"}
+    assert selection_kwargs["include_query_tools"] is False
 
 
 def test_serialize_semantic_config_selection_keeps_refresh_payload():

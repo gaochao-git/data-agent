@@ -10,13 +10,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import { cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
+import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
 import QueryResultPanel from './QueryResultPanel.vue'
 import QuickQueries from './QuickQueries.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import QueryFavoriteModal from './QueryFavoriteModal.vue'
 import ExecutionTargetPicker from './ExecutionTargetPicker.vue'
 import AiGeneratedNotice from './AiGeneratedNotice.vue'
-import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog } from '../utils'
+import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded } from '../utils'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
 import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
@@ -25,6 +26,13 @@ const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
 const renderMarkdown = (text: string) => md.render(text)
 const { submitSqlTask } = useQueryTask()
 const SQL_ASSIST_AGENT_ID = 'chat_data_sql_assist'
+const isMacPlatform = /Mac|iPhone|iPad|iPod/i.test(globalThis.navigator?.platform || '')
+const primaryShortcutLabel = isMacPlatform ? '⌘' : 'Ctrl'
+const optionShortcutLabel = isMacPlatform ? 'Option' : 'Alt'
+const executeShortcutLabel = `${primaryShortcutLabel}+Enter`
+const executeAllShortcutLabel = `${primaryShortcutLabel}+Shift+Enter`
+const formatShortcutLabel = `Shift+${optionShortcutLabel}+F`
+const clearShortcutLabel = `${primaryShortcutLabel}+K`
 
 // CodeMirror
 import { Codemirror } from 'vue-codemirror'
@@ -190,39 +198,10 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const attrs = useAttrs()
 
-// 表结构面板
-const searchText = ref('')
-const expandedTables = ref<Set<string>>(new Set())
+// 表结构面板（搜索/展开/悬浮标题，与 QueryBuilder 共享逻辑）
+const schemaTables = computed(() => props.datasource?.ds_tables || [])
+const { searchText, expandedTables, filteredTables, buildTableTitle, toggleTable } = useTableSchemaPanel(schemaTables)
 const isDatasourceHovered = ref(false)
-
-// 过滤表
-const filteredTables = computed(() => {
-  if (!props.datasource?.ds_tables) return []
-  if (!searchText.value.trim()) return props.datasource.ds_tables
-  const keyword = searchText.value.toLowerCase()
-  return props.datasource.ds_tables.filter(t =>
-    t.table_name.toLowerCase().includes(keyword) ||
-    t.description?.toLowerCase().includes(keyword) ||
-    t.business_desc?.toLowerCase().includes(keyword)
-  )
-})
-
-const buildTableTitle = (table: TableInfo) => [
-  `表名：${table.table_name}`,
-  `备注：${table.description || '-'}`,
-  table.business_desc ? `表业务说明：${table.business_desc}` : '',
-].filter(Boolean).join('\n')
-
-// 切换表展开
-const toggleTable = (tableName: string) => {
-  const newSet = new Set(expandedTables.value)
-  if (newSet.has(tableName)) {
-    newSet.delete(tableName)
-  } else {
-    newSet.add(tableName)
-  }
-  expandedTables.value = newSet
-}
 
 const focusSqlEditor = () => {
   const view = editorViewRef.value
@@ -479,7 +458,7 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
     title: result.title || result.memberName || result.sql || `结果${index + 1}`,
     resultData: JSON.stringify({
-      success: !result.error,
+      status: result.error ? 'failed' : 'succeeded',
       columns: result.columns,
       data: result.data,
       total_count: result.total_count,
@@ -838,7 +817,7 @@ const handleViewHistoryResult = async (item: SqlHistoryItem) => {
     ElMessage.warning('该查询暂无可查看结果')
     return
   }
-  if (payload.success === false) {
+  if (!isQuerySucceeded(payload)) {
     ElMessage.warning(payload.error || response.data?.error_message || '历史结果已不可用')
     return
   }
@@ -1520,7 +1499,7 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
             data: result.data || [],
             total_count: result.total_count || 0,
             execution_time_ms: result.execution_time_ms ?? elapsed,
-            error: result.success ? undefined : (result.error || '执行失败'),
+            error: isQuerySucceeded(result) ? undefined : (result.error || '执行失败'),
             title,
             memberDatasourceId: result.member_datasource_id,
             memberName: result.member_name,
@@ -1616,14 +1595,82 @@ const handleClear = () => {
 }
 
 // 快捷键
-const handleKeydown = (e: KeyboardEvent) => {
-  if (e.key === 'Escape' && sqlContextMenu.value.visible) {
+const isPrimaryShortcut = (e: KeyboardEvent) => e.ctrlKey || e.metaKey
+
+const isEditableShortcutTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.closest('.cm-editor')) return false
+  const tagName = target.tagName.toLowerCase()
+  return (
+    tagName === 'input' ||
+    tagName === 'textarea' ||
+    tagName === 'select' ||
+    target.isContentEditable ||
+    Boolean(target.closest('.el-dialog, .el-popper, .ai-history-popover'))
+  )
+}
+
+const isSqlEditorShortcutScope = (target: EventTarget | null): boolean => {
+  if (!containerRef.value || !(target instanceof Node)) return false
+  return containerRef.value.contains(target)
+}
+
+const closeTopOverlay = (): boolean => {
+  if (sqlContextMenu.value.visible) {
     closeSqlContextMenu()
+    return true
+  }
+  if (showAiConversationHistoryPopover.value) {
+    showAiConversationHistoryPopover.value = false
+    return true
+  }
+  if (showHistoryDialog.value) {
+    showHistoryDialog.value = false
+    return true
+  }
+  if (showFavoriteModal.value) {
+    showFavoriteModal.value = false
+    return true
+  }
+  if (showSaveModal.value) {
+    showSaveModal.value = false
+    return true
+  }
+  if (showAiPanel.value) {
+    showAiPanel.value = false
+    return true
+  }
+  return false
+}
+
+const handleKeydown = (e: KeyboardEvent) => {
+  const key = e.key.toLowerCase()
+  const code = e.code
+  if (key === 'escape' && closeTopOverlay()) {
+    e.preventDefault()
     return
   }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+
+  if (!isSqlEditorShortcutScope(e.target)) return
+  if (isEditableShortcutTarget(e.target)) return
+
+  if (isPrimaryShortcut(e) && code === 'Enter') {
     e.preventDefault()
-    handleExecute()
+    if (!executing.value) {
+      handleExecute({ ignoreSelection: e.shiftKey })
+    }
+    return
+  }
+
+  if (e.shiftKey && e.altKey && code === 'KeyF') {
+    e.preventDefault()
+    handleFormat()
+    return
+  }
+
+  if (isPrimaryShortcut(e) && code === 'KeyK') {
+    e.preventDefault()
+    handleClear()
   }
 }
 
@@ -2080,6 +2127,7 @@ defineExpose({
             class="flex items-center gap-1 h-[24px] px-3 border rounded text-[12px] font-semibold cursor-pointer transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             :class="executing ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100' : 'border-[#e3e5eb] bg-white text-[#21252C] hover:bg-[#f0f1f3]'"
             :disabled="executing && (!executingTaskId || cancellingTask)"
+            :title="executing ? '暂停当前查询' : `查询（${executeShortcutLabel}）`"
             @click="executing ? handleCancelExecutingTask() : handleExecute()"
           >
             <i v-if="executing" :class="['fa-solid text-[12px]', cancellingTask ? 'fa-spinner fa-spin' : 'fa-stop']"></i>
@@ -2096,7 +2144,7 @@ defineExpose({
             <input v-model="skipQueryCache" type="checkbox" class="m-0">
             <span>跳过缓存</span>
           </label>
-          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="handleFormat">
+          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" :title="`格式化（${formatShortcutLabel}）`" @click="handleFormat">
             <i class="fa-solid fa-indent"></i>
             <span>格式化</span>
           </button>
@@ -2121,7 +2169,7 @@ defineExpose({
             <i class="fa-regular fa-floppy-disk"></i>
             <span>保存SQL</span>
           </button>
-          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" @click="handleClear">
+          <button class="flex items-center gap-1 h-[24px] px-3 border border-[#e3e5eb] rounded bg-white text-[12px] font-semibold text-[#21252C] cursor-pointer transition-all duration-150 hover:bg-[#f0f1f3]" :title="`重置（${clearShortcutLabel}）`" @click="handleClear">
             <i class="fa-regular fa-file"></i>
             <span>重置</span>
           </button>
@@ -2140,7 +2188,7 @@ defineExpose({
             ref="codemirrorRef"
             v-model="sqlCode"
             :extensions="extensions"
-            placeholder="输入 SQL 语句... (⌘+Enter 查询，输入表名或字段名触发自动补全)"
+            :placeholder="`输入 SQL 语句...（${executeShortcutLabel} 查询，${executeAllShortcutLabel} 查询全部）`"
             :style="{ height: '100%' }"
             :autofocus="true"
             :indent-with-tab="true"

@@ -193,41 +193,56 @@ def test_conversation_reasoning_serialization_and_timestamp_branches():
         "skip",
         {"content": ""},
         {"id": "", "content": "第一段", "toolCallCount": "2"},
-        {"content": "第二段", "tool_call_count": "bad"},
+        {"content": "第二段", "tool_call_count": "bad", "reasoning_turn_id": "turn-2"},
         {"content": "第三段", "tool_call_count": -3},
     ]) == [
         {"id": "reasoning-history-2", "content": "第一段", "tool_call_count": 2},
-        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0},
+        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0, "reasoning_turn_id": "turn-2"},
         {"id": "reasoning-history-4", "content": "第三段", "tool_call_count": 0},
     ]
 
 
-def test_conversation_interrupt_info_branches():
-    assert conversation_module._get_interrupt_info(None) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[object()])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value="bad")])])) is None
-    assert conversation_module._get_interrupt_info(SimpleNamespace(
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"x": 1}})])],
-        values={"messages": []},
-    )) == {
-        "tool_name": "unknown_tool",
-        "tool_call_id": None,
-        "args": {"x": 1},
-        "message": None,
-    }
+@pytest.mark.asyncio
+async def test_get_checkpoint_datasource_id_reads_tuple_without_building_graph():
+    class Checkpointer:
+        async def aget_tuple(self, config):
+            assert config["configurable"]["thread_id"] == "conv_ds"
+            return SimpleNamespace(checkpoint={"channel_values": {"conversation_datasource_id": "ds_a"}})
 
-    state = SimpleNamespace(
-        tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认执行"})])],
-        values={"messages": [AIMessage(content="", tool_calls=[{"id": "tc1", "name": "semantic_query_tool", "args": {}}])]},
-    )
-    assert conversation_module._get_interrupt_info(state) == {
-        "tool_name": "semantic_query_tool",
-        "tool_call_id": "tc1",
-        "args": {"sql": "select 1"},
-        "message": "确认执行",
-    }
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def get_graph(_checkpointer):
+        raise AssertionError("只读取绑定数据源时不应创建完整 agent")
+
+    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
+
+    assert datasource_id == "ds_a"
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_datasource_id_skips_graph_when_tuple_has_no_binding():
+    class Checkpointer:
+        async def aget_tuple(self, _config):
+            return SimpleNamespace(checkpoint={"channel_values": {"messages": []}})
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def get_graph(_checkpointer):
+        raise AssertionError("checkpoint 可直接读取时不应创建完整 agent")
+
+    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
+
+    assert datasource_id is None
 
 
 @pytest.mark.asyncio
@@ -298,7 +313,6 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     detail = await conversation_module.get_detail("", "conv_sync", None, None, user_id="u1")
     assert detail["title"] == "更新标题"
     assert detail["messages"] == []
-    assert detail["pending_tool"] is None
 
     assert await conversation_module.generate_title("", "missing", None, None, user_id="u1") is None
     assert await conversation_module.generate_title("", "conv_sync", None, None, user_id="u1") == "更新标题"
@@ -326,6 +340,16 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
         async def __aexit__(self, *_args):
             return False
 
+    raw_token_usage = {
+        "used": 12,
+        "total": 100,
+        "breakdown": [{
+            "key": "system_prompt",
+            "content": "SECRET_SYSTEM_PROMPT",
+            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+    }
+
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -337,10 +361,10 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                     "task_stages": [
                         {"run_id": "run1", "stage": "thinking", "status": "completed", "content": "理解"}
                     ],
-                    "token_usage": {"used": 12, "total": 100},
+                    "token_usage": raw_token_usage,
                     "conversation_datasource_id": "ds_a",
                 },
-                tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"args": {"sql": "select 1"}, "message": "确认"})])],
+                tasks=[],
             )
 
     detail = await conversation_module.get_detail("", "conv_detail", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1")
@@ -349,9 +373,11 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
     assert detail["task_stages"][0]["stage"] == "thinking"
     assert detail["reasoning_segments"] == []
-    assert detail["token_usage"] == {"used": 12, "total": 100}
+    assert detail["token_usage"]["used"] == 12
+    assert detail["token_usage"]["breakdown"][0]["content"] == "[系统提示词已隐藏]"
+    assert detail["token_usage"]["breakdown"][0]["children"][0]["content"] == "[系统提示词已隐藏]"
+    assert raw_token_usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
     assert detail["datasource_id"] == "ds_a"
-    assert detail["pending_tool"]["args"] == {"sql": "select 1"}
     assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
 
 
@@ -398,7 +424,6 @@ async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
     assert detail["task_stages"] == []
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"] is None
-    assert detail["pending_tool"] is None
 
 
 @pytest.mark.asyncio

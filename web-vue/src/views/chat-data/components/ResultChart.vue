@@ -6,6 +6,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import type { ChartType } from '../chartTypes'
+import { toSafeNumber } from '../utils'
 
 type ResultChartType = Extract<ChartType, 'bar' | 'horizontal_bar' | 'line' | 'area' | 'pie' | 'funnel' | 'graph'>
 
@@ -35,12 +36,15 @@ const autoXField = computed(() => {
 
 // 自动选择 Y 轴字段
 const autoYFields = computed(() => {
-  if (props.yField && props.columns.includes(props.yField)) {
-    return [props.yField]
-  }
   if (props.type === 'graph') {
+    if (props.yField && props.columns.includes(props.yField)) {
+      return [props.yField]
+    }
     const nonNumeric = props.columns.filter((col) => !props.numericColumns.includes(col) && col !== autoXField.value)
     return nonNumeric.length > 0 ? [nonNumeric[0]!] : []
+  }
+  if (props.yField && props.numericColumns.includes(props.yField)) {
+    return [props.yField]
   }
   // 默认展示所有数值列，避免 SQL 返回的多指标结果被前端截断。
   return props.numericColumns.length > 0 ? props.numericColumns : []
@@ -61,8 +65,7 @@ const buildGraphData = () => {
     const target = String(row.target ?? row.to ?? row.Target ?? row[targetField] ?? '').trim()
     if (!source || !target) return
     const rawValue = valueField ? row[valueField] : row.value ?? row.weight ?? row.count
-    const parsedValue = Number(rawValue)
-    const value = Number.isFinite(parsedValue) ? parsedValue : undefined
+    const value = toSafeNumber(rawValue) ?? undefined
     nodeMap.set(source, (nodeMap.get(source) || 0) + (value ?? 1))
     nodeMap.set(target, nodeMap.get(target) || 0)
     links.push({ source, target, value })
@@ -89,7 +92,7 @@ const generateOption = (): echarts.EChartsOption => {
 
     const pieData = props.data.map((row) => ({
       name: String(row[autoXField.value] ?? ''),
-      value: Number(row[yField]) || 0
+      value: toSafeNumber(row[yField]) ?? 0
     }))
 
     return {
@@ -142,7 +145,7 @@ const generateOption = (): echarts.EChartsOption => {
     if (!yField) return {}
     const funnelData = props.data.map((row) => ({
       name: String(row[autoXField.value] ?? ''),
-      value: Number(row[yField]) || 0
+      value: toSafeNumber(row[yField]) ?? 0
     }))
 
     return {
@@ -203,7 +206,7 @@ const generateOption = (): echarts.EChartsOption => {
   const series: echarts.SeriesOption[] = autoYFields.value.map((yField, index) => {
     const baseConfig = {
       name: yField,
-      data: props.data.map((row) => Number(row[yField]) || 0),
+      data: props.data.map((row) => toSafeNumber(row[yField]) ?? 0),
       itemStyle: {
         color: colors[index % colors.length]
       }

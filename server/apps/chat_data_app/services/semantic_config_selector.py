@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from .context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
 from .semantic_json_parser import parse_llm_json
@@ -379,7 +380,14 @@ def _parse_selection_response(content: str, configs: List[Dict[str, Any]]) -> Di
 
 async def _invoke_selector_prompt(llm: Any, prompt: str) -> str:
     """执行一次选择器模型调用。"""
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "semantic_config_selector"},
+        )
+        raise
     return str(getattr(response, "content", response) or "")
 
 

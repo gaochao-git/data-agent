@@ -4,6 +4,9 @@ import os
 import sys
 import time
 
+import pytest
+from pydantic import ValidationError
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -12,8 +15,18 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import calculator_tool
-from apps.chat_data_app.agent.tools import sql as agent_tools
+from apps.chat_data_app.agent.tools import semantic_query as agent_tools
+from apps.chat_data_app.agent.prompts.semantic_layer import build_semantic_prompt
+from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services import sql_assist_context
+
+
+def _query_result_payload(result: str) -> dict:
+    payload = json.loads(result)
+    assert payload["type"] == "query_result"
+    assert payload["version"] == 1
+    return payload
 
 
 def test_calculator_tool_calculates_decimal_expression_and_rounds():
@@ -75,7 +88,7 @@ def test_calculator_tool_covers_empty_division_and_unary_branches():
 
 
 def test_build_semantic_prompt_includes_ontology_rules():
-    prompt = agent_tools.build_semantic_prompt({
+    prompt = build_semantic_prompt({
         "description": "订单指标集",
         "ontology_rules": "有效订单仅统计已支付且未退款订单",
         "metrics": [{"name": "订单金额", "expression": "SUM(pay_amount)", "description": "实付金额"}],
@@ -102,19 +115,17 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
         {"table_name": "users", "description": "用户表", "columns": []},
     ]
 
-    assert agent_tools.get_tables_name_comment([]) == "暂无可用数据表"
-    assert agent_tools.get_tables_name_comment(tables) == "- orders: 订单表\n- users: 用户表"
-    assert agent_tools.get_tables_create_format([], ["orders"]) == ""
-    assert agent_tools.get_tables_create_format(tables, []) == ""
-    assert agent_tools.get_tables_create_format(tables, ["missing"]) == ""
+    assert sql_assist_context.get_tables_create_format([], ["orders"]) == ""
+    assert sql_assist_context.get_tables_create_format(tables, []) == ""
+    assert sql_assist_context.get_tables_create_format(tables, ["missing"]) == ""
 
-    ddl = agent_tools.get_tables_create_format(tables, ["orders"])
+    ddl = sql_assist_context.get_tables_create_format(tables, ["orders"])
 
     assert "CREATE TABLE orders" in ddl
     assert "order_id bigint PRIMARY KEY  -- 订单ID" in ddl
     assert "status TEXT  -- 订单状态" in ddl
 
-    no_comment = agent_tools.get_tables_create_format(
+    no_comment = sql_assist_context.get_tables_create_format(
         [{"table_name": "logs", "description": "", "columns": [{"name": "id"}]}],
         ["logs"],
     )
@@ -123,7 +134,7 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
 
 
 def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relationships():
-    prompt = agent_tools.build_semantic_prompt({
+    prompt = build_semantic_prompt({
         "source_type": "hive",
         "metrics": [
             {"name": "订单数", "label": "订单数量", "aggregation": "COUNT", "field": "order_id", "mysql_type": "bigint", "metadata_supplement": "同义词：订单量"},
@@ -189,46 +200,23 @@ def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
         async def get_datasource_async(self, datasource_id):
             return {"ds_tables": [{"table_name": datasource_id}]} if datasource_id == "ds_a" else None
 
+        async def get_cached_schema_async(self, datasource_id):
+            datasource = await self.get_datasource_async(datasource_id)
+            if not datasource:
+                raise ValueError("数据源不存在")
+            return datasource.get("ds_tables", [])
+
         async def get_all_datasources_async(self):
             return [
                 {"ds_tables": [{"table_name": "orders"}]},
                 {"ds_tables": [{"table_name": "users"}]},
             ]
 
-    monkeypatch.setattr(agent_tools, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(sql_assist_context, "get_datasource_manager", lambda: FakeManager())
 
-    assert asyncio.run(agent_tools.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
-    assert asyncio.run(agent_tools.get_all_tables_async("missing")) == []
-    assert asyncio.run(agent_tools.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
-
-
-def test_llm_select_tables_parses_json_code_block_filters_invalid_and_falls_back(monkeypatch):
-    tables = [{"table_name": "orders", "description": "订单表"}, {"table_name": "users", "description": "用户表"}]
-    captured = {}
-
-    class FakeResponse:
-        def __init__(self, content):
-            self.content = content
-
-    class FakeLLM:
-        def __init__(self, content):
-            self.content = content
-
-        async def ainvoke(self, messages):
-            captured["messages"] = messages
-            assert "orders" in messages[0].content
-            return FakeResponse(self.content)
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('```json\n{"tables":["orders","missing"]}\n```'))
-    assert asyncio.run(agent_tools.llm_select_tables("查订单", tables)) == ["orders"]
-    assert getattr(captured["messages"][0], "type", "") == "human"
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM('{"tables":["users"]}'))
-    assert asyncio.run(agent_tools.llm_select_tables("查用户", tables)) == ["users"]
-
-    monkeypatch.setattr(agent_tools, "get_chat_data_llm", lambda **_kwargs: FakeLLM("not json"))
-    assert asyncio.run(agent_tools.llm_select_tables("查全部", tables)) == ["orders", "users"]
-    assert asyncio.run(agent_tools.llm_select_tables("查空", [])) == []
+    assert asyncio.run(sql_assist_context.get_all_tables_async("ds_a")) == [{"table_name": "ds_a"}]
+    assert asyncio.run(sql_assist_context.get_all_tables_async("missing")) == []
+    assert asyncio.run(sql_assist_context.get_all_tables_async(None)) == [{"table_name": "orders"}, {"table_name": "users"}]
 
 
 class _FakeDatasourceManager:
@@ -257,6 +245,15 @@ class _FakeDatasourceManager:
             },
         }
         return [all_targets[item] for item in member_ids]
+
+    async def get_authorized_execution_datasources_async(
+        self,
+        datasource_id: str,
+        member_datasource_ids: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ):
+        return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
 
 
 async def _fake_execute_sql_on_target(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
@@ -328,7 +325,7 @@ def test_execute_sql_real_returns_multi_member_results(monkeypatch):
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert result["sql"] == "select 1"
     assert len(result["results"]) == 2
     assert result["results"][0]["member_name"] == "杭州库"
@@ -369,10 +366,10 @@ def test_execute_sql_real_uses_first_successful_member_as_primary(monkeypatch):
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
-    assert result["member_name"] == "宁波库"
-    assert result["columns"] == ["member_id", "sql_text"]
-    assert result["data"][0]["member_id"] == "member_b"
+    assert result["status"] == "succeeded"
+    assert result["results"][1]["member_name"] == "宁波库"
+    assert result["results"][1]["columns"] == ["member_id", "sql_text"]
+    assert result["results"][1]["data"][0]["member_id"] == "member_b"
 
 
 async def _fake_execute_sql_on_target_with_delay(sql: str, target_datasource: dict, user_id: str | None = None, operator_name: str | None = None) -> dict:
@@ -403,7 +400,7 @@ def test_execute_sql_real_runs_members_concurrently(monkeypatch):
     ))
     elapsed = time.perf_counter() - start
 
-    assert result["success"] is True
+    assert result["status"] == "succeeded"
     assert len(result["results"]) == 2
     assert result["results"][0]["member_datasource_id"] == "member_a"
     assert result["results"][1]["member_datasource_id"] == "member_b"
@@ -437,11 +434,11 @@ def test_execute_sql_real_keeps_other_members_when_one_member_raises(monkeypatch
         member_datasource_ids=["member_a", "member_b"],
     ))
 
-    assert result["success"] is True
-    assert result["member_name"] == "宁波库"
-    assert result["results"][0]["success"] is False
+    assert result["status"] == "succeeded"
+    assert result["results"][1]["member_name"] == "宁波库"
+    assert result["results"][0]["status"] == "failed"
     assert result["results"][0]["error"] == "执行失败: boom"
-    assert result["results"][1]["success"] is True
+    assert result["results"][1]["status"] == "succeeded"
 
 
 def test_execute_sql_real_returns_errors_for_missing_datasource(monkeypatch):
@@ -504,10 +501,10 @@ def test_execute_sql_real_updates_task_success_and_failure(monkeypatch):
     monkeypatch.setattr(query_runtime, "execute_sql_for_member", fake_runtime_execute_error)
     failed = asyncio.run(agent_tools._execute_sql_real("select 1", "ds_group", ["member_a"]))
 
-    assert success["success"] is True
+    assert success["status"] == "succeeded"
     assert updates[0]["status"] == "running"
     assert updates[1]["status"] == "succeeded"
-    assert failed["success"] is False
+    assert failed["status"] == "failed"
     assert failed["error"] == "不支持的数据源类型"
     assert updates[-1]["status"] == "failed"
 
@@ -564,6 +561,13 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "state": state,
     }))
 
+    json_string_success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": '{"metrics": ["订单数"]}',
+        "semantic_config_id": "cfg_a",
+        "member_datasource_ids": ["m1"],
+        "state": state,
+    }))
+
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
     failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["订单数"]},
@@ -572,12 +576,34 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "state": state,
     }))
 
-    assert success.startswith("<query_result>")
-    assert '"data": [{"id": 1}]' in success
-    assert '"sql": "select 1"' in success
-    assert '"query_mode": "dsl2sql"' in success
-    assert '"confidence": 0.9' in success
-    assert failed == "查询失败: 表不存在"
+    success_payload = _query_result_payload(success)
+    json_string_success_payload = _query_result_payload(json_string_success)
+    assert success_payload["status"] == "succeeded"
+    assert success_payload["data"]["data"] == [{"id": 1}]
+    assert success_payload["data"]["sql"] == "select 1"
+    assert success_payload["meta"]["query_mode"] == "dsl2sql"
+    assert success_payload["meta"]["confidence"] == 0.9
+    assert json_string_success_payload["status"] == "succeeded"
+    failed_payload = _query_result_payload(failed)
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["error"] == "表不存在"
+
+
+def test_semantic_query_input_rejects_invalid_json_dsl_string():
+    base_payload = {
+        "semantic_config_id": "cfg_a",
+        "member_datasource_ids": ["m1"],
+    }
+
+    assert SemanticQueryInput.model_validate({
+        **base_payload,
+        "dsl": '{"metrics": ["订单数"]}',
+    }).dsl == {"metrics": ["订单数"]}
+
+    with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        SemanticQueryInput.model_validate({**base_payload, "dsl": "not-json"})
+    with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        SemanticQueryInput.model_validate({**base_payload, "dsl": "[]"})
 
 
 def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
@@ -619,7 +645,7 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
+    assert _query_result_payload(result)["status"] == "succeeded"
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
 
 
@@ -661,7 +687,7 @@ def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch)
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
+    assert _query_result_payload(result)["status"] == "succeeded"
     assert captured["member_datasource_ids"] == ["org_b"]
 
 
@@ -991,7 +1017,7 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "member_datasource_ids": ["org_a"],
         "state": state,
     }))
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+    payload = _query_result_payload(result)
 
     assert captured == {
         "sql": "with t as (select 1 as v) select * from t",
@@ -1003,9 +1029,9 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "conversation_id": "conv_a",
         "operator_name": "测试用户",
     }
-    assert payload["query_mode"] == "nl2sql"
-    assert payload["confidence"] == 0.6
-    assert payload["sql"] == "with t as (select 1 as v) select * from t"
+    assert payload["meta"]["query_mode"] == "nl2sql"
+    assert payload["meta"]["confidence"] == 0.6
+    assert payload["data"]["sql"] == "with t as (select 1 as v) select * from t"
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
@@ -1113,10 +1139,10 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
         "member_datasource_ids": ["m1"],
         "state": {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]},
     }))
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
+    payload = _query_result_payload(result)
 
-    assert payload["artifact_id"] == "artifact_blank_sql"
-    assert payload["sql"] == "select generated"
+    assert payload["meta"]["artifact_id"] == "artifact_blank_sql"
+    assert payload["meta"]["sql"] == "select generated"
 
 
 def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
@@ -1188,10 +1214,10 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
         "state": state,
     }))
 
-    assert result.startswith("<query_result>")
-    assert '"artifact_id": "artifact_large"' in result
-    assert '"llm_analysis_skipped": true' in result
-    assert "查询结果已超过限制，仅返回工具结果，不进行分析" in result
+    payload = _query_result_payload(result)
+    assert payload["meta"]["artifact_id"] == "artifact_large"
+    assert payload["meta"]["llm_analysis_skipped"] is True
+    assert "查询结果已超过限制，完整结果已写入 artifact" in result
     assert "x" * 120 not in result
     assert captured["result"]["data"][0]["content"] == "x" * 200
     assert captured["conversation_id"] == "conv_a"
@@ -1235,9 +1261,9 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
         "state": state,
     }))
 
-    payload = json.loads(result.removeprefix("<query_result>").removesuffix("</query_result>"))
-    assert payload["artifact_id"] == "artifact_no_sql"
-    assert payload["sql"] == "select compiled from temp_config"
+    payload = _query_result_payload(result)
+    assert payload["meta"]["artifact_id"] == "artifact_no_sql"
+    assert payload["meta"]["sql"] == "select compiled from temp_config"
 
 
 def test_semantic_query_tool_injects_explicit_id_into_temp_semantic_config(monkeypatch):
@@ -1304,21 +1330,8 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
     assert '"sql": "select 1"' in result
 
 
-def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch():
-    assert agent_tools._build_multi_member_query_result("select 1", []) == {
-        "success": False,
-        "sql": "select 1",
-        "columns": [],
-        "data": [],
-        "total_count": 0,
-        "execution_time_ms": None,
-        "error": "查询失败",
-        "member_datasource_id": None,
-        "member_name": None,
-        "results": [],
-    }
-
-    prompt = agent_tools.build_semantic_prompt({
+def test_sql_tool_remaining_helpers_cover_prompt_alias_branch():
+    prompt = build_semantic_prompt({
         "metrics": [
             {"name": "无表指标", "expression": "COUNT(*)", "table": "", "description": ""},
             {"name": "同表指标", "expression": "SUM(amount)", "table": "orders", "table_alias": "orders"},
@@ -1335,19 +1348,3 @@ def test_sql_tool_remaining_helpers_cover_empty_member_and_prompt_alias_branch()
     assert "**同表指标**，表达式: SUM(amount)，表: orders" in prompt
     assert "表: alias_only" in prompt
     assert "表达式: -" in prompt
-
-
-def test_execute_sql_direct_delegates_to_real_executor(monkeypatch):
-    captured = {}
-
-    async def fake_execute_sql_real(sql, datasource_id):
-        captured["sql"] = sql
-        captured["datasource_id"] = datasource_id
-        return {"success": True}
-
-    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-
-    result = asyncio.run(agent_tools.execute_sql_direct("select 1", "ds_a"))
-
-    assert result == {"success": True}
-    assert captured == {"sql": "select 1", "datasource_id": "ds_a"}

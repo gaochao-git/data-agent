@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -11,10 +12,11 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from .llm_config import get_chat_data_max_tokens
-from .runtime_config import get_context_edit_config, get_context_window
+from .runtime_config import get_context_compression_config, get_context_window, is_context_usage_system_prompt_visible
 
 
 REQUEST_OVERHEAD_TOKENS = 3
+SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
 
 
 def estimate_tokens(text: str) -> int:
@@ -95,7 +97,7 @@ def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | N
     requested_output = max(int(max_output_tokens or get_chat_data_max_tokens()), 1)
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
-    trigger_ratio = float(get_context_edit_config().get("trigger_ratio", 0.70))
+    trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
     soft_input_limit = max(int(context_window * trigger_ratio), 1)
     return ContextBudget(
         context_window=context_window,
@@ -119,6 +121,34 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
         "input_budget_tokens": total,
         "input_budget_trigger_ratio": budget.trigger_ratio,
     }
+
+
+def sanitize_context_usage_for_response(usage: Any) -> Any:
+    """返回给前端前隐藏 system prompt 明文，不改变原始 usage 对象。"""
+    if is_context_usage_system_prompt_visible() or not isinstance(usage, dict):
+        return usage
+    sanitized = copy.deepcopy(usage)
+    _sanitize_breakdown(sanitized.get("breakdown"))
+    llm_calls = sanitized.get("llm_calls")
+    if isinstance(llm_calls, list):
+        for call in llm_calls:
+            if isinstance(call, dict):
+                _sanitize_breakdown(call.get("breakdown"))
+    return sanitized
+
+
+def _sanitize_breakdown(items: Any) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        is_system_item = item.get("key") == "system_prompt" or item.get("role") == "system"
+        if is_system_item:
+            item["content"] = SYSTEM_PROMPT_PLACEHOLDER
+            item["description"] = SYSTEM_PROMPT_PLACEHOLDER
+            item["redacted"] = True
+        _sanitize_breakdown(item.get("children"))
 
 
 class ToolResultBudget:

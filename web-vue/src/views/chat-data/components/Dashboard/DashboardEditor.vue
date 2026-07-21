@@ -10,6 +10,7 @@ import { useDashboard } from './composables/useDashboard'
 import PanelCard from './components/PanelCard.vue'
 import { DASHBOARD_BACKGROUNDS, GRID_CONFIG, LIGHT_BACKGROUNDS, MONITOR_BACKGROUNDS } from './constants'
 import type { DataSource } from '../../types'
+import type { Panel } from '../../api/dashboard'
 
 interface Props {
   dashboardId: string
@@ -155,7 +156,7 @@ const buildDashboardSignature = () => {
   })
 }
 
-const buildPanelConfigSignature = (panel: any) => {
+const buildPanelConfigSignature = (panel: Panel) => {
   return JSON.stringify({
     name: panel?.name || '',
     sql: panel?.sql || '',
@@ -174,7 +175,7 @@ const markAllSaved = () => {
   markLayoutSaved()
   savedDashboardSignature.value = buildDashboardSignature()
   const next: Record<string, string> = {}
-  ;(panels.value || []).forEach((panel: any) => {
+  ;(panels.value || []).forEach((panel: Panel) => {
     next[panel.id] = buildPanelConfigSignature(panel)
   })
   savedPanelConfigSignatures.value = next
@@ -203,7 +204,7 @@ const hasUnsavedPanelConfigChanges = computed(() => {
   const map = savedPanelConfigSignatures.value || {}
   const currentPanels = panels.value || []
   if (currentPanels.length !== Object.keys(map).length) return true
-  return currentPanels.some((panel: any) => map[panel.id] !== buildPanelConfigSignature(panel))
+  return currentPanels.some((panel: Panel) => map[panel.id] !== buildPanelConfigSignature(panel))
 })
 
 const hasUnsavedChanges = computed(() => {
@@ -254,7 +255,7 @@ const handleSaveLayout = async () => {
   if (hasUnsavedPanelConfigChanges.value) {
     const map = savedPanelConfigSignatures.value || {}
     const currentPanels = panels.value || []
-    for (const panel of currentPanels as any[]) {
+    for (const panel of currentPanels) {
       const nextSig = buildPanelConfigSignature(panel)
       if (map[panel.id] === nextSig) continue
       const updated = await handleUpdatePanel(panel.id, {
@@ -364,7 +365,7 @@ const handleChangeChartType = async (panelId: string, chartType: string) => {
   if (!dashboard.value?.panels) return
   dashboard.value = {
     ...dashboard.value,
-    panels: dashboard.value.panels.map((p: any) => p.id === panelId ? { ...p, chart_type: chartType } : p)
+    panels: dashboard.value.panels.map((p: Panel) => p.id === panelId ? { ...p, chart_type: chartType as Panel['chart_type'] } : p)
   }
 }
 
@@ -374,7 +375,7 @@ const handleUpdateChartConfig = async (panelId: string, config: Record<string, u
   if (!dashboard.value?.panels) return
   dashboard.value = {
     ...dashboard.value,
-    panels: dashboard.value.panels.map((p: any) => p.id === panelId ? { ...p, chart_config: config } : p)
+    panels: dashboard.value.panels.map((p: Panel) => p.id === panelId ? { ...p, chart_config: config } : p)
   }
 }
 
@@ -383,7 +384,7 @@ const handleUpdatePanelSql = (panelId: string, sql: string) => {
   if (!dashboard.value?.panels) return
   dashboard.value = {
     ...dashboard.value,
-    panels: dashboard.value.panels.map((p: any) => p.id === panelId ? { ...p, sql } : p)
+    panels: dashboard.value.panels.map((p: Panel) => p.id === panelId ? { ...p, sql } : p)
   }
 }
 
@@ -392,7 +393,7 @@ const handleUpdatePanelMemberDatasourceId = (panelId: string, memberDatasourceId
   if (!dashboard.value?.panels) return
   dashboard.value = {
     ...dashboard.value,
-    panels: dashboard.value.panels.map((p: any) => (
+    panels: dashboard.value.panels.map((p: Panel) => (
       p.id === panelId ? { ...p, member_datasource_id: memberDatasourceId } : p
     ))
   }
@@ -404,7 +405,7 @@ const handleEditPanelName = (panelId: string, name: string) => {
   if (!trimmed || !dashboard.value?.panels) return
   dashboard.value = {
     ...dashboard.value,
-    panels: dashboard.value.panels.map((p: any) => p.id === panelId ? { ...p, name: trimmed } : p)
+    panels: dashboard.value.panels.map((p: Panel) => p.id === panelId ? { ...p, name: trimmed } : p)
   }
 }
 

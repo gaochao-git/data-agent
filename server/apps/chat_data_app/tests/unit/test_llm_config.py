@@ -179,8 +179,8 @@ def test_chat_data_model_config_rejects_invalid_format(monkeypatch):
         raise AssertionError(f"invalid CHAT_DATA_MODEL was accepted: {value}")
 
 
-def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
-    from apps.chat_data_app.agent import data_analyze_graph
+def test_data_analyze_agent_uses_configured_model_without_fallback(monkeypatch):
+    from apps.chat_data_app.agent import analyze_data_agent
 
     created_models = []
     created_temperatures = []
@@ -199,19 +199,19 @@ def test_data_analyze_agent_uses_configured_model_fallback(monkeypatch):
         return object()
 
     _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
-    monkeypatch.setattr(data_analyze_graph, "get_chat_data_llm", fake_get_chat_data_llm)
-    monkeypatch.setattr(data_analyze_graph, "create_agent", fake_create_agent)
-    monkeypatch.setattr(data_analyze_graph, "create_data_analyze_tools", lambda *args, **kwargs: [])
+    monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", fake_get_chat_data_llm)
+    monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
+    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *args, **kwargs: [])
 
-    data_analyze_graph.create_data_analyze_agent(
+    analyze_data_agent.create_data_analyze_agent(
         workspace_root="/tmp/fxcjg_test_data/workspace",
         system_prompt="test",
         model_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
     )
 
-    assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507", "qwen3.6-35b-a3b"]
-    assert created_temperatures == [None, None]
-    assert len(captured["middleware"]) == 3
-    assert captured["middleware"][2].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["state_schema"] is data_analyze_graph.DataAnalyzeAgentState
-    assert any(isinstance(item, data_analyze_graph.ModelFallbackMiddleware) for item in captured["middleware"])
+    assert created_models == ["Qwen/Qwen3-30B-A3B-Instruct-2507"]
+    assert created_temperatures == [None]
+    middleware_names = [getattr(item, "name", "") for item in captured["middleware"]]
+    assert "ToolCallNameNormalizerMiddleware" in middleware_names
+    assert "ToolErrorMiddleware" in middleware_names
+    assert captured["state_schema"] is analyze_data_agent.DataAnalyzeAgentState

@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelGlobalRunningQueryHistory, getGlobalQueryHistory } from '../api'
 import type { DataSource, SqlHistoryItem } from '../types'
 import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
+import { cleanDisplayError } from '../utils'
 
 const props = withDefaults(defineProps<{
   datasources?: DataSource[]
@@ -125,14 +126,6 @@ const formatDurationSeconds = (value?: number | null) => {
   const seconds = milliseconds / 1000
   const decimalPlaces = seconds < 1 ? 3 : 2
   return `${seconds.toFixed(decimalPlaces).replace(/\.?0+$/, '')} 秒`
-}
-
-const cleanDisplayError = (value?: string | null) => {
-  const rawText = String(value || '').replace(/\r\n?/g, '\n')
-  const withoutAnsiEscapes = rawText
-    .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
-    .replace(/\[(?:\d{1,3};)*\d{1,3}m/g, '')
-  return withoutAnsiEscapes.trim() || '暂无错误信息'
 }
 
 const formatNullableText = (value?: string | number | null) => {

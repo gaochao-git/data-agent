@@ -14,8 +14,252 @@ ChatData App 是一个基于 LangGraph 实现的智能问数服务，当前主�
 - **SQL 自动生成**：根据语义配置和用户意图生成查询 SQL
 - **语义层支持**：通过配置指标/维度实现标准化查询
 - **多数据库支持**：支持 MySQL 和 Hive 语法
-- **LangGraph集成**：使用 LangGraph 框架进行工作流编排
+- **LangChain Agent 集成**：使用 `create_agent` 组织模型与工具循环
 - **RESTful API**：提供标准的HTTP接口供前端调用
+
+---
+
+## 权限边界
+
+ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单、页面入口和角色授权。`/api/chatdata/admin/**` 是否允许访问由上层 controller/BFF 基于登录态和权限点统一拦截。
+
+本模块仍负责服务层身份和业务数据权限：
+
+- 所有 `/api/chatdata/admin/**` 路由入口至少调用 `_get_current_user(request)`，保证服务 token、当前用户和审计身份一致。
+- 用户侧数据按 `user_id`、owner、public/global 状态隔离。
+- 数据源执行对象权限在 service 层校验；HTTP 执行对象通过权限接口获取当前用户可用机构编码，direct 执行对象使用服务端固定允许编码。
+- 上层 controller 负责 admin 角色权限，本模块不重复实现菜单/角色授权，避免两套权限口径漂移。
+
+---
+
+## 核心查询链路
+
+### 统一入口
+
+前端 ChatData 主页面入口是 `web-vue/src/views/chat-data/pages/index.vue`，按 `viewMode` 分成四个用户入口：
+
+| `viewMode` | 页面能力 | 前端主组件 |
+|---|---|---|
+| `conversation` | 数据智能体 | `SqlConversation.vue` / `AnalysisConversation.vue` |
+| `builder` | 可视化查询 | `QueryBuilder/index.vue` |
+| `editor` | SQL 查询 | `SqlEditor.vue` |
+| `dashboard` | 看板查询 | `Dashboard/DashboardEditor.vue` |
+
+前端接口统一从 `web-vue/src/views/chat-data/api/` 发起。代码中 URL 写为 `/agents/api/chatdata/...`；开发环境通常由 `VITE_APP_BASE_API=/dev-api` 拼成 `/dev-api/agents/api/chatdata/...`，再经 `web-vue/vite.config.ts` 代理转发到后端。后端实际挂载入口是 `server/main.py -> apps.chat_data_app.router`，路由总前缀是 `/api/chatdata`，聚合文件是 `server/apps/chat_data_app/routes.py`。
+
+### 1. 数据智能体
+
+数据智能体包含问数和分析两个 agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。
+
+```text
+index.vue
+  -> SqlConversation.vue / AnalysisConversation.vue
+  -> composables/useSqlGenerator.ts
+  -> api/index.ts: streamCompletion()
+  -> POST /agents/api/chatdata/conversations/{conversation_id}/completion
+  -> routers/conversations.py: completion()
+  -> handlers.py:
+       agent_id=chat_data              -> sql_completion_handler()
+       agent_id=chat_data_data_analyze -> data_analyze_completion_handler()
+  -> agent/chat_data_agent.py 或 agent/analyze_data_agent.py
+  -> dsl2sql_tool / semantic_query_tool
+  -> services/semantic_query_service.py
+  -> services/query_runtime.py: execute_agent_sql()
+  -> execute_sql_for_member()
+  -> services/sql_executor.py
+```
+
+问数主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径。智能分析也复用同一套 `dsl2sql_tool` 和 `semantic_query_tool`，区别主要在工作区、技能和分析产物处理。
+
+执行模式：
+
+- 前端只发起 `streamCompletion()` SSE，不拿 `task_id` 轮询。
+- `semantic_query_tool` 内部调用 `query_runtime.execute_agent_sql()`，会创建 `query_task` 和 `query_execution` 记录用于历史、审计和结果落库。
+- SQL 执行在当前工具调用内等待完成，结果通过结构化 JSON 工具结果回到智能体和 SSE 流。
+- 如果任务记录或执行明细创建失败，当前 SQL 工具调用直接失败，不再绕过任务审计降级查询；智能问数的用户交互主口径仍是“对话流内同步等待工具结果”。
+
+`semantic_query_tool` 的查询结果返回协议固定为 JSON 字符串，不再使用 XML 标签：
+
+```json
+{
+  "type": "query_result",
+  "version": 1,
+  "status": "succeeded",
+  "data": {
+    "sql": "SELECT ...",
+    "results": []
+  },
+  "error": null,
+  "meta": {
+    "query_mode": "dsl2sql",
+    "confidence": 0.9,
+    "artifact_id": null
+  }
+}
+```
+
+前端先根据 SSE `tool` 事件的 `tool_name=semantic_query_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、artifact、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
+
+### 2. 可视化查询
+
+可视化查询先把页面 Builder 配置编译成 SQL，再使用统一异步查询任务执行。
+
+```text
+index.vue
+  -> QueryBuilder/index.vue
+  -> compileCurrentBuilderSql()
+  -> api/query.ts: compileSemanticBuilderSql()
+  -> POST /agents/api/chatdata/compile-semantic-builder-sql
+  -> routers/query_execution.py: compile_semantic_builder_sql_endpoint()
+  -> services/semantic_builder_compiler.py
+
+QueryBuilder/index.vue
+  -> useQueryTask.submitSqlTask(query_type='builder')
+  -> api/query.ts: createQueryTask()
+  -> POST /agents/api/chatdata/query-tasks
+  -> routers/query_execution.py: create_query_task()
+  -> services/query_task_service.py: create_query_task_for_user()
+  -> services/query_runtime.py: prepare_sql_request_for_execution() / create_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> query_runtime.run_sql_query_task()
+  -> build_execute_sql_result_data()
+  -> execute_sql_for_member()
+```
+
+前端通过 `getQueryTask()` 轮询 `/agents/api/chatdata/query-tasks/{task_id}`，结果只消费任务返回的 `results[]`。取消执行走 `cancelQueryTask()`，后端入口是 `/query-tasks/{task_id}/cancel`。
+
+执行模式：
+
+- `compileSemanticBuilderSql()` 只做 DSL 编译预览，不执行 SQL，不写查询任务。
+- 点击执行后调用 `createQueryTask()` 创建 `task_type=sql`、`query_type=builder` 的异步任务。
+- 后端 `create_query_task_for_user()` 创建任务后立即 `schedule_query_task()` 后台执行。
+- 前端 `useQueryTask.waitForTask()` 轮询 `GET /query-tasks/{task_id}`，只在任务进入 `succeeded`、`partial_success`、`failed`、`cancelled` 等终态后更新页面结果。
+- 可视化查询和 SQL 查询共用 `query_runtime.run_sql_query_task()`、`build_execute_sql_result_data()`、`execute_sql_for_member()`，区别在请求中额外带 `semantic_builder_config`、`semantic_config_id` 和 `query_type=builder`。
+
+### 3. SQL 查询
+
+SQL 查询页面不再使用同步 `/execute-sql` 旧入口，主链路只有异步任务。
+
+```text
+index.vue
+  -> SqlEditor.vue
+  -> handleExecute()
+  -> parseSQLStatements()
+  -> useQueryTask.submitSqlTask(query_type='sql')
+  -> api/query.ts: createQueryTask()
+  -> POST /agents/api/chatdata/query-tasks
+  -> routers/query_execution.py: create_query_task()
+  -> services/query_task_service.py: create_query_task_for_user()
+  -> services/query_runtime.py: prepare_sql_request_for_execution()
+  -> create_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> query_runtime.run_sql_query_task()
+  -> create_query_executions_for_task()
+  -> build_execute_sql_result_data()
+  -> execute_sql_for_member()
+  -> services/sql_executor.py
+```
+
+SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成单条语句，逐条创建任务。`prepare_sql_request_for_execution()` 在任务创建时做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
+
+执行模式：
+
+- 每条 SQL 创建一个 `task_type=sql`、`query_type=sql` 的异步任务。
+- 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态和 `results[]`。
+- 任务取消走 `POST /query-tasks/{task_id}/cancel`；HTTP Hive 通过远端 `remote_task_id` 停止，MySQL direct 通过连接 ID `KILL QUERY`，Hive direct 当前没有真实 kill 能力。
+- SQL 查询页面不消费智能体 `semantic_query_tool` 工具结果，也不直接调用 `execute_agent_sql()`。
+
+### 4. 看板查询
+
+看板配置和看板查询分开：配置类接口在 `routers/dashboard.py` / `services/dashboard_service.py`，面板刷新复用查询运行时。
+
+```text
+DashboardEditor.vue
+  -> composables/useDashboard.ts
+  -> api/dashboard.ts: getDashboard() / updateDashboard() / addPanel() / updatePanel()
+  -> /agents/api/chatdata/dashboards...
+  -> routers/dashboard.py
+  -> services/dashboard_service.py
+```
+
+看板面板执行有两种前端调用：
+
+```text
+单面板刷新:
+DashboardEditor.vue
+  -> useDashboard.loadPanelData()
+  -> api/dashboard.ts: executePanel()
+  -> POST /agents/api/chatdata/dashboards/{dashboard_id}/query-tasks
+  -> 轮询 GET /agents/api/chatdata/query-tasks/{task_id}
+  -> routers/dashboard.py: create_dashboard_query_task()
+  -> QueryTaskService.schedule_query_task()
+  -> dashboard_runtime.run_dashboard_batch_task()
+  -> execute_dashboard_panel_task_payload()
+  -> build_dashboard_panel_execution_result()
+  -> execute_dashboard_panel_sql_with_target()
+  -> execute_sql_for_member()
+
+批量加载:
+DashboardEditor.vue
+  -> useDashboard.loadDashboardPanelsInBackground()
+  -> api/dashboard.ts: executePanelsBatch()
+  -> POST /agents/api/chatdata/dashboards/{dashboard_id}/panels/execute-batch
+  -> routers/dashboard.py: execute_panels_batch()
+  -> dashboard_runtime.stream_dashboard_batch_execution()
+  -> execute_dashboard_panel_task_payload()
+  -> execute_sql_for_member()
+```
+
+`services/query_providers.py` 初始化 `QueryTaskService` 后会调用 `query_task_service.configure_dashboard_runtime()`，把 `execute_sql_for_member`、任务创建、任务更新和调度函数注入 `dashboard_runtime.py`，避免看板 runtime 反向导入查询 router。
+
+执行模式：
+
+- 看板配置 CRUD 不执行 SQL，只维护 `dashboard` 和 `panel` 配置。
+- 单面板刷新当前前端走 `executePanel()`：先 `POST /dashboards/{dashboard_id}/query-tasks` 创建 `task_type=dashboard_batch` 任务，再轮询通用 `GET /query-tasks/{task_id}`，最后从 `task.result.results[panel_id].payload` 取面板数据。
+- 批量加载当前前端走 `executePanelsBatch()`：调用 `POST /dashboards/{dashboard_id}/panels/execute-batch`，后端立即创建 `task_type=dashboard_batch` 记录并返回 SSE；每个面板完成后推送一个 `PanelData`。
+- 批量 SSE 失败时，前端 `useDashboard.loadAllPanelData()` 会回退到多个单面板 `executePanel()`。
+- 两种看板执行最终都进入 `dashboard_runtime.execute_dashboard_panel_task_payload()`，再到 `build_dashboard_panel_execution_result()` 和 `execute_sql_for_member()`，统一做 execution 记录、成员数据源权限、limit、安全校验、缓存和真实执行。
+- 看板任务返回结构不同于 SQL 任务：`GET /query-tasks/{task_id}` 对 `dashboard_batch` 返回 `result`，其中 `result.results` 是按 `panel_id` 索引的面板结果；SQL/Builder 查询返回顶层 `results[]` 成员结果。
+
+### 统一结果口径
+
+智能体、可视化查询、SQL 查询和看板查询只要涉及多个执行对象，成员结果统一使用 `results[]`：
+
+```json
+{
+  "results": [
+    {
+      "member_datasource_id": "ORG_CODE1",
+      "member_name": "财付通",
+      "status": "succeeded",
+      "sql": "SELECT ...",
+      "columns": ["字段A"],
+      "data": [{"字段A": 1}],
+      "total_count": 1,
+      "execution_time_ms": 56,
+      "error": null
+    }
+  ]
+}
+```
+
+字段约定：
+
+- `member_datasource_id` 是执行对象标识，用于权限、历史、看板保存和回放。
+- `member_name` 是用户可见名称，用于结果标题和图表展示。
+- `status` 是成员执行状态主口径；成功为 `succeeded`，失败或取消由具体状态和 `error` 表达。
+- `columns` 保留服务端返回顺序，前端表格不要仅从 `data[0]` 推断列顺序。
+- `data` 是当前成员结果行，不承载多成员合并身份字段。
+
+新增查询入口或结果字段时，需要同步检查：
+
+```text
+后端 router/service/runtime
+-> web-vue/src/views/chat-data/api/* 类型
+-> web-vue/src/views/chat-data/types/query.ts
+-> web-vue/src/views/chat-data/utils/queryResult.ts
+-> 智能体、可视化查询、SQL 查询、看板消费侧
+```
 
 ---
 
@@ -158,14 +402,14 @@ dsl = {
 ```
 chat_data_app/
 ├── agent/
-│   ├── state.py           # LangGraph 状态定义
-│   ├── chat_data_graph.py # chat_data 主图定义
-│   ├── sql_assist_graph.py# SQL 辅助图定义
-│   ├── data_analyze_graph.py # 数据分析图定义
-│   ├── nodes.py           # Agent 节点
+│   ├── chat_data_agent.py # 智能问数 create_agent 组装和状态定义
+│   ├── analyze_data_agent.py # 智能分析 create_agent 组装和状态定义
+│   ├── sql_assist_agent.py# SQL 辅助 create_agent 组装和状态定义
+│   ├── agent_runtime.py   # 问数和分析共用运行时工具
+│   ├── middleware/        # create_agent middleware、上下文编辑和 token usage
 │   ├── tools/             # 工具包
 │   ├── config.py          # 模式配置
-│   ├── prompts/           # 提示词包
+│   ├── prompts/           # 提示词模板和 system prompt builder
 │   └── skills/            # 图表生成技能
 ├── services/
 │   ├── semantic_tools.py              # 语义工具处理器
@@ -189,12 +433,14 @@ chat_data_app/
 | `get_dialect` | semantic/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
 | `InputValidator` | semantic/input_validator.py | 校验指标、维度、过滤、排序和 limit |
 
-### LangGraph 工作流
+### create_agent 工作流
 
 ```
-START → [agent节点] → [tools_condition] → [tools执行] → [agent节点] → END
-              ↑                                    |
-              └────────────────────────────────────┘
+create_agent
+  ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
+  └─ tools 节点：执行 skill_load、select_semantic_config_tool、dsl2sql_tool、semantic_query_tool 等工具
+
+model → tools → model，直到模型不再发起工具调用后结束。
 ```
 
 ### 工具列表

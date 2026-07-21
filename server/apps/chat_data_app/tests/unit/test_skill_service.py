@@ -14,7 +14,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
-from apps.chat_data_app.agent.data_analyze_graph import build_data_analyze_system_prompt
+from apps.chat_data_app.agent.analyze_data_agent import build_data_analyze_system_prompt
 from apps.chat_data_app.services import skill_service as skill_service_module
 from apps.chat_data_app.services.skill_service import SkillService, skill_service
 
@@ -664,7 +664,6 @@ def test_data_analyze_prompt_injects_skill_metadata_not_skill_body():
         skill={"name": "dashboard-generation", "title": "看板生成技能"},
         data_context={"datasource": {"id": "ds_1"}, "semantic_configs": []},
         workspace_root="/tmp/workspace",
-        data_context_file="/mnt/user-data/workspace/data_context.json",
     )
 
     role_index = prompt.index("<role>")

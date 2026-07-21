@@ -3,16 +3,11 @@
 提供统一的会话管理 API 接口
 """
 
-import json
-import time
 import inspect
-from typing import Callable, Optional, Dict, Any, List, AsyncGenerator
+from typing import Callable, Optional, Dict, Any, List
 
-from fastapi import APIRouter, Query, UploadFile, File, Form, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, UploadFile, File, Request
 from pydantic import BaseModel
-from langgraph.types import Command
-from langchain_core.messages import AIMessage
 
 from utils.error_codes import ErrorCode, ensure_defined_error_code
 from utils import conversation
@@ -44,12 +39,6 @@ class CompletionRequest(BaseModel):
     file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
 
 
-class ResumeRequest(BaseModel):
-    """恢复中断请求（Human-in-the-Loop 工具确认）"""
-    action: str = "approve"  # approve | edit | reject
-    data: Optional[Dict[str, Any]] = None  # 修改后的数据（action=edit 时使用）
-
-
 class AgentAvailabilityResult(BaseModel):
     """Agent 可用性检查结果。"""
     enabled: bool = True
@@ -61,7 +50,6 @@ class AgentAvailabilityResult(BaseModel):
 
 _agent_configs: Dict[str, Dict[str, Any]] = {}
 _completion_handlers: Dict[str, Callable] = {}
-_resume_handlers: Dict[str, Callable] = {}  # resume 处理器（Human-in-the-Loop）
 _agent_availability_checkers: Dict[str, Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]] = {}
 _default_db_path: Optional[str] = None  # 默认数据库路径（用于通过 conversation_id 查询 agent_id）
 
@@ -108,19 +96,6 @@ def register_completion_handler(agent_id: str, handler: Callable):
     _completion_handlers[agent_id] = handler
 
 
-def register_resume_handler(agent_id: str, handler: Callable):
-    """
-    注册 resume 处理器（Human-in-the-Loop 工具确认）
-
-    注意：通常不需要注册，通用 resume 实现会自动使用 get_graph 和 get_checkpointer。
-    只有当 agent 需要特殊的 resume 逻辑时才需要注册。
-
-    Args:
-        agent_id: 代理标识
-        handler: 处理函数，签名为 async def handler(conversation_id, action, data) -> StreamingResponse
-    """
-    _resume_handlers[agent_id] = handler
-
 def register_agent_availability_checker(agent_id: str, checker: Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]):
     """注册 agent 可用性检查器。"""
     _agent_availability_checkers[agent_id] = checker
@@ -157,89 +132,6 @@ def _agent_unavailable_response(agent_id: str):
         code=availability.code,
         status="error",
     )
-
-
-async def _generic_resume_stream(
-    conversation_id: str,
-    action: str,
-    data: Optional[Dict[str, Any]],
-    get_graph: Callable,
-    get_checkpointer: Callable
-) -> AsyncGenerator[str, None]:
-    """
-    通用 resume 流式处理
-
-    根据 LangGraph 官方规范，使用 Command(resume=...) 恢复被中断的图执行。
-    """
-    try:
-        config = {
-            "configurable": {
-                "thread_id": conversation_id,
-                "checkpoint_ns": ""
-            }
-        }
-
-        human_input = {
-            "action": action,
-            "data": data or {}
-        }
-
-        async with get_checkpointer() as checkpointer:
-            graph = get_graph(checkpointer)
-
-            event_count = 0
-            async for event in graph.astream(
-                Command(resume=human_input),
-                config=config,
-                stream_mode=["custom", "messages"],
-            ):
-                event_count += 1
-                # 处理 custom 事件（task_progress 等）
-                if isinstance(event, tuple) and len(event) == 2:
-                    event_type, event_data = event
-                    if event_type == "custom" and isinstance(event_data, dict):
-                        yield f"event: {event_data.get('event', 'message')}\ndata: {json.dumps(event_data.get('data', event_data), ensure_ascii=False)}\n\n"
-
-            logger.info(f"[通用resume] astream 循环结束，共收到 {event_count} 个事件")
-
-            # 获取最终状态
-            final_snapshot = await graph.aget_state(config)
-            if not final_snapshot or not final_snapshot.values:
-                yield f"event: error\ndata: {{\"message\": \"未获取到最终状态\"}}\n\n"
-                return
-
-            final_state = final_snapshot.values
-
-            # 检查是否再次被中断
-            if final_snapshot.next:
-                logger.info(f"图再次被中断，等待节点: {final_snapshot.next}")
-
-                interrupt_data = None
-                if final_snapshot.tasks:
-                    for task in final_snapshot.tasks:
-                        if hasattr(task, 'interrupts') and task.interrupts:
-                            interrupt_data = task.interrupts[0].value if task.interrupts else None
-                            break
-
-                yield f"event: interrupt\ndata: {json.dumps({'next_node': list(final_snapshot.next), 'interrupt_data': interrupt_data, 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')}, ensure_ascii=False)}\n\n"
-                return
-
-            # 获取最后一条 AIMessage
-            messages = final_state.get("messages", [])
-            last_message = None
-            for msg in reversed(messages):
-                if isinstance(msg, AIMessage):
-                    last_message = msg
-                    break
-
-            if last_message:
-                yield f"event: completed\ndata: {json.dumps({'messages': [{'id': getattr(last_message, 'id', None), 'role': 'assistant', 'content': last_message.content, 'additional_kwargs': last_message.additional_kwargs}], 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')}, ensure_ascii=False)}\n\n"
-            else:
-                yield f"event: completed\ndata: {json.dumps({'message': '操作成功', 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')}, ensure_ascii=False)}\n\n"
-
-    except Exception as e:
-        logger.error(f"[通用resume] 恢复对话失败: {e}", exc_info=True)
-        yield f"event: error\ndata: {{\"message\": \"恢复对话失败: {str(e)}\", \"timestamp\": \"{time.strftime('%Y-%m-%d %H:%M:%S')}\"}}\n\n"
 
 
 def get_agent_config(agent_id: str) -> Optional[Dict[str, Any]]:
@@ -735,71 +627,6 @@ async def get_conversation_context(conversation_id: str, req: Request):
     except Exception as e:
         logger.error(f"获取对话上下文失败: {e}", exc_info=True)
         return business_response(msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
-
-
-@router.post("/{conversation_id}/resume")
-async def resume_conversation(conversation_id: str, request: ResumeRequest, req: Request):
-    """
-    恢复被中断的会话（Human-in-the-Loop 工具确认）
-
-    POST /api/chatdata/conversations/{id}/resume
-    Body: {"action": "approve" | "edit" | "reject", "data": {...}}
-
-    返回：StreamingResponse (SSE)
-
-    通用实现：根据 conversation_id 自动获取对应 agent 的 graph 和 checkpointer，
-    无需每个 agent 单独注册 resume handler。
-    """
-    try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        user_id = _get_user_id(req)
-
-        # 通过 conversation_id 获取 agent 配置
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        # 获取 agent_id
-        agent_id = await conversation.get_agent_id(_default_db_path, conversation_id, user_id)
-        if not agent_id:
-            return business_response(msg="无法确定对话的 agent_id", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        unavailable_response = _agent_unavailable_response(agent_id)
-        if unavailable_response:
-            return unavailable_response
-
-        # 优先使用自定义的 resume handler（如果有特殊逻辑）
-        handler = _resume_handlers.get(agent_id)
-        if handler:
-            return await handler(
-                conversation_id=conversation_id,
-                action=request.action,
-                data=request.data
-            )
-
-        # 通用 resume 实现：使用已注册的 get_graph 和 get_checkpointer
-        get_graph = config.get("get_graph")
-        get_checkpointer = config.get("get_checkpointer")
-        if not get_graph or not get_checkpointer:
-            return business_response(msg=f"agent {agent_id} 缺少 graph 或 checkpointer 配置", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-
-        return StreamingResponse(
-            _generic_resume_stream(
-                conversation_id=conversation_id,
-                action=request.action,
-                data=request.data,
-                get_graph=get_graph,
-                get_checkpointer=get_checkpointer
-            ),
-            media_type="text/event-stream",
-            headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
-        )
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except Exception as e:
-        logger.error(f"恢复对话失败: {e}", exc_info=True)
-        return business_response(msg=f"恢复对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_RESUME_FAILED, status="error")
 
 
 @router.post("/{conversation_id}/files")

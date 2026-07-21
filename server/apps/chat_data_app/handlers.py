@@ -10,28 +10,40 @@ chat_data_app 的 completion handler
 import json
 import asyncio
 import time
-import uuid
+from contextlib import suppress
 from typing import Dict, Any, Optional
+from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 
+from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
 from utils import conversation
 from .agent import (
-    get_chat_data_graph,
+    create_chat_data_agent,
     get_checkpointer,
 )
-from .agent import data_analyze_graph
+from .agent import analyze_data_agent
+from .agent.prompts.chat_data_builder import build_chat_data_system_prompt
 from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
 from .services.datasource_manager import get_datasource_manager
+from .services.context_budget import sanitize_context_usage_for_response
 from .services.data_analyze_context import build_data_analyze_context
-from .services.data_analyze_workspace import ensure_data_analyze_workspace, write_workspace_json
+from .services.execution_target_context import append_selected_execution_targets_to_context
+from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.data_analyze_workspace import ensure_data_analyze_workspace
 from .services.skill_service import skill_service
 from .services.semantic_tools import (
     format_semantic_config_directory_for_prompt,
     list_runtime_semantic_config_directory,
+)
+from .services.workspace_execution import (
+    SandboxExecutionSessionRef,
+    attach_workspace_execution_session,
+    cleanup_workspace_execution_session,
+    get_workspace_execution_session,
 )
 
 logger = get_logger(__name__)
@@ -40,10 +52,17 @@ AGENT_ID = "chat_data"
 DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
 REASONING_TOOL_DISPLAY_NAMES = {
     "select_semantic_config_tool": "选择指标集",
-    "dsl2sql_tool": "生成SQL",
+    "dsl2sql_tool": "生成 SQL",
     "semantic_query_tool": "查询数据",
-    "calculator_tool": "计算",
+    "calculator_tool": "精确计算",
     "skill_load": "加载技能",
+    "file_read": "读取文件",
+    "file_glob": "查找文件",
+    "file_grep": "搜索文件",
+    "file_edit": "写入文件",
+    "sandbox_run": "运行脚本",
+    "present_artifacts": "展示文件",
+    "output_artifact": "生成文件",
 }
 
 
@@ -52,16 +71,14 @@ def _get_timestamp() -> str:
     return time.strftime('%Y-%m-%d %H:%M:%S')
 
 
-async def prepare_data_analyze_workspace(conversation_id: str, data_context: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """异步准备 DataAnalyze 工作目录和上下文文件。"""
-    return await asyncio.to_thread(_prepare_data_analyze_workspace_sync, conversation_id, data_context)
+async def prepare_data_analyze_workspace(conversation_id: str) -> dict[str, str]:
+    """异步准备 DataAnalyze 工作目录。"""
+    return await asyncio.to_thread(_prepare_data_analyze_workspace_sync, conversation_id)
 
 
-def _prepare_data_analyze_workspace_sync(conversation_id: str, data_context: dict[str, Any]) -> tuple[dict[str, str], str]:
-    """同步创建 DataAnalyze 工作目录并写入上下文文件。"""
-    workspace_paths = ensure_data_analyze_workspace(conversation_id)
-    data_context_file = write_workspace_json(workspace_paths["root"], "workspace/data_context.json", data_context)
-    return workspace_paths, data_context_file
+def _prepare_data_analyze_workspace_sync(conversation_id: str) -> dict[str, str]:
+    """同步创建 DataAnalyze 工作目录。"""
+    return ensure_data_analyze_workspace(conversation_id)
 
 
 def _format_sse(event: str, data: dict | str) -> str:
@@ -82,11 +99,46 @@ def _format_sse(event: str, data: dict | str) -> str:
     return f"event: {event}\ndata: {data_str}\n\n"
 
 
+def _build_user_message(content: str, semantic_selection_event: dict[str, Any] | None = None, **extra_kwargs: Any) -> HumanMessage:
+    """构造带服务端时间戳和前端选择留痕的用户消息。"""
+    reasoning_turn_id = str(uuid4())
+    additional_kwargs = {
+        "timestamp": _get_timestamp(),
+        "reasoning_turn_id": reasoning_turn_id,
+    }
+    if semantic_selection_event:
+        additional_kwargs["semantic_config_selection"] = semantic_selection_event
+    additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
+    return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
+
+
+def _build_agent_context_state(
+    *,
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+    user_id: str | None,
+    operator_name: str | None,
+    conversation_id: str,
+    **extra_state: Any,
+) -> dict[str, Any]:
+    """构造问数和分析共享的 Agent 状态字段。"""
+    state = {
+        "conversation_datasource_id": datasource_id,
+        "datasource_id": datasource_id,
+        "semantic_config_id": semantic_config_id,
+        "user_id": user_id,
+        "operator_name": operator_name or "",
+        "conversation_id": conversation_id,
+    }
+    state.update(extra_state)
+    return state
+
+
 def _message_end_payload(usage: Any | None = None) -> dict[str, Any]:
     """构造消息结束事件，timestamp 表示服务端确认完成的时间。"""
     payload: dict[str, Any] = {"timestamp": _get_timestamp()}
     if usage:
-        payload["usage"] = usage
+        payload["usage"] = sanitize_context_usage_for_response(usage)
     return payload
 
 
@@ -153,23 +205,47 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
     })
 
 
-def _append_reasoning_segment(segments: list[dict[str, Any]], content: str, tool_call_count: int) -> None:
+def _append_reasoning_segment(
+    segments: list[dict[str, Any]],
+    content: str,
+    tool_call_count: int,
+    reasoning_turn_id: str | None = None,
+) -> None:
     content = _format_reasoning_for_display(content)
     if not content:
         return
-    if segments and segments[-1].get("tool_call_count") == tool_call_count:
+    if (
+        segments
+        and segments[-1].get("tool_call_count") == tool_call_count
+        and segments[-1].get("reasoning_turn_id") == reasoning_turn_id
+    ):
         segments[-1]["content"] = f"{segments[-1].get('content') or ''}{content}"
         return
-    segments.append({
-        "id": f"reasoning-{len(segments)}",
+    segment = {
+        "id": f"reasoning-{reasoning_turn_id}-{len(segments)}" if reasoning_turn_id else f"reasoning-{len(segments)}",
         "content": content,
         "tool_call_count": tool_call_count,
-    })
+    }
+    if reasoning_turn_id:
+        segment["reasoning_turn_id"] = reasoning_turn_id
+    segments.append(segment)
 
 
 def _visible_tool_count(tool_names: dict[str, str]) -> int:
     """计算已出现且前端可见的工具数量，用于恢复思考与工具的时序。"""
     return sum(1 for name in tool_names.values() if name != "load_skill_tool")
+
+
+def _is_data_analyze_visible_stream_message(message_chunk: Any, metadata: dict[str, Any]) -> bool:
+    """过滤 DataAnalyze 单 Agent 流，避免工具内部模型调用进入主对话。"""
+    node_name = str(metadata.get("langgraph_node") or "")
+    if node_name.startswith("__"):
+        return False
+    if getattr(message_chunk, "type", None) == "tool":
+        return True
+    if node_name in {"model", "data_analyze_agent"}:
+        return True
+    return str(metadata.get("lc_agent_name") or "") == "data_analyze_agent"
 
 
 def _normalize_enable_thinking(value: Any) -> bool | None:
@@ -189,27 +265,73 @@ def _normalize_enable_thinking(value: Any) -> bool | None:
 
 
 async def _persist_reasoning_segments(
-    graph: Any,
+    agent: Any,
     config: dict[str, Any],
     segments: list[dict[str, Any]],
     as_node: str,
     persisted_count: int = 0,
 ) -> int:
     pending_segments = segments[persisted_count:]
-    if not pending_segments or not hasattr(graph, "aupdate_state"):
+    if not pending_segments or not hasattr(agent, "aupdate_state"):
         return persisted_count
     try:
-        await graph.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
+        await agent.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
         return len(segments)
     except Exception as exc:
         logger.warning("保存模型思考分段失败: %s", exc)
         return persisted_count
 
 
+async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any], state: Any | None) -> Any | None:
+    """为 create_agent 产生的最新 AIMessage 补充完成时间，保持历史消息时间口径一致。"""
+    values = getattr(state, "values", None) if state is not None else None
+    messages = values.get("messages") if isinstance(values, dict) else []
+    latest_ai_message = None
+    for message in reversed(messages or []):
+        if getattr(message, "type", None) == "ai":
+            latest_ai_message = message
+            break
+    if latest_ai_message is None:
+        return state
+    additional_kwargs = getattr(latest_ai_message, "additional_kwargs", None) or {}
+    if additional_kwargs.get("timestamp") or not hasattr(agent, "aupdate_state"):
+        return state
+    try:
+        patched_message = latest_ai_message.model_copy(deep=True) if hasattr(latest_ai_message, "model_copy") else latest_ai_message.copy(deep=True)
+        patched_message.additional_kwargs = dict(additional_kwargs)
+        patched_message.additional_kwargs["timestamp"] = _get_timestamp()
+        await agent.aupdate_state(config, {"messages": [patched_message]}, as_node="model")
+        return await agent.aget_state(config) if hasattr(agent, "aget_state") else state
+    except Exception as exc:
+        logger.warning("保存 DataAnalyze 助手消息时间失败: %s", exc)
+        return state
+
+
+async def _finish_workspace_execution_session(
+    session_ref: SandboxExecutionSessionRef,
+    user_id: str,
+    *,
+    success: bool,
+) -> None:
+    """按 DataAnalyze 执行结果归还或销毁沙箱 session。"""
+    session = session_ref.current
+    session_ref.current = None
+    if session is None:
+        return
+    if success:
+        try:
+            await attach_workspace_execution_session(session, user_id)
+        except Exception:
+            await cleanup_workspace_execution_session(session)
+            raise
+        return
+    await cleanup_workspace_execution_session(session)
+
+
 def _format_tool_event(
     tool_name: str,
     tool_call_id: str | None,
-    status: str,  # "pending" | "running" | "completed"
+    status: str,  # "running" | "completed"
     args: dict | None = None,
     result: str | None = None,
     message: str | None = None,
@@ -221,10 +343,10 @@ def _format_tool_event(
     Args:
         tool_name: 工具名称
         tool_call_id: 工具调用 ID
-        status: 状态 (pending, running, completed)
-        args: 工具参数（pending 状态时使用）
+        status: 状态 (running, completed)
+        args: 工具参数
         result: 工具执行结果（completed 状态时使用）
-        message: 提示信息（pending 状态时使用）
+        message: 提示信息
         timestamp: 时间戳（格式：YYYY-MM-DD HH:MM:SS）
     """
     data = {
@@ -328,53 +450,332 @@ def _finish_running_tool(
     return active_tool_call_id
 
 
-def _get_interrupt_info(state) -> dict | None:
-    """
-    从状态中提取中断信息（由工具内部的 interrupt() 触发）
+class _ToolStreamState:
+    """维护 LangGraph 流式工具调用状态，统一 running 和完成事件字段。"""
 
-    LangGraph interrupt 结构：
-    - state.tasks[].interrupts[].value: interrupt() 传入的数据
-    - state.values.messages[-1].tool_calls: 最后一条 AI 消息的工具调用
+    def __init__(self):
+        self.tool_names: dict[str, str] = {}
+        self.args_buffer: dict[str, str] = {}
+        self.args_fallback: dict[str, dict[str, Any]] = {}
+        self.index_map: dict[int, str] = {}
+        self.running_tool_ids: list[str] = []
+        self.emitted_running_tool_ids: set[str] = set()
+        self.active_tool_call_id: str | None = None
 
-    Returns:
-        如果有中断: {"tool_name", "tool_call_id", "sql", "message", ...}
-        否则: None
-    """
-    if not state or not state.tasks:
-        return None
+    def visible_tool_count(self) -> int:
+        return _visible_tool_count(self.tool_names)
 
-    # 从 tasks 中找到第一个 interrupt
-    for task in state.tasks:
-        if not (hasattr(task, 'interrupts') and task.interrupts):
-            continue
+    def handle_tool_calls(self, tool_calls: Any) -> list[str]:
+        events: list[str] = []
+        for tool_call in tool_calls or []:
+            if not isinstance(tool_call, dict):
+                continue
+            tool_call_id = str(tool_call.get("id") or "").strip()
+            tool_name = str(tool_call.get("name") or "").strip()
+            tool_index = tool_call.get("index")
+            if not tool_call_id or not tool_name:
+                continue
+            self.tool_names[tool_call_id] = tool_name
+            self.active_tool_call_id = tool_call_id
+            if isinstance(tool_index, int):
+                self.index_map[tool_index] = tool_call_id
+            self.args_buffer.setdefault(tool_call_id, "")
+            if isinstance(tool_call.get("args"), dict):
+                self.args_fallback[tool_call_id] = tool_call.get("args") or {}
+            events.extend(self._running_event(tool_call_id, tool_name, tool_call.get("args") if isinstance(tool_call.get("args"), dict) else None))
+        return events
 
-        interrupt = task.interrupts[0]  # 取第一个中断
-        if not hasattr(interrupt, 'value'):
-            continue
+    def handle_tool_call_chunks(self, tool_call_chunks: Any) -> list[str]:
+        events: list[str] = []
+        for chunk in tool_call_chunks or []:
+            if not isinstance(chunk, dict):
+                continue
+            chunk_id = str(chunk.get("id") or "").strip()
+            chunk_name = str(chunk.get("name") or "").strip()
+            chunk_args = str(chunk.get("args") or "")
+            chunk_index = chunk.get("index")
+            if chunk_id:
+                if chunk_name:
+                    self.tool_names[chunk_id] = chunk_name
+                self.active_tool_call_id = chunk_id
+                if isinstance(chunk_index, int):
+                    self.index_map[chunk_index] = chunk_id
+                self.args_buffer.setdefault(chunk_id, "")
+                running_tool_name = chunk_name or self.tool_names.get(chunk_id, "")
+                if running_tool_name:
+                    events.extend(self._running_event(chunk_id, running_tool_name, {}))
 
-        value = interrupt.value
-        if not isinstance(value, dict):
-            continue
+            current_tool_call_id = (
+                chunk_id
+                or (self.index_map.get(chunk_index) if isinstance(chunk_index, int) else None)
+                or _resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids)
+            )
+            if current_tool_call_id and chunk_args:
+                self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
+        return events
 
-        # 从最后一条消息的 tool_calls 中获取 tool_call_id 和 tool_name
-        tool_call_id = None
-        tool_name = None
-        messages = state.values.get("messages", []) if state.values else []
-        if messages:
-            last_msg = messages[-1]
-            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-                tc = last_msg.tool_calls[0]
-                tool_call_id = tc.get("id")
-                tool_name = tc.get("name")
+    def build_tool_message_payload(self, message_chunk: Any) -> dict[str, Any]:
+        tool_call_id = str(getattr(message_chunk, "tool_call_id", "") or "").strip()
+        msg_data = message_chunk.model_dump()
+        msg_data["type"] = "tool"
+        msg_data["timestamp"] = _get_timestamp()
+        msg_data["tool_name"] = self.tool_names.get(tool_call_id, msg_data.get("name") or "")
+        msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content")) else "completed"
+        if tool_call_id:
+            msg_data["accumulated_args"] = _parse_tool_args_buffer(
+                self.args_buffer.get(tool_call_id, ""),
+                self.args_fallback.get(tool_call_id),
+            )
+            self.args_buffer.pop(tool_call_id, None)
+            self.args_fallback.pop(tool_call_id, None)
+        self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
+        return msg_data
 
-        # 直接透传 interrupt.value，补充 tool 信息
+    def _running_event(self, tool_call_id: str, tool_name: str, args: dict[str, Any] | None) -> list[str]:
+        _register_running_tool(self.running_tool_ids, tool_call_id)
+        if tool_call_id in self.emitted_running_tool_ids:
+            return []
+        self.emitted_running_tool_ids.add(tool_call_id)
+        return [_format_tool_event(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            status="running",
+            args=args or {},
+        )]
+
+
+class _AgentSseStreamAdapter:
+    """统一 create_agent 的 SSE 流处理，保留各 Agent 的可见消息过滤钩子。"""
+
+    def __init__(
+        self,
+        *,
+        agent: Any,
+        initial_state: dict[str, Any],
+        config: dict[str, Any],
+        request: Request | None = None,
+        visible_message_filter=None,
+        disconnect_log_message: str = "客户端已断开，停止流式输出: %s",
+        disconnect_log_id: str = "",
+        reasoning_as_node: str = "model",
+        include_empty_tool_messages: bool = False,
+        on_first_message=None,
+        debug_label: str | None = None,
+        reasoning_turn_id: str | None = None,
+    ):
+        self.agent = agent
+        self.initial_state = initial_state
+        self.config = config
+        self.request = request
+        self.visible_message_filter = visible_message_filter
+        self.disconnect_log_message = disconnect_log_message
+        self.disconnect_log_id = disconnect_log_id
+        self.reasoning_as_node = reasoning_as_node
+        self.include_empty_tool_messages = include_empty_tool_messages
+        self.on_first_message = on_first_message
+        self.debug_label = debug_label
+        self.reasoning_turn_id = reasoning_turn_id
+        self.tool_stream_state = _ToolStreamState()
+        self.reasoning_segments: list[dict[str, Any]] = []
+        self.persisted_reasoning_count = 0
+        self.latest_token_usage: dict[str, Any] | None = None
+        self.state: Any | None = None
+        self.disconnected = False
+        self._first_visible_payload_seen = False
+        self._first_token_timeout_alarm_emitted = False
+
+    async def stream_events(self):
+        """输出 token_usage、thinking、tool、message 事件。"""
+        started_at = time.perf_counter()
+        timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
+        try:
+            async for event in self.agent.astream(
+                self.initial_state,
+                config=self.config,
+                stream_mode=["messages", "custom"],
+            ):
+                if await self._handle_disconnect():
+                    return
+
+                event_kind, payload = self._parse_stream_event(event)
+                if event_kind == "custom":
+                    token_usage_event = self._handle_custom_payload(payload)
+                    if token_usage_event:
+                        yield token_usage_event
+                    continue
+                if event_kind != "messages":
+                    continue
+
+                message_chunk, metadata = payload
+                if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
+                    continue
+                if self._has_visible_payload(message_chunk):
+                    self._record_first_visible_payload(started_at)
+
+                async for sse_event in self._handle_message_chunk(message_chunk, metadata):
+                    yield sse_event
+        except Exception as exc:
+            if not self._first_visible_payload_seen:
+                self._emit_first_token_timeout_if_needed(started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)})
+            emit_llm_connection_alarm_if_needed(
+                exc,
+                ext1=self._alarm_context(),
+                ext2={"error_type": exc.__class__.__name__, "error": str(exc)},
+            )
+            raise
+        finally:
+            timeout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await timeout_task
+
+    async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
+        """持久化思考分段并构造 message_end payload。"""
+        self.persisted_reasoning_count = await _persist_reasoning_segments(
+            self.agent,
+            self.config,
+            self.reasoning_segments,
+            as_node=self.reasoning_as_node,
+            persisted_count=self.persisted_reasoning_count,
+        )
+        self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
+        if persist_latest_ai_timestamp:
+            self.state = await _persist_latest_ai_message_timestamp(self.agent, self.config, self.state)
+        usage = self._resolve_end_usage(prefer_latest_usage)
+        return _message_end_payload_from_state(self.state, usage)
+
+    async def _handle_disconnect(self) -> bool:
+        if not self.request or not await self.request.is_disconnected():
+            return False
+        logger.info(self.disconnect_log_message, self.disconnect_log_id)
+        self.persisted_reasoning_count = await _persist_reasoning_segments(
+            self.agent,
+            self.config,
+            self.reasoning_segments,
+            as_node=self.reasoning_as_node,
+            persisted_count=self.persisted_reasoning_count,
+        )
+        self.disconnected = True
+        return True
+
+    def _handle_custom_payload(self, payload: Any) -> str | None:
+        if not isinstance(payload, dict) or payload.get("type") != "token_usage" or not payload.get("usage"):
+            return None
+        self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
+        return _format_sse("token_usage", self.latest_token_usage)
+
+    def _alarm_context(self) -> dict[str, Any]:
+        configurable = self.config.get("configurable") if isinstance(self.config, dict) else {}
         return {
-            **value,  # 包含 sql, message 等
-            "tool_name": tool_name or "unknown_tool",
-            "tool_call_id": tool_call_id,
+            "thread_id": (configurable or {}).get("thread_id") or "",
+            "checkpoint_ns": (configurable or {}).get("checkpoint_ns") or "",
+            "debug_label": self.debug_label or "",
         }
 
-    return None
+    def _has_visible_payload(self, message_chunk: Any) -> bool:
+        has_content = bool(getattr(message_chunk, "content", None))
+        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
+        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
+        msg_type = getattr(message_chunk, "type", None)
+        return bool(
+            has_content
+            or has_tool_calls
+            or has_tool_call_chunks
+            or _format_thinking_event(message_chunk)
+            or (self.include_empty_tool_messages and msg_type == "tool")
+        )
+
+    def _record_first_visible_payload(self, started_at: float) -> None:
+        if self._first_visible_payload_seen:
+            return
+        self._first_visible_payload_seen = True
+        self._emit_first_token_timeout_if_needed(started_at)
+        if self.on_first_message:
+            self.on_first_message()
+
+    async def _first_token_timeout_watchdog(self, started_at: float) -> None:
+        threshold_seconds = int(LLM_FIRST_TOKEN_TIMEOUT_SECONDS or 0)
+        if threshold_seconds <= 0:
+            return
+        await asyncio.sleep(threshold_seconds)
+        if not self._first_visible_payload_seen and not self.disconnected:
+            self._emit_first_token_timeout_if_needed(started_at)
+
+    def _emit_first_token_timeout_if_needed(self, started_at: float, *, ext2: Any = None) -> None:
+        threshold_seconds = int(LLM_FIRST_TOKEN_TIMEOUT_SECONDS or 0)
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        if threshold_seconds <= 0 or elapsed_ms < threshold_seconds * 1000 or self._first_token_timeout_alarm_emitted:
+            return
+        self._first_token_timeout_alarm_emitted = True
+        emit_llm_first_token_timeout_alarm(
+            elapsed_ms=elapsed_ms,
+            threshold_seconds=threshold_seconds,
+            ext1=self._alarm_context(),
+            ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
+        )
+
+    async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]):
+        has_content = bool(getattr(message_chunk, "content", None))
+        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
+        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
+        msg_type = getattr(message_chunk, "type", None)
+        thinking_event = _format_thinking_event(message_chunk)
+        has_visible_payload = has_content or has_tool_calls or has_tool_call_chunks or thinking_event
+        if not has_visible_payload and not (self.include_empty_tool_messages and msg_type == "tool"):
+            return
+        if thinking_event:
+            _append_reasoning_segment(
+                self.reasoning_segments,
+                _extract_reasoning_content(message_chunk),
+                self.tool_stream_state.visible_tool_count(),
+                self.reasoning_turn_id,
+            )
+            yield thinking_event
+            if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
+                return
+        if self.debug_label and msg_type == "ai" and has_content:
+            logger.debug("[%s] %s", self.debug_label, str(message_chunk.content)[:200])
+        if has_tool_calls:
+            for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
+                yield tool_event
+        if has_tool_call_chunks:
+            for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
+                yield tool_event
+        if msg_type == "tool":
+            yield _format_sse("tool", self.tool_stream_state.build_tool_message_payload(message_chunk))
+            return
+        msg_data = message_chunk.model_dump()
+        msg_data["timestamp"] = _get_timestamp()
+        yield _format_sse("message", msg_data)
+
+    def _resolve_end_usage(self, prefer_latest_usage: bool) -> Any | None:
+        state_usage = None
+        if self.state and getattr(self.state, "values", None):
+            state_usage = self.state.values.get("token_usage")
+        if prefer_latest_usage:
+            return self.latest_token_usage or state_usage
+        return state_usage if state_usage is not None else self.latest_token_usage
+
+    @staticmethod
+    def _parse_stream_event(event: Any) -> tuple[str, Any]:
+        if isinstance(event, tuple) and len(event) == 2:
+            stream_mode, payload = event
+            if stream_mode == "custom":
+                return "custom", payload
+            if stream_mode == "messages":
+                return "messages", payload
+            message_chunk, metadata = event
+            return "messages", (message_chunk, metadata)
+        return "unknown", event
+
+
+def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str, Any]) -> bool:
+    """过滤智能问数 create_agent 流，避免工具内部模型调用进入主对话。"""
+    node_name = str(metadata.get("langgraph_node") or "")
+    msg_type = getattr(message_chunk, "type", "ai")
+    if msg_type == "ai" and node_name != "model":
+        logger.debug("[过滤] 跳过来自 %s 节点的 AI 消息", node_name)
+        return False
+    return True
 
 
 async def _get_semantic_config_async(
@@ -525,41 +926,14 @@ def _append_user_selected_execution_targets_to_context(
     member_datasource_ids: list[str],
 ) -> str:
     """用户显式选择执行对象时，追加到数据源组智能问数说明末尾。"""
-    selected_member_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    if not selected_member_ids:
-        return str(query_context or "").strip()
-
-    selected_id_set = set(selected_member_ids)
-    selected_targets = [
-        (index, target)
-        for index, target in enumerate(execution_targets, start=1)
-        if _execution_target_member_id(target) in selected_id_set
-    ]
-    if not selected_targets:
-        return str(query_context or "").strip()
-
-    lines: list[str] = []
-    base_context = str(query_context or "").strip()
-    if base_context:
-        lines.extend([base_context, ""])
-    lines.append("## 当前用户已选择的执行对象数据源")
-    lines.append("本次查询必须只使用以下 member_datasource_ids：")
-    for index, target in selected_targets:
-        member_name = _execution_target_name(target, index)
-        member_id = _execution_target_member_id(target)
-        org_code = _execution_target_org_code(target)
-        line = f"- {member_name}"
-        if member_id:
-            line += f"（member_datasource_id: {member_id}）"
-        if org_code and org_code != member_name:
-            line += f"；编码：{org_code}"
-        lines.append(line)
-    return "\n".join(lines)
+    return append_selected_execution_targets_to_context(query_context, execution_targets, member_datasource_ids)
 
 
 async def _get_execution_targets_async(
     datasource_id: str | None,
     member_datasource_ids: list[str] | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
 ) -> list[dict]:
     if not datasource_id:
         return []
@@ -568,9 +942,11 @@ async def _get_execution_targets_async(
         return []
     try:
         ds_manager = get_datasource_manager()
-        return await ds_manager.get_execution_datasources_async(
+        return await ds_manager.get_authorized_execution_datasources_async(
             datasource_id,
             normalized_member_ids,
+            user_id=user_id,
+            username=username,
         )
     except Exception as err:
         logger.warning(f"构造执行对象说明失败: {err}")
@@ -642,7 +1018,7 @@ async def _stream_sql_generation(
     if temp_semantic_config:
         # 使用临时配置（用于测试，不保存到数据库）
         semantic_config = temp_semantic_config
-        logger.info(f"使用临时语义配置（测试模式）")
+        logger.info("使用临时语义配置（测试模式）")
     elif semantic_config_id is not None:
         semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id, user_query, user_id)
         if semantic_config:
@@ -665,27 +1041,17 @@ async def _stream_sql_generation(
             "checkpoint_ns": ""
         }
     }
-    token_usage = None
 
     try:
         async with get_checkpointer() as checkpointer:
-            # 构建 graph，传入语义配置（如果有）
-            # 语义模式时，graph 会添加 semantic_to_sql_tool 工具
-            graph = get_chat_data_graph(
-                checkpointer=checkpointer,
-                semantic_config=semantic_config,
-                datasource_id=datasource_id,
-                model_id=model_id,
-                enable_thinking=enable_thinking,
-                user_id=user_id,
-                available_skills_context=await _build_query_skills_context(user_id=user_id, skill_names=normalized_skill_names),
-            )
-
-            human_message_kwargs = {"timestamp": _get_timestamp()}
-            if semantic_selection_event:
-                human_message_kwargs["semantic_config_selection"] = semantic_selection_event
             if normalized_skill_names:
-                human_message_kwargs["skill_names"] = normalized_skill_names
+                user_message = _build_user_message(
+                    user_query,
+                    semantic_selection_event,
+                    skill_names=normalized_skill_names,
+                )
+            else:
+                user_message = _build_user_message(user_query, semantic_selection_event)
 
             semantic_config_directory_info = ""
             if not semantic_config:
@@ -701,6 +1067,8 @@ async def _stream_sql_generation(
             all_execution_targets = await _get_execution_targets_async(
                 datasource_id,
                 explicit_member_datasource_ids,
+                user_id=user_id,
+                username=username,
             )
             available_member_datasource_ids = [
                 _execution_target_member_id(target)
@@ -715,214 +1083,61 @@ async def _stream_sql_generation(
                     all_execution_targets,
                     selected_member_datasource_ids,
                 )
-            initial_state = {
-                "messages": [HumanMessage(
-                    content=user_query,
-                    additional_kwargs=human_message_kwargs
-                )],
-                "execution_context": {
+            initial_state = _build_agent_context_state(
+                datasource_id=datasource_id,
+                semantic_config_id=semantic_config_id,
+                user_id=user_id,
+                operator_name=username,
+                conversation_id=thread_id,
+                messages=[user_message],
+                execution_context={
                     "datasource_id": datasource_id,
                     "available_member_datasource_ids": available_member_datasource_ids,
                     "matched_member_datasource_ids": matched_member_datasource_ids,
                 },
-                "conversation_datasource_id": datasource_id,
-                "semantic_config_id": semantic_config_id,
-                "semantic_config": semantic_config,
-                "user_id": user_id,
-                "operator_name": username or "",
-                "conversation_id": thread_id,
-                "prompt_context": {
+                semantic_config=semantic_config,
+                prompt_context={
                     "datasource_group_context": datasource_group_context,
                     "semantic_config_directory_info": semantic_config_directory_info,
                 },
-            }
-
-            # 用于跟踪已发送 running 状态的工具
-            running_tool_ids: list[str] = []
-            active_tool_call_id: str | None = None
-            # 用于累积 tool_call_chunks 的 args（JSON 字符串拼接）
-            tool_call_args_buffer: dict[str, str] = {}
-            # 用于存储工具名称
-            tool_call_names: dict[str, str] = {}
-            reasoning_segments: list[dict[str, Any]] = []
-            persisted_reasoning_count = 0
-
-            # 流式执行
-            # 使用 messages 捕获 LLM 输出，custom 转发模型入口上下文占用等辅助事件。
-            # 通过 metadata["langgraph_node"] 区分来源，过滤工具内部的 LLM 调用。
-            async for event in graph.astream(
-                initial_state,
-                config=config,
-                stream_mode=["messages", "custom"],
-            ):
-                # 检测客户端断连，停止消费事件
-                if request and await request.is_disconnected():
-                    logger.info(f"客户端已断开，停止流式输出: {thread_id}")
-                    persisted_reasoning_count = await _persist_reasoning_segments(
-                        graph,
-                        config,
-                        reasoning_segments,
-                        as_node="agent",
-                        persisted_count=persisted_reasoning_count,
-                    )
-                    return
-
-                if isinstance(event, tuple) and len(event) == 2 and event[0] == "custom":
-                    payload = event[1]
-                    if isinstance(payload, dict) and payload.get("type") == "token_usage" and payload.get("usage"):
-                        token_usage = payload.get("usage")
-                        yield _format_sse("token_usage", token_usage)
-                    continue
-
-                if isinstance(event, tuple) and len(event) == 2 and event[0] == "messages":
-                    message_chunk, metadata = event[1]
-                else:
-                    message_chunk, metadata = event
-
-                # 过滤：只保留来自 agent 节点的消息（排除 tools 节点内部的 LLM 调用）
-                node_name = metadata.get("langgraph_node", "")
-                msg_type = getattr(message_chunk, 'type', 'ai')
-                # AI 消息：只接受来自 agent 节点的
-                # Tool 消息：来自 tools 节点，需要保留
-                if msg_type == 'ai' and node_name != "agent":
-                    logger.debug(f"[过滤] 跳过来自 {node_name} 节点的 AI 消息")
-                    continue
-
-                # 检查是否有内容或工具调用
-                has_content = hasattr(message_chunk, 'content') and message_chunk.content
-                has_tool_calls = hasattr(message_chunk, 'tool_calls') and message_chunk.tool_calls
-                has_tool_call_chunks = hasattr(message_chunk, 'tool_call_chunks') and message_chunk.tool_call_chunks
-                thinking_event = _format_thinking_event(message_chunk)
-                if not has_content and not has_tool_calls and not has_tool_call_chunks and not thinking_event:
-                    continue
-                if thinking_event:
-                    _append_reasoning_segment(
-                        reasoning_segments,
-                        _extract_reasoning_content(message_chunk),
-                        _visible_tool_count(tool_call_names),
-                    )
-                    yield thinking_event
-                    if not has_content and not has_tool_calls and not has_tool_call_chunks:
-                        continue
-
-                # 调试：打印 AI 消息内容
-                if msg_type == 'ai' and has_content:
-                    logger.debug(f"[AI Content from {node_name}] {message_chunk.content[:200]}")
-
-                # 根据消息类型选择事件名
-                msg_type = getattr(message_chunk, 'type', 'ai')
-                if msg_type == 'tool':
-                    event_name = "tool"
-                else:
-                    event_name = "message"
-
-                # 检测 tool_calls 开始，发送 running 状态，并初始化 args buffer
-                if has_tool_calls:
-                    for tc in message_chunk.tool_calls:
-                        tc_id = tc.get("id")
-                        tc_name = tc.get("name")
-                        # 只有当 id 和 name 都存在且未发送过时，发送 running 状态
-                        if tc_id and tc_name and tc_id not in running_tool_ids:
-                            _register_running_tool(running_tool_ids, tc_id)
-                            tool_call_names[tc_id] = tc_name
-                            tool_call_args_buffer[tc_id] = ""  # 初始化 args buffer
-                            yield _format_tool_event(
-                                tool_name=tc_name,
-                                tool_call_id=tc_id,
-                                status="running",
-                            )
-
-                # 累积 tool_call_chunks 的 args（JSON 字符串）
-                # 注意：LangChain 流式模式下，只有第一个 chunk 有 id，后续 chunks 的 id 为 None
-                # 需要使用 index 来关联，或者记住当前活跃的 tool_call_id
-                if has_tool_call_chunks:
-                    for chunk in message_chunk.tool_call_chunks:
-                        chunk_id = chunk.get("id")
-                        chunk_args = chunk.get("args", "")
-                        chunk_name = chunk.get("name")
-
-                        # 如果有 id，记录为当前活跃的 tool_call（只在首次出现时初始化 buffer）
-                        if chunk_id:
-                            tool_call_names[chunk_id] = chunk_name or tool_call_names.get(chunk_id, "")
-                            # 只有新的 tool_call_id 才初始化 buffer
-                            if chunk_id not in tool_call_args_buffer:
-                                tool_call_args_buffer[chunk_id] = ""
-                            _register_running_tool(running_tool_ids, chunk_id)
-
-                        # 优先使用 chunk 自带 id，其次使用最近一次明确记录的活跃 tool_call_id
-                        current_tool_call_id = _resolve_active_tool_call_id(
-                            chunk_id,
-                            active_tool_call_id,
-                            running_tool_ids,
-                        )
-                        if chunk_id:
-                            active_tool_call_id = current_tool_call_id
-
-                        # 累积 args
-                        if current_tool_call_id and chunk_args:
-                            if current_tool_call_id not in tool_call_args_buffer:
-                                tool_call_args_buffer[current_tool_call_id] = ""
-                            tool_call_args_buffer[current_tool_call_id] += chunk_args
-
-                # ToolMessage: 工具执行完成，发送带有完整 args 的消息
-                if msg_type == 'tool':
-                    tool_call_id = getattr(message_chunk, 'tool_call_id', '')
-                    # 解析累积的 args JSON 字符串
-                    accumulated_args = {}
-                    if tool_call_id and tool_call_id in tool_call_args_buffer:
-                        args_str = tool_call_args_buffer[tool_call_id]
-                        if args_str:
-                            try:
-                                accumulated_args = json.loads(args_str)
-                            except json.JSONDecodeError:
-                                logger.warning(f"无法解析工具参数: {args_str[:100]}")
-                        # 清理 buffer
-                        del tool_call_args_buffer[tool_call_id]
-                    active_tool_call_id = _finish_running_tool(running_tool_ids, active_tool_call_id, tool_call_id)
-
-                    # 构造增强的消息，包含完整的 args 和时间戳
-                    msg_data = message_chunk.model_dump()
-                    msg_data["timestamp"] = _get_timestamp()
-                    if accumulated_args:
-                        # 添加累积的 args 到消息中（前端可以从这里获取）
-                        msg_data["accumulated_args"] = accumulated_args
-                        msg_data["tool_name"] = tool_call_names.get(tool_call_id, "")
-                    yield _format_sse(event_name, msg_data)
-                else:
-                    # AI 消息添加时间戳
-                    msg_data = message_chunk.model_dump()
-                    msg_data["timestamp"] = _get_timestamp()
-                    yield _format_sse(event_name, msg_data)
-
-            # 检查是否被 interrupt() 中断
-            persisted_reasoning_count = await _persist_reasoning_segments(
-                graph,
-                config,
-                reasoning_segments,
-                as_node="agent",
-                persisted_count=persisted_reasoning_count,
             )
-            state = await graph.aget_state(config)
-            token_usage = state.values.get("token_usage") if state and state.values else None
-            interrupt_info = _get_interrupt_info(state)
-            if interrupt_info:
-                # 返回待确认的工具信息（status: pending）
-                sql_preview = interrupt_info.get('args', {}).get('sql', '')[:50]
-                logger.info(f"检测到工具中断，等待用户确认: {sql_preview}...")
-                yield _format_tool_event(
-                    tool_name=interrupt_info.get("tool_name", "unknown_tool"),
-                    tool_call_id=interrupt_info.get("tool_call_id"),
-                    status="pending",
-                    args=interrupt_info.get("args"),
-                    message=interrupt_info.get("message"),
-                )
-                end_payload = _message_end_payload_from_state(state, token_usage)
-                yield _format_sse("message_end", end_payload)
-                yield _format_sse("done", "[DONE]")
+            system_prompt = build_chat_data_system_prompt(
+                initial_state,
+                semantic_config=semantic_config,
+                available_skills_context=await _build_query_skills_context(
+                    user_id=user_id,
+                    skill_names=normalized_skill_names,
+                ),
+            )
+
+            # 创建智能问数 agent，传入语义配置（如果有）
+            agent = create_chat_data_agent(
+                checkpointer=checkpointer,
+                semantic_config=semantic_config,
+                datasource_id=datasource_id,
+                system_prompt=system_prompt,
+                model_id=model_id,
+                enable_thinking=enable_thinking,
+                user_id=user_id,
+            )
+
+            stream_adapter = _AgentSseStreamAdapter(
+                agent=agent,
+                initial_state=initial_state,
+                config=config,
+                request=request,
+                visible_message_filter=_is_chat_data_visible_stream_message,
+                disconnect_log_id=thread_id,
+                debug_label="AI Content from model",
+                reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
+            )
+            async for sse_event in stream_adapter.stream_events():
+                yield sse_event
+            if stream_adapter.disconnected:
                 return
 
-        # 正常结束
-        end_payload = _message_end_payload_from_state(state, token_usage)
+            end_payload = await stream_adapter.finish()
+
         yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
@@ -958,7 +1173,7 @@ async def sql_completion_handler(
     else:
         skill_names = []
 
-    # 保持懒创建会话的既有行为；数据源组由下方 graph state 首次绑定。
+    # 保持懒创建会话的既有行为；数据源组由下方 agent state 首次绑定。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
 
     return StreamingResponse(
@@ -999,7 +1214,6 @@ async def data_analyze_completion_handler(
     semantic_config_selection = options_data.get("semantic_config_selection")
 
     async def generate_stream():
-        nonlocal semantic_config_id
         started_at = time.perf_counter()
         last_phase_at = started_at
 
@@ -1020,12 +1234,12 @@ async def data_analyze_completion_handler(
             log_phase("get_or_create_conversation")
             log_phase("skip_preload_skill")
             semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-            data_context_kwargs = {"user_id": user_id}
+            data_context_kwargs = {"user_id": user_id, "username": username}
             if member_datasource_ids:
                 data_context_kwargs["member_datasource_ids"] = member_datasource_ids
             data_context = await build_data_analyze_context(datasource_id, semantic_config_id, **data_context_kwargs)
             log_phase("build_data_context")
-            workspace_paths, data_context_file = await prepare_data_analyze_workspace(conversation_id, data_context)
+            workspace_paths = await prepare_data_analyze_workspace(conversation_id)
             log_phase("ensure_workspace")
             try:
                 available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="analyze")
@@ -1033,33 +1247,27 @@ async def data_analyze_completion_handler(
             except Exception as err:
                 logger.warning("DataAnalyze 技能列表加载失败，回退代码目录: %s", err)
                 available_skills_xml = build_builtin_skills_prompt()
-            system_prompt = data_analyze_graph.build_data_analyze_system_prompt(
+            system_prompt = analyze_data_agent.build_data_analyze_system_prompt(
                 skill=None,
                 data_context=data_context,
                 workspace_root=workspace_paths["root"],
-                data_context_file=data_context_file,
                 available_skills_xml=available_skills_xml,
             )
             log_phase("build_system_prompt")
             config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-            human_message_kwargs = {"timestamp": _get_timestamp()}
-            if semantic_selection_event:
-                human_message_kwargs["semantic_config_selection"] = semantic_selection_event
-            initial_state = {
-                "messages": [HumanMessage(content=query, additional_kwargs=human_message_kwargs)],
-                "task_stages": [],
-                "task_run_id": str(uuid.uuid4()),
-                "conversation_datasource_id": datasource_id,
-                "datasource_id": datasource_id,
-                "semantic_config_id": semantic_config_id,
-                "member_datasource_ids": member_datasource_ids or [],
-                "user_id": user_id,
-                "operator_name": username or "",
-                "conversation_id": conversation_id,
-            }
+            initial_state = _build_agent_context_state(
+                datasource_id=datasource_id,
+                semantic_config_id=semantic_config_id,
+                user_id=user_id,
+                operator_name=username,
+                conversation_id=conversation_id,
+                messages=[_build_user_message(query, semantic_selection_event)],
+                member_datasource_ids=member_datasource_ids or [],
+            )
 
             async with get_checkpointer() as checkpointer:
-                agent = data_analyze_graph.create_data_analyze_flow_graph(
+                execution_session_ref = SandboxExecutionSessionRef()
+                agent = analyze_data_agent.create_data_analyze_agent(
                     workspace_root=workspace_paths["root"],
                     system_prompt=system_prompt,
                     model_id=model_id,
@@ -1070,165 +1278,51 @@ async def data_analyze_completion_handler(
                     member_datasource_ids=member_datasource_ids,
                     user_id=user_id,
                     operator_name=username,
+                    execution_session_ref=execution_session_ref,
                     enable_thinking=enable_thinking,
                 )
                 log_phase("create_agent")
-                tool_call_names: dict[str, str] = {}
-                tool_call_args_buffer: dict[str, str] = {}
-                tool_call_args_fallback: dict[str, dict[str, Any]] = {}
-                tool_call_index_map: dict[int, str] = {}
-                emitted_running_tool_ids: set[str] = set()
-                active_tool_call_id: str | None = None
-                reasoning_segments: list[dict[str, Any]] = []
-                persisted_reasoning_count = 0
-                first_chunk_logged = False
-                latest_token_usage: dict[str, Any] | None = None
-                async for stream_item in agent.astream(initial_state, config=config, stream_mode=["messages", "updates", "custom"], subgraphs=True):
-                    if len(stream_item) == 3:
-                        _subgraph_path, stream_mode, payload = stream_item
-                    else:
-                        stream_mode, payload = stream_item
-                    if stream_mode == "updates":
-                        for node_payload in (payload or {}).values():
-                            for stage in node_payload.get("task_stages") or []:
-                                yield _format_sse("task_stage", stage)
-                        continue
-                    if stream_mode == "custom":
-                        if isinstance(payload, dict) and payload.get("type") == "token_usage":
-                            usage = payload.get("usage")
-                            if usage:
-                                latest_token_usage = usage
-                                yield _format_sse("token_usage", usage)
-                        continue
-                    message_chunk, metadata = payload
-                    if not first_chunk_logged:
-                        first_chunk_logged = True
-                        log_phase("first_model_chunk")
-                    if request and await request.is_disconnected():
-                        logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
-                        persisted_reasoning_count = await _persist_reasoning_segments(
-                            agent,
-                            config,
-                            reasoning_segments,
-                            as_node="execute",
-                            persisted_count=persisted_reasoning_count,
-                        )
-                        return
-                    node_name = metadata.get("langgraph_node")
-                    if node_name and node_name.startswith("__"):
-                        continue
-                    if node_name in {"thinking", "plan", "done"}:
-                        stage_name = "thinking" if node_name == "thinking" else ("plan" if node_name == "plan" else "done")
-                        content = getattr(message_chunk, "content", None)
-                        if content:
-                            yield _format_sse("task_stage_delta", {
-                                "stage": stage_name,
-                                "status": "running",
-                                "content": content,
-                            })
-                        continue
-                    has_content = bool(getattr(message_chunk, "content", None))
-                    has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
-                    has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-                    msg_type = getattr(message_chunk, "type", None)
-                    thinking_event = _format_thinking_event(message_chunk)
-                    if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool" and not thinking_event:
-                        continue
-                    if thinking_event:
-                        _append_reasoning_segment(
-                            reasoning_segments,
-                            _extract_reasoning_content(message_chunk),
-                            _visible_tool_count(tool_call_names),
-                        )
-                        yield thinking_event
-                        if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
-                            continue
-                    if has_tool_calls:
-                        for tc in getattr(message_chunk, "tool_calls", []) or []:
-                            tc_id = str(tc.get("id") or "").strip()
-                            tc_name = str(tc.get("name") or "").strip()
-                            tc_index = tc.get("index")
-                            if tc_id and tc_name:
-                                tool_call_names[tc_id] = tc_name
-                                active_tool_call_id = tc_id
-                                if isinstance(tc_index, int):
-                                    tool_call_index_map[tc_index] = tc_id
-                                if tc_id not in tool_call_args_buffer:
-                                    tool_call_args_buffer[tc_id] = ""
-                                if isinstance(tc.get("args"), dict):
-                                    tool_call_args_fallback[tc_id] = tc.get("args") or {}
-                                if tc_id not in emitted_running_tool_ids:
-                                    emitted_running_tool_ids.add(tc_id)
-                                    yield _format_tool_event(
-                                        tool_name=tc_name,
-                                        tool_call_id=tc_id,
-                                        status="running",
-                                        args=tc.get("args") or {},
-                                    )
-                    if has_tool_call_chunks:
-                        for tc in getattr(message_chunk, "tool_call_chunks", []) or []:
-                            tc_id = str(tc.get("id") or "").strip()
-                            tc_name = str(tc.get("name") or "").strip()
-                            tc_args = str(tc.get("args") or "")
-                            tc_index = tc.get("index")
-                            if tc_id and tc_name:
-                                tool_call_names[tc_id] = tc_name
-                            if tc_id:
-                                active_tool_call_id = tc_id
-                                if isinstance(tc_index, int):
-                                    tool_call_index_map[tc_index] = tc_id
-                                if tc_id not in tool_call_args_buffer:
-                                    tool_call_args_buffer[tc_id] = ""
-                                running_tool_name = tc_name or tool_call_names.get(tc_id, "")
-                                if running_tool_name and tc_id not in emitted_running_tool_ids:
-                                    emitted_running_tool_ids.add(tc_id)
-                                    yield _format_tool_event(
-                                        tool_name=running_tool_name,
-                                        tool_call_id=tc_id,
-                                        status="running",
-                                        args={},
-                                    )
-                            current_tool_call_id = tc_id or (tool_call_index_map.get(tc_index) if isinstance(tc_index, int) else None) or active_tool_call_id
-                            if current_tool_call_id and tc_args:
-                                tool_call_args_buffer[current_tool_call_id] = tool_call_args_buffer.get(current_tool_call_id, "") + tc_args
-                    msg_data = message_chunk.model_dump()
-                    msg_data["timestamp"] = _get_timestamp()
-                    if msg_type == "tool":
-                        tool_call_id = str(getattr(message_chunk, "tool_call_id", "") or "")
-                        msg_data["tool_name"] = tool_call_names.get(tool_call_id, msg_data.get("name") or "")
-                        msg_data["status"] = "error" if _is_tool_result_error(msg_data.get("content")) else "completed"
-                        if tool_call_id and (tool_call_id in tool_call_args_buffer or tool_call_id in tool_call_args_fallback):
-                            msg_data["accumulated_args"] = _parse_tool_args_buffer(
-                                tool_call_args_buffer.get(tool_call_id, ""),
-                                tool_call_args_fallback.get(tool_call_id),
-                            )
-                            tool_call_args_buffer.pop(tool_call_id, None)
-                            tool_call_args_fallback.pop(tool_call_id, None)
-                        if active_tool_call_id == tool_call_id:
-                            active_tool_call_id = None
-                        yield _format_sse("tool", msg_data)
-                    else:
-                        yield _format_sse("message", msg_data)
-                log_phase("agent_stream_done")
-                persisted_reasoning_count = await _persist_reasoning_segments(
-                    agent,
-                    config,
-                    reasoning_segments,
-                    as_node="execute",
-                    persisted_count=persisted_reasoning_count,
+                if request and await request.is_disconnected():
+                    logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
+                    return
+                execution_session_ref.current = await get_workspace_execution_session(workspace_paths["root"], user_id)
+                log_phase("get_workspace_execution_session")
+                session_success = False
+                stream_adapter = _AgentSseStreamAdapter(
+                    agent=agent,
+                    initial_state=initial_state,
+                    config=config,
+                    request=request,
+                    visible_message_filter=_is_data_analyze_visible_stream_message,
+                    disconnect_log_message="DataAnalyze 客户端已断开，停止流式输出: %s",
+                    disconnect_log_id=conversation_id,
+                    include_empty_tool_messages=True,
+                    on_first_message=lambda: log_phase("first_model_chunk"),
+                    reasoning_turn_id=str(initial_state["messages"][0].additional_kwargs.get("reasoning_turn_id") or "") or None,
                 )
-                state = await agent.aget_state(config) if hasattr(agent, "aget_state") else None
-                end_payload = _message_end_payload_from_state(state, latest_token_usage)
+                try:
+                    async for sse_event in stream_adapter.stream_events():
+                        yield sse_event
+                    if stream_adapter.disconnected:
+                        session_success = True
+                        return
+                    session_success = True
+                except asyncio.CancelledError:
+                    session_success = True
+                    raise
+                except Exception:
+                    raise
+                finally:
+                    await _finish_workspace_execution_session(execution_session_ref, user_id, success=session_success)
+                log_phase("agent_stream_done")
+                end_payload = await stream_adapter.finish(
+                    persist_latest_ai_timestamp=True,
+                    prefer_latest_usage=True,
+                )
                 yield _format_sse("message_end", end_payload)
             yield _format_sse("done", "[DONE]")
         except Exception as e:
             logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
-            yield _format_sse("task_stage", {
-                "stage": "execute",
-                "status": "error",
-                "title": "任务执行",
-                "content": f"任务执行失败：{str(e)}",
-            })
             yield _format_sse("error", {"error": str(e)})
             yield _format_sse("done", "[DONE]")
 

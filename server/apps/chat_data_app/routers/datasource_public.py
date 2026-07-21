@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException, Request
 
 from utils.error_codes import ErrorCode
@@ -12,7 +10,6 @@ from utils.response import business_response
 
 from ..services.datasource_manager import get_datasource_manager
 from .dependencies import _get_current_user
-from .datasource_helpers import _get_optional_request_user_http_params
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -27,12 +24,19 @@ async def get_datasources(request: Request, include_tables: bool = True):
         数据源列表
     """
     try:
+        current_user = _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasources = await ds_manager.get_all_datasources_async(include_tables)
+        datasources = await ds_manager.get_authorized_datasources_async(
+            include_tables=include_tables,
+            user_id=str(current_user.user_id),
+            username=str(current_user.username or ""),
+        )
         return business_response(
             data={"datasources": datasources},
             msg="获取成功"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取数据源列表失败: {str(e)}", exc_info=True)
         return business_response(
@@ -110,34 +114,23 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
 @router.get("/datasources/{datasource_id}/schema")
 async def get_schema(
     datasource_id: str,
-    source: str = None,
     tables: str = None,
     request: Request = None,
 ):
-    """
-    获取数据源的表结构（统一接口）
-
-    支持两种模式：
-    - cache: 从本地缓存读取（快）
-    - live: 实时从数据库获取（准）
-    """
+    """获取数据源缓存表结构。实时物理元数据只允许管理接口主动拉取/同步。"""
     try:
-        user_params = _get_optional_request_user_http_params(request)
+        _get_current_user(request)
         ds_manager = get_datasource_manager()
-        if source is None:
-            source = os.getenv("CHAT_DATA_SCHEMA_SOURCE", "cache")
         table_names = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
-        schema_tables = await ds_manager.get_schema_async(
+        schema_tables = await ds_manager.get_cached_schema_async(
             datasource_id,
-            source=source,
             table_names=table_names,
-            **user_params,
         )
         return business_response(
             data={
                 "tables": schema_tables,
                 "count": len(schema_tables),
-                "source": source
+                "source": "cache"
             },
             msg="获取成功"
         )
@@ -153,6 +146,8 @@ async def get_schema(
             code=ErrorCode.CHATDATA_QUERY_FAILED,
             status="error"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取表结构失败: {str(e)}", exc_info=True)
         return business_response(

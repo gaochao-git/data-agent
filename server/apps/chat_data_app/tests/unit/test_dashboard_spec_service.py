@@ -101,6 +101,10 @@ def test_get_dashboard_spec_semantic_config_keeps_selected_source_type(monkeypat
                 ],
             }
 
+        async def get_cached_schema_async(self, datasource_id):
+            assert datasource_id == "ds_a"
+            return []
+
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
 
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "sc_a"))
@@ -483,6 +487,9 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_semantic_configs_async(self, datasource_id):
             return [{"id": "disabled", "enabled": False}, {"id": "enabled", "enabled": True, "relationships": [{"left_table": "a"}]}]
 
+        async def get_cached_schema_async(self, datasource_id):
+            return [{"table_name": "orders"}]
+
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: LazyManager())
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "enabled"))
     assert config["id"] == "enabled"
@@ -492,6 +499,9 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
     class NoConfigManager:
         async def get_datasource_async(self, datasource_id):
             return {"source_type": "mysql", "semantic_configs": [{"id": "disabled", "enabled": False}]}
+
+        async def get_cached_schema_async(self, datasource_id):
+            return []
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: NoConfigManager())
     try:
@@ -618,6 +628,9 @@ def test_execute_dashboard_panel_sql_preflight_success_failure_and_exception(mon
             if datasource_id == "empty":
                 return []
             return [{"source_type": "mysql", "mode": datasource_id}]
+
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_ids)
 
     class FakeExecutor:
         def __init__(self, target):
@@ -997,6 +1010,9 @@ def test_execute_dashboard_panel_sql_preflight_without_username(monkeypatch):
     class FakeManager:
         async def get_execution_datasources_async(self, datasource_id, member_ids):
             return [{"source_type": "mysql", "source_config": {"host": "h"}}]
+
+        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids=None, user_id=None, username=None):
+            return await self.get_execution_datasources_async(datasource_id, member_ids)
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_executor", lambda _target: FakeExecutor())

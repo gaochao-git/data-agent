@@ -49,15 +49,23 @@ def test_context_window_reads_chat_data_model_config(monkeypatch):
     assert runtime_config.get_context_window("unknown") == 128000
 
 
-def test_get_context_edit_config_returns_runtime_values(monkeypatch):
-    monkeypatch.setattr(runtime_config, "CONTEXT_EDIT_ENABLED", False)
+def test_get_context_compression_config_returns_runtime_values(monkeypatch):
+    monkeypatch.setattr(runtime_config, "CONTEXT_COMPRESSION_ENABLED", False)
 
-    config = runtime_config.get_context_edit_config()
+    config = runtime_config.get_context_compression_config()
 
     assert config == {
         "enabled": False,
         "trigger_ratio": 0.70,
     }
+
+
+def test_context_usage_system_prompt_visibility_flag(monkeypatch):
+    monkeypatch.setattr(runtime_config, "CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
+    assert runtime_config.is_context_usage_system_prompt_visible() is False
+
+    monkeypatch.setattr(runtime_config, "CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", True)
+    assert runtime_config.is_context_usage_system_prompt_visible() is True
 
 
 def test_normalize_row_limit_uses_default_and_rejects_invalid_or_too_large(monkeypatch):

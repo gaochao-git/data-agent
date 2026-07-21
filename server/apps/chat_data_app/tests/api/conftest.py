@@ -140,10 +140,17 @@ class FakeDatasourceManager:
             result.append(item)
         return result
 
+    async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+        return await self.get_all_datasources_async(include_tables=include_tables)
+
     async def has_datasource_async(self, datasource_id: str):
         return datasource_id in self.datasources
 
     async def get_datasource_async(self, datasource_id: str):
+        datasource = self.datasources.get(datasource_id)
+        return dict(datasource) if datasource else None
+
+    async def get_datasource_meta_async(self, datasource_id: str):
         datasource = self.datasources.get(datasource_id)
         return dict(datasource) if datasource else None
 
@@ -153,13 +160,19 @@ class FakeDatasourceManager:
                 return dict(datasource)
         return None
 
-    async def get_schema_async(self, datasource_id: str, source: str = "cache", table_names=None):
+    async def get_datasource_meta_by_group_name_async(self, name: str):
+        return await self.get_datasource_by_group_name_async(name)
+
+    async def get_cached_schema_async(self, datasource_id: str, table_names=None):
         datasource = self.datasources[datasource_id]
         tables = datasource.get("ds_tables") or []
         if table_names:
             table_set = set(table_names)
             return [item for item in tables if item.get("table_name") in table_set]
         return list(tables)
+
+    async def get_live_schema_async(self, datasource_id: str, table_names=None, **_kwargs):
+        return await self.get_cached_schema_async(datasource_id, table_names=table_names)
 
     async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
         configs = list((self.datasources.get(datasource_id) or {}).get("semantic_configs") or [])

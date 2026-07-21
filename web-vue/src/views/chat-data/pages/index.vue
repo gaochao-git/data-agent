@@ -8,10 +8,9 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
-import { getUserOrgList } from '@/api/psoss/records'
 import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
 import SqlConversation from '../components/SqlConversation.vue'
 import AnalysisConversation from '../components/AnalysisConversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
@@ -91,31 +90,18 @@ const datasources = ref<DataSource[]>([])
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
-const userOrgCodePermissions = ref<string[]>([])
 const CONVERSATION_SEMANTIC_CONFIG_STORAGE_KEY = 'chat-data:conversation-semantic-config'
 const CONVERSATION_MODEL_STORAGE_KEY = 'chat-data:conversation-model'
 
-const hasMappedDatasource = computed(() => {
-  const parentName = parentComponentName.value
-  if (!parentName) return false
-  return allDatasources.value.some(ds => ds.mapped_modules?.includes(parentName))
-})
-
 const noMatchedDatasourceTitle = computed(() => {
-  if (hasMappedDatasource.value && userOrgCodePermissions.value.length === 0) {
-    return '当前用户无可用机构权限'
-  }
   if (parentComponentName.value) {
-    return `当前模块（${parentComponentName.value}）未配置数据源`
+    return `当前模块（${parentComponentName.value}）无可用数据源`
   }
   return '当前配置未匹配到数据源'
 })
 const noMatchedDatasourceDesc = computed(() => {
-  if (hasMappedDatasource.value && userOrgCodePermissions.value.length === 0) {
-    return '请确认当前用户已授权可访问的机构编码'
-  }
   if (parentComponentName.value) {
-    return '请在数据源管理中配置模块映射'
+    return '请确认已配置模块映射，且当前用户有可访问的机构权限'
   }
   return '请在数据源管理中添加可用数据源'
 })
@@ -131,30 +117,6 @@ const getDatasourceOrgCode = (datasource: DataSource) => {
   return normalizeOrgCode(sourceConfig.org_code)
 }
 
-const normalizeOrgCodePermissions = (items: unknown): string[] => {
-  const rawItems = Array.isArray(items) ? items : []
-  const result: string[] = []
-  rawItems.forEach((item) => {
-    const value = typeof item === 'string'
-      ? item
-      : (item as Record<string, unknown> | null)?.orgCode
-    const orgCode = normalizeOrgCode(value)
-    if (orgCode && !result.includes(orgCode)) {
-      result.push(orgCode)
-    }
-  })
-  return result
-}
-
-const loadUserOrgCodePermissions = async () => {
-  try {
-    const res = await getUserOrgList()
-    userOrgCodePermissions.value = normalizeOrgCodePermissions((res as { data?: unknown }).data)
-  } catch (error) {
-    console.error('加载用户机构权限失败:', error)
-    userOrgCodePermissions.value = []
-  }
-}
 // 后台管理弹窗
 const showAdminModal = ref(false)
 const canManageAdmin = computed(() => {
@@ -215,35 +177,7 @@ const handleDatasourcesChange = (newDatasources: DataSource[]) => {
 const applyDatasourceFilters = (allDatasources: DataSource[]): DataSource[] => {
   const parentName = parentComponentName.value
   if (!parentName) return []
-  const allowedOrgCodes = userOrgCodePermissions.value
-
-  return allDatasources.flatMap((ds) => {
-    const parentMatched = ds.mapped_modules?.includes(parentName)
-    if (!parentMatched) return []
-
-    const members = ds.member_sources || []
-    if (members.length === 0) {
-      const orgCode = getDatasourceOrgCode(ds)
-      return orgCode && allowedOrgCodes.includes(orgCode) ? [ds] : []
-    }
-
-    const allowedMembers = members.filter((member) => {
-      if (allowedOrgCodes.length === 0) return false
-      const orgCode = getMemberOrgCode(member)
-      return orgCode && allowedOrgCodes.includes(orgCode)
-    })
-    if (allowedMembers.length === 0) return []
-
-    const allowedMemberIds = new Set(allowedMembers.map(member => String(member.member_datasource_id || '').trim()).filter(Boolean))
-    return [{
-      ...ds,
-      member_sources: allowedMembers,
-      member_datasource_ids: (ds.member_datasource_ids || []).filter(memberId => allowedMemberIds.has(String(memberId || '').trim())),
-      template_datasource_id: allowedMemberIds.has(String(ds.template_datasource_id || '').trim())
-        ? ds.template_datasource_id
-        : allowedMembers[0]?.member_datasource_id,
-    }]
-  })
+  return allDatasources.filter(ds => ds.mapped_modules?.includes(parentName))
 }
 
 const shouldShowNoMatchedDatasource = (filtered: DataSource[]): boolean => {
@@ -554,9 +488,6 @@ const hasMoreConversations = ref(false)
 const conversationPage = ref(1)
 const conversationPageSize = 20
 const conversationKey = ref(0) // 用于强制重新渲染 SqlConversation
-const hasAnalysisPanel = ref(false)
-const rightConversationPanelMode = ref<'conversation' | 'analysis'>('conversation')
-const showConversationListPanel = ref(true)
 const showHistoryPopover = ref(false)
 const hasEnteredConversationOnce = ref(false)
 const conversationsLoaded = ref(false)
@@ -586,46 +517,14 @@ const canShowNewConversationButton = computed(() => {
   return hasEnteredConversationOnce.value || !!currentConversationId.value
 })
 
-onUnmounted(() => {
-})
-
-const switchConversationRightPanel = () => {
-  if (!hasAnalysisPanel.value) return
-  rightConversationPanelMode.value = rightConversationPanelMode.value === 'conversation' ? 'analysis' : 'conversation'
-  if (rightConversationPanelMode.value === 'conversation') {
-    showConversationListPanel.value = true
-  } else {
-    showConversationListPanel.value = false
-  }
-}
-
-const switchToConversationPanel = () => {
-  rightConversationPanelMode.value = 'conversation'
-  showConversationListPanel.value = true
-}
-
-const switchToAnalysisPanel = () => {
-  if (!hasAnalysisPanel.value) return
-  rightConversationPanelMode.value = 'analysis'
-  showConversationListPanel.value = false
-}
-
-const handleAnalysisPanelChange = (open: boolean) => {
-  hasAnalysisPanel.value = open
-  if (open) {
-    rightConversationPanelMode.value = 'analysis'
-    showConversationListPanel.value = false
-    return
-  }
-  if (rightConversationPanelMode.value === 'analysis') {
-    rightConversationPanelMode.value = 'conversation'
-    showConversationListPanel.value = true
-  }
-}
-
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
 const sqlConversationRef = ref<InstanceType<typeof SqlConversation> | null>(null)
+const analysisConversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
+
+const openAnalysisConsole = () => {
+  analysisConversationRef.value?.openConsolePanel()
+}
 
 // 加载数据源
 const loadDatasources = async () => {
@@ -838,9 +737,6 @@ const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
   hasMoreConversations.value = false
   isLoadingConversations.value = false
   isLoadingMoreConversations.value = false
-  hasAnalysisPanel.value = false
-  rightConversationPanelMode.value = 'conversation'
-  showConversationListPanel.value = true
   conversationKey.value++
   void ensureConversationsLoaded(true)
 }
@@ -909,7 +805,6 @@ const ensureConversationDatasource = async (): Promise<boolean> => {
 
 const handleHistoryConversationSelect = async (id: string) => {
   if (!await selectConversation(id)) return
-  showConversationListPanel.value = false
   showHistoryPopover.value = false
 }
 
@@ -1486,7 +1381,7 @@ const tableSchema = computed(() => {
 const queryBuilderRef = ref<InstanceType<typeof QueryBuilder> | null>(null)
 
 // BuilderSidebar 拖拽事件处理
-const handleBuilderDragStart = (type: 'table' | 'field', data: any, event: DragEvent) => {
+const handleBuilderDragStart = (type: 'field', data: BuilderDragFieldData, event: DragEvent) => {
   if (queryBuilderRef.value) {
     queryBuilderRef.value.handleSidebarDragStart(type, data, event)
   }
@@ -1498,11 +1393,11 @@ const handleBuilderDragEnd = () => {
   }
 }
 
-const handleBuilderAddDimension = (data: any) => {
+const handleBuilderAddDimension = (data: BuilderDragFieldData) => {
   queryBuilderRef.value?.addFieldToDimension(data)
 }
 
-const handleBuilderAddMetric = (data: any) => {
+const handleBuilderAddMetric = (data: BuilderDragFieldData) => {
   queryBuilderRef.value?.addFieldToAggregation(data)
 }
 
@@ -1550,7 +1445,6 @@ onMounted(async () => {
     ElMessage.error('未获取到当前登录用户')
     return
   }
-  await loadUserOrgCodePermissions()
   await loadDatasources()
   void ensureConversationsLoaded()
   // 不立即创建会话，等发送第一条消息时才创建
@@ -1628,6 +1522,14 @@ onUnmounted(() => {
             @click="handleNewConversation"
           >
             <i class="fa-solid fa-circle-plus text-[13px]"></i>
+          </button>
+          <button
+            v-if="viewMode === 'conversation' && currentConversationAgentId === 'chat_data_data_analyze'"
+            class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
+            title="控制台"
+            @click="openAnalysisConsole"
+          >
+            <i class="fa-solid fa-terminal text-[12px]"></i>
           </button>
 
           <div
@@ -1884,7 +1786,6 @@ onUnmounted(() => {
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
                   :semantic-configs="enabledSemanticConfigs"
-                  :show-analysis-panel="rightConversationPanelMode === 'analysis'"
                   :ensure-conversation-id="ensureConversationId"
                   :ensure-conversation-datasource="ensureConversationDatasource"
                   :execution-targets="executionTargets"
@@ -1899,15 +1800,13 @@ onUnmounted(() => {
                   @first-message-complete="handleFirstMessageComplete"
                   @datasource-change="handleDatasourceChange"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
-                  @analysis-panel-change="handleAnalysisPanelChange"
                   @agent-change="handleAgentChange"
-                  @switch-to-conversation="switchToConversationPanel"
-                  @switch-to-analysis="switchToAnalysisPanel"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"
                 />
                 <AnalysisConversation
                   v-else
+                  ref="analysisConversationRef"
                   :key="conversationKey"
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"

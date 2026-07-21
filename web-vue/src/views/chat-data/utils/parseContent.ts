@@ -93,21 +93,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 3. 提取 query_result
-  const queryResultRegex = /<query_result>([\s\S]*?)<\/query_result>/g
-  while ((match = queryResultRegex.exec(content)) !== null) {
-    const matchedContent = match[1]
-    if (matchedContent !== undefined) {
-      elements.push({
-        type: 'queryResult',
-        content: matchedContent.trim(),
-        startIndex: match.index,
-        endIndex: match.index + match[0].length
-      })
-    }
-  }
-
-  // 4. 提取 chart_config
+  // 3. 提取 chart_config
   const chartConfigRegex = /<chart_config>([\s\S]*?)<\/chart_config>/g
   while ((match = chartConfigRegex.exec(content)) !== null) {
     const matchedContent = match[1]
@@ -121,7 +107,7 @@ export function parseStructuredContent(content: string, isStreaming = false): Pa
     }
   }
 
-  // 5. 提取 explanation
+  // 4. 提取 explanation
   const explanationRegex = /<explanation>([\s\S]*?)<\/explanation>/g
   while ((match = explanationRegex.exec(content)) !== null) {
     const matchedContent = match[1]

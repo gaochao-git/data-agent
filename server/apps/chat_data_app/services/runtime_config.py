@@ -38,8 +38,10 @@ TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHATDATA_TOOL_RESULT_OFFLOAD_S
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
 DEFAULT_CONTEXT_WINDOW = 128000
-CONTEXT_EDIT_ENABLED = read_bool_env("CHATDATA_CONTEXT_EDIT_ENABLED", True)
-CONTEXT_EDIT_TRIGGER_RATIO = 0.70
+CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHATDATA_CONTEXT_COMPRESSION_ENABLED", True)
+CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.70
+CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHATDATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
+LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHATDATA_LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
 
 
 def get_context_window(model_id: str | None) -> int:
@@ -49,12 +51,17 @@ def get_context_window(model_id: str | None) -> int:
     return int(get_chat_data_model_config(model_id).get("context_window") or DEFAULT_CONTEXT_WINDOW)
 
 
-def get_context_edit_config() -> dict:
-    """读取智能问数模型入口上下文编辑配置。"""
+def get_context_compression_config() -> dict:
+    """读取智能问数上下文压缩配置。"""
     return {
-        "enabled": CONTEXT_EDIT_ENABLED,
-        "trigger_ratio": CONTEXT_EDIT_TRIGGER_RATIO,
+        "enabled": CONTEXT_COMPRESSION_ENABLED,
+        "trigger_ratio": CONTEXT_COMPRESSION_TRIGGER_RATIO,
     }
+
+
+def is_context_usage_system_prompt_visible() -> bool:
+    """是否在上下文预算明细中展示 system prompt 原文。"""
+    return CONTEXT_USAGE_SHOW_SYSTEM_PROMPT
 
 
 def get_chat_data_runtime_config() -> dict:

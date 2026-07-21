@@ -12,11 +12,12 @@ from auth import AuthenticationError
 
 from utils.error_codes import ErrorCode
 from utils import conversation
+from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 from utils.response import business_response
 from ..agent import get_chat_data_graph
-from ..agent.data_analyze_graph import get_data_analyze_graph
+from ..agent.analyze_data_agent import get_data_analyze_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,
@@ -34,27 +35,9 @@ from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_history_learning_service import (
     SemanticHistoryLearningService,
-    _build_existing_semantic_indexes,
-    _build_history_learning_table_context,
     _compact_history_conversation_messages,
-    _compact_history_sample_for_llm,
-    _extract_expression_columns,
-    _extract_history_task_conversation_id,
-    _extract_history_task_query_text,
-    _extract_history_task_semantic_id,
     _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
     _history_belongs_to_config as _service_history_belongs_to_config,
-    _history_message_text,
-    _is_existing_history_suggestion,
-    _is_history_tool_error_message,
-    _is_negative_feedback_text,
-    _normalize_history_learning_result,
-    _normalize_history_suggestion_item,
-    _normalize_semantic_expression,
-    _normalize_semantic_text,
-    _parse_json_object,
-    _sample_map_by_execution_id,
-    _semantic_scope_tables,
     build_semantic_history_learning_service,
 )
 from ..services.semantic_common import (
@@ -495,7 +478,14 @@ async def _call_metric_recommendation_llm(
         max_metrics=max_metrics,
     )
     llm = get_chat_data_llm(streaming=False, max_tokens=2000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "semantic_metric_recommendation"},
+        )
+        raise
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
 
@@ -503,7 +493,14 @@ async def _call_metric_recommendation_llm(
 async def _call_prefill_llm(prompt: str, generate_business_flow: bool = False) -> Dict[str, Any]:
     """调用大模型并解析自动预填字段。"""
     llm = get_chat_data_llm(streaming=False, max_tokens=4000)
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        emit_llm_connection_alarm_if_needed(
+            exc,
+            ext1={"purpose": "semantic_prefill"},
+        )
+        raise
     content = response.content if hasattr(response, "content") else str(response)
     return _parse_prefill_response(str(content), generate_business_flow)
 
@@ -692,6 +689,7 @@ async def create_semantic_config(datasource_id: str, payload: SemanticConfigCrea
 @router.post("/admin/datasources/{datasource_id}/semantic-configs")
 async def create_admin_semantic_config(datasource_id: str, payload: SemanticConfigCreateRequest, request: Request):
     """创建公共指标集。"""
+    _get_current_user(request)
     return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
 
 
@@ -743,6 +741,7 @@ async def auto_prefill_semantic_fields(datasource_id: str, config_id: str, paylo
 @router.post("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/auto-prefill")
 async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str, payload: SemanticAutoPrefillRequest, request: Request):
     """后台按公共指标集自动预填维度/指标/表达式。"""
+    _get_current_user(request)
     return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -811,6 +810,7 @@ async def semantic_prefill(payload: SemanticPrefillRequest, request: Request):
 @router.post("/admin/semantic/prefill")
 async def admin_semantic_prefill(payload: SemanticPrefillRequest, request: Request):
     """后台按公共指标集预填语义字段。"""
+    _get_current_user(request)
     return await _semantic_prefill_route(payload, request, admin_manage=True)
 
 
@@ -876,6 +876,7 @@ async def learn_admin_semantic_config_from_history(
     request: Request,
 ):
     """后台基于公共指标集的查询历史生成维护建议。"""
+    _get_current_user(request)
     return await _learn_semantic_config_from_history_route(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -1015,6 +1016,7 @@ async def update_admin_semantic_config(
     request: Request,
 ):
     """后台更新公共指标集。"""
+    _get_current_user(request)
     return await _update_semantic_config(datasource_id, config_id, payload, request, admin_manage=True)
 
 
@@ -1027,6 +1029,7 @@ async def delete_semantic_config(datasource_id: str, config_id: str, request: Re
 @router.delete("/admin/datasources/{datasource_id}/semantic-configs/{config_id}")
 async def delete_admin_semantic_config(datasource_id: str, config_id: str, request: Request):
     """后台删除公共指标集。"""
+    _get_current_user(request)
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
 
 
@@ -1039,4 +1042,5 @@ async def toggle_semantic_config(datasource_id: str, config_id: str, enabled: bo
 @router.patch("/admin/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")
 async def toggle_admin_semantic_config(datasource_id: str, config_id: str, enabled: bool, request: Request):
     """后台切换公共指标集启用状态。"""
+    _get_current_user(request)
     return await _toggle_semantic_config(datasource_id, config_id, enabled, request, admin_manage=True)

@@ -21,6 +21,7 @@ import {
   updateSkill
 } from '../api'
 import type { SkillInfo, SkillVersionInfo } from '../types'
+import { getSkillCreatorLabel } from '../utils'
 
 type SkillFileDir = 'references' | 'assets' | 'scripts'
 type SkillScope = 'query' | 'analyze' | 'all'
@@ -121,10 +122,6 @@ const canDeleteSkill = (skill?: SkillInfo | null) => Boolean(
 const canCopySkill = (skill?: SkillInfo | null) => Boolean(
   skill?.source && skill.source !== 'system'
 )
-const getSkillCreatorLabel = (skill: SkillInfo) => {
-  if (skill.source === 'system') return '系统'
-  return skill.creator_name || skill.creator_id || skill.owner_user_id || '未知'
-}
 const getSkillDirectoryName = computed(() => selectedSkill.value?.name || selectedSkill.value?.skill_id || 'skill')
 const skillDirDescriptions: Record<SkillFileDir, string> = {
   references: '参考文档、说明和知识材料',

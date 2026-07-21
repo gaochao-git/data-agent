@@ -47,8 +47,8 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 
 <workflow>
 ## 数据上下文
-- `data_context` 是本次运行的数据源、表结构、语义指标和维度体系，直接作为事实依据。
-- `data_context.datasource.source_type` 和 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
+- 未手动选择指标集时，`data_context` 只注入“当前可见指标集目录”和“当前指标集”说明，不包含表结构、完整指标和维度口径。
+- `data_context.datasource.source_type` 和已选中 `semantic_configs[].source_type` 是数据库方言事实，只能由系统提供；模型不得猜测、改写或根据 SQL 报错自行切换方言。
 - 如果 `semantic_configs` 中存在 `selected=true` 的配置，表示用户已手动选择指标集，后续只使用该指标集的指标和维度。
 - 如果没有 `selected=true` 的指标集，业务数据分析必须先调用 `select_semantic_config_tool`；工具返回相关 `semantic_config_ids` 和指标集配置后，由你依据用户原问题、维度暴露的表列、指标口径和关联关系自行决定后续使用哪个指标集、是否澄清或是否执行查询。每次 `dsl2sql_tool` 和 `semantic_query_tool` 都必须传入一个明确的 `semantic_config_id`；每次 `semantic_query_tool` 还必须传入 `data_context.execution_targets` 中的一个或多个 `member_datasource_ids`。
 - 正文不得输出、复述或用 Markdown 代码块展示工具返回的 JSON、指标集 ID 或语义配置。
@@ -100,6 +100,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 - 回复只展示：简短结论、关键数字、产物路径或预览状态。
 - 不在正文暴露：工具参数、JSON、DSL、SQL、patch、XML、YAML、工具返回原文或原始查询行。
 - 过程说明只写当前动作或发现，不展开指标、维度、SQL、卡片清单或工具结果明细。
+- `semantic_query_tool` 的查询结果会由前端自动渲染为表格/图表；最终回复不要再次输出 markdown 表格、逐行明细列表、完整结果清单或大段复述查询结果，只提炼关键结论或说明已完成查询。
 - `file_edit` 仅代表会话文件已生成，任何业务系统写入不能由模型自行宣称成功。
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。
 </workflow>
@@ -123,27 +124,6 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.replac
     "{security_guardrails}",
     SECURITY_PROMPT,
 )
-
-DATA_ANALYZE_THINKING_PROMPT = (
-    "你是数据分析任务理解节点。请用 1-2 句中文概括用户目标、是否命中技能、需要依赖的数据或产物。"
-    "不要输出推理链路、SQL、JSON、工具参数或字段清单。"
-)
-
-DATA_ANALYZE_PLAN_PROMPT = (
-    "你是数据分析任务规划节点。请基于用户目标和理解摘要，输出 2-5 条简短执行步骤，每行一条。"
-    "步骤只能描述阶段性动作，不要输出 SQL、JSON、工具参数或字段清单。"
-)
-
-DATA_ANALYZE_DONE_PROMPT = (
-    "你是数据分析任务收尾节点。请用一句中文概括本次任务已进入完成阶段。"
-    "不要编造关键数字或产物路径；具体结果以执行节点最终回复为准。"
-)
-
-DATA_ANALYZE_DEFAULT_PLAN_STEPS = [
-    "确认数据上下文和可用技能",
-    "按需调用工具并生成结果",
-    "校验产物并输出结果",
-]
 
 DATA_ANALYZE_SEMANTIC_FEWSHOT_PROMPT = """# 示例
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import json
 from pathlib import Path
 from typing import Any
 
@@ -41,14 +40,6 @@ def ensure_data_analyze_workspace(conversation_id: str) -> dict[str, str]:
         path.mkdir(parents=True, exist_ok=True)
         paths[name.replace("-", "_")] = str(path)
     return paths
-
-
-def write_workspace_json(workspace_root: str, relative_path: str, payload: Any) -> str:
-    """向会话 workspace 写入 JSON 上下文文件。"""
-    target = resolve_workspace_path(workspace_root, relative_path, writable=True)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return to_visible_path(workspace_root, target)
 
 
 def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = False) -> Path:

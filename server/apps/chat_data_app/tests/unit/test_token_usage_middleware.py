@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -9,26 +10,32 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.middleware.token_usage_middleware import (
-    bind_token_usage_middleware,
+from apps.chat_data_app.agent.middleware.context_usage import (
+    SYSTEM_PROMPT_PLACEHOLDER,
+    bind_context_usage_middleware,
     build_request_breakdown,
     build_usage_from_llm_calls,
     build_message_breakdown,
     build_prompt_breakdown,
     count_messages_tokens,
     count_tools_tokens,
-    create_request_token_usage_middleware,
+    create_request_context_usage_middleware,
     estimate_prompt_usage,
     estimate_text_tokens,
     estimate_tokens,
-    invoke_with_token_usage,
+    invoke_with_context_usage,
     _build_request_messages,
     _extract_result_messages,
-    _get_agent_token_usage,
+    _get_agent_context_usage,
     _merge_response_usage,
     _request_model_name,
 )
-from apps.chat_data_app.services.context_budget import ContextBudget, build_context_usage_payload, get_model_context_budget
+from apps.chat_data_app.services.context_budget import (
+    ContextBudget,
+    build_context_usage_payload,
+    get_model_context_budget,
+    sanitize_context_usage_for_response,
+)
 from apps.chat_data_app.services.runtime_config import get_context_window
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -53,6 +60,47 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert payload["remaining"] == 1
 
 
+def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mutation():
+    usage = {
+        "breakdown": [{
+            "key": "system_prompt",
+            "content": "SECRET_SYSTEM_PROMPT",
+            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+        "llm_calls": [{
+            "breakdown": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+    }
+
+    sanitized = sanitize_context_usage_for_response(usage)
+
+    assert sanitized["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["breakdown"][0]["children"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert sanitized["llm_calls"][0]["breakdown"][0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert "SECRET_SYSTEM_PROMPT" not in json.dumps(sanitized, ensure_ascii=False)
+    assert usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+
+
+def test_sanitize_context_usage_keeps_system_prompt_when_debug_enabled(monkeypatch):
+    usage = {
+        "breakdown": [{
+            "key": "system_prompt",
+            "content": "SECRET_SYSTEM_PROMPT",
+            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+        }],
+    }
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.is_context_usage_system_prompt_visible",
+        lambda: True,
+    )
+
+    sanitized = sanitize_context_usage_for_response(usage)
+
+    assert sanitized is usage
+    assert sanitized["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+
+
 def test_count_tools_tokens_uses_tool_schema_text():
     tokens = count_tools_tokens([{
         "type": "function",
@@ -75,7 +123,7 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
             return "bad tool schema"
 
     monkeypatch.setattr(
-        "apps.chat_data_app.agent.middleware.token_usage_middleware.convert_to_openai_tool",
+        "apps.chat_data_app.agent.middleware.context_usage.convert_to_openai_tool",
         lambda _tool: (_ for _ in ()).throw(RuntimeError("bad tool")),
     )
 
@@ -119,6 +167,28 @@ def test_build_message_breakdown_includes_message_metadata_and_content():
     assert rows[1]["round"] == 1
     assert rows[1]["message_index"] == 1
     assert rows[1]["content"] == "我来分析"
+
+
+def test_build_message_breakdown_keeps_system_message_content_by_default():
+    rows = build_message_breakdown([
+        SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
+    ])
+
+    assert rows[0]["role"] == "system"
+    assert rows[0]["content"] == "# 角色 SECRET_SYSTEM_PROMPT"
+    assert rows[0].get("redacted") is None
+
+
+def test_build_message_breakdown_redacts_when_explicitly_requested():
+    rows = build_message_breakdown([
+        SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),
+    ], hide_content=True)
+
+    assert rows[0]["role"] == "system"
+    assert rows[0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert rows[0]["description"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert rows[0]["redacted"] is True
+    assert "SECRET_SYSTEM_PROMPT" not in json.dumps(rows, ensure_ascii=False)
 
 
 def test_build_message_breakdown_includes_ai_tool_call_arguments():
@@ -221,9 +291,11 @@ def test_build_request_breakdown_groups_tools_and_keeps_messages():
 
 
 def test_build_request_breakdown_includes_system_message_group():
+    system_prompt = "系统提示 SECRET_SYSTEM_PROMPT"
+    system_tokens = count_messages_tokens([SystemMessage(content=system_prompt)])
     breakdown = build_request_breakdown(
         messages=[
-            SystemMessage(content="系统提示"),
+            SystemMessage(content=system_prompt),
             HumanMessage(content="用户问题"),
         ],
         message_tokens=20,
@@ -234,6 +306,8 @@ def test_build_request_breakdown_includes_system_message_group():
 
     assert [item["key"] for item in breakdown] == ["system_prompt", "messages", "request_overhead"]
     assert breakdown[0]["children"][0]["role"] == "system"
+    assert breakdown[0]["children"][0]["content"] == system_prompt
+    assert breakdown[0]["children"][0]["tokens"] == system_tokens
     assert breakdown[1]["children"][0]["message_index"] == 1
     assert breakdown[2]["tokens"] == 3
 
@@ -255,7 +329,7 @@ def test_build_request_breakdown_can_return_only_tool_schema():
 
 
 def test_build_tools_breakdown_fallback_payload(monkeypatch):
-    from apps.chat_data_app.agent.middleware import token_usage_middleware as module
+    from apps.chat_data_app.agent.middleware import context_usage as module
 
     class BadTool:
         def __str__(self):
@@ -324,22 +398,22 @@ def test_merge_response_usage_supports_message_and_result_wrapper():
     assert ignored_record == {"input_tokens": 1}
 
 
-def test_bind_and_get_agent_token_usage_handles_weakref_and_attribute_fallback():
+def test_bind_and_get_agent_context_usage_handles_weakref_and_attribute_fallback():
     class Agent:
         pass
 
     class NonWeakrefAgent:
-        __slots__ = ("_chat_data_token_usage_middleware",)
+        __slots__ = ("_chat_data_context_usage_middleware",)
 
-    middleware = SimpleNamespace(get_token_usage=lambda: {"used": 10})
+    middleware = SimpleNamespace(get_context_usage=lambda: {"used": 10})
     agent = Agent()
-    bind_token_usage_middleware(agent, middleware)
-    assert _get_agent_token_usage(agent) == {"used": 10}
+    bind_context_usage_middleware(agent, middleware)
+    assert _get_agent_context_usage(agent) == {"used": 10}
 
     fallback_agent = NonWeakrefAgent()
-    bind_token_usage_middleware(fallback_agent, middleware)
-    assert _get_agent_token_usage(fallback_agent) == {"used": 10}
-    assert _get_agent_token_usage(object()) is None
+    bind_context_usage_middleware(fallback_agent, middleware)
+    assert _get_agent_context_usage(fallback_agent) == {"used": 10}
+    assert _get_agent_context_usage(object()) is None
 
 
 def test_extract_result_messages_filters_non_messages():
@@ -349,9 +423,9 @@ def test_extract_result_messages_filters_non_messages():
     assert _extract_result_messages({"messages": "bad"}) == []
 
 
-def test_create_request_token_usage_middleware_records_and_merges_usage():
+def test_create_request_context_usage_middleware_records_and_merges_usage():
     async def run():
-        middleware = create_request_token_usage_middleware()
+        middleware = create_request_context_usage_middleware()
         request = SimpleNamespace(
             system_message=SystemMessage(content="系统提示"),
             messages=[HumanMessage(content="统计订单数")],
@@ -371,16 +445,64 @@ def test_create_request_token_usage_middleware_records_and_merges_usage():
     import asyncio
 
     middleware, response = asyncio.run(run())
-    assert response.content == "ok"
-    assert len(middleware.token_usage_records) == 1
-    record = middleware.token_usage_records[0]
+    assert response.model_response.result[0].content == "ok"
+    assert len(middleware.context_usage_records) == 1
+    record = middleware.context_usage_records[0]
     assert record["model"] == "qwen3.5-35b-a3b"
     assert record["actual_input_tokens"] == 100
     assert record["output_tokens"] == 20
-    assert middleware.get_token_usage()["llm_calls"][0]["actual_total_tokens"] == 120
+    assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
-def test_invoke_with_token_usage_prefers_runtime_usage_and_falls_back_to_estimate():
+def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch):
+    async def run():
+        from apps.chat_data_app.agent.middleware import context_usage
+
+        monkeypatch.setattr(
+            context_usage.ToolResultBudget,
+            "configure",
+            lambda self, system_prompt, tools, model_id=None: ContextBudget(
+                context_window=10000,
+                max_output_tokens=2000,
+                trigger_ratio=0.70,
+                input_budget_tokens=7000,
+            ),
+        )
+        monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
+        monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
+        middleware = create_request_context_usage_middleware("qwen-test", state_schema=dict)
+        captured = {}
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="分析系统提示"),
+            messages=[
+                HumanMessage(content="历史问题"),
+                ToolMessage(content="历史工具结果 " * 5000, tool_call_id="call_old", name="semantic_query_tool"),
+                AIMessage(content="历史回答"),
+                HumanMessage(content="当前问题"),
+            ],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen-test"),
+        )
+
+        async def handler(inner_request):
+            captured["request"] = inner_request
+            return AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
+
+        response = await middleware.awrap_model_call(request, handler)
+        return middleware, response, captured
+
+    import asyncio
+
+    middleware, response, captured = asyncio.run(run())
+    sent_messages = captured["request"].messages
+    assert sent_messages[1].content.startswith("历史工具结果")
+    assert response.model_response.result[0].content == "ok"
+    usage = response.command.update["token_usage"]
+    assert "context_editing" not in usage
+    assert "context_editing" not in middleware.get_context_usage()
+
+
+def test_invoke_with_context_usage_prefers_runtime_usage_and_falls_back_to_estimate():
     import asyncio
 
     class Agent:
@@ -390,10 +512,10 @@ def test_invoke_with_token_usage_prefers_runtime_usage_and_falls_back_to_estimat
         async def ainvoke(self, _state):
             return self.result
 
-    middleware = SimpleNamespace(get_token_usage=lambda: {"used": 99, "total": 100})
+    middleware = SimpleNamespace(get_context_usage=lambda: {"used": 99, "total": 100})
     agent = Agent({"messages": [AIMessage(content="完成")]})
-    bind_token_usage_middleware(agent, middleware)
-    result, usage = asyncio.run(invoke_with_token_usage(
+    bind_context_usage_middleware(agent, middleware)
+    result, usage = asyncio.run(invoke_with_context_usage(
         agent=agent,
         state={"messages": [HumanMessage(content="问题")]},
         system_prompt="系统",
@@ -403,7 +525,7 @@ def test_invoke_with_token_usage_prefers_runtime_usage_and_falls_back_to_estimat
     assert usage == {"used": 99, "total": 100}
 
     fallback_agent = Agent({"messages": [AIMessage(content="没有 runtime usage")]})
-    _result, fallback_usage = asyncio.run(invoke_with_token_usage(
+    _result, fallback_usage = asyncio.run(invoke_with_context_usage(
         agent=fallback_agent,
         state={"messages": [HumanMessage(content="问题")]},
         system_prompt="系统",

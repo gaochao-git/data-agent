@@ -14,6 +14,7 @@ interface Props {
   defaultExpanded?: boolean
   compact?: boolean
   showRunningIndicator?: boolean
+  renderQueryResultPreview?: boolean
   activeToolCallId?: string | null
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
@@ -23,6 +24,7 @@ const props = withDefaults(defineProps<Props>(), {
   defaultExpanded: false,
   compact: false,
   showRunningIndicator: true,
+  renderQueryResultPreview: true,
   activeToolCallId: null,
   isAnalysisActive: false
 })
@@ -69,6 +71,7 @@ const toggleExpand = (id: string) => {
       :is-expanded="expandedIds.has(tc.tool_call_id)"
       :compact="compact"
       :show-running-indicator="showRunningIndicator"
+      :render-query-result-preview="renderQueryResultPreview"
       :active="activeToolCallId === tc.tool_call_id"
       :datasource-id="datasourceId"
       :execution-targets="executionTargets"
