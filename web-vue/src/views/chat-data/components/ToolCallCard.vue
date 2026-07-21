@@ -129,6 +129,11 @@ const normalizeVisiblePath = (path: unknown): string => {
     .replace(/\/+/g, '/')
 }
 
+const getFileName = (path: unknown): string => {
+  const normalizedPath = normalizeVisiblePath(path)
+  return normalizedPath.split('/').filter(Boolean).pop() || normalizedPath
+}
+
 const getResultField = (field: string): string => {
   const result = String(props.toolCall.result || '')
   const match = result.match(new RegExp(`^${field}=([^\\n]+)`, 'm'))
@@ -138,10 +143,10 @@ const getResultField = (field: string): string => {
 const compactDescription = computed(() => {
   const args = props.toolCall.args || {}
   if (props.toolCall.tool_name === 'file_read') {
-    return normalizeVisiblePath(args.file_path || args.path)
+    return getFileName(args.file_path || args.path)
   }
   if (props.toolCall.tool_name === 'file_edit') {
-    return normalizeVisiblePath(args.file_path || args.path)
+    return getFileName(args.file_path || args.path)
   }
   if (props.toolCall.tool_name === 'skill_load') {
     return String(args.skill_name || args.name || getResultField('runtime_path') || '').trim()
