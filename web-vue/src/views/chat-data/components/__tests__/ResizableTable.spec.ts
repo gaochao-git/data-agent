@@ -61,4 +61,54 @@ describe('ResizableTable', () => {
     expect(wrapper.text()).toContain('第 20 行')
     expect(wrapper.findAll('.absolute.left-0.flex').length).toBe(0)
   })
+
+  it('displays query values without changing numeric formatting', () => {
+    const wrapper = mount(ResizableTable, {
+      props: {
+        columns: [{ key: 'value', title: '结果' }],
+        data: [{ value: 10130.089787 }, { value: '12345678901234567890' }],
+        virtual: false,
+      },
+    })
+
+    expect(wrapper.text()).toContain('10130.089787')
+    expect(wrapper.text()).toContain('12345678901234567890')
+    expect(wrapper.text()).not.toContain('10,130.09')
+  })
+
+  it('renders a visible resize indicator with an expanded drag target for each column', () => {
+    const wrapper = mount(ResizableTable, {
+      props: {
+        columns,
+        data: buildRows(1),
+        virtual: false,
+      },
+    })
+
+    const handles = wrapper.findAll('[data-testid="column-resize-handle"]')
+    expect(handles).toHaveLength(columns.length)
+    expect(handles[0]!.classes()).toContain('w-3')
+    expect(handles[0]!.classes()).toContain('justify-end')
+    expect(handles[0]!.find('span').classes()).toContain('bg-slate-300')
+  })
+
+  it('highlights the resize indicator while its column is being dragged', async () => {
+    const wrapper = mount(ResizableTable, {
+      props: {
+        columns,
+        data: buildRows(1),
+        virtual: false,
+      },
+    })
+
+    const handle = wrapper.find('[data-testid="column-resize-handle"]')
+    await handle.trigger('mousedown', { clientX: 100 })
+
+    expect(handle.find('span').classes()).toContain('!bg-[#1677FF]')
+
+    document.dispatchEvent(new MouseEvent('mouseup'))
+    await wrapper.vm.$nextTick()
+
+    expect(handle.find('span').classes()).not.toContain('!bg-[#1677FF]')
+  })
 })

@@ -4,6 +4,7 @@ import * as echarts from 'echarts'
 import ResizableTable from './ResizableTable.vue'
 import { normalizeChartType, type ChartType } from '../chartTypes'
 import { registerChinaMap, normalizeProvinceName, isChinaMapRegistered } from '../utils/mapRegistry'
+import { getSafeNumericColumns, isSafeNumericValue, toSafeNumber } from '../utils'
 
 interface ChartSpecSeries {
   field?: string
@@ -79,6 +80,7 @@ const tableColumns = computed(() => {
   })
   return Array.from(seen).map(key => ({ key, title: key, width: 150 }))
 })
+const safeNumericColumns = computed(() => getSafeNumericColumns(dataRows.value, tableColumns.value.map(column => column.key)))
 const seriesLabels = computed(() => {
   const labels: Record<string, string> = {}
   for (const item of props.spec?.series || []) {
@@ -111,21 +113,15 @@ function inferXField() {
 }
 
 function isNumericValue(value: unknown) {
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (typeof value !== 'string' || !value.trim()) return false
-  return Number.isFinite(Number(value))
+  return isSafeNumericValue(value)
 }
 
 function inferYFields() {
-  const firstRows = dataRows.value.slice(0, 20)
-  const keys = Array.from(new Set(firstRows.flatMap(row => Object.keys(row || {}))))
-  return keys.filter(key => firstRows.some(row => isNumericValue(row[key]))).slice(0, 4)
+  return safeNumericColumns.value.slice(0, 4)
 }
 
 function numberValue(value: unknown) {
-  if (value === null || value === undefined || value === '') return null
-  const next = Number(value)
-  return Number.isFinite(next) ? next : null
+  return toSafeNumber(value)
 }
 
 function getLabel(field: string) {
@@ -216,8 +212,8 @@ function buildOption(): echarts.EChartsOption {
     return {
       tooltip: {
         trigger: 'item',
-        formatter: (params: any) => Number.isFinite(Number(params.value))
-          ? `${params.name}: ${Number(params.value).toLocaleString()}`
+        formatter: (params: any) => isSafeNumericValue(params.value)
+          ? `${params.name}: ${String(params.value)}`
           : `${params.name}: 暂无数据`,
       },
       visualMap: {

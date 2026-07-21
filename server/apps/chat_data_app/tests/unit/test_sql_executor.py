@@ -28,7 +28,11 @@ def test_serialize_value_formats_datetime_without_iso_t_separator():
     assert sql_executor.resolve_query_timeout("hive", None) == sql_executor.DEFAULT_HIVE_QUERY_TIMEOUT_SECONDS
     assert sql_executor.resolve_query_timeout("sqlite", None) == sql_executor.DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
     assert sql_executor._friendly_sql_error("MySQL", RuntimeError("Query execution was interrupted")) == "已人工取消"
-    assert sql_executor._serialize_value(Decimal("12.50")) == 12.5
+    assert sql_executor._serialize_value(Decimal("12.50")) == "12.50"
+    assert sql_executor._serialize_value(9007199254740991) == 9007199254740991
+    assert sql_executor._serialize_value(9007199254740992) == "9007199254740992"
+    assert sql_executor._serialize_value(Decimal("12345678901234567890")) == "12345678901234567890"
+    assert sql_executor._serialize_value(Decimal("12345678901234567890.01")) == "12345678901234567890.01"
     assert sql_executor._serialize_value(datetime(2024, 1, 4, 8, 1, 0)) == "2024-01-04 08:01:00"
     assert sql_executor._serialize_value(date(2024, 1, 4)) == "2024-01-04"
     assert sql_executor._serialize_value(b"\xe4\xbd\xa0\xe5\xa5\xbd") == "你好"
@@ -1030,7 +1034,7 @@ def test_mysql_executor_success_callbacks_kill_and_close(monkeypatch):
 
     assert result["success"] is True
     assert result["columns"] == ["id", "amount"]
-    assert result["data"] == [{"id": 1, "amount": 12.5}]
+    assert result["data"] == [{"id": 1, "amount": "12.5"}]
     assert result["db_connection_id"] == "12345"
     assert callback_payloads == [{"db_connection_id": "12345"}]
     assert cursor.executed[0] == "SELECT CONNECTION_ID()"

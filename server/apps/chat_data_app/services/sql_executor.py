@@ -42,6 +42,7 @@ HTTP_SUBMIT_URL = str(os.getenv("CHAT_DATA_HTTP_SUBMIT_URL") or "").strip()
 HTTP_STATUS_URL = str(os.getenv("CHAT_DATA_HTTP_STATUS_URL") or "").strip()
 HTTP_STOP_URL = str(os.getenv("CHAT_DATA_HTTP_STOP_URL") or "").strip()
 HTTP_VERIFY_TLS = str(os.getenv("CHAT_DATA_HTTP_VERIFY_TLS", "false")).strip().lower() in {"1", "true", "yes", "on"}
+JS_SAFE_INTEGER_MAX = 2**53 - 1
 
 
 def _get_http_auth_token() -> str:
@@ -138,9 +139,11 @@ def _friendly_sql_error(engine: str, err: Exception) -> str:
 
 
 def _serialize_value(value: Any) -> Any:
-    """将不可 JSON 序列化的值转换为可序列化类型"""
+    """将查询值转换为 JSON 可表示且不会损失 JavaScript 整数精度的类型。"""
     if isinstance(value, Decimal):
-        return float(value)
+        return format(value, "f")
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > JS_SAFE_INTEGER_MAX:
+        return str(value)
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, date):

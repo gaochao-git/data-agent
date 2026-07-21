@@ -8,7 +8,7 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
-import { dedupeRepeatedErrorText, isQueryFailed } from '../utils'
+import { dedupeRepeatedErrorText, getSafeNumericColumns, isQueryFailed } from '../utils'
 
 interface QueryResult {
   status?: string | null
@@ -273,13 +273,7 @@ const pageEnd = computed(() => {
 // 数值列检测
 const numericColumns = computed(() => {
   if (!activeResult.value?.columns) return []
-  const data = limitedData.value
-  if (data.length === 0) return []
-
-  return activeResult.value.columns.filter((col) => {
-    const firstValue = data[0]?.[col]
-    return typeof firstValue === 'number'
-  })
+  return getSafeNumericColumns(limitedData.value, activeResult.value.columns)
 })
 
 // 图表可用性检测

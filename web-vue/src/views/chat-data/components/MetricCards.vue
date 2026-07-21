@@ -4,6 +4,7 @@
  * 用于展示单个或多个指标数据
  */
 import { computed } from 'vue'
+import { isNumericValue } from '../utils'
 
 interface Props {
   data: Record<string, unknown>[]
@@ -19,7 +20,7 @@ const numericColumns = computed(() => {
   if (!props.data.length) return []
   return props.columns.filter((col) => {
     const value = props.data[0]?.[col]
-    return typeof value === 'number'
+    return isNumericValue(value)
   })
 })
 
@@ -50,24 +51,8 @@ const layoutMode = computed<'single' | 'multi-metric' | 'multi-row' | 'grid'>(()
   return 'grid'
 })
 
-// 格式化数值
 const formatValue = (value: unknown): string => {
   if (value === null || value === undefined) return '-'
-  if (typeof value === 'number') {
-    // 大数字格式化
-    if (Math.abs(value) >= 1e8) {
-      return (value / 1e8).toFixed(2) + '亿'
-    }
-    if (Math.abs(value) >= 1e4) {
-      return (value / 1e4).toFixed(2) + '万'
-    }
-    // 小数保留2位
-    if (!Number.isInteger(value)) {
-      return value.toFixed(2)
-    }
-    // 整数添加千分位
-    return value.toLocaleString('zh-CN')
-  }
   return String(value)
 }
 

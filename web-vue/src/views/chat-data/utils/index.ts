@@ -9,6 +9,7 @@ export { parseStructuredContent } from './parseContent'
 export { formatSemanticConfigOptionLabel, formatSemanticConfigSummary, getSemanticConfigTableCount, getSemanticConfigsTableCount } from './semanticConfig'
 export { getSkillCreatorLabel, getSkillCreatorShortLabel } from './skill'
 export { getToolDisplayName } from './toolDisplay'
+export { getSafeNumericColumns, isNumericValue, isSafeNumericValue, toSafeNumber } from './numeric'
 export {
   QUERY_MEMBER_ID_COLUMN,
   QUERY_MEMBER_NAME_COLUMN,

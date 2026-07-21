@@ -14,7 +14,7 @@ import type { DataSource, ExecutionTargetOption } from '../../../types'
 import { CHART_TYPE_HELP_TEXT } from '../../../chartTypes'
 import type { ThemeConfig } from '../constants'
 import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
-import { flattenQueryResultForDisplay, QUERY_MEMBER_ID_COLUMN, QUERY_MEMBER_NAME_COLUMN } from '../../../utils'
+import { flattenQueryResultForDisplay, getSafeNumericColumns, isNumericValue, QUERY_MEMBER_ID_COLUMN, QUERY_MEMBER_NAME_COLUMN, toSafeNumber } from '../../../utils'
 import { registerChinaMap, normalizeProvinceName, isChinaMapRegistered } from '../../../utils/mapRegistry'
 import ExecutionTargetPicker from '../../ExecutionTargetPicker.vue'
 
@@ -476,6 +476,7 @@ let chartInstance: echarts.ECharts | null = null
 const chartTypes = CHART_TYPES
 const chartStyleConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'combo', 'funnel', 'graph']
 const fieldConfigTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel', 'graph']
+const numericChartTypes = ['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel'] as const
 const supportsChartStyleConfig = computed(() => editState.chartType === 'kpi' || chartStyleConfigTypes.includes(editState.chartType))
 const supportsFieldConfig = computed(() => fieldConfigTypes.includes(editState.chartType))
 const currentChartTypeMeta = computed(() => {
@@ -488,22 +489,7 @@ const DASHBOARD_MEMBER_COLUMN = QUERY_MEMBER_NAME_COLUMN
 const DASHBOARD_MEMBER_ID_COLUMN = QUERY_MEMBER_ID_COLUMN
 
 const parseNumericValue = (value: unknown): number | null => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null
-  }
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return null
-  }
-  const normalized = trimmed.replace(/,/g, '')
-  if (!/^-?\d+(\.\d+)?$/.test(normalized)) {
-    return null
-  }
-  const parsed = Number(normalized)
-  return Number.isFinite(parsed) ? parsed : null
+  return toSafeNumber(value)
 }
 
 // 可用列（分类列 & 数值列）
@@ -515,20 +501,8 @@ const availableColumns = computed(() => {
     return { all: [] as string[], categoryColumns: [] as string[], numericColumns: [] as string[] }
   }
   const columns = result.columns.filter(col => col !== DASHBOARD_MEMBER_ID_COLUMN)
-  const sampleRows = result.data.slice(0, 5)
-  const categoryColumns: string[] = []
-  const numericColumns: string[] = []
-  columns.forEach(col => {
-    const nonEmptyValues = sampleRows
-      .map(row => row[col])
-      .filter(value => value !== null && value !== undefined && String(value).trim() !== '')
-    const isNumericColumn = nonEmptyValues.length > 0 && nonEmptyValues.every(value => parseNumericValue(value) !== null)
-    if (isNumericColumn) {
-      numericColumns.push(col)
-    } else {
-      categoryColumns.push(col)
-    }
-  })
+  const numericColumns = getSafeNumericColumns(result.data, columns)
+  const categoryColumns = columns.filter(col => !numericColumns.includes(col))
   return { all: columns, categoryColumns, numericColumns }
 })
 
@@ -557,22 +531,22 @@ const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string,
   }
 
   if (chartType === 'combo') {
-    const primaryYField = (manualY && all.includes(manualY))
+    const primaryYField = (manualY && numericColumns.includes(manualY))
       ? manualY
-      : (numericColumns[0] ?? all[1] ?? all[0] ?? '')
-    const secondaryYField = (manualYSecondary && all.includes(manualYSecondary) && manualYSecondary !== primaryYField)
+      : (numericColumns[0] ?? '')
+    const secondaryYField = (manualYSecondary && numericColumns.includes(manualYSecondary) && manualYSecondary !== primaryYField)
       ? manualYSecondary
-      : (numericColumns.find(field => field !== primaryYField) ?? all.find(field => field !== xField && field !== primaryYField) ?? '')
+      : (numericColumns.find(field => field !== primaryYField) ?? '')
     const yFields = [primaryYField, secondaryYField].filter((field): field is string => !!field)
     return { xField, yFields, seriesField: '' }
   }
 
-  // Y 轴：手动设定 > 所有数值字段 > 第二列
+  // Y 轴只允许使用可安全计算的数值字段，防止大数被 JavaScript 静默截断。
   let yFields: string[]
-  if (manualY && all.includes(manualY)) {
+  if (manualY && numericColumns.includes(manualY)) {
     yFields = [manualY]
   } else {
-    yFields = numericColumns.length > 0 ? numericColumns : [all[1] ?? all[0] ?? ''].filter((field): field is string => !!field)
+    yFields = numericColumns
   }
 
   // 分组字段：手动设定 > 多数据源执行对象 > 第二个业务分类字段
@@ -588,6 +562,11 @@ const inferFields = (chartType: Panel['chart_type'], chartConfig: Record<string,
 // 智能推断字段（支持手动覆盖）
 const inferredFields = computed(() => inferFields(props.panel.chart_type, props.panel.chart_config || {}))
 const editInferredFields = computed(() => inferFields(editState.chartType, editState.chartConfig))
+const chartUnavailable = computed(() => {
+  return numericChartTypes.includes(props.panel.chart_type as typeof numericChartTypes[number])
+    && displayResult.value.data.length > 0
+    && inferredFields.value.yFields.length === 0
+})
 
 // 字段配置处理
 const handleFieldConfigChange = (field: 'xField' | 'yField' | 'yField2' | 'seriesField', value: string) => {
@@ -837,13 +816,13 @@ const chartOption = computed(() => {
       value: parseNumericValue(row[primaryYField]) ?? 0,
     }))
     const pieTotal = pieData.reduce((sum, item) => sum + item.value, 0)
-    const formattedPieTotal = formatRawNumber(pieTotal)
+    const pieTotalText = String(pieTotal)
 
     return {
       ...baseOption,
       color: pieColors,
       title: {
-        text: formattedPieTotal.value,
+        text: pieTotalText,
         subtext: '合计',
         left: 'center',
         top: 'center',
@@ -1006,7 +985,7 @@ const chartOption = computed(() => {
         trigger: 'item',
         formatter: (params: any) => {
           if (params.value !== undefined && !isNaN(params.value)) {
-            return `${params.name}: ${params.value.toLocaleString()}`
+            return `${params.name}: ${String(params.value)}`
           }
           return `${params.name}: 暂无数据`
         },
@@ -1125,12 +1104,6 @@ onUnmounted(() => {
   chartInstance?.dispose()
   chartInstance = null
 })
-
-const formatRawNumber = (num: number): { value: string } => {
-  if (!Number.isFinite(num)) return { value: '-' }
-  if (Number.isInteger(num)) return { value: num.toLocaleString() }
-  return { value: num.toLocaleString(undefined, { maximumFractionDigits: 6 }) }
-}
 
 // KPI 原始值
 const kpiRawValue = computed(() => {
@@ -1327,16 +1300,22 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                   v-for="col in displayResult.columns"
                   :key="col"
                   class="px-4 py-2.5 text-left"
-                  :class="{ 'font-semibold tabular-nums': typeof row[col] === 'number' }"
+                  :class="{ 'font-semibold tabular-nums': isNumericValue(row[col]) }"
                   :style="{ borderBottom: `1px solid ${theme.tableBorder}` }"
                 >
-                  {{ typeof row[col] === 'number' ? row[col].toLocaleString() : row[col] }}
+                  {{ row[col] ?? '' }}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </template>
+
+      <!-- 无可安全计算的数值列 -->
+      <div v-else-if="chartUnavailable" class="flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center text-[13px] [&>i]:text-2xl [&>i]:opacity-50" :style="{ color: theme.textMuted }">
+        <i class="fa-solid fa-chart-column"></i>
+        <span>当前结果没有可安全计算的数值字段</span>
+      </div>
 
       <!-- 图表 -->
       <template v-else>
@@ -1495,7 +1474,12 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
                     {{ editState.chartType === 'graph' ? '终点字段' : editState.chartType === 'combo' ? '柱状指标' : 'Y轴（数值）' }}
                   </label>
                   <el-select :model-value="editInferredFields.yFields[0] || ''" class="w-full" @change="(val: string) => handleFieldConfigChange('yField', val)">
-                    <el-option v-for="col in availableColumns.all" :key="col" :value="col" :label="`${col}${availableColumns.numericColumns.includes(col) ? ' (数值)' : ' (分类)'}`" />
+                    <el-option
+                      v-for="col in editState.chartType === 'graph' ? availableColumns.all : availableColumns.numericColumns"
+                      :key="col"
+                      :value="col"
+                      :label="`${col}${availableColumns.numericColumns.includes(col) ? ' (数值)' : ' (分类)'}`"
+                    />
                   </el-select>
                 </div>
                 <div v-if="editState.chartType === 'combo'">

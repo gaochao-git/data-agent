@@ -3,6 +3,7 @@
  * 可调整列宽的数据表格组件
  */
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { isNumericValue } from '../utils'
 
 interface Column {
   key: string
@@ -207,7 +208,7 @@ const getCellRawValue = (row: Record<string, unknown>, rowIndex: number, col: Co
 
 // 判断是否为数值
 const isNumeric = (value: unknown): boolean => {
-  return typeof value === 'number'
+  return isNumericValue(value)
 }
 
 const isIndexColumn = (col: Column) => col.key === INDEX_COLUMN_KEY
@@ -217,33 +218,11 @@ const isFirstBusinessColumn = (colIndex: number): boolean => {
   return colIndex === (props.showIndex ? 1 : 0)
 }
 
-const isRatioColumn = (columnKey: string): boolean => {
-  const name = (columnKey || '').toLowerCase()
-  return name === 'ratio_value' || name === '比率'
-}
-
-const formatNumberValue = (value: number): string => {
-  if (Number.isInteger(value)) return value.toLocaleString('zh-CN')
-  return value.toLocaleString('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  })
-}
-
-const formatDisplayValue = (value: unknown, col: Column): string => {
-  if (value === null || value === undefined) return '-'
-  if (typeof value === 'number' && isRatioColumn(col.key)) {
-    return `${(value * 100).toFixed(2)}%`
-  }
-  if (typeof value === 'number') {
-    return formatNumberValue(value)
-  }
-  return formatCellValue(value)
-}
+const formatDisplayValue = (value: unknown): string => formatCellValue(value)
 
 // 复制单元格内容
-const copyCellValue = (value: unknown, col: Column) => {
-  const text = formatDisplayValue(value, col)
+const copyCellValue = (value: unknown) => {
+  const text = formatDisplayValue(value)
   navigator.clipboard.writeText(text)
 }
 </script>
@@ -265,9 +244,17 @@ const copyCellValue = (value: unknown, col: Column) => {
       >
         <span class="block overflow-hidden text-ellipsis pr-2" :title="col.title">{{ col.title }}</span>
         <div
-          class="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-transparent transition-colors duration-150 hover:bg-gradient-to-br hover:from-[#1f82d9] hover:to-[#135589]"
+          data-testid="column-resize-handle"
+          class="group/resize absolute right-0 top-0 bottom-0 z-10 flex w-3 cursor-col-resize items-center justify-end"
           @mousedown="startResize(col.key, $event)"
-        />
+        >
+          <span
+            :class="[
+              'h-6 w-px rounded-full bg-slate-300 transition-[height,width,background-color] duration-150 group-hover/resize:h-9 group-hover/resize:w-0.5 group-hover/resize:bg-[#1677FF]',
+              isDragging && dragCol === col.key && '!h-9 !w-0.5 !bg-[#1677FF]'
+            ]"
+          ></span>
+        </div>
       </div>
     </div>
 
@@ -291,10 +278,10 @@ const copyCellValue = (value: unknown, col: Column) => {
             (getCellRawValue(row, rowIndex, col) === null || getCellRawValue(row, rowIndex, col) === undefined) && 'text-gray-400 italic'
           ]"
           :style="{ width: `${getColumnWidth(col.key)}px`, minWidth: `${getColumnWidth(col.key)}px` }"
-          :title="formatDisplayValue(getCellRawValue(row, rowIndex, col), col)"
-          @dblclick="copyCellValue(getCellRawValue(row, rowIndex, col), col)"
+          :title="formatDisplayValue(getCellRawValue(row, rowIndex, col))"
+          @dblclick="copyCellValue(getCellRawValue(row, rowIndex, col))"
         >
-          {{ formatDisplayValue(getCellRawValue(row, rowIndex, col), col) }}
+          {{ formatDisplayValue(getCellRawValue(row, rowIndex, col)) }}
         </div>
       </div>
     </div>
