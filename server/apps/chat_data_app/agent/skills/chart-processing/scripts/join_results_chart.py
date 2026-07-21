@@ -25,6 +25,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from numeric_utils import to_safe_number as to_number
+
 
 def load_json(path: str) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -48,17 +50,6 @@ def safe_field(label: str, index: int) -> str:
     normalized = "".join(ch.lower() if ch.isalnum() else "_" for ch in label.strip())
     normalized = "_".join(part for part in normalized.split("_") if part)
     return normalized or f"series_{index + 1}"
-
-
-def to_number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value))
-    except ValueError:
-        return None
 
 
 def build_series_map(rows: list[dict[str, Any]], key_field: str, value_field: str) -> dict[str, float | None]:

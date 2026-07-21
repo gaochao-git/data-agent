@@ -52,6 +52,7 @@ const graphPayload = computed(() => {
 const chartType = computed<ChartType>(() => {
   return normalizeChartType(props.spec?.chart_type)
 })
+const numericChartTypes = new Set<ChartType>(['bar', 'horizontal_bar', 'line', 'area', 'pie', 'map', 'combo', 'funnel'])
 const graphNodeCount = computed(() => Array.isArray(graphPayload.value?.nodes) ? graphPayload.value.nodes.length : 0)
 const graphLinkCount = computed(() => {
   if (Array.isArray(graphPayload.value?.links)) return graphPayload.value.links.length
@@ -66,7 +67,12 @@ const chartBodyHeightClass = computed(() => {
 const xField = computed(() => String(props.spec?.encoding?.x || inferXField()))
 const yFields = computed(() => {
   const fields = props.spec?.encoding?.y
-  if (Array.isArray(fields) && fields.length) return fields.map(item => String(item)).filter(Boolean)
+  if (Array.isArray(fields) && fields.length) {
+    const requestedFields = fields.map(item => String(item)).filter(Boolean)
+    return numericChartTypes.has(chartType.value)
+      ? requestedFields.filter(field => safeNumericColumns.value.includes(field))
+      : requestedFields
+  }
   return inferYFields()
 })
 const comboYFields = computed(() => {
@@ -81,6 +87,9 @@ const tableColumns = computed(() => {
   return Array.from(seen).map(key => ({ key, title: key, width: 150 }))
 })
 const safeNumericColumns = computed(() => getSafeNumericColumns(dataRows.value, tableColumns.value.map(column => column.key)))
+const chartUnavailable = computed(() => {
+  return numericChartTypes.has(chartType.value) && dataRows.value.length > 0 && yFields.value.length === 0
+})
 const seriesLabels = computed(() => {
   const labels: Record<string, string> = {}
   for (const item of props.spec?.series || []) {
@@ -110,10 +119,6 @@ function inferXField() {
   const keys = Object.keys(first)
   const ySet = new Set(inferYFields())
   return keys.find(key => !ySet.has(key)) || keys[0] || ''
-}
-
-function isNumericValue(value: unknown) {
-  return isSafeNumericValue(value)
 }
 
 function inferYFields() {
@@ -451,6 +456,11 @@ watch(mapLoaded, () => {
 })
 
 watch(chartRef, () => {
+  if (!chartRef.value) {
+    chartInstance?.dispose()
+    chartInstance = null
+    return
+  }
   observeChartElement()
   renderChart()
 })
@@ -484,6 +494,10 @@ watch(chartRef, () => {
 
     <div v-if="!dataRows.length && !hasGraphSpecData" class="flex h-52 items-center justify-center text-xs text-slate-400">
       暂无可渲染数据
+    </div>
+    <div v-else-if="chartUnavailable" class="flex flex-col items-center justify-center gap-2 text-xs text-slate-400" :class="chartBodyHeightClass">
+      <i class="fa-solid fa-chart-column text-2xl opacity-50"></i>
+      <span>当前结果没有可安全计算的数值字段</span>
     </div>
     <div v-else-if="chartType === 'map' && !mapLoaded" class="flex items-center justify-center gap-2 text-xs text-slate-400" :class="chartBodyHeightClass">
       <i class="fa-solid fa-spinner fa-spin"></i>

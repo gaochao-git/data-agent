@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from numeric_utils import to_safe_number as to_number
+
 
 def load_json(path: str) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -41,13 +43,8 @@ def columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def is_number(value: Any) -> bool:
-    if isinstance(value, bool) or value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return True
     try:
-        float(str(value))
-        return True
+        return to_number(value) is not None
     except ValueError:
         return False
 
@@ -96,8 +93,7 @@ def normalize_rows(rows: list[dict[str, Any]], y_fields: list[str], chart_type: 
         item = dict(row)
         numeric_y_fields = y_fields[1:] if chart_type == "graph" else y_fields
         for field in numeric_y_fields:
-            value = item.get(field)
-            item[field] = float(value) if is_number(value) else None
+            item[field] = to_number(item.get(field))
         normalized.append(item)
     return normalized
 

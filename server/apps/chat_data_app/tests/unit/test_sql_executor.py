@@ -29,6 +29,7 @@ def test_serialize_value_formats_datetime_without_iso_t_separator():
     assert sql_executor.resolve_query_timeout("sqlite", None) == sql_executor.DEFAULT_MYSQL_QUERY_TIMEOUT_SECONDS
     assert sql_executor._friendly_sql_error("MySQL", RuntimeError("Query execution was interrupted")) == "已人工取消"
     assert sql_executor._serialize_value(Decimal("12.50")) == "12.50"
+    assert sql_executor._serialize_value(Decimal("1E+3")) == "1E+3"
     assert sql_executor._serialize_value(9007199254740991) == 9007199254740991
     assert sql_executor._serialize_value(9007199254740992) == "9007199254740992"
     assert sql_executor._serialize_value(Decimal("12345678901234567890")) == "12345678901234567890"

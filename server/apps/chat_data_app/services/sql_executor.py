@@ -141,7 +141,7 @@ def _friendly_sql_error(engine: str, err: Exception) -> str:
 def _serialize_value(value: Any) -> Any:
     """将查询值转换为 JSON 可表示且不会损失 JavaScript 整数精度的类型。"""
     if isinstance(value, Decimal):
-        return format(value, "f")
+        return str(value)
     if isinstance(value, int) and not isinstance(value, bool) and abs(value) > JS_SAFE_INTEGER_MAX:
         return str(value)
     if isinstance(value, datetime):

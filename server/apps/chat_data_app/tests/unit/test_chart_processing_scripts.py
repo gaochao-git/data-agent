@@ -8,19 +8,7 @@ import importlib.util
 
 
 def load_compare_period_chart_module():
-    script_path = (
-        Path(__file__).resolve().parents[2]
-        / "agent"
-        / "skills"
-        / "chart-processing"
-        / "scripts"
-        / "compare_period_chart.py"
-    )
-    spec = importlib.util.spec_from_file_location("compare_period_chart", script_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_chart_script_module("compare_period_chart.py")
 
 
 def load_chart_script_module(script_name: str):
@@ -32,6 +20,9 @@ def load_chart_script_module(script_name: str):
         / "scripts"
         / script_name
     )
+    script_directory = str(script_path.parent)
+    if script_directory not in sys.path:
+        sys.path.insert(0, script_directory)
     spec = importlib.util.spec_from_file_location(script_name.replace(".py", ""), script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -108,6 +99,25 @@ def test_compare_period_helpers_cover_rows_numbers_labels_and_rate(tmp_path):
     module.dump_json(str(output_path), {"ok": True})
     assert output_path.exists()
     assert json.loads(output_path.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_chart_processing_scripts_reject_precision_losing_values():
+    for script_name in ("single_result_chart.py", "join_results_chart.py", "compare_period_chart.py"):
+        module = load_chart_script_module(script_name)
+        assert module.to_number("12.50") == 12.5
+        assert module.to_number("0.0000001") == 0.0000001
+        try:
+            module.to_number("9007199254740991.1")
+        except ValueError as exc:
+            assert "safe" in str(exc)
+        else:
+            raise AssertionError(f"{script_name} should reject imprecise decimal values")
+        try:
+            module.to_number("9007199254740992")
+        except ValueError as exc:
+            assert "safe" in str(exc)
+        else:
+            raise AssertionError(f"{script_name} should reject oversized integers")
 
 
 def test_compare_period_rows_reject_invalid_payload():
