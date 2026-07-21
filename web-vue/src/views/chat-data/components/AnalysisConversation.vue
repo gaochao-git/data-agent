@@ -1906,8 +1906,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @focus="inputFocused = true"
             @blur="inputFocused = false"
           >
-            <template #toolbar-extra>
-              <ConversationTokenUsage ref="tokenUsagePanelRef" :usage="tokenUsage" />
+            <template #model-prefix>
+              <ConversationTokenUsage
+                ref="tokenUsagePanelRef"
+                :usage="tokenUsage"
+                compact
+              />
             </template>
 
             <template #command-menu>

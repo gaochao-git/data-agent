@@ -19,9 +19,12 @@ type TokenUsageRow = {
 
 interface Props {
   usage: ChatDataTokenUsage | null
+  compact?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  compact: false,
+})
 
 const panelOpen = ref(false)
 const sortMode = ref<TokenUsageSort>('round')
@@ -59,7 +62,11 @@ const usagePercentage = computed(() => {
     : Math.round((usage.used / usage.total) * 1000) / 10
   return Math.max(0, Math.min(100, percentage))
 })
-const usagePercentageText = computed(() => usageDisplay.value ? `${Math.round(usagePercentage.value)}` : '')
+const usagePercentageText = computed(() => {
+  if (!usageDisplay.value) return ''
+  const rounded = Math.round(usagePercentage.value)
+  return props.compact && rounded >= 100 ? '!' : `${rounded}`
+})
 const ringStyle = computed(() => {
   const percentage = usageDisplay.value ? usagePercentage.value : 0
   const color = percentage >= 90 ? '#ef4444' : percentage >= 70 ? '#f59e0b' : '#1677FF'
@@ -202,21 +209,35 @@ defineExpose({
 </script>
 
 <template>
-  <div v-if="usageDisplay" class="relative">
+  <div v-if="usageDisplay || compact" class="relative">
     <button
       ref="buttonRef"
       type="button"
-      class="flex h-7 shrink-0 items-center gap-1.5 rounded-full border-none bg-transparent px-1.5 text-xs text-gray-500 cursor-pointer hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent"
+      :class="[
+        'flex shrink-0 items-center rounded-full border-none bg-transparent text-xs text-gray-500 cursor-pointer hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent',
+        compact ? 'h-5 px-0' : 'h-7 gap-1.5 px-1.5'
+      ]"
       :disabled="!usageDisplay"
       :title="buttonTitle"
       @click="togglePanel"
     >
-      <span class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full" :style="ringStyle">
-        <span class="flex h-4 w-4 items-center justify-center rounded-full bg-white text-[8px] font-semibold leading-none text-gray-500">
+      <span
+        :class="[
+          'relative flex shrink-0 items-center justify-center rounded-full',
+          compact ? 'h-4 w-4' : 'h-5 w-5'
+        ]"
+        :style="ringStyle"
+      >
+        <span
+          :class="[
+            'flex items-center justify-center rounded-full bg-white font-semibold leading-none text-gray-500',
+            compact ? 'h-3 w-3 text-[9px]' : 'h-4 w-4 text-[8px]'
+          ]"
+        >
           {{ usagePercentageText }}
         </span>
       </span>
-      <span class="toolbar-label">上下文</span>
+      <span v-if="!compact" class="toolbar-label">上下文</span>
     </button>
     <div
       v-if="panelOpen"

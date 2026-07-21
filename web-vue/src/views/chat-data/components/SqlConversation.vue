@@ -1401,7 +1401,14 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
               :targets="executionTargets"
               :multiple="executionTargetMultiple"
             />
-            <ConversationTokenUsage ref="tokenUsagePanelRef" :usage="tokenUsage" />
+          </template>
+
+          <template #model-prefix>
+            <ConversationTokenUsage
+              ref="tokenUsagePanelRef"
+              :usage="tokenUsage"
+              compact
+            />
           </template>
 
           <template #command-menu>

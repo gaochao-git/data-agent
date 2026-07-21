@@ -154,21 +154,32 @@ onBeforeUnmount(() => {
 
         <div class="flex items-center gap-2">
           <div ref="modelMenuRef" class="relative">
-            <button
-              type="button"
-              class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]"
-              title="模型设置"
-              @click="modelMenuOpen = !modelMenuOpen"
-            >
-              <i
-                :class="[
-                  'fa-solid fa-microchip text-[10px]',
-                  enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
-                ]"
-              ></i>
-              <span class="model-trigger-label max-w-[150px] truncate text-xs text-gray-500">{{ selectedModelLabel }}</span>
-              <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-            </button>
+            <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
+              <slot name="model-prefix">
+                <i
+                  :class="[
+                    'fa-solid fa-microchip text-[10px]',
+                    enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
+                  ]"
+                ></i>
+              </slot>
+              <button
+                type="button"
+                class="flex min-w-0 items-center gap-1.5 border-none bg-transparent p-0 text-xs text-gray-500 cursor-pointer"
+                title="模型设置"
+                @click="modelMenuOpen = !modelMenuOpen"
+              >
+                <span
+                  :class="[
+                    'model-trigger-label max-w-[150px] truncate',
+                    enableDeepThinking ? 'text-blue-600' : 'text-gray-500'
+                  ]"
+                >
+                  {{ selectedModelLabel }}
+                </span>
+                <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
+              </button>
+            </div>
             <div
               v-if="modelMenuOpen"
               class="absolute right-0 bottom-8 z-50 w-[220px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
