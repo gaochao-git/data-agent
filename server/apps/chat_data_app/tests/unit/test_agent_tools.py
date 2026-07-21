@@ -4,6 +4,9 @@ import os
 import sys
 import time
 
+import pytest
+from pydantic import ValidationError
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -14,6 +17,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent.tools import calculator_tool
 from apps.chat_data_app.agent.tools import semantic_query as agent_tools
 from apps.chat_data_app.agent.prompts.semantic_layer import build_semantic_prompt
+from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services import sql_assist_context
 
@@ -557,6 +561,13 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "state": state,
     }))
 
+    json_string_success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
+        "dsl": '{"metrics": ["订单数"]}',
+        "semantic_config_id": "cfg_a",
+        "member_datasource_ids": ["m1"],
+        "state": state,
+    }))
+
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real_failed)
     failed = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["订单数"]},
@@ -566,14 +577,33 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     }))
 
     success_payload = _query_result_payload(success)
+    json_string_success_payload = _query_result_payload(json_string_success)
     assert success_payload["status"] == "succeeded"
     assert success_payload["data"]["data"] == [{"id": 1}]
     assert success_payload["data"]["sql"] == "select 1"
     assert success_payload["meta"]["query_mode"] == "dsl2sql"
     assert success_payload["meta"]["confidence"] == 0.9
+    assert json_string_success_payload["status"] == "succeeded"
     failed_payload = _query_result_payload(failed)
     assert failed_payload["status"] == "failed"
     assert failed_payload["error"] == "表不存在"
+
+
+def test_semantic_query_input_rejects_invalid_json_dsl_string():
+    base_payload = {
+        "semantic_config_id": "cfg_a",
+        "member_datasource_ids": ["m1"],
+    }
+
+    assert SemanticQueryInput.model_validate({
+        **base_payload,
+        "dsl": '{"metrics": ["订单数"]}',
+    }).dsl == {"metrics": ["订单数"]}
+
+    with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        SemanticQueryInput.model_validate({**base_payload, "dsl": "not-json"})
+    with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
+        SemanticQueryInput.model_validate({**base_payload, "dsl": "[]"})
 
 
 def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):

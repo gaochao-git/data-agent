@@ -2,6 +2,7 @@
 ChatData API 数据模型定义
 """
 
+import json
 from typing import Optional, Dict, List, Literal, Union, Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
@@ -10,6 +11,21 @@ from .services.runtime_config import DEFAULT_ROW_LIMIT
 QueryExecutorType = Literal["direct", "http"]
 MAX_RECOMMENDED_QUESTION_COUNT = 50
 MAX_RECOMMENDED_QUESTION_LENGTH = 50
+
+
+def _normalize_json_object(value: Any, field_name: str) -> Any:
+    """兼容部分模型将嵌套工具对象序列化为 JSON 字符串。"""
+    current = value
+    for _ in range(2):
+        if not isinstance(current, str):
+            break
+        try:
+            current = json.loads(current.strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} 必须是对象或有效的 JSON 对象字符串") from exc
+    if isinstance(current, str) or not isinstance(current, dict):
+        raise ValueError(f"{field_name} 必须是对象或有效的 JSON 对象字符串")
+    return current
 
 
 def _normalize_recommended_questions(value: Any) -> List[str]:
@@ -632,6 +648,13 @@ class SemanticQueryInput(BaseModel):
         min_length=1,
         description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
+
+    @field_validator("dsl", mode="before")
+    @classmethod
+    def normalize_dsl(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return _normalize_json_object(value, "dsl")
 
 
 class CalculatorItem(BaseModel):
