@@ -193,11 +193,11 @@ def test_conversation_reasoning_serialization_and_timestamp_branches():
         "skip",
         {"content": ""},
         {"id": "", "content": "第一段", "toolCallCount": "2"},
-        {"content": "第二段", "tool_call_count": "bad"},
+        {"content": "第二段", "tool_call_count": "bad", "reasoning_turn_id": "turn-2"},
         {"content": "第三段", "tool_call_count": -3},
     ]) == [
         {"id": "reasoning-history-2", "content": "第一段", "tool_call_count": 2},
-        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0},
+        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0, "reasoning_turn_id": "turn-2"},
         {"id": "reasoning-history-4", "content": "第三段", "tool_call_count": 0},
     ]
 

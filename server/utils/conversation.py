@@ -159,6 +159,9 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                 semantic_config_selection = _serialize_semantic_config_selection(msg.additional_kwargs.get("semantic_config_selection"))
                 if semantic_config_selection:
                     msg_data["semantic_config_selection"] = semantic_config_selection
+                reasoning_turn_id = str(msg.additional_kwargs.get("reasoning_turn_id") or "").strip()
+                if reasoning_turn_id:
+                    msg_data["reasoning_turn_id"] = reasoning_turn_id
 
             serialized.append(msg_data)
 
@@ -258,11 +261,15 @@ def _serialize_reasoning_segments(reasoning_segments: Any) -> List[Dict[str, Any
             normalized_tool_call_count = max(0, int(tool_call_count))
         except (TypeError, ValueError):
             normalized_tool_call_count = 0
-        serialized.append({
+        segment = {
             "id": str(item.get("id") or f"reasoning-history-{index}"),
             "content": content,
             "tool_call_count": normalized_tool_call_count,
-        })
+        }
+        reasoning_turn_id = str(item.get("reasoning_turn_id") or item.get("reasoningTurnId") or "").strip()
+        if reasoning_turn_id:
+            segment["reasoning_turn_id"] = reasoning_turn_id
+        serialized.append(segment)
     return serialized
 
 

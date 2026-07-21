@@ -457,19 +457,20 @@ function getSqlTokenClass(type: string): string {
 <template>
   <div
     v-if="compact"
-    class="inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-200 cursor-pointer"
+    class="group inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-200 cursor-pointer"
     :class="[
-      active ? 'border-blue-200 bg-blue-50 text-blue-700 shadow-sm' : 'border-transparent bg-transparent text-slate-500 hover:bg-slate-50',
+      'border-transparent bg-transparent text-slate-400 hover:text-slate-600',
       isError ? 'border-red-200 bg-red-50 text-red-600' : ''
     ]"
     @click="emit('select')"
   >
-    <i class="fa-solid fa-wrench"></i>
+    <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
     <span class="min-w-0 truncate" :title="toolCall.tool_name">
       <span class="font-semibold">{{ displayName }}</span>
-      <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400">{{ compactDescription }}</span>
+      <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
     </span>
     <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
+    <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
   </div>
   <div
     v-else

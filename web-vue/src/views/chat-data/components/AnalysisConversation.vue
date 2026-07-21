@@ -1148,6 +1148,10 @@ const formatToolTableCell = (value: unknown): string => {
 }
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
+  if (activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value && sidePanelTab.value === 'tool') {
+    sidePanelOpen.value = false
+    return
+  }
   activeToolCallId.value = toolCall.tool_call_id
   sidePanelTab.value = 'tool'
   sidePanelOpen.value = true

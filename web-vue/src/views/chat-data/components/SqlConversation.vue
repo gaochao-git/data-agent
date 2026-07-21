@@ -174,6 +174,10 @@ const findToolCallById = (toolCallId: string | null): ToolCallInfo | null => {
 
 const activeToolCall = computed(() => findToolCallById(activeToolCallId.value))
 const selectToolCall = (toolCall: ToolCallInfo) => {
+  if (activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value) {
+    sidePanelOpen.value = false
+    return
+  }
   activeToolCallId.value = toolCall.tool_call_id
   sidePanelOpen.value = true
 }

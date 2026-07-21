@@ -129,6 +129,14 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
         {"id": "reasoning-1", "content": "工具后", "tool_call_count": 2},
     ]
 
+    handlers._append_reasoning_segment(reasoning_segments, "下一轮", 0, "turn-2")
+    assert reasoning_segments[-1] == {
+        "id": "reasoning-turn-2-2",
+        "content": "下一轮",
+        "tool_call_count": 0,
+        "reasoning_turn_id": "turn-2",
+    }
+
 
 def test_data_analyze_visible_stream_message_accepts_single_agent_model_node():
     ai_chunk = FakeChunk(content="分析")
@@ -171,6 +179,7 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
         initial_state={"messages": []},
         config={"thread_id": "t"},
         visible_message_filter=handlers._is_chat_data_visible_stream_message,
+        reasoning_turn_id="turn-1",
     )
 
     chunks = await collect_stream(adapter.stream_events())
@@ -185,6 +194,7 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
     assert end_payload["timestamp"] == "2026-07-15 09:00:00"
     assert end_payload["usage"]["total_tokens"] == 9
     assert agent.updated[0][1]["reasoning_segments"][0]["content"] == "调用 选择指标集"
+    assert agent.updated[0][1]["reasoning_segments"][0]["reasoning_turn_id"] == "turn-1"
 
 
 def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):

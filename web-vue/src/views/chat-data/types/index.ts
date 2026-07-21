@@ -264,6 +264,7 @@ export interface ThinkingSegment {
   id: string
   content: string
   toolCallCount: number
+  reasoningTurnId?: string
 }
 
 export interface SemanticConfigSelectionInfo {

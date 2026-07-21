@@ -12,6 +12,7 @@ import asyncio
 import time
 from contextlib import suppress
 from typing import Dict, Any, Optional
+from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
@@ -100,11 +101,15 @@ def _format_sse(event: str, data: dict | str) -> str:
 
 def _build_user_message(content: str, semantic_selection_event: dict[str, Any] | None = None, **extra_kwargs: Any) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。"""
-    additional_kwargs = {"timestamp": _get_timestamp()}
+    reasoning_turn_id = str(uuid4())
+    additional_kwargs = {
+        "timestamp": _get_timestamp(),
+        "reasoning_turn_id": reasoning_turn_id,
+    }
     if semantic_selection_event:
         additional_kwargs["semantic_config_selection"] = semantic_selection_event
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
-    return HumanMessage(content=content, additional_kwargs=additional_kwargs)
+    return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
 
 def _build_agent_context_state(
@@ -200,18 +205,30 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
     })
 
 
-def _append_reasoning_segment(segments: list[dict[str, Any]], content: str, tool_call_count: int) -> None:
+def _append_reasoning_segment(
+    segments: list[dict[str, Any]],
+    content: str,
+    tool_call_count: int,
+    reasoning_turn_id: str | None = None,
+) -> None:
     content = _format_reasoning_for_display(content)
     if not content:
         return
-    if segments and segments[-1].get("tool_call_count") == tool_call_count:
+    if (
+        segments
+        and segments[-1].get("tool_call_count") == tool_call_count
+        and segments[-1].get("reasoning_turn_id") == reasoning_turn_id
+    ):
         segments[-1]["content"] = f"{segments[-1].get('content') or ''}{content}"
         return
-    segments.append({
-        "id": f"reasoning-{len(segments)}",
+    segment = {
+        "id": f"reasoning-{reasoning_turn_id}-{len(segments)}" if reasoning_turn_id else f"reasoning-{len(segments)}",
         "content": content,
         "tool_call_count": tool_call_count,
-    })
+    }
+    if reasoning_turn_id:
+        segment["reasoning_turn_id"] = reasoning_turn_id
+    segments.append(segment)
 
 
 def _visible_tool_count(tool_names: dict[str, str]) -> int:
@@ -544,6 +561,7 @@ class _AgentSseStreamAdapter:
         include_empty_tool_messages: bool = False,
         on_first_message=None,
         debug_label: str | None = None,
+        reasoning_turn_id: str | None = None,
     ):
         self.agent = agent
         self.initial_state = initial_state
@@ -556,6 +574,7 @@ class _AgentSseStreamAdapter:
         self.include_empty_tool_messages = include_empty_tool_messages
         self.on_first_message = on_first_message
         self.debug_label = debug_label
+        self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
         self.persisted_reasoning_count = 0
@@ -708,6 +727,7 @@ class _AgentSseStreamAdapter:
                 self.reasoning_segments,
                 _extract_reasoning_content(message_chunk),
                 self.tool_stream_state.visible_tool_count(),
+                self.reasoning_turn_id,
             )
             yield thinking_event
             if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
@@ -1109,6 +1129,7 @@ async def _stream_sql_generation(
                 visible_message_filter=_is_chat_data_visible_stream_message,
                 disconnect_log_id=thread_id,
                 debug_label="AI Content from model",
+                reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
             )
             async for sse_event in stream_adapter.stream_events():
                 yield sse_event
@@ -1277,6 +1298,7 @@ async def data_analyze_completion_handler(
                     disconnect_log_id=conversation_id,
                     include_empty_tool_messages=True,
                     on_first_message=lambda: log_phase("first_model_chunk"),
+                    reasoning_turn_id=str(initial_state["messages"][0].additional_kwargs.get("reasoning_turn_id") or "") or None,
                 )
                 try:
                     async for sse_event in stream_adapter.stream_events():

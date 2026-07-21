@@ -200,25 +200,27 @@ const handleCopyAssistantMessage = async (message: Message) => {
 
                 <div
                   v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(message, segment.thinkingSegmentId)"
-                  class="overflow-hidden rounded-lg border border-slate-100 bg-slate-50"
+                  class="min-w-0"
                 >
                   <button
                     type="button"
-                    class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"
+                    class="group inline-flex max-w-full items-center gap-2 rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
                     @click="toggleThinkingSegment(message, segment.thinkingSegmentId)"
                   >
-                    <i class="fa-solid fa-brain text-xs text-slate-500"></i>
+                    <i class="fa-solid fa-brain text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600"></i>
                     <span>思考</span>
                     <i
                       :class="[
-                        'ml-auto fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform',
-                        !isThinkingSegmentCollapsed(message, segment.thinkingSegmentId) && 'rotate-90',
+                        'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
+                        !isThinkingSegmentCollapsed(message, segment.thinkingSegmentId)
+                          ? 'rotate-90 opacity-100'
+                          : 'opacity-0 group-hover:opacity-100',
                       ]"
                     ></i>
                   </button>
                   <div
                     v-if="!isThinkingSegmentCollapsed(message, segment.thinkingSegmentId)"
-                    class="whitespace-pre-wrap border-t border-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-500"
+                    class="mb-1.5 max-h-[210px] overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-400"
                   >
                     {{ getThinkingSegment(message, segment.thinkingSegmentId)!.content }}
                   </div>
