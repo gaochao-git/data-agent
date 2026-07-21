@@ -279,7 +279,6 @@ const handleCopyAssistantMessage = async (message: Message) => {
           </div>
 
           <div v-if="message.isStreaming && shouldShowStreamingStatus(message)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
-            <i class="fa-solid fa-spinner fa-spin text-[11px]"></i>
             <span>{{ hasVisibleAssistantContent(message.content) ? '正在生成' : '正在思考' }}</span>
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse"></span>
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:120ms]"></span>
