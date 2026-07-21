@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ConversationAgentSelector from './ConversationAgentSelector.vue'
 
 type AgentId = 'chat_data' | 'chat_data_data_analyze'
@@ -38,6 +38,8 @@ const props = withDefaults(defineProps<Props>(), {
   submitTitle: '发送 (Enter)',
 })
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const modelMenuRef = ref<HTMLElement | null>(null)
+const modelMenuOpen = ref(false)
 
 const emit = defineEmits<{
   submit: []
@@ -59,11 +61,31 @@ const boxClass = computed(() => [
   props.inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
 ])
 
+const selectedModelLabel = computed(() =>
+  props.modelOptions.find(model => model.id === props.selectedModel)?.label || props.selectedModel || '模型'
+)
+
 const resizeTextarea = () => {
   const textarea = textareaRef.value
   if (!textarea) return
   textarea.style.height = 'auto'
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
+}
+
+const selectModel = (modelId: string) => {
+  emit('update:selectedModel', modelId)
+  modelMenuOpen.value = false
+}
+
+const toggleDeepThinking = () => {
+  emit('update:enableDeepThinking', !props.enableDeepThinking)
+}
+
+const handleDocumentClick = (event: MouseEvent) => {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (modelMenuRef.value?.contains(target)) return
+  modelMenuOpen.value = false
 }
 
 const focus = () => {
@@ -73,6 +95,14 @@ const focus = () => {
 defineExpose({
   focus,
   resizeTextarea,
+})
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentClick)
 })
 </script>
 
@@ -103,6 +133,12 @@ defineExpose({
       </div>
       <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
         <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
+          <ConversationAgentSelector
+            :model-value="selectedAgent"
+            :options="agentOptions"
+            @update:model-value="emit('update:selectedAgent', $event)"
+            @disabled-click="emit('disabledAgentClick', $event)"
+          />
           <button
             v-if="showSkillButton"
             type="button"
@@ -113,38 +149,71 @@ defineExpose({
             <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
             <span class="toolbar-label">技能</span>
           </button>
-          <ConversationAgentSelector
-            :model-value="selectedAgent"
-            :options="agentOptions"
-            @update:model-value="emit('update:selectedAgent', $event)"
-            @disabled-click="emit('disabledAgentClick', $event)"
-          />
-          <div class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]">
-            <i class="fa-solid fa-microchip text-[10px] text-gray-400"></i>
-            <select
-              :value="selectedModel"
-              class="model-select max-w-[150px] truncate border-none bg-transparent text-xs text-gray-500 outline-none cursor-pointer appearance-none pr-3"
-              @change="emit('update:selectedModel', ($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-            </select>
-            <i class="fa-solid fa-chevron-down text-[8px] text-gray-400 -ml-2"></i>
-          </div>
-          <button
-            type="button"
-            :class="[
-              'flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full border-none text-xs outline-none cursor-pointer transition-colors',
-              enableDeepThinking ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-black/[0.05]'
-            ]"
-            :title="enableDeepThinking ? '已开启深度思考' : '开启深度思考'"
-            :aria-pressed="enableDeepThinking"
-            @click="emit('update:enableDeepThinking', !enableDeepThinking)"
-          >
-            <i class="fa-solid fa-brain text-[10px]"></i>
-            <span class="toolbar-label">思考</span>
-          </button>
           <slot name="toolbar-extra" />
         </div>
+
+        <div class="flex items-center gap-2">
+          <div ref="modelMenuRef" class="relative">
+            <button
+              type="button"
+              class="flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-full hover:bg-black/[0.05]"
+              title="模型设置"
+              @click="modelMenuOpen = !modelMenuOpen"
+            >
+              <i
+                :class="[
+                  'fa-solid fa-microchip text-[10px]',
+                  enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
+                ]"
+              ></i>
+              <span class="model-trigger-label max-w-[150px] truncate text-xs text-gray-500">{{ selectedModelLabel }}</span>
+              <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
+            </button>
+            <div
+              v-if="modelMenuOpen"
+              class="absolute right-0 bottom-8 z-50 w-[220px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+            >
+              <div class="py-1">
+                <button
+                  v-for="m in modelOptions"
+                  :key="m.id"
+                  type="button"
+                  :class="[
+                    'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-1.5 text-left text-xs cursor-pointer',
+                    selectedModel === m.id ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
+                  ]"
+                  @click="selectModel(m.id)"
+                >
+                  <span class="truncate">{{ m.label }}</span>
+                  <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
+                </button>
+                <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">暂无模型</div>
+              </div>
+              <div class="border-t border-gray-100 p-1.5">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-3 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+                  role="switch"
+                  :aria-checked="enableDeepThinking"
+                  :title="enableDeepThinking ? '关闭深度思考' : '开启深度思考'"
+                  @click="toggleDeepThinking"
+                >
+                  <span class="flex min-w-0 items-center gap-1.5">
+                    <i
+                      :class="[
+                        'fa-solid fa-brain text-[10px]',
+                        enableDeepThinking ? 'text-blue-500' : 'text-gray-400'
+                      ]"
+                    ></i>
+                    <span class="truncate">深度思考</span>
+                  </span>
+                  <span :class="['deep-thinking-switch', enableDeepThinking && 'deep-thinking-switch-on']">
+                    <span class="deep-thinking-switch-thumb"></span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
 
         <button
           v-if="isGenerating"
@@ -165,6 +234,7 @@ defineExpose({
         >
           <i class="fa-solid fa-arrow-up"></i>
         </button>
+        </div>
       </div>
     </div>
     <slot name="command-menu" />
@@ -174,6 +244,48 @@ defineExpose({
 <style scoped>
 .chat-input-box {
   container-type: inline-size;
+}
+
+.deep-thinking-switch {
+  position: relative;
+  display: inline-block;
+  width: 26px;
+  height: 14px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #e5e7eb;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.deep-thinking-switch:hover {
+  background: #d1d5db;
+}
+
+.deep-thinking-switch-on {
+  background: #1677ff;
+}
+
+.deep-thinking-switch-on:hover {
+  background: #0f6be8;
+}
+
+.deep-thinking-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.22);
+  transition: transform 0.15s ease;
+}
+
+.deep-thinking-switch-on .deep-thinking-switch-thumb {
+  transform: translateX(12px);
 }
 
 @container (max-width: 560px) {
@@ -186,15 +298,14 @@ defineExpose({
     display: none;
   }
 
-  .chat-input-toolbar .model-select {
+  .model-trigger-label {
     max-width: 92px;
   }
 }
 
 @container (max-width: 430px) {
-  .chat-input-toolbar .model-select {
+  .model-trigger-label {
     max-width: 0;
-    padding-right: 0;
   }
 }
 
