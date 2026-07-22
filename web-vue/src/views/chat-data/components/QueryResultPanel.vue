@@ -85,6 +85,7 @@ interface Props {
   allowFullscreen?: boolean
   initialViewMode?: ViewMode
   activeIndex?: number
+  mergeRepeatedErrors?: boolean
 }
 
 defineOptions({
@@ -103,6 +104,7 @@ const props = withDefaults(defineProps<Props>(), {
   metricsFirst: false,
   allowFullscreen: true,
   activeIndex: 0,
+  mergeRepeatedErrors: true,
 })
 
 const emit = defineEmits<{
@@ -266,7 +268,7 @@ const itemsFromResult = computed<QueryResultPanelItem[]>(() => {
 
 const normalizedItems = computed<QueryResultPanelItem[]>(() => {
   const items = props.items.length > 0 ? props.items : itemsFromResult.value
-  return mergeRepeatedErrorItems(items)
+  return props.mergeRepeatedErrors ? mergeRepeatedErrorItems(items) : items
 })
 
 const tabs = computed<ResultTabItem[]>(() =>

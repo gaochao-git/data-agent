@@ -17,7 +17,7 @@ export type {
 } from '../types/query'
 
 export function createQueryTask(params: {
-  sql: string
+  sql: string[]
   datasource_id: string
   member_datasource_ids?: string[]
   limit?: number
@@ -30,7 +30,6 @@ export function createQueryTask(params: {
   skip_query_cache?: boolean
 }): Promise<ApiResponse<QueryTaskCreateResult>> {
   const data: Record<string, unknown> = {
-    task_type: 'sql',
     sql: params.sql,
     datasource_id: params.datasource_id,
     member_datasource_ids: params.member_datasource_ids || [],

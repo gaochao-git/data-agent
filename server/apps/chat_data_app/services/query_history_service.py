@@ -148,6 +148,14 @@ class QueryHistoryService:
     def _history_display_time(payload: Dict[str, Any]) -> Any:
         return payload.get("finished_time") or payload.get("started_time") or payload.get("create_time")
 
+    @staticmethod
+    def resolve_history_sql_status(item: ChatDataQueryExecution, task_status: str) -> str:
+        """父任务取消只表示停止信号；已完成的子 SQL 保留自身状态。"""
+        sql_status = str(item.sql_status or "").strip().lower()
+        if task_status == "cancelled" and sql_status in {"pending", "running"}:
+            return "cancelled"
+        return sql_status or str(item.sql_status or "")
+
     @classmethod
     def build_history_payload(cls, item: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> Dict[str, Any]:
         query_type = task.query_type if task else "sql"
@@ -156,7 +164,7 @@ class QueryHistoryService:
         request_payload = _safe_json_loads(task_data.get("request_payload"), {}) or {}
         panel_execution_plan = request_payload.get("panel_execution_plan")
         operator_name = cls._history_operator_name(item, task, task_data)
-        display_sql_status = "cancelled" if task_status == "cancelled" else item.sql_status
+        display_sql_status = cls.resolve_history_sql_status(item, task_status)
         payload = item.to_dict()
         payload.pop("result_payload", None)
         display_time = cls._history_display_time(payload)

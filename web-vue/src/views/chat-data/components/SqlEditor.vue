@@ -440,6 +440,7 @@ const queryCacheEnabled = ref(false)
 // 多结果支持
 interface QueryResultItem {
   sql: string
+  status?: string
   columns: string[]
   data: Record<string, unknown>[]
   total_count: number
@@ -458,7 +459,7 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
     key: `${result.memberDatasourceId || result.title || 'result'}-${index}`,
     title: result.title || result.memberName || result.sql || `结果${index + 1}`,
     resultData: JSON.stringify({
-      status: result.error ? 'failed' : 'succeeded',
+      status: result.status || (result.error ? 'failed' : 'succeeded'),
       columns: result.columns,
       data: result.data,
       total_count: result.total_count,
@@ -709,7 +710,6 @@ const formatHistoryNullableText = (value?: string | number | null) => {
 }
 
 const getHistoryStatusTagType = (item: SqlHistoryItem) => {
-  if (item.task_status === 'cancelled') return 'info'
   if (item.sql_status === 'pending' || item.sql_status === 'running') return 'warning'
   if (item.sql_status === 'succeeded') return 'success'
   if (item.sql_status === 'cancelled') return 'info'
@@ -717,7 +717,6 @@ const getHistoryStatusTagType = (item: SqlHistoryItem) => {
 }
 
 const getHistoryStatusText = (item: SqlHistoryItem) => {
-  if (item.task_status === 'cancelled') return '已取消'
   const statusMap: Record<string, string> = {
     pending: '等待中',
     running: '执行中',
@@ -1466,73 +1465,80 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
   results.value = []
   executionTime.value = null
 
-  const newResults: QueryResultItem[] = []
-
-  for (let i = 0; i < statements.length; i++) {
-    const stmt = statements[i] ?? ''
-    const startTime = Date.now()
-
-    try {
-      const task = await submitSqlTask({
-        datasource_id: props.datasourceId,
-        member_datasource_ids: selectedMemberDatasourceIds.value,
-        sql: stmt,
-        query_type: 'sql',
-        query_text: 'SQL查询',
-        skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
-      }, {
-        onProgress: (taskStatus) => {
-          executingTaskText.value = taskStatus.progress_text || '执行中...'
-          executingTaskId.value = taskStatus.task_id
-        }
-      })
-      const elapsed = Date.now() - startTime
-      const memberResults = task.results || []
-
-      if (memberResults.length > 0) {
-        memberResults.forEach((result, memberIndex) => {
-          const memberLabel = result.member_name || result.member_datasource_id || `成员${memberIndex + 1}`
-          const title = statements.length > 1 ? `${memberLabel} · SQL ${i + 1}` : memberLabel
-          newResults.push({
-            sql: result.sql || stmt,
-            columns: result.columns || [],
-            data: result.data || [],
-            total_count: result.total_count || 0,
-            execution_time_ms: result.execution_time_ms ?? elapsed,
-            error: isQuerySucceeded(result) ? undefined : (result.error || '执行失败'),
-            title,
-            memberDatasourceId: result.member_datasource_id,
-            memberName: result.member_name,
-            cache_hit: result.cache_hit,
-            cache_age_seconds: result.cache_age_seconds,
-            cache_expires_in_seconds: result.cache_expires_in_seconds,
-          })
-        })
-      } else {
-        newResults.push({
-          sql: stmt,
+  const startTime = Date.now()
+  try {
+    const task = await submitSqlTask({
+      datasource_id: props.datasourceId,
+      member_datasource_ids: selectedMemberDatasourceIds.value,
+      sql: statements,
+      query_type: 'sql',
+      query_text: 'SQL查询',
+      skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
+    }, {
+      returnTerminalTask: true,
+      onProgress: (taskStatus) => {
+        executingTaskText.value = taskStatus.progress_text || '执行中...'
+        executingTaskId.value = taskStatus.task_id
+      }
+    })
+    const elapsed = Date.now() - startTime
+    const statementResults = task.statement_results || [{
+      statement_index: 0,
+      sql: statements[0] || sqlText,
+      status: task.status,
+      error: task.error_message,
+      results: task.results || [],
+    }]
+    const nextResults: QueryResultItem[] = statementResults.flatMap<QueryResultItem>((statementResult) => {
+      const memberResults = statementResult.results || []
+      if (memberResults.length === 0) {
+        return [{
+          sql: statementResult.sql,
+          status: statementResult.status || undefined,
           columns: [],
           data: [],
           total_count: 0,
           execution_time_ms: elapsed,
-          error: task.error_message || '执行失败',
-          title: statements.length > 1 ? `SQL ${i + 1}` : '结果1',
-        })
+          error: isQuerySucceeded(statementResult) ? undefined : (statementResult.error || '执行失败'),
+          title: statements.length > 1 ? `SQL ${statementResult.statement_index + 1}` : '结果1',
+          memberDatasourceId: undefined,
+          memberName: undefined,
+          cache_hit: undefined,
+          cache_age_seconds: undefined,
+          cache_expires_in_seconds: undefined,
+        }]
       }
-    } catch (err) {
-      const elapsed = Date.now() - startTime
-      newResults.push({
-        sql: stmt,
-        columns: [],
-        data: [],
-        total_count: 0,
-        execution_time_ms: elapsed,
-        error: err instanceof Error ? err.message : '执行失败',
-        title: statements.length > 1 ? `SQL ${i + 1}` : '结果1',
+      return memberResults.map((result, memberIndex) => {
+        const memberLabel = result.member_name || result.member_datasource_id || `成员${memberIndex + 1}`
+        return {
+          sql: result.sql || statementResult.sql,
+          status: result.status || undefined,
+          columns: result.columns || [],
+          data: result.data || [],
+          total_count: result.total_count || 0,
+          execution_time_ms: result.execution_time_ms ?? elapsed,
+          error: isQuerySucceeded(result) ? undefined : (result.error || '执行失败'),
+          title: statements.length > 1 ? `${memberLabel} · SQL ${statementResult.statement_index + 1}` : memberLabel,
+          memberDatasourceId: result.member_datasource_id,
+          memberName: result.member_name,
+          cache_hit: result.cache_hit,
+          cache_age_seconds: result.cache_age_seconds,
+          cache_expires_in_seconds: result.cache_expires_in_seconds,
+        }
       })
-    }
-
-    results.value = [...newResults]
+    })
+    results.value = nextResults
+  } catch (err) {
+    results.value = [{
+      sql: sqlText,
+      status: 'failed',
+      columns: [],
+      data: [],
+      total_count: 0,
+      execution_time_ms: Date.now() - startTime,
+      error: err instanceof Error ? err.message : '执行失败',
+      title: '结果1',
+    }]
   }
 
   executing.value = false
@@ -1541,7 +1547,7 @@ const handleExecute = async (options: { ignoreSelection?: boolean } = {}) => {
   cancellingTask.value = false
 
   // 如果有成功的查询，触发历史刷新
-  const hasSuccess = newResults.some(r => !r.error)
+  const hasSuccess = results.value.some(r => !r.error)
   if (hasSuccess) {
     queryHistoryRefreshKey.value++
   }
@@ -2434,6 +2440,7 @@ defineExpose({
         <QueryResultPanel
           v-if="queryResultPanelItems.length > 0"
           :items="queryResultPanelItems"
+          :merge-repeated-errors="false"
           :on-save="handleSaveToDashboard"
         />
 

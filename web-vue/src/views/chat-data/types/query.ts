@@ -30,19 +30,28 @@ export interface QueryResult {
 
 export interface QueryTaskCreateResult {
   task_id: string
-  task_type: 'sql'
+  task_type: 'sql' | 'sql_batch'
   status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'partial_success'
   poll_interval_ms: number
 }
 
+export interface StatementQueryResult {
+  statement_index: number
+  sql: string
+  status: string
+  error?: string | null
+  results?: MemberQueryResult[]
+}
+
 export interface QueryTaskStatusResult {
   task_id: string
-  task_type: 'sql'
+  task_type: 'sql' | 'sql_batch'
   datasource_id: string
   query_type: string
   status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'partial_success'
   progress_text?: string
   results?: MemberQueryResult[] | null
+  statement_results?: StatementQueryResult[] | null
   error_message?: string | null
   started_time?: string | null
   finished_time?: string | null

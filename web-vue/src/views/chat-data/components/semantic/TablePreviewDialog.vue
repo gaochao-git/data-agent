@@ -68,7 +68,7 @@ const previewTableData = async (tableName: string) => {
   try {
     const createResp = await createQueryTask({
       datasource_id: props.datasourceId,
-      sql: `SELECT * FROM ${quoteTableIdentifier(tableName)} LIMIT 1`,
+      sql: [`SELECT * FROM ${quoteTableIdentifier(tableName)} LIMIT 1`],
       limit: 1,
       query_type: 'sql',
       query_text: '表数据预览',

@@ -172,7 +172,7 @@ class QueryTaskService:
         datasource = await self.datasource_manager_factory().get_datasource_async(body.datasource_id)
         if not datasource:
             raise QueryTaskNotFoundError(f"数据源不存在: {body.datasource_id}")
-        prepared_body = await query_runtime.prepare_sql_request_for_execution(body, datasource)
+        prepared_body = await query_runtime.prepare_sql_batch_request_for_execution(body, datasource)
         task_info = await query_runtime.create_query_task(prepared_body)
         self.schedule_query_task(task_info["task_id"])
         return {
@@ -191,7 +191,6 @@ class QueryTaskService:
         executions = await query_runtime.get_query_executions(response_data["task_id"])
         if not self.is_query_task_owned_by_user(task_data, executions, user_id):
             raise QueryTaskNotFoundError(f"任务不存在: {task_id}")
-        response_data = await self.merge_live_remote_sql_result(response_data, executions)
         result_payload = response_data["result_payload"]
         task_type = response_data["task_type"]
         task_response = {
@@ -209,7 +208,28 @@ class QueryTaskService:
             "update_time": response_data["update_time"],
         }
         if task_type == "sql":
+            response_data = await self.merge_live_remote_sql_result(response_data, executions)
+            task_response.update({
+                "status": response_data["status"],
+                "progress_text": response_data["progress_text"],
+                "error_message": response_data["error_message"],
+            })
+            result_payload = response_data["result_payload"]
             task_response["results"] = self.build_sql_task_results(result_payload, executions)
+        elif task_type == "sql_batch":
+            statement_results = await self.build_sql_batch_statement_results(response_data, executions)
+            batch_status, progress_text, error_message = self.resolve_sql_batch_status(
+                statement_results,
+                fallback_status=response_data["status"],
+                fallback_progress_text=response_data["progress_text"],
+                fallback_error_message=response_data["error_message"],
+            )
+            task_response.update({
+                "status": batch_status,
+                "progress_text": progress_text,
+                "error_message": error_message,
+                "statement_results": statement_results,
+            })
         else:
             task_response["executions"] = self.build_query_task_execution_views(executions)
             task_response["result"] = result_payload
@@ -491,6 +511,153 @@ class QueryTaskService:
             "error_message": live_remote_payload["error_message"],
             "result_payload": live_remote_payload["result_payload"],
         }
+
+    async def build_sql_batch_statement_results(
+        self,
+        response_data: Dict[str, Any],
+        executions: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """补齐批次任务中不落库的 HTTP 成员结果。"""
+        result_payload = response_data.get("result_payload") or {}
+        statements = [dict(item) for item in result_payload.get("statement_results") or []]
+        remote_tasks = list(response_data.get("remote_tasks") or [])
+        if statements and remote_tasks:
+            request_payload = response_data.get("request_payload") or {}
+            user_id = str(request_payload.get("user_id") or "").strip()
+            username = str(request_payload.get("operator_name") or "").strip()
+            execution_by_remote_task_id = {
+                str((execution or {}).get("remote_task_id") or "").strip(): execution
+                for execution in executions
+                if str((execution or {}).get("remote_task_id") or "").strip()
+            }
+            for remote_task in remote_tasks:
+                try:
+                    statement_index = int(remote_task.get("statement_index"))
+                except (TypeError, ValueError):
+                    continue
+                if statement_index < 0 or statement_index >= len(statements):
+                    continue
+                remote_result = await self.fetch_http_query_task_result(
+                    str(remote_task.get("remote_task_id") or ""),
+                    str(remote_task.get("source_type") or "hive"),
+                    user_id=user_id,
+                    username=username,
+                )
+                statement = statements[statement_index]
+                execution = execution_by_remote_task_id.get(str(remote_task.get("remote_task_id") or "").strip())
+                execution_status = str((execution or {}).get("sql_status") or "").strip().lower()
+                if execution_status in {"cancelled", "kill_failed"}:
+                    remote_result = {
+                        "status": execution_status,
+                        "error": (execution or {}).get("error_message") or ("已人工取消" if execution_status == "cancelled" else "停止执行失败"),
+                        "columns": [],
+                        "data": [],
+                        "total_count": 0,
+                        "execution_time_ms": (execution or {}).get("execution_time_ms"),
+                    }
+                member_result = {
+                    "member_datasource_id": remote_task.get("member_datasource_id"),
+                    "member_name": remote_task.get("member_name"),
+                    "sql": statement.get("sql") or "",
+                    "status": query_result_status(remote_result),
+                    "columns": remote_result.get("columns") or [],
+                    "data": remote_result.get("data") or [],
+                    "total_count": int(remote_result.get("total_count") or 0),
+                    "execution_time_ms": self.resolve_member_execution_time_ms(remote_result, execution),
+                    "error": remote_result.get("error"),
+                }
+                existing = list(statement.get("results") or [])
+                member_id = str(member_result["member_datasource_id"] or "").strip()
+                statement["results"] = [
+                    item for item in existing
+                    if str((item or {}).get("member_datasource_id") or "").strip() != member_id
+                ] + [member_result]
+                aggregated = build_query_result_payload(
+                    sql=str(statement.get("sql") or ""),
+                    member_results=statement["results"],
+                    fallback_error=statement.get("error"),
+                )
+                statement.update({
+                    "status": aggregated["status"],
+                    "error": aggregated["error"],
+                    "results": aggregated["results"],
+                })
+        if str(response_data.get("status") or "").strip().lower() == "cancelled":
+            return self.mark_pending_sql_batch_statements_cancelled(statements)
+        return statements
+
+    @staticmethod
+    def mark_pending_sql_batch_statements_cancelled(statements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """父任务收到停止信号后，查询接口即时把未完成 SQL 显示为已停止。"""
+        for statement in statements:
+            member_results = list(statement.get("results") or [])
+            if member_results:
+                next_member_results = []
+                for member_result in member_results:
+                    next_member_result = dict(member_result or {})
+                    if query_result_status(next_member_result) in {"pending", "running"}:
+                        next_member_result["status"] = "cancelled"
+                        next_member_result["error"] = next_member_result.get("error") or "已人工取消"
+                    next_member_results.append(next_member_result)
+                aggregated = build_query_result_payload(
+                    sql=str(statement.get("sql") or ""),
+                    member_results=next_member_results,
+                    fallback_error=statement.get("error"),
+                )
+                statement.update({
+                    "status": aggregated["status"],
+                    "error": aggregated["error"],
+                    "results": aggregated["results"],
+                })
+                continue
+            if query_result_status(statement) in {"pending", "running"}:
+                statement["status"] = "cancelled"
+                statement["error"] = statement.get("error") or "已人工取消"
+        return statements
+
+    @staticmethod
+    def resolve_sql_batch_status(
+        statement_results: List[Dict[str, Any]],
+        *,
+        fallback_status: str = "running",
+        fallback_progress_text: Optional[str] = None,
+        fallback_error_message: Optional[str] = None,
+    ) -> tuple[str, str, Optional[str]]:
+        """按批次内每条 SQL 的实时状态决定前端是否继续轮询。"""
+        normalized_fallback_status = str(fallback_status or "").strip().lower()
+        if not statement_results:
+            # 后台任务尚未初始化结果时，必须保留任务表状态，不能把空数组误判为失败。
+            return (
+                normalized_fallback_status or "pending",
+                str(fallback_progress_text or "任务已创建，等待执行"),
+                fallback_error_message,
+            )
+        statuses = [query_result_status(item) for item in statement_results]
+        if normalized_fallback_status == "failed" and not any(status in {"pending", "running"} for status in statuses):
+            return (
+                normalized_fallback_status,
+                str(fallback_progress_text or "执行失败"),
+                fallback_error_message,
+            )
+        if any(status in {"pending", "running"} for status in statuses):
+            if normalized_fallback_status == "cancelled":
+                has_succeeded = any(status == "succeeded" for status in statuses)
+                if has_succeeded:
+                    return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
+                return "cancelled", "已停止", "已人工取消"
+            return "running", "SQL 执行中", None
+        if statuses and all(status == "cancelled" for status in statuses):
+            return "cancelled", "已停止", "已人工取消"
+        has_succeeded = any(status == "succeeded" for status in statuses)
+        has_failures = any(status != "succeeded" for status in statuses)
+        if has_succeeded and has_failures:
+            if all(status in {"succeeded", "cancelled"} for status in statuses):
+                return "partial_success", "执行完成，部分 SQL 已停止", "部分 SQL 已停止"
+            return "partial_success", "执行完成，部分 SQL 失败", "部分 SQL 执行失败"
+        if has_succeeded:
+            return "succeeded", "执行完成", None
+        errors = [str(item.get("error") or "").strip() for item in statement_results]
+        return "failed", "执行失败", "；".join(error for error in errors if error) or "SQL 执行失败"
 
     async def build_live_remote_sql_result(
         self,
@@ -831,6 +998,10 @@ class QueryTaskService:
         """后台执行 SQL 查询任务。"""
         await query_runtime.run_sql_query_task(task_id, task)
 
+    async def run_sql_batch_query_task(self, task_id: str, task: Dict[str, Any]) -> None:
+        """后台执行顺序 SQL 批次任务。"""
+        await query_runtime.run_sql_batch_query_task(task_id, task)
+
     async def run_query_task(self, task_id: str) -> None:
         """后台执行查询任务。"""
         task = await query_runtime.get_query_task(task_id)
@@ -851,6 +1022,9 @@ class QueryTaskService:
         task_type = task.get("task_type")
         if task_type == "sql":
             await self.run_sql_query_task(task_id, task)
+            return
+        if task_type == "sql_batch":
+            await self.run_sql_batch_query_task(task_id, task)
             return
         if task_type == "dashboard_panel":
             await dashboard_runtime.run_dashboard_panel_task(task_id, task)

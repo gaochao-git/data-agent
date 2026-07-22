@@ -2244,7 +2244,7 @@ const executeQuery = async () => {
     const task = await submitSqlTask({
       datasource_id: props.datasourceId,
       member_datasource_ids: selectedMemberDatasourceIds.value,
-      sql: sqlText,
+      sql: [sqlText],
       query_type: 'builder',
       semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>,
       semantic_config_id: props.semanticConfigId as string,

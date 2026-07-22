@@ -150,22 +150,23 @@ index.vue
   -> POST /agents/api/chatdata/query-tasks
   -> routers/query_execution.py: create_query_task()
   -> services/query_task_service.py: create_query_task_for_user()
-  -> services/query_runtime.py: prepare_sql_request_for_execution()
+  -> services/query_runtime.py: prepare_sql_batch_request_for_execution()
   -> create_query_task()
   -> QueryTaskService.schedule_query_task()
-  -> query_runtime.run_sql_query_task()
+  -> query_runtime.run_sql_query_task() / run_sql_batch_query_task()
   -> create_query_executions_for_task()
   -> build_execute_sql_result_data()
   -> execute_sql_for_member()
   -> services/sql_executor.py
 ```
 
-SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成单条语句，逐条创建任务。`prepare_sql_request_for_execution()` 在任务创建时做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
+SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成 `sql: string[]` 一次提交。后端按数组长度派生内部任务类型：单条 SQL 为 `task_type=sql`，多条 SQL 为 `task_type=sql_batch`。`prepare_sql_batch_request_for_execution()` 在任务创建时逐条做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
 
 执行模式：
 
-- 每条 SQL 创建一个 `task_type=sql`、`query_type=sql` 的异步任务。
-- 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态和 `results[]`。
+- 前端只创建一个异步任务，不传 `task_type`；后端根据 `sql` 数组长度派生 `sql` 或 `sql_batch`。
+- `sql_batch` 内部按 SQL 语句顺序执行；同一条 SQL 选择的多个执行对象仍并发执行。
+- 前端轮询 `GET /query-tasks/{task_id}` 获取任务状态；单条 SQL 返回 `results[]`，多条 SQL 返回 `statement_results[]`，每个语句节点内继续使用统一 `results[]` 成员结果。
 - 任务取消走 `POST /query-tasks/{task_id}/cancel`；HTTP Hive 通过远端 `remote_task_id` 停止，MySQL direct 通过连接 ID `KILL QUERY`，Hive direct 当前没有真实 kill 能力。
 - SQL 查询页面不消费智能体 `semantic_query_tool` 工具结果，也不直接调用 `execute_agent_sql()`。
 

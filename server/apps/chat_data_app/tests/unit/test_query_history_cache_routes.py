@@ -111,6 +111,16 @@ async def _seed_query_history(session_factory):
                 create_time=now - timedelta(minutes=3),
                 update_time=now - timedelta(minutes=3),
             ),
+            ChatDataQueryTask(
+                task_id="task_sql_batch_cancelled",
+                task_type="sql_batch",
+                datasource_id="ds1",
+                query_type="sql",
+                task_status="cancelled",
+                request_payload=json.dumps({"operator_name": "SQL用户", "sql": ["select 1", "select 2"]}),
+                create_time=now - timedelta(minutes=4),
+                update_time=now - timedelta(minutes=4),
+            ),
             ChatDataQueryExecution(
                 execution_id="ex_sql",
                 task_id="",
@@ -185,6 +195,44 @@ async def _seed_query_history(session_factory):
                 finished_time=now - timedelta(minutes=3),
                 create_time=now - timedelta(minutes=3),
                 update_time=now - timedelta(minutes=3),
+                create_by="u1",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_sql_batch_done",
+                task_id="task_sql_batch_cancelled",
+                user_id="u1",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员库",
+                executor_type="direct",
+                sql_text="select 1",
+                sql_status="succeeded",
+                execution_time_ms=6,
+                result_row_count=1,
+                result_payload='{"status":"succeeded","columns":["one"],"data":[{"one":1}]}',
+                started_time=now - timedelta(minutes=4),
+                finished_time=now - timedelta(minutes=4),
+                create_time=now - timedelta(minutes=4),
+                update_time=now - timedelta(minutes=4),
+                create_by="u1",
+            ),
+            ChatDataQueryExecution(
+                execution_id="ex_sql_batch_pending",
+                task_id="task_sql_batch_cancelled",
+                user_id="u1",
+                datasource_id="ds1",
+                member_datasource_id="m1",
+                member_name="成员库",
+                executor_type="direct",
+                sql_text="select 2",
+                sql_status="pending",
+                execution_time_ms=None,
+                result_row_count=None,
+                result_payload=None,
+                started_time=None,
+                finished_time=None,
+                create_time=now - timedelta(minutes=4),
+                update_time=now - timedelta(minutes=4),
                 create_by="u1",
             ),
             ChatDataQueryExecution(
@@ -303,9 +351,22 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
         status="succeeded",
     ))
     sql_body = _payload(sql_response)
-    assert sql_body["data"]["total"] == 1
-    assert sql_body["data"]["queries"][0]["execution_id"] == "ex_sql"
-    assert sql_body["data"]["queries"][0]["source"] == "SQL编辑器"
+    assert sql_body["data"]["total"] == 2
+    sql_items = {item["execution_id"]: item for item in sql_body["data"]["queries"]}
+    assert sql_items["ex_sql"]["source"] == "SQL编辑器"
+    assert sql_items["ex_sql_batch_done"]["sql_status"] == "succeeded"
+    assert sql_items["ex_sql_batch_done"]["success_flag"] == 1
+
+    sql_cancelled_response = asyncio.run(query_history_routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        source="sql",
+        status="cancelled",
+    ))
+    sql_cancelled_body = _payload(sql_cancelled_response)
+    assert sql_cancelled_body["data"]["total"] == 1
+    assert sql_cancelled_body["data"]["queries"][0]["execution_id"] == "ex_sql_batch_pending"
+    assert sql_cancelled_body["data"]["queries"][0]["sql_status"] == "cancelled"
 
     cancelled_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
@@ -327,7 +388,7 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
         status=None,
     ))
     all_body = _payload(all_response)
-    assert all_body["data"]["total"] == 4
+    assert all_body["data"]["total"] == 6
 
 
 def test_get_query_history_filters_by_executed_time_range(route_db):
@@ -925,6 +986,29 @@ def test_query_task_record_and_remote_task_helpers(route_db, monkeypatch):
         "source_type": "hive",
     }]
     assert duplicate_task["remote_tasks"] == remote_task["remote_tasks"]
+    first_statement_task = asyncio.run(query_runtime.append_query_task_remote_task(
+        "task_generated",
+        {
+            "member_datasource_id": "m1",
+            "member_name": "成员1",
+            "remote_task_id": "remote_1",
+            "source_type": "hive",
+            "statement_index": 0,
+        },
+    ))
+    second_statement_task = asyncio.run(query_runtime.append_query_task_remote_task(
+        "task_generated",
+        {
+            "member_datasource_id": "m1",
+            "member_name": "成员1",
+            "remote_task_id": "remote_1",
+            "source_type": "hive",
+            "statement_index": 1,
+        },
+    ))
+    assert len(first_statement_task["remote_tasks"]) == 2
+    assert len(second_statement_task["remote_tasks"]) == 3
+    assert second_statement_task["remote_tasks"][-1]["statement_index"] == 1
     assert asyncio.run(query_runtime.append_query_task_remote_task("task_generated", {"member_datasource_id": "m2"})) is None
     assert asyncio.run(query_runtime.append_query_task_remote_task("missing", {"member_datasource_id": "m2", "remote_task_id": "remote_2"})) is None
 
@@ -1399,22 +1483,20 @@ def test_prepare_sql_request_keeps_sql_for_executor_validation(monkeypatch):
             return self.datasource
 
     builder_request = QueryTaskCreateRequest(
-        task_type="sql",
         datasource_id="ds1",
-        sql="select * from orders -- 注释",
+        sql=["select * from orders -- 注释"],
         query_type="builder",
     )
     with pytest.raises(ValueError, match="必须基于指标集"):
-        asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_request, {"source_type": "mysql"}))
+        asyncio.run(query_runtime.prepare_sql_batch_request_for_execution(builder_request, {"source_type": "mysql"}))
 
     sql_request = QueryTaskCreateRequest(
-        task_type="sql",
         datasource_id="ds1",
-        sql="select 1; drop table orders",
+        sql=["select 1; drop table orders"],
         query_type="sql",
     )
     with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
-        asyncio.run(query_runtime.prepare_sql_request_for_execution(sql_request, {"source_type": "mysql"}))
+        asyncio.run(query_runtime.prepare_sql_batch_request_for_execution(sql_request, {"source_type": "mysql"}))
 
 
 def test_create_query_task_endpoint_branches(monkeypatch):
@@ -1428,16 +1510,14 @@ def test_create_query_task_endpoint_branches(monkeypatch):
     monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试用户"))
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager(None))
     missing_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
-        task_type="sql",
         datasource_id="missing",
-        sql="select 1",
+        sql=["select 1"],
     )))
     assert _payload(missing_response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: Manager({"id": "ds1", "source_type": "mysql"}))
     invalid_sql_response = asyncio.run(query_execution_routes.create_query_task(_make_request(), QueryTaskCreateRequest(
-        task_type="sql",
         datasource_id="ds1",
-        sql="select 1; select 2",
+        sql=["select 1; select 2"],
     )))
     assert _payload(invalid_sql_response)["code"] == ErrorCode.CHATDATA_BAD_REQUEST

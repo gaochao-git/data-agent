@@ -107,7 +107,6 @@ class ExecuteSqlRequest(BaseModel):
 
 class QueryTaskCreateRequest(BaseModel):
     """异步查询任务创建请求"""
-    task_type: Literal["sql"] = Field(default="sql", description="任务类型")
     datasource_id: str = Field(..., description="数据源ID")
     member_datasource_ids: List[str] = Field(default_factory=list, description="选中的成员数据源ID列表")
     user_id: Optional[str] = Field(default=None, description="当前用户ID")
@@ -115,13 +114,22 @@ class QueryTaskCreateRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, description="来源会话ID")
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
-    sql: str = Field(..., min_length=1, description="要执行的 SQL 语句")
+    sql: List[str] = Field(..., min_length=1, description="要执行的 SQL 语句列表")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
     query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
     semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
+
+    @model_validator(mode="after")
+    def validate_sql_list(self):
+        self.sql = [str(item or "").strip() for item in self.sql if str(item or "").strip()]
+        if not self.sql:
+            raise ValueError("SQL 至少包含一条有效语句")
+        if len(self.sql) > 1 and self.semantic_builder_config:
+            raise ValueError("SQL 批次不支持语义可视化查询")
+        return self
 
 
 class CompileSemanticBuilderSqlRequest(BaseModel):

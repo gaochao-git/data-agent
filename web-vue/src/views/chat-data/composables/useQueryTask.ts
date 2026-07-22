@@ -1,4 +1,4 @@
-import { createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
+import { cancelQueryTask, createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
 const DEFAULT_POLL_INTERVAL_MS = 1500
@@ -6,7 +6,7 @@ const DEFAULT_POLL_INTERVAL_MS = 1500
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
 interface SubmitSqlTaskParams {
-  sql: string
+  sql: string[]
   datasource_id: string
   member_datasource_ids?: string[]
   limit?: number
@@ -22,6 +22,7 @@ interface SubmitSqlTaskParams {
 interface WaitTaskOptions {
   pollIntervalMs?: number
   timeoutMs?: number
+  returnTerminalTask?: boolean
   onProgress?: (task: QueryTaskStatusResult) => void
 }
 
@@ -43,13 +44,20 @@ export function useQueryTask() {
         return task
       }
       if (task.status === 'cancelled') {
+        if (options.returnTerminalTask) return task
         throw new Error(task.error_message || '已人工取消')
       }
       if (task.status === 'failed') {
+        if (options.returnTerminalTask) return task
         throw new Error(task.error_message || '任务执行失败')
       }
       if (Date.now() - startedAt > timeoutMs) {
-        throw new Error('任务执行超时，请稍后重试')
+        try {
+          await cancelQueryTask(taskId)
+        } catch {
+          // 取消失败不覆盖超时提示，任务仍可从查询历史中手动停止。
+        }
+        throw new Error('任务执行超时，已提交停止请求')
       }
 
       await sleep(Math.max(500, pollIntervalMs))

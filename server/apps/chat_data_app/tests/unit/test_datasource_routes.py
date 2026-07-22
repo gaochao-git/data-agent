@@ -1465,10 +1465,9 @@ def test_create_query_task_schedules_background_run(monkeypatch):
     monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", fake_schedule)
 
     resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(
-        task_type="sql",
         datasource_id="ds_a",
         member_datasource_ids=["phy_a"],
-        sql="select 1",
+        sql=["select 1"],
         limit=100,
         timeout=30,
         query_type="sql",
@@ -1550,6 +1549,40 @@ def test_get_query_task_returns_task_status(monkeypatch):
         "execution_time_ms": 12,
         "error": None,
     }]
+
+
+def test_get_sql_batch_task_keeps_pending_status_before_statement_results_exist(monkeypatch):
+    """首轮轮询不能将尚未初始化的批次结果误判为失败。"""
+    _mock_authenticated_user(monkeypatch)
+    task_data = {"task_id": "task_batch_001"}
+    response_data = {
+        "task_id": "task_batch_001",
+        "task_type": "sql_batch",
+        "datasource_id": "ds_a",
+        "query_type": "sql",
+        "status": "pending",
+        "progress_text": "任务已创建，等待执行",
+        "request_payload": {"user_id": "10001", "operator_name": "测试用户"},
+        "result_payload": {"statement_results": []},
+        "remote_tasks": [],
+        "error_message": None,
+        "started_time": None,
+        "finished_time": None,
+        "create_time": "2026-07-22T17:33:36",
+        "update_time": "2026-07-22T17:33:36",
+    }
+
+    monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result=task_data))
+    monkeypatch.setattr(query_runtime, "build_query_task_response_data", lambda _task_data: response_data)
+    monkeypatch.setattr(query_runtime, "get_query_executions", lambda _task_id: asyncio.sleep(0, result=[]))
+
+    response = asyncio.run(query_execution_routes.get_query_task("task_batch_001", SimpleNamespace()))
+    data = _payload(response)["data"]
+
+    assert data["status"] == "pending"
+    assert data["progress_text"] == "任务已创建，等待执行"
+    assert data["error_message"] is None
+    assert data["statement_results"] == []
 
 
 def test_get_query_task_rejects_other_user(monkeypatch):
@@ -3235,7 +3268,7 @@ def test_query_favorite_exception_branches(monkeypatch):
 
 def test_task_endpoint_auth_and_error_branches(monkeypatch):
     monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")))
-    create_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql="select 1")))
+    create_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
     get_resp = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
     cancel_resp = asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
     assert _payload(create_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
@@ -3293,12 +3326,12 @@ def test_create_query_task_exception_branches(monkeypatch):
 
     _mock_datasource_manager(monkeypatch, Manager())
     monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad sql")))
-    value_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql="select 1")))
+    value_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
     assert _payload(value_resp)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     monkeypatch.setattr(query_runtime, "prepare_sql_request_for_execution", lambda body, *_args, **_kwargs: asyncio.sleep(0, result=body))
     monkeypatch.setattr(query_runtime, "create_query_task", lambda _body: asyncio.sleep(0, result={"bad": "task"}))
-    crash_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql="select 1")))
+    crash_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
     assert _payload(crash_resp)["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 
@@ -4280,6 +4313,66 @@ def test_routes_live_remote_sql_result_status_branches(monkeypatch):
     assert [item["member_datasource_id"] for item in succeeded_with_direct["result_payload"]["results"]] == ["m_direct", "m_http"]
     assert succeeded_with_direct["result_payload"]["execution_time_ms"] == 5000
     assert succeeded_with_direct["result_payload"]["results"][1]["execution_time_ms"] == 5000
+
+
+def test_sql_batch_remote_result_keeps_task_running_until_remote_completion(monkeypatch):
+    async def fake_fetch(remote_task_id, _source_type, **_kwargs):
+        return {
+            "rt_running": {"status": "running", "columns": [], "data": [], "total_count": 0, "error": None},
+            "rt_succeeded": {"status": "succeeded", "columns": ["id"], "data": [{"id": 2}], "total_count": 1, "error": None},
+        }[remote_task_id]
+
+    service = query_providers.query_task_service
+    monkeypatch.setattr(service, "fetch_http_query_task_result", fake_fetch)
+    response_data = {
+        "request_payload": {"user_id": "u1", "operator_name": "用户1"},
+        "result_payload": {
+            "statement_results": [
+                {"statement_index": 0, "sql": "select 1", "status": "succeeded", "results": []},
+                {"statement_index": 1, "sql": "select 2", "status": "succeeded", "results": []},
+            ],
+        },
+        "remote_tasks": [
+            {"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt_running", "source_type": "hive", "statement_index": 0},
+            {"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt_succeeded", "source_type": "hive", "statement_index": 1},
+        ],
+    }
+
+    statements = asyncio.run(service.build_sql_batch_statement_results(response_data, []))
+    status, progress_text, error_message = service.resolve_sql_batch_status(statements)
+
+    assert [item["status"] for item in statements] == ["running", "succeeded"]
+    assert status == "running"
+    assert progress_text == "SQL 执行中"
+    assert error_message is None
+
+
+def test_sql_batch_status_keeps_cancelled_task_terminal_with_pending_statements():
+    status, progress_text, error_message = query_providers.query_task_service.resolve_sql_batch_status(
+        [
+            {"statement_index": 0, "status": "cancelled", "results": []},
+            {"statement_index": 1, "status": "pending", "results": []},
+        ],
+        fallback_status="cancelled",
+        fallback_progress_text="已停止",
+    )
+
+    assert status == "cancelled"
+    assert progress_text == "已停止"
+    assert error_message == "已人工取消"
+
+    partial_status, partial_progress, partial_error = query_providers.query_task_service.resolve_sql_batch_status(
+        [
+            {"statement_index": 0, "status": "succeeded", "results": []},
+            {"statement_index": 1, "status": "pending", "results": []},
+        ],
+        fallback_status="cancelled",
+        fallback_progress_text="已停止",
+    )
+
+    assert partial_status == "partial_success"
+    assert partial_progress == "执行完成，部分 SQL 已停止"
+    assert partial_error == "部分 SQL 已停止"
 
 
 def test_routes_task_owner_and_cancel_status_helpers():

@@ -355,9 +355,8 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
     response = client.post(
         "/api/chatdata/query-tasks",
         json={
-            "task_type": "sql",
             "datasource_id": "ds_a",
-            "sql": "select * from tampered_table",
+            "sql": ["select * from tampered_table"],
             "query_type": "builder",
             "semantic_config_id": "cfg_a",
             "builder_config": {"dimensions": [{"table": "city_dim", "column": "city_name", "alias": "城市"}]},
@@ -371,8 +370,8 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
 
     payload = response.json()
     assert payload["status"] == "success"
-    assert "tampered_table" not in captured["body"].sql
-    assert "LEFT JOIN orders ON city_dim.city_id = orders.city_id" in captured["body"].sql
+    assert "tampered_table" not in captured["body"].sql[0]
+    assert "LEFT JOIN orders ON city_dim.city_id = orders.city_id" in captured["body"].sql[0]
     assert captured["body"].builder_config is None
     assert captured["body"].semantic_builder_config["aggregations"][0]["alias"] == "销售额"
     assert captured["scheduled"] == "task_a"
@@ -396,9 +395,8 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
     response = client.post(
         "/api/chatdata/query-tasks",
         json={
-            "task_type": "sql",
             "datasource_id": "ds_a",
-            "sql": "select * from orders",
+            "sql": ["select * from orders"],
             "query_type": "sql",
             "limit": 10,
             "skip_query_cache": True,
@@ -423,7 +421,7 @@ def test_create_query_task_returns_datasource_not_found(client, auth_headers, fa
 
     response = client.post(
         "/api/chatdata/query-tasks",
-        json={"task_type": "sql", "datasource_id": "missing_ds", "sql": "select 1"},
+        json={"datasource_id": "missing_ds", "sql": ["select 1"]},
         headers=auth_headers,
     )
 
@@ -442,7 +440,7 @@ def test_create_query_task_returns_sql_prepare_error(client, auth_headers, fake_
 
     response = client.post(
         "/api/chatdata/query-tasks",
-        json={"task_type": "sql", "datasource_id": "ds_a", "sql": "select 1; select 2"},
+        json={"datasource_id": "ds_a", "sql": ["select 1; select 2"]},
         headers=auth_headers,
     )
 
@@ -459,7 +457,7 @@ def test_create_query_task_rejects_dangerous_sql_before_scheduling(client, auth_
 
     response = client.post(
         "/api/chatdata/query-tasks",
-        json={"task_type": "sql", "datasource_id": "ds_a", "sql": "select 1; drop table orders"},
+        json={"datasource_id": "ds_a", "sql": ["select 1; drop table orders"]},
         headers=auth_headers,
     )
 

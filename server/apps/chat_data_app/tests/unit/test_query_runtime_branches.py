@@ -15,7 +15,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
-from apps.chat_data_app.schema import ExecuteSqlRequest
+from apps.chat_data_app.schema import ExecuteSqlRequest, QueryTaskCreateRequest
 from apps.chat_data_app.services import query_cache, query_runtime
 
 
@@ -53,11 +53,180 @@ def test_load_remote_tasks_and_query_task_response_branches():
     assert query_runtime.load_remote_tasks(None) == []
     assert query_runtime.load_remote_tasks("bad json") == []
     assert query_runtime.load_remote_tasks({"bad": True}) == []
+    assert query_runtime.load_remote_tasks([{
+        "member_datasource_id": "m1",
+        "member_name": "成员1",
+        "remote_task_id": "rt1",
+        "statement_index": 1,
+    }])[0]["statement_index"] == 1
+
+
+def test_sql_batch_runs_statements_in_order_and_keeps_statement_results(monkeypatch):
+    updates = []
+    executed_sql = []
+    created_sql = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def update_task(_task_id, **kwargs):
+        updates.append(kwargs)
+
+    async def create_executions(_task_id, request, operator_name=None):
+        created_sql.append(request.sql)
+        return {"m1": f"exec_{len(created_sql)}"}
+
+    async def execute_sql(request, **_kwargs):
+        executed_sql.append(request.sql)
+        return {
+            "status": "succeeded",
+            "sql": request.sql,
+            "results": [{"member_datasource_id": "m1", "status": "succeeded", "columns": ["id"], "data": [{"id": len(executed_sql)}], "total_count": 1}],
+        }
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda _request, result, **_kwargs: asyncio.sleep(0, result=result))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_1", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m1"],
+            "user_id": "user_a",
+            "operator_name": "用户A",
+                "sql": ["select 1", "select 2"],
+        }),
+    }))
+
+    assert created_sql == ["select 1", "select 2"]
+    assert executed_sql == ["select 1", "select 2"]
+    final_update = updates[-1]
+    assert final_update["status"] == "succeeded"
+    statement_results = final_update["result_payload"]["statement_results"]
+    assert [item["sql"] for item in statement_results] == ["select 1", "select 2"]
+    assert [item["status"] for item in statement_results] == ["succeeded", "succeeded"]
+
+
+def test_sql_batch_filters_http_statement_results_from_persisted_payload(monkeypatch):
+    updates = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def update_task(_task_id, **kwargs):
+        updates.append(kwargs)
+
+    async def create_executions(_task_id, _request, operator_name=None):
+        return {"m_http": "exec_http"}
+
+    async def execute_sql(request, **_kwargs):
+        return {
+            "status": "succeeded",
+            "sql": request.sql,
+            "results": [
+                {
+                    "member_datasource_id": "m_http",
+                    "member_name": "HTTP成员",
+                    "status": "succeeded",
+                    "columns": ["id"],
+                    "data": [{"id": 1}],
+                    "total_count": 1,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_http", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m_http"],
+            "user_id": "user_a",
+            "sql": ["select 1", "select 2"],
+        }),
+    }))
+
+    final_statements = updates[-1]["result_payload"]["statement_results"]
+    assert [item["status"] for item in final_statements] == ["succeeded", "succeeded"]
+    assert final_statements[0]["results"] == []
+    assert final_statements[1]["results"] == []
+
+
+def test_sql_batch_cancellation_stops_before_next_statement(monkeypatch):
+    checks = iter([False, False, True])
+    executed_sql = []
+    created_sql = []
+    updates = []
+    execution_updates = []
+
+    async def cancelled(_task_id):
+        return next(checks)
+
+    async def create_executions(_task_id, request, operator_name=None):
+        created_sql.append(request.sql)
+        return {"m1": f"exec_{len(created_sql)}"}
+
+    async def execute_sql(request, **_kwargs):
+        executed_sql.append(request.sql)
+        return {"status": "succeeded", "sql": request.sql, "results": []}
+
+    async def update_execution(execution_id, **kwargs):
+        execution_updates.append((execution_id, kwargs))
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **kwargs: asyncio.sleep(0, result=updates.append(kwargs)))
+    monkeypatch.setattr(query_runtime, "update_query_execution", update_execution)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda _request, result, **_kwargs: asyncio.sleep(0, result=result))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_1", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m1"],
+            "user_id": "user_a",
+                "sql": ["select 1", "select 2"],
+        }),
+    }))
+
+    assert created_sql == ["select 1", "select 2"]
+    assert executed_sql == ["select 1"]
+    final_statement_results = updates[-1]["result_payload"]["statement_results"]
+    assert [item["status"] for item in final_statement_results] == ["succeeded", "cancelled"]
+    assert execution_updates[-1] == ("exec_2", {
+        "sql_status": "cancelled",
+        "error_message": "已人工取消",
+        "finished_time": execution_updates[-1][1]["finished_time"],
+    })
     assert query_runtime.load_remote_tasks([
         "skip",
         {"member_datasource_id": "", "remote_task_id": "rt_skip"},
         {"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt1", "source_type": ""},
     ]) == [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt1", "source_type": "hive"}]
+
+
+def test_create_query_task_derives_internal_task_type_from_sql_list(monkeypatch):
+    captured = []
+
+    async def create_task_record(**kwargs):
+        captured.append(kwargs)
+        return {"task_id": "task_1", "task_type": kwargs["task_type"]}
+
+    monkeypatch.setattr(query_runtime, "create_task_record", create_task_record)
+
+    single = QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])
+    batch = QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1", "select 2"])
+
+    assert asyncio.run(query_runtime.create_query_task(single))["task_type"] == "sql"
+    assert asyncio.run(query_runtime.create_query_task(batch))["task_type"] == "sql_batch"
+    assert captured[0]["request_payload"]["sql"] == "select 1"
+    assert captured[1]["request_payload"]["sql"] == ["select 1", "select 2"]
 
     response = query_runtime.build_query_task_response_data({
         "task_id": "task_a",
