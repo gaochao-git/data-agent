@@ -3,7 +3,7 @@
  * 辅助查询构建器 - 拖拽式界面
  * 支持拖拽表到数据源区域，拖拽字段到维度/聚合区域
  */
-import { ref, reactive, computed, watch, onMounted, onUnmounted, useAttrs, type ComponentPublicInstance } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, useAttrs, type ComponentPublicInstance, type PropType } from 'vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { cancelQueryTask, getChatDataConfig, getDatasourceSchema, compileSemanticBuilderSql } from '../../api'
@@ -23,7 +23,14 @@ import IconPlay from '../icons/IconPlay.vue'
 import IconClose from '../icons/IconClose.vue'
 import IconCaretDown from '../icons/IconCaretDown.vue'
 import type { ChartType } from '../../chartTypes'
-import type { BuilderDragFieldData, BuilderDragTableData, SemanticRelationship, ExecutionTargetOption } from '../../types'
+import type {
+  BuilderDragFieldData,
+  BuilderDragTableData,
+  ChatDataSqlChangePayload,
+  SemanticConfigItem,
+  SemanticRelationship,
+  ExecutionTargetOption,
+} from '../../types'
 import { isQuerySucceeded } from '../../utils'
 import type {
   AggregationField,
@@ -37,10 +44,10 @@ import type {
   AdvancedFilterLeaf,
   AdvancedFilterScope,
   OrderByField,
-  QueryBuilderProps as Props,
   QueryResultPanelItem,
   SelectedTable,
   TableInfo,
+  DataSource,
 } from './types'
 import {
   appendFilterToAdvancedTree as appendFilterToAdvancedTreeUtil,
@@ -65,17 +72,21 @@ import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
 import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, buildSemanticBuilderConfigPayload as buildSemanticBuilderConfigPayloadUtil } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
 
-const props = withDefaults(defineProps<Props>(), {
-  datasource: null,
-  datasources: () => [],
-  semanticConfigId: null,
-  semanticConfig: null,
-  semanticConfigs: () => [],
-  initialBuilderConfig: null,
-  hideSidebar: false,
-  hideChartPanel: false,
-  executionTargetMultiple: true,
-  hideExecutionTargetSelector: false,
+const props = defineProps({
+  datasourceId: { type: String, required: true },
+  datasource: { type: Object as PropType<DataSource | null>, default: null },
+  datasources: { type: Array as PropType<DataSource[]>, default: () => [] },
+  semanticConfigId: { type: String as PropType<string | null>, default: null },
+  semanticConfig: { type: Object as PropType<SemanticConfigItem | null>, default: null },
+  semanticConfigs: { type: Array as PropType<SemanticConfigItem[]>, default: () => [] },
+  initialBuilderConfig: { type: Object as PropType<BuilderConfig | null>, default: null },
+  hideSidebar: { type: Boolean, default: false },
+  hideChartPanel: { type: Boolean, default: false },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[] | undefined>, default: undefined },
+  executionTargetMultiple: { type: Boolean, default: true },
+  selectedMemberDatasourceIds: { type: Array as PropType<string[] | undefined>, default: undefined },
+  hideExecutionTargetSelector: { type: Boolean, default: false },
+  onSqlChange: { type: Function as PropType<((payload: ChatDataSqlChangePayload) => void) | undefined>, default: undefined },
 })
 const attrs = useAttrs()
 const { submitSqlTask } = useQueryTask()

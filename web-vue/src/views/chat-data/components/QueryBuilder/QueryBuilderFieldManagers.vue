@@ -1,18 +1,28 @@
 <script setup lang="ts">
+import type { PropType } from 'vue'
 import type { AggregationField, DimensionField } from './types'
 
 type DimensionDraft = DimensionField & { selected?: boolean }
 type AggregationDraft = AggregationField & { selected?: boolean }
 
-defineProps<{
-  dimensionDrafts: DimensionDraft[]
-  aggregationDrafts: AggregationDraft[]
-  transformOptions: Array<{ value: string; label: string }>
-  aggFunctions: Array<{ value: string; label: string }>
-  getDimensionDisplayName: (field: DimensionField) => string
-  getMetricDisplayName: (field: AggregationField) => string
-  isDimensionDateField: (field: Pick<DimensionField, 'table' | 'column'>) => boolean
-}>()
+defineProps({
+  dimensionDrafts: { type: Array as PropType<DimensionDraft[]>, required: true },
+  aggregationDrafts: { type: Array as PropType<AggregationDraft[]>, required: true },
+  transformOptions: { type: Array as PropType<Array<{ value: string; label: string }>>, required: true },
+  aggFunctions: { type: Array as PropType<Array<{ value: string; label: string }>>, required: true },
+  getDimensionDisplayName: {
+    type: Function as PropType<(field: DimensionField) => string>,
+    required: true,
+  },
+  getMetricDisplayName: {
+    type: Function as PropType<(field: AggregationField) => string>,
+    required: true,
+  },
+  isDimensionDateField: {
+    type: Function as PropType<(field: Pick<DimensionField, 'table' | 'column'>) => boolean>,
+    required: true,
+  },
+})
 
 const showDimensionManager = defineModel<boolean>('showDimensionManager', { required: true })
 const showAggregationManager = defineModel<boolean>('showAggregationManager', { required: true })
