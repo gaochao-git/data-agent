@@ -121,7 +121,7 @@ const getDatasourceOrgCode = (datasource: DataSource) => {
 const showAdminModal = ref(false)
 const canManageAdmin = computed(() => {
   const permissions = userStore.permissions || []
-  return permissions.includes('*:*:*') || permissions.includes('chatdata:admin:manage')
+  return permissions.includes('*:*:*') || permissions.includes('agents:chatData:admin')
 })
 const canManageDatasource = canManageAdmin
 
