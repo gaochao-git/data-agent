@@ -1,6 +1,7 @@
 import request from '@/utils/request'
 import type { ApiResponse } from '../types'
 import type {
+  CancelQueryExecutionResult,
   CancelQueryTaskResult,
   CancelRunningQueryHistoryResult,
   QueryHistoryResult,
@@ -9,6 +10,7 @@ import type {
 } from '../types/query'
 
 export type {
+  CancelQueryExecutionResult,
   CancelQueryTaskResult,
   CancelRunningQueryHistoryResult,
   QueryHistoryResult,
@@ -63,6 +65,13 @@ export function getQueryTask(taskId: string): Promise<ApiResponse<QueryTaskStatu
 export function cancelQueryTask(taskId: string): Promise<ApiResponse<CancelQueryTaskResult>> {
   return request({
     url: `/agents/api/chatdata/query-tasks/${taskId}/cancel`,
+    method: 'post',
+  })
+}
+
+export function cancelQueryHistoryExecution(executionId: string): Promise<ApiResponse<CancelQueryExecutionResult>> {
+  return request({
+    url: `/agents/api/chatdata/query-history/${executionId}/cancel`,
     method: 'post',
   })
 }

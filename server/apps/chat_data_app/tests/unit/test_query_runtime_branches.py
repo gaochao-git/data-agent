@@ -211,6 +211,42 @@ def test_sql_batch_cancellation_stops_before_next_statement(monkeypatch):
     ]) == [{"member_datasource_id": "m1", "member_name": "成员1", "remote_task_id": "rt1", "source_type": "hive"}]
 
 
+def test_sql_batch_reports_partial_stop_when_only_cancelled_failures(monkeypatch):
+    updates = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def create_executions(_task_id, request, operator_name=None):
+        return {"m1": f"exec_{request.sql[-1]}"}
+
+    async def execute_sql(request, **_kwargs):
+        if request.sql == "select 2":
+            return {"status": "cancelled", "sql": request.sql, "error": "已人工取消", "results": []}
+        return {"status": "succeeded", "sql": request.sql, "results": []}
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **kwargs: asyncio.sleep(0, result=updates.append(kwargs)))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda _request, result, **_kwargs: asyncio.sleep(0, result=result))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_partial_cancel", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m1"],
+            "user_id": "user_a",
+            "sql": ["select 1", "select 2"],
+        }),
+    }))
+
+    final_update = updates[-1]
+    assert final_update["status"] == "partial_success"
+    assert final_update["progress_text"] == "执行完成，部分 SQL 已停止"
+    assert final_update["error_message"] == "部分 SQL 已停止"
+    assert [item["status"] for item in final_update["result_payload"]["statement_results"]] == ["succeeded", "cancelled"]
+
+
 def test_create_query_task_derives_internal_task_type_from_sql_list(monkeypatch):
     captured = []
 

@@ -16,7 +16,7 @@ from ..services.query_providers import (
     get_query_history_service,
     get_query_task_service,
 )
-from ..services.query_task_service import QueryTaskService
+from ..services.query_task_service import QueryTaskNotFoundError, QueryTaskService
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
@@ -128,6 +128,32 @@ async def cancel_my_running_query_history(
     except Exception as e:
         logger.error("批量停止个人查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg="批量停止失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/query-history/{execution_id}/cancel")
+async def cancel_query_history_execution(
+    execution_id: str,
+    request: Request,
+    task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
+):
+    """停止当前用户的一条 SQL 执行明细。"""
+    try:
+        current_user = _resolve_current_user(request, None)
+        result = await (task_service or get_query_task_service()).cancel_query_execution_for_user(
+            execution_id,
+            user_id=str(current_user.user_id),
+            operator_name=str(getattr(current_user, "username", "") or "").strip(),
+        )
+        return business_response(data=result.data, msg=result.message)
+    except AuthenticationError as e:
+        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except QueryTaskNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except HTTPException as e:
+        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except Exception as e:
+        logger.error("停止查询历史明细失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
+        return business_response(msg="停止查询明细失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 @router.post("/admin/query-history/cancel-running")

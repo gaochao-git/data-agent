@@ -52,18 +52,6 @@ class QueryHistoryDao:
     def _append_status_condition(conditions: List[Any], status_filter: Optional[str]) -> None:
         if not status_filter:
             return
-        if status_filter == "cancelled":
-            conditions.append(or_(
-                ChatDataQueryExecution.sql_status == "cancelled",
-                and_(ChatDataQueryTask.task_status == "cancelled", ChatDataQueryExecution.sql_status.in_(["pending", "running"])),
-            ))
-            return
-        if status_filter in {"pending", "running"}:
-            conditions.append(and_(
-                ChatDataQueryExecution.sql_status == status_filter,
-                or_(ChatDataQueryTask.task_status.is_(None), ChatDataQueryTask.task_status != "cancelled"),
-            ))
-            return
         conditions.append(ChatDataQueryExecution.sql_status == status_filter)
 
     @staticmethod

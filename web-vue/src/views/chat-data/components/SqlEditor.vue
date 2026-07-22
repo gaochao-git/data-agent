@@ -8,7 +8,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, shallowRef, useAttrs, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import { cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
+import { cancelQueryHistoryExecution, cancelQueryTask, cancelRunningQueryHistory, createConversation, generateConversationTitle, getChatDataConfig, getConversationHistory, getConversations, getQueryHistory, getQueryHistoryResult, streamQuickSql } from '../api'
 import { useQueryTask } from '../composables/useQueryTask'
 import { useTableSchemaPanel } from '../composables/useTableSchemaPanel'
 import QueryResultPanel from './QueryResultPanel.vue'
@@ -735,7 +735,7 @@ const isHistoryItemRunnable = (item: SqlHistoryItem) => {
 }
 
 const isHistoryItemCancellable = (item: SqlHistoryItem) => {
-  return Boolean(item.task_id) && ['pending', 'running'].includes(String(item.sql_status || ''))
+  return Boolean(item.execution_id) && ['pending', 'running'].includes(String(item.sql_status || ''))
 }
 
 const isHistoryResultViewable = (item: SqlHistoryItem) => {
@@ -838,26 +838,25 @@ const handleViewHistoryResult = async (item: SqlHistoryItem) => {
 }
 
 const handleCancelHistoryItem = async (item: SqlHistoryItem) => {
-  if (!item.task_id) {
-    ElMessage.warning('缺少任务ID，无法暂停')
+  if (!item.execution_id) {
+    ElMessage.warning('缺少执行ID，无法停止本条 SQL')
     return
   }
   try {
-    const response = await cancelQueryTask(item.task_id)
+    const response = await cancelQueryHistoryExecution(item.execution_id)
     if (response.status !== 'success') {
-      ElMessage.error(response.msg || '暂停失败')
+      ElMessage.error(response.msg || '停止失败')
       return
     }
-    if (response.data?.status === 'partial_success' || response.data?.status === 'failed') {
-      const firstMessage = response.data?.executions?.find(execution => execution.message)?.message
-      ElMessage.warning(firstMessage || '部分 SQL 暂停失败')
+    if (response.data?.success === false || response.data?.status === 'kill_failed') {
+      ElMessage.warning(response.data?.message || '本条 SQL 停止失败')
     } else {
-      ElMessage.success('已提交暂停请求')
+      ElMessage.success('已提交停止本条 SQL 请求')
     }
     await loadQueryHistory()
   } catch (err) {
-    console.error('暂停查询任务失败:', err)
-    ElMessage.error('暂停失败，请稍后重试')
+    console.error('停止查询历史明细失败:', err)
+    ElMessage.error('停止失败，请稍后重试')
   }
 }
 
@@ -865,7 +864,7 @@ const handleCancelAllRunningHistory = async () => {
   try {
     await ElMessageBox.confirm(
       '确定要停止你所有正在执行的 SQL 吗？该操作会影响个人查询历史中的所有等待中和执行中任务。',
-      '停止SQL',
+      '停止全部SQL',
       {
         confirmButtonText: '停止',
         cancelButtonText: '取消',
@@ -2545,7 +2544,7 @@ defineExpose({
           />
         </label>
         <el-button :loading="historyLoading" @click="loadQueryHistory">刷新</el-button>
-        <el-button plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止SQL</el-button>
+        <el-button plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止全部SQL</el-button>
         <el-dropdown trigger="click" :hide-on-click="false">
           <el-button plain>
             字段显示
@@ -2663,7 +2662,7 @@ defineExpose({
       <el-table-column v-if="isHistoryColumnVisible('actions')" label="操作" width="360" align="center" fixed="right">
         <template #default="{ row }">
           <div class="history-action-cell">
-            <el-button v-if="isHistoryItemCancellable(row)" type="danger" link @click="handleCancelHistoryItem(row)">暂停</el-button>
+            <el-button v-if="isHistoryItemCancellable(row)" type="danger" link @click="handleCancelHistoryItem(row)">停止该SQL</el-button>
             <el-button type="primary" link :disabled="!isHistoryResultViewable(row)" @click="handleViewHistoryResult(row)">查看结果</el-button>
             <el-button type="primary" link :disabled="!isHistoryItemRunnable(row)" @click="handleRunHistoryItem(row)">一键运行</el-button>
             <el-button type="primary" link @click="handleCopyHistoryItem(row)">一键复制</el-button>

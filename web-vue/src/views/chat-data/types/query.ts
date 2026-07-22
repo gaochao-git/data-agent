@@ -59,27 +59,24 @@ export interface QueryTaskStatusResult {
   update_time?: string | null
 }
 
+export interface CancelQueryExecutionResult {
+  execution_id?: string
+  status?: string
+  success?: boolean
+  message?: string | null
+}
+
 export interface CancelQueryTaskResult {
   task_id: string
   status: string
-  executions?: Array<{
-    execution_id?: string
-    status?: string
-    success?: boolean
-    message?: string | null
-  }>
+  executions?: CancelQueryExecutionResult[]
 }
 
 export interface CancelRunningQueryHistoryResult {
   total: number
   cancelled: number
   failed: number
-  executions?: Array<{
-    execution_id?: string
-    status?: string
-    success?: boolean
-    message?: string | null
-  }>
+  executions?: CancelQueryExecutionResult[]
 }
 
 export interface QueryHistoryResult {

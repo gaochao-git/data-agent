@@ -1069,12 +1069,25 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
             return
 
     has_failures = any(item.get("status") != QUERY_SUCCEEDED_STATUS for item in statement_results)
+    only_cancelled_failures = has_failures and all(
+        query_result_status(item) in {QUERY_SUCCEEDED_STATUS, "cancelled"}
+        for item in statement_results
+    )
+    final_progress_text = "执行完成"
+    final_error_message = None
+    if has_failures:
+        if only_cancelled_failures:
+            final_progress_text = "执行完成，部分 SQL 已停止"
+            final_error_message = "部分 SQL 已停止"
+        else:
+            final_progress_text = "执行完成，部分 SQL 失败"
+            final_error_message = "部分 SQL 执行失败"
     await update_query_task(
         task_id,
         status="partial_success" if has_failures else "succeeded",
-        progress_text="执行完成" if not has_failures else "执行完成，部分 SQL 失败",
+        progress_text=final_progress_text,
         result_payload={"statement_results": statement_results},
-        error_message="部分 SQL 执行失败" if has_failures else None,
+        error_message=final_error_message,
         finished_time=datetime.now(),
     )
 

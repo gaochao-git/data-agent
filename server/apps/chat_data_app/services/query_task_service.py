@@ -476,6 +476,27 @@ class QueryTaskService:
             message="停止请求已提交",
         )
 
+    async def cancel_query_execution_for_user(
+        self,
+        execution_id: str,
+        *,
+        user_id: str,
+        operator_name: str,
+    ) -> QueryTaskServiceResponse:
+        """停止当前用户的一条 SQL 执行明细，不影响同批次其他 SQL。"""
+        execution = await self.query_history_service.get_execution_model(execution_id)
+        if not execution or str(execution.user_id or "").strip() != str(user_id or "").strip():
+            raise QueryTaskNotFoundError(f"执行记录不存在: {execution_id}")
+        resolved_operator = (
+            str(execution.create_by_name or execution.update_by_name or "").strip()
+            or str(operator_name or "").strip()
+        )
+        result = await self.cancel_query_execution(execution, operator_name=resolved_operator)
+        return QueryTaskServiceResponse(
+            data=result,
+            message="停止请求已提交" if result.get("status") in {"cancelled", "kill_failed"} else "执行已结束",
+        )
+
     async def cancel_running_query_history(
         self,
         *,

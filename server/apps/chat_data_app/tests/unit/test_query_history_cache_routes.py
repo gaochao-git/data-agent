@@ -168,7 +168,7 @@ async def _seed_query_history(session_factory):
                 member_name="成员库",
                 executor_type="direct",
                 sql_text="select * from orders",
-                sql_status="running",
+                sql_status="cancelled",
                 execution_time_ms=None,
                 result_row_count=None,
                 result_payload=None,
@@ -364,9 +364,18 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
         status="cancelled",
     ))
     sql_cancelled_body = _payload(sql_cancelled_response)
-    assert sql_cancelled_body["data"]["total"] == 1
-    assert sql_cancelled_body["data"]["queries"][0]["execution_id"] == "ex_sql_batch_pending"
-    assert sql_cancelled_body["data"]["queries"][0]["sql_status"] == "cancelled"
+    assert sql_cancelled_body["data"]["total"] == 0
+
+    sql_pending_response = asyncio.run(query_history_routes.get_query_history(
+        _make_request(),
+        datasource_id="ds1",
+        source="sql",
+        status="pending",
+    ))
+    sql_pending_body = _payload(sql_pending_response)
+    assert sql_pending_body["data"]["total"] == 1
+    assert sql_pending_body["data"]["queries"][0]["execution_id"] == "ex_sql_batch_pending"
+    assert sql_pending_body["data"]["queries"][0]["sql_status"] == "pending"
 
     cancelled_response = asyncio.run(query_history_routes.get_query_history(
         _make_request(),
@@ -389,6 +398,9 @@ def test_get_query_history_supports_sql_null_task_and_cancelled_task(route_db):
     ))
     all_body = _payload(all_response)
     assert all_body["data"]["total"] == 6
+    all_items = {item["execution_id"]: item for item in all_body["data"]["queries"]}
+    assert all_items["ex_sql_batch_pending"]["task_status"] == "cancelled"
+    assert all_items["ex_sql_batch_pending"]["sql_status"] == "pending"
 
 
 def test_get_query_history_filters_by_executed_time_range(route_db):
@@ -622,6 +634,57 @@ def test_cancel_admin_running_query_history_can_filter_datasource(route_db):
     assert task_statuses["task_u1_ds1"] == "cancelled"
     assert task_statuses["task_u2_ds1"] == "cancelled"
     assert task_statuses["task_u1_ds2"] == "running"
+
+
+def test_cancel_query_history_execution_only_cancels_current_execution(route_db):
+    asyncio.run(_seed_running_query_history(route_db))
+
+    response = asyncio.run(query_history_routes.cancel_query_history_execution(
+        "ex_u1_ds1_pending",
+        _make_request(),
+    ))
+    body = _payload(response)
+
+    assert body["status"] == "success"
+    assert body["data"]["execution_id"] == "ex_u1_ds1_pending"
+    assert body["data"]["status"] == "cancelled"
+
+    async def read_statuses():
+        async with route_db() as session:
+            execution_result = await session.execute(select(ChatDataQueryExecution.execution_id, ChatDataQueryExecution.sql_status))
+            task_result = await session.execute(select(ChatDataQueryTask.task_id, ChatDataQueryTask.task_status))
+            return dict(execution_result.all()), dict(task_result.all())
+
+    execution_statuses, task_statuses = asyncio.run(read_statuses())
+    assert execution_statuses["ex_u1_ds1_pending"] == "cancelled"
+    assert execution_statuses["ex_u1_ds2_pending"] == "pending"
+    assert execution_statuses["ex_u2_ds1_pending"] == "pending"
+    assert execution_statuses["ex_u1_ds1_done"] == "succeeded"
+    assert task_statuses["task_u1_ds1"] == "running"
+    assert task_statuses["task_u1_ds2"] == "running"
+    assert task_statuses["task_u2_ds1"] == "running"
+
+
+def test_cancel_query_history_execution_hides_other_user_execution(route_db):
+    asyncio.run(_seed_running_query_history(route_db))
+
+    response = asyncio.run(query_history_routes.cancel_query_history_execution(
+        "ex_u2_ds1_pending",
+        _make_request(),
+    ))
+    body = _payload(response)
+
+    assert body["status"] == "error"
+    assert body["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+    async def read_status():
+        async with route_db() as session:
+            result = await session.execute(
+                select(ChatDataQueryExecution.sql_status).filter_by(execution_id="ex_u2_ds1_pending")
+            )
+            return result.scalar_one()
+
+    assert asyncio.run(read_status()) == "pending"
 
 
 def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route_db, monkeypatch):

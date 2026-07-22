@@ -226,7 +226,7 @@ const stopRunningSql = async () => {
   try {
     await ElMessageBox.confirm(
       `确定要停止${scopeText}所有正在执行的 SQL 吗？该操作会停止等待中和执行中的任务。`,
-      '停止SQL',
+      '停止全部SQL',
       {
         confirmButtonText: '停止',
         cancelButtonText: '取消',
@@ -331,7 +331,7 @@ defineExpose({
           :disabled="stoppingRunning"
           @click="stopRunningSql"
         >
-          {{ stoppingRunning ? '停止中...' : '停止SQL' }}
+          {{ stoppingRunning ? '停止中...' : '停止全部SQL' }}
         </button>
         <el-dropdown trigger="click" :hide-on-click="false">
           <button class="h-8 rounded border border-slate-200 px-3 text-xs text-slate-600 hover:bg-slate-50">
