@@ -505,6 +505,15 @@ export function getDatasources(params?: DatasourceListParams): Promise<ApiRespon
   })
 }
 
+/** 获取后台数据源列表 */
+export function getAdminDatasources(params?: DatasourceListParams): Promise<ApiResponse<{ datasources: DataSource[] }>> {
+  return request({
+    url: ADMIN_DATASOURCE_API_PREFIX,
+    method: 'get',
+    params
+  })
+}
+
 /** 删除数据源 */
 export function deleteAdminDatasource(id: string): Promise<ApiResponse<null>> {
   return request({

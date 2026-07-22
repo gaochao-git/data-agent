@@ -87,6 +87,7 @@ const currentUser = computed(() => ({
 // 数据源
 const allDatasources = ref<DataSource[]>([])
 const datasources = ref<DataSource[]>([])
+const adminDatasourceCache = ref<Record<string, DataSource>>({})
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
@@ -150,8 +151,7 @@ const normalizeTableInfoList = (tables: unknown): TableInfo[] => {
   }).filter(table => table.table_name)
 }
 
-// 数据源管理回调：更新本地数据源列表
-const handleDatasourcesChange = (newDatasources: DataSource[]) => {
+const cacheDatasourceSchema = (newDatasources: DataSource[]) => {
   const nextSchemaCache = { ...datasourceSchemaCache.value }
   let schemaCacheChanged = false
   newDatasources.forEach(ds => {
@@ -162,6 +162,16 @@ const handleDatasourcesChange = (newDatasources: DataSource[]) => {
   if (schemaCacheChanged) {
     datasourceSchemaCache.value = nextSchemaCache
   }
+}
+
+// 数据源管理回调：后台配置更新后重新加载前台授权数据源列表
+const handleAdminDatasourcesUpdated = () => {
+  void loadDatasources()
+}
+
+// 数据源管理回调：更新本地数据源列表
+const handleDatasourcesChange = (newDatasources: DataSource[]) => {
+  cacheDatasourceSchema(newDatasources)
   allDatasources.value = newDatasources
   datasources.value = applyDatasourceFilters(newDatasources)
   // 如果当前选中的数据源不在新列表中，重新选择
@@ -443,7 +453,8 @@ const activeMetricConfigDatasourceId = computed(() => {
 
 const metricConfigDatasource = computed(() => {
   const datasourceId = activeMetricConfigDatasourceId.value
-  const datasource = allDatasources.value.find(ds => ds.id === datasourceId)
+  const datasource = adminDatasourceCache.value[datasourceId]
+    || allDatasources.value.find(ds => ds.id === datasourceId)
     || datasources.value.find(ds => ds.id === datasourceId)
     || null
   if (!datasource) return null
@@ -460,9 +471,16 @@ const handleCloseMetricConfigTab = () => {
 }
 
 // 打开语义配置面板
-const handleOpenSemanticConfig = (datasourceId?: string) => {
+const handleOpenSemanticConfig = (datasourceId?: string, datasource?: DataSource) => {
   if (!canManageDatasource.value) return
   semanticConfigDatasourceId.value = datasourceId || selectedDatasourceId.value
+  if (datasource?.id) {
+    adminDatasourceCache.value = {
+      ...adminDatasourceCache.value,
+      [datasource.id]: datasource,
+    }
+    cacheDatasourceSchema([datasource])
+  }
   showAdminModal.value = false
   isSemanticConfigPanelOpen.value = true
   if (semanticConfigDatasourceId.value) {
@@ -1018,7 +1036,8 @@ const currentDatasource = computed(() => {
 })
 
 const semanticConfigDatasource = computed(() => {
-  const datasource = allDatasources.value.find(ds => ds.id === semanticConfigDatasourceId.value)
+  const datasource = adminDatasourceCache.value[semanticConfigDatasourceId.value]
+    || allDatasources.value.find(ds => ds.id === semanticConfigDatasourceId.value)
     || datasources.value.find(ds => ds.id === semanticConfigDatasourceId.value)
     || null
   if (!datasource) return null
@@ -1954,8 +1973,7 @@ onUnmounted(() => {
     <ChatDataAdminManager
       v-if="canManageAdmin"
       v-model="showAdminModal"
-      :datasources="allDatasources"
-      @datasources-change="handleDatasourcesChange"
+      @datasources-updated="handleAdminDatasourcesUpdated"
       @open-semantic-config="handleOpenSemanticConfig"
     />
     </div>

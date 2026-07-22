@@ -7,24 +7,25 @@ import { computed, nextTick, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import DataSourceManager from './DataSourceManager.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
+import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
 
 const props = withDefaults(defineProps<{
   modelValue: boolean
-  datasources?: DataSource[]
-}>(), {
-  datasources: () => [],
-})
+}>(), {})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  datasourcesChange: [datasources: DataSource[]]
-  openSemanticConfig: [datasourceId: string]
+  'datasources-updated': []
+  'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
 const activeTab = ref<'datasource' | 'sqlHistory'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
+const adminDatasourceOptions = ref<DataSource[]>([])
+const adminDatasourceOptionsLoaded = ref(false)
+const loadingAdminDatasourceOptions = ref(false)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -41,9 +42,33 @@ const openDatasourceGroupModal = () => {
   datasourceManagerRef.value?.openGroupModal()
 }
 
+const loadAdminDatasourceOptions = async (force = false) => {
+  if (loadingAdminDatasourceOptions.value) return
+  if (!force && adminDatasourceOptionsLoaded.value) return
+  loadingAdminDatasourceOptions.value = true
+  try {
+    const res = await getAdminDatasources({ include_tables: false })
+    if (res.status === 'success') {
+      adminDatasourceOptions.value = res.data.datasources || []
+      adminDatasourceOptionsLoaded.value = true
+    }
+  } catch (err) {
+    console.error('加载后台数据源选项失败:', err)
+  } finally {
+    loadingAdminDatasourceOptions.value = false
+  }
+}
+
+const handleDatasourcesUpdated = () => {
+  adminDatasourceOptionsLoaded.value = false
+  void loadAdminDatasourceOptions(true)
+  emit('datasources-updated')
+}
+
 const switchTab = async (tab: 'datasource' | 'sqlHistory') => {
   activeTab.value = tab
   if (tab !== 'sqlHistory') return
+  await loadAdminDatasourceOptions()
   await nextTick()
   sqlHistoryRef.value?.ensureLoaded()
 }
@@ -89,15 +114,14 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory') => {
         v-show="activeTab === 'datasource'"
         ref="datasourceManagerRef"
         class="h-full"
-        :datasources="datasources"
-        @datasources-change="emit('datasourcesChange', $event)"
-        @open-semantic-config="emit('openSemanticConfig', $event)"
+        @datasources-updated="handleDatasourcesUpdated"
+        @open-semantic-config="(datasourceId, datasource) => emit('open-semantic-config', datasourceId, datasource)"
       />
       <GlobalSqlHistory
         v-show="activeTab === 'sqlHistory'"
         ref="sqlHistoryRef"
         class="h-full"
-        :datasources="datasources"
+        :datasources="adminDatasourceOptions"
       />
     </div>
   </el-dialog>

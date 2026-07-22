@@ -32,6 +32,7 @@ from apps.chat_data_app.routers.datasource_admin import (
     clear_default_datasource,
     create_datasource_group,
     delete_datasource,
+    get_admin_datasources,
     generate_datasource_column_dict,
     get_datasource_table_groups,
     set_default_datasource,
@@ -890,6 +891,35 @@ def test_get_datasources_supports_lightweight_mode(monkeypatch):
 
     assert data["status"] == "success"
     assert all(item["ds_tables"] == [] for item in data["data"]["datasources"])
+
+
+def test_get_admin_datasources_uses_unfiltered_list(monkeypatch):
+    class Manager(_FakeDatasourceManager):
+        def __init__(self):
+            super().__init__()
+            self.all_called = False
+            self.authorized_called = False
+
+        async def get_all_datasources_async(self, include_tables: bool = True):
+            self.all_called = True
+            assert include_tables is False
+            return [{"id": "ds_admin", "ds_tables": []}]
+
+        async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+            self.authorized_called = True
+            return []
+
+    manager = Manager()
+    _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
+
+    resp = asyncio.run(get_admin_datasources(SimpleNamespace(), include_tables=False))
+    data = _payload(resp)
+
+    assert data["status"] == "success"
+    assert data["data"]["datasources"] == [{"id": "ds_admin", "ds_tables": []}]
+    assert manager.all_called is True
+    assert manager.authorized_called is False
 
 
 def test_get_datasources_does_not_build_display_name_from_current_user(monkeypatch):

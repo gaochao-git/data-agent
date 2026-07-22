@@ -78,6 +78,25 @@ def _normalize_template_source(body: DatasourceGroupCreateRequest | DatasourceGr
     )
 
 
+@router.get("/admin/datasources")
+async def get_admin_datasources(request: Request, include_tables: bool = True):
+    """获取后台配置页数据源列表，不按执行机构权限过滤。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        datasources = await ds_manager.get_all_datasources_async(include_tables=include_tables)
+        return business_response(data={"datasources": datasources}, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取后台数据源列表失败: %s", e, exc_info=True)
+        return business_response(
+            msg=f"获取失败: {str(e)}",
+            code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED,
+            status="error"
+        )
+
+
 @router.post("/admin/datasources/groups")
 async def create_datasource_group(body: DatasourceGroupCreateRequest, request: Request):
     """创建数据源组。"""

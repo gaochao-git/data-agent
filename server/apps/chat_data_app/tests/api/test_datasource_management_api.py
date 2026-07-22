@@ -4,6 +4,33 @@ from apps.chat_data_app.routers import datasource_admin as datasource_admin_rout
 from utils.error_codes import ErrorCode
 
 
+def test_admin_list_datasources_uses_unfiltered_list(client, patch_datasource_manager, auth_headers):
+    class Manager:
+        def __init__(self):
+            self.all_include_tables = None
+            self.authorized_called = False
+
+        async def get_all_datasources_async(self, include_tables: bool = True):
+            self.all_include_tables = include_tables
+            return [{"id": "ds_admin", "group_name": "后台数据源", "ds_tables": []}]
+
+        async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
+            self.authorized_called = True
+            return []
+
+    manager = Manager()
+    patch_datasource_manager(manager)
+
+    response = client.get("/api/chatdata/admin/datasources", params={"include_tables": False}, headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["datasources"] == [{"id": "ds_admin", "group_name": "后台数据源", "ds_tables": []}]
+    assert manager.all_include_tables is False
+    assert manager.authorized_called is False
+
+
 def test_update_datasource_meta_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
     patch_datasource_manager(fake_datasource_manager)
 
@@ -60,9 +87,13 @@ def test_table_groups_read_and_save_api_contract(client, fake_datasource_manager
 def test_admin_datasource_read_routes_require_auth(client, fake_datasource_manager, patch_datasource_manager):
     patch_datasource_manager(fake_datasource_manager)
 
+    list_response = client.get("/api/chatdata/admin/datasources")
     table_groups_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups")
     semantic_health_response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-health")
 
+    assert list_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert list_response.json()["status"] == "error"
+    assert list_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
     assert table_groups_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
     assert table_groups_response.json()["status"] == "error"
     assert table_groups_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED

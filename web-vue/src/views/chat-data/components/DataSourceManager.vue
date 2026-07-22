@@ -3,10 +3,10 @@
  * 数据源管理组件
  * 支持数据源列表展示、新建数据源组、删除、设为默认
  */
-import { ref, computed, onMounted, watch, h } from 'vue'
+import { ref, computed, onMounted, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getDatasources,
+  getAdminDatasources,
   deleteAdminDatasource,
   getAdminDbTables,
   setAdminDefaultDatasource,
@@ -27,15 +27,9 @@ import {
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
 import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
 
-const props = withDefaults(defineProps<{
-  datasources?: DataSource[]
-}>(), {
-  datasources: () => [],
-})
-
 const emit = defineEmits<{
-  (e: 'datasources-change', datasources: DataSource[]): void
-  (e: 'open-semantic-config', datasourceId: string): void
+  (e: 'datasources-updated'): void
+  (e: 'open-semantic-config', datasourceId: string, datasource?: DataSource): void
 }>()
 
 // 数据源列表
@@ -189,7 +183,7 @@ const saveMappingModules = async () => {
     if (res.status === 'success') {
       ElMessage.success('映射模块已保存')
       closeMappingPopover()
-      fetchDatasources()
+      fetchDatasources(true)
     } else {
       ElMessage.error(res.msg || '保存失败')
     }
@@ -371,7 +365,7 @@ const saveTableGroups = async () => {
     const res = await updateAdminDatasourceTableGroups(tableGroupDs.value.id, payload)
     if (res.status === 'success') {
       ElMessage.success('表分组已保存')
-      await fetchDatasources()
+      await fetchDatasources(true)
       closeTableGroupModal()
     } else {
       ElMessage.error(res.msg || '保存表分组失败')
@@ -443,7 +437,7 @@ const applyTableBusinessDesc = (datasourceId: string, tableName: string, busines
       ),
     }
   })
-  emit('datasources-change', datasources.value)
+  emit('datasources-updated')
 }
 
 const saveTableBusinessDesc = async (ds: DataSource, table: TableInfo) => {
@@ -801,8 +795,8 @@ const resetGroupTableSelector = () => {
   savedGroupTemplateSnapshotKey.value = ''
 }
 
-const emitDatasourcesChange = () => {
-  emit('datasources-change', datasources.value)
+const emitDatasourcesUpdated = () => {
+  emit('datasources-updated')
 }
 
 const normalizeDatasourceList = (items: DataSource[] = []) => {
@@ -816,7 +810,7 @@ const applyDatasourceList = (items: DataSource[]) => {
   columnDictStatusLoadingKeys.value = new Set()
 }
 
-const replaceDatasourceInList = (updatedDatasource?: DataSource | null, keepCurrentTables = false) => {
+const replaceDatasourceInList = (updatedDatasource?: DataSource | null, keepCurrentTables = false, notifyUpdated = true) => {
   if (!updatedDatasource?.id) return
   const currentIndex = datasources.value.findIndex(ds => ds.id === updatedDatasource.id)
   const currentDatasource = currentIndex >= 0 ? datasources.value[currentIndex] : null
@@ -833,17 +827,17 @@ const replaceDatasourceInList = (updatedDatasource?: DataSource | null, keepCurr
   if (currentIndex >= 0) nextDatasources.splice(currentIndex, 1, nextDatasource)
   else nextDatasources.unshift(nextDatasource)
   datasources.value = nextDatasources
-  emitDatasourcesChange()
+  if (notifyUpdated) emitDatasourcesUpdated()
 }
 
 // 加载数据源
-const fetchDatasources = async () => {
+const fetchDatasources = async (notifyUpdated = false) => {
   datasourcesLoading.value = true
   try {
-    const res = await getDatasources()
+    const res = await getAdminDatasources()
     if (res.status === 'success') {
       applyDatasourceList(res.data.datasources || [])
-      emitDatasourcesChange()
+      if (notifyUpdated) emitDatasourcesUpdated()
     }
   } catch (err) {
     console.error('获取数据源失败:', err)
@@ -851,15 +845,6 @@ const fetchDatasources = async () => {
     datasourcesLoading.value = false
   }
 }
-
-watch(
-  () => props.datasources,
-  (nextDatasources) => {
-    if (datasourcesLoading.value) return
-    applyDatasourceList(nextDatasources || [])
-  },
-  { immediate: true }
-)
 
 // 展开/折叠
 const toggleDatasource = (dsId: string) => {
@@ -880,7 +865,7 @@ const toggleTable = (ds: DataSource, table: TableInfo) => {
 }
 
 const handleOpenSemanticConfig = (datasourceId: string) => {
-  emit('open-semantic-config', datasourceId)
+  emit('open-semantic-config', datasourceId, datasources.value.find(ds => ds.id === datasourceId))
 }
 
 const getHealthStatusLabel = (status?: string) => {
@@ -929,7 +914,7 @@ const handleDelete = async (ds: DataSource) => {
     const res = await deleteAdminDatasource(ds.id)
     if (res.status === 'success') {
       ElMessage.success('删除成功')
-      await fetchDatasources()
+      await fetchDatasources(true)
     } else {
       ElMessage.error(res.msg || '删除失败')
     }
@@ -950,7 +935,7 @@ const handleToggleDefault = async (ds: DataSource) => {
       : await setAdminDefaultDatasource(ds.id)
     if (res.status === 'success') {
       ElMessage.success(isDefault ? '已取消默认' : '已设为默认')
-      fetchDatasources()
+      fetchDatasources(true)
     } else {
       ElMessage.error(res.msg || '操作失败')
     }
@@ -1261,11 +1246,11 @@ const handleCreateDatasourceGroup = async () => {
     if (res.status === 'success') {
       const wasEditing = Boolean(editingGroupId.value)
       ElMessage.success(wasEditing ? '配置已保存' : '数据源组创建成功')
-      replaceDatasourceInList(res.data, true)
+      replaceDatasourceInList(res.data, true, false)
       if (res.data?.id) {
         editingGroupId.value = res.data.id
       }
-      await fetchDatasources()
+      await fetchDatasources(true)
       savedGroupConfigSnapshotKey.value = buildGroupConfigSnapshotKey()
       if (shouldResetTableSelectorAfterSave) {
         resetGroupTableSelector()
