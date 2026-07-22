@@ -9,8 +9,10 @@ import httpx
 
 from mock.direct_org_codes import DIRECT_ORG_CODES
 from utils.alarm import emit_external_api_alarm
+from utils.logger import get_logger
 from .runtime_config import read_positive_int_env
 
+logger = get_logger(__name__)
 HTTP_PERMISSION_URL = str(os.getenv("CHAT_DATA_HTTP_PERMISSION_URL") or "").strip()
 HTTP_PERMISSION_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_HTTP_PERMISSION_TIMEOUT_SECONDS", 5)
 
@@ -32,10 +34,21 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
     """Read HTTP execution org permissions from the configured permission service."""
     normalized_user_id = str(user_id or "").strip()
     normalized_username = str(username or "").strip()
-    if not HTTP_PERMISSION_URL or not normalized_user_id:
+    if not HTTP_PERMISSION_URL:
+        logger.debug("跳过 HTTP 执行对象权限查询: CHAT_DATA_HTTP_PERMISSION_URL 未配置 user_id=%s", normalized_user_id or "-")
+        return set()
+    if not normalized_user_id:
+        logger.debug("跳过 HTTP 执行对象权限查询: user_id 为空 url=%s", HTTP_PERMISSION_URL)
         return set()
 
     payload = {"userId": normalized_user_id, "username": normalized_username}
+    logger.debug(
+        "开始查询 HTTP 执行对象权限: url=%s timeout=%ss user_id=%s username=%s",
+        HTTP_PERMISSION_URL,
+        HTTP_PERMISSION_TIMEOUT_SECONDS,
+        normalized_user_id,
+        normalized_username or "-",
+    )
     try:
         async with httpx.AsyncClient(timeout=HTTP_PERMISSION_TIMEOUT_SECONDS) as client:
             response = await client.post(HTTP_PERMISSION_URL, json=payload)
@@ -54,10 +67,14 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
     try:
         code = int(response_payload.get("code"))
     except (TypeError, ValueError, AttributeError):
+        logger.debug("HTTP 执行对象权限响应 code 无效: user_id=%s response_type=%s", normalized_user_id, type(response_payload).__name__)
         return set()
     if code != 20000:
+        logger.debug("HTTP 执行对象权限响应非成功: user_id=%s code=%s", normalized_user_id, code)
         return set()
-    return normalize_org_codes(response_payload.get("data"))
+    org_codes = normalize_org_codes(response_payload.get("data"))
+    logger.debug("HTTP 执行对象权限查询完成: user_id=%s org_code_count=%s", normalized_user_id, len(org_codes))
+    return org_codes
 
 
 async def get_allowed_org_codes_by_executor(user_id: Optional[str], username: Optional[str]) -> Dict[str, Set[str]]:
