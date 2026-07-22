@@ -73,7 +73,7 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
         logger.debug("HTTP 执行对象权限响应非成功: user_id=%s code=%s", normalized_user_id, code)
         return set()
     org_codes = normalize_org_codes(response_payload.get("data"))
-    logger.debug("HTTP 执行对象权限查询完成: user_id=%s org_code_count=%s", normalized_user_id, len(org_codes))
+    logger.debug("HTTP 执行对象权限查询完成: user_id=%s org_codes=%s", normalized_user_id, sorted(org_codes))
     return org_codes
 
 
