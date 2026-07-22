@@ -216,7 +216,6 @@ const visibleModes = computed(() => {
   const labelToKey = new Map<string, ViewMode>(
     allModes.value.map((m) => [m.label, m.key])
   )
-  const allowedModes = allModes.value.filter(mode => mode.key !== 'metricConfig' || canManageDatasource.value)
   for (const item of hiddenRaw) {
     const value = String(item || '').trim()
     if (!value) continue
@@ -227,8 +226,8 @@ const visibleModes = computed(() => {
     const mapped = labelToKey.get(value)
     if (mapped) keySet.add(mapped)
   }
-  const filtered = allowedModes.filter(mode => !keySet.has(mode.key))
-  return filtered.length > 0 ? filtered : [...allowedModes]
+  const filtered = allModes.value.filter(mode => !keySet.has(mode.key))
+  return filtered.length > 0 ? filtered : [...allModes.value]
 })
 
 const resolveInitialMode = (): ViewMode => {
