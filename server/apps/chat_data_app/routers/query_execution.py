@@ -243,15 +243,24 @@ async def cancel_query_task(
 
 
 @router.post("/compile-semantic-builder-sql")
-async def compile_semantic_builder_sql_endpoint(request: CompileSemanticBuilderSqlRequest):
+async def compile_semantic_builder_sql_endpoint(
+    request: Request,
+    body: CompileSemanticBuilderSqlRequest,
+):
     """编译语义可视化 DSL 为 SQL（仅预览，不执行）。"""
     try:
+        current_user = _resolve_current_user(request, None)
         result = await compile_semantic_builder_sql(
-            datasource_id=request.datasource_id,
-            semantic_config_id=request.semantic_config_id,
-            semantic_builder_config=request.semantic_builder_config,
+            datasource_id=body.datasource_id,
+            semantic_config_id=body.semantic_config_id,
+            semantic_builder_config=body.semantic_builder_config,
+            user_id=str(current_user.user_id),
         )
         return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
+    except AuthenticationError as err:
+        return business_response(msg=err.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+    except HTTPException as err:
+        return business_response(msg=str(err.detail), code=chatdata_http_exception_error_code(err.status_code), status="error")
     except LookupError as err:
         return business_response(msg=str(err), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as err:

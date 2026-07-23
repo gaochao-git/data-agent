@@ -69,7 +69,7 @@ import {
 } from './utils/advancedFilterTree'
 import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
-import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, buildSemanticBuilderConfigPayload as buildSemanticBuilderConfigPayloadUtil } from './utils/builderConfig'
+import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
 
 const props = defineProps({
@@ -303,18 +303,22 @@ const handleSaveSql = async () => {
     return
   }
   try {
-    const sqlText = await compileCurrentBuilderSql()
+    const builderConfigPayload = snapshotBuilderConfigPayload(buildBuilderConfigParams())
+    const builderConfigSnapshot = JSON.stringify(builderConfigPayload)
+    const sqlText = await compileCurrentBuilderSql(
+      toSemanticBuilderConfigPayload(builderConfigPayload),
+      builderConfigSnapshot,
+    )
     if (!sqlText) {
       ElMessage.warning('请先配置查询条件')
       return
     }
-    const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
     cb({
       mode: 'builder',
       sql: sqlText,
       builderConfig: builderConfigPayload
     })
-    savedBuilderConfigSnapshot.value = buildBuilderConfigSnapshot()
+    savedBuilderConfigSnapshot.value = builderConfigSnapshot
     ElMessage.success('SQL 已保存')
   } catch (err) {
     const rawMessage = getApiErrorDetail(err) || (err instanceof Error ? err.message : '')
@@ -2096,7 +2100,9 @@ const buildBuilderConfigParams = () => ({
 })
 
 const buildBuilderConfigPayload = () => buildBuilderConfigPayloadUtil(buildBuilderConfigParams())
-const buildSemanticBuilderConfigPayload = () => buildSemanticBuilderConfigPayloadUtil(buildBuilderConfigParams())
+const snapshotSemanticBuilderConfig = () => (
+  toSemanticBuilderConfigPayload(snapshotBuilderConfigPayload(buildBuilderConfigParams())) as Record<string, unknown>
+)
 
 const builderConfigSnapshot = computed(() => buildBuilderConfigSnapshot())
 
@@ -2138,25 +2144,31 @@ const getApiErrorDetail = (err: unknown): string => {
   return data?.msg || data?.detail || ''
 }
 
-const compileCurrentBuilderSql = async (force = false): Promise<string> => {
+const compileCurrentBuilderSql = async (
+  semanticBuilderConfig: Record<string, unknown> = snapshotSemanticBuilderConfig(),
+  snapshot: string = buildBuilderConfigSnapshot(),
+  datasourceId: string = props.datasourceId,
+  semanticConfigId: string = props.semanticConfigId as string,
+  force = false,
+): Promise<string> => {
   if (!validateQueryPagination()) {
     return ''
   }
-  const snapshot = buildBuilderConfigSnapshot()
-  if (!force && compiledSql.value && compiledSqlSnapshot.value === snapshot) {
+  const compileSnapshot = JSON.stringify({ datasourceId, semanticConfigId, snapshot })
+  if (!force && compiledSql.value && compiledSqlSnapshot.value === compileSnapshot) {
     return compiledSql.value
   }
   if (!ensureSemanticConfigSelected()) {
     return ''
   }
   const response = await compileSemanticBuilderSql({
-    datasource_id: props.datasourceId,
-    semantic_config_id: props.semanticConfigId as string,
-    semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>
+    datasource_id: datasourceId,
+    semantic_config_id: semanticConfigId,
+    semantic_builder_config: semanticBuilderConfig,
   })
   const sqlText = String(response.data?.sql || '').trim()
   compiledSql.value = sqlText
-  compiledSqlSnapshot.value = snapshot
+  compiledSqlSnapshot.value = compileSnapshot
   return sqlText
 }
 
@@ -2235,21 +2247,20 @@ const executeQuery = async () => {
   resultTabs.value = []
   activeResultTabIndex.value = 0
   try {
-    const sqlText = await compileCurrentBuilderSql()
-    if (!sqlText) {
-      ElMessage.warning('请先配置查询条件')
-      return
-    }
+    const datasourceId = props.datasourceId
+    const semanticConfigId = props.semanticConfigId as string
+    const memberDatasourceIds = [...selectedMemberDatasourceIds.value]
+    const shouldSkipQueryCache = queryCacheEnabled.value ? skipQueryCache.value : false
+    const semanticBuilderConfig = snapshotSemanticBuilderConfig()
 
     const task = await submitSqlTask({
-      datasource_id: props.datasourceId,
-      member_datasource_ids: selectedMemberDatasourceIds.value,
-      sql: [sqlText],
+      datasource_id: datasourceId,
+      member_datasource_ids: memberDatasourceIds,
       query_type: 'builder',
-      semantic_builder_config: buildSemanticBuilderConfigPayload() as Record<string, unknown>,
-      semantic_config_id: props.semanticConfigId as string,
+      semantic_builder_config: semanticBuilderConfig,
+      semantic_config_id: semanticConfigId,
       query_text: '可视化查询',
-      skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
+      skip_query_cache: shouldSkipQueryCache,
     }, {
       returnTerminalTask: true,
       onProgress: (taskStatus) => {
@@ -2264,7 +2275,7 @@ const executeQuery = async () => {
         const payload = isQuerySucceeded(result)
           ? {
               status: 'succeeded',
-              sql: result.sql || sqlText,
+              sql: result.sql || '',
               columns: result.columns || [],
               data: result.data || [],
               total_count: result.total_count || 0,
@@ -2277,7 +2288,7 @@ const executeQuery = async () => {
             }
           : {
               status: result.status || 'failed',
-              sql: result.sql || sqlText,
+              sql: result.sql || '',
               columns: result.columns || [],
               data: result.data || [],
               total_count: result.total_count || 0,
@@ -2289,7 +2300,7 @@ const executeQuery = async () => {
         return {
           title: memberLabel,
           rawResultData: JSON.stringify(payload),
-          executedSql: result.sql || sqlText,
+          executedSql: result.sql || '',
           memberDatasourceId: result.member_datasource_id,
           memberName: result.member_name,
           status: isQuerySucceeded(result) ? 'success' : 'error',
@@ -2306,7 +2317,7 @@ const executeQuery = async () => {
       resultTabs.value = [{
         title: '结果1',
         rawResultData: rawResultData.value,
-        executedSql: sqlText,
+        executedSql: '',
         status: 'error',
       }]
     }

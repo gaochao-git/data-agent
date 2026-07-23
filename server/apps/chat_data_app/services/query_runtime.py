@@ -849,6 +849,12 @@ async def prepare_sql_batch_request_for_execution(
     datasource: Optional[Dict[str, Any]] = None,
 ) -> QueryTaskCreateRequest:
     """逐条校验批次 SQL，保持每个实际执行单元只能是一条安全 SQL。"""
+    if str(request.query_type or "").strip().lower() == "builder":
+        prepared = await prepare_sql_request_for_execution(
+            request.model_copy(update={"sql": request.sql[0] if request.sql else ""}),
+            datasource,
+        )
+        return prepared.model_copy(update={"sql": [prepared.sql]})
     statements = list(request.sql)
     if len(statements) == 1:
         prepared = await prepare_sql_request_for_execution(request.model_copy(update={"sql": statements[0]}), datasource)

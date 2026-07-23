@@ -19,7 +19,7 @@ export type {
 } from '../types/query'
 
 export function createQueryTask(params: {
-  sql: string[]
+  sql?: string[]
   datasource_id: string
   member_datasource_ids?: string[]
   limit?: number
@@ -32,7 +32,6 @@ export function createQueryTask(params: {
   skip_query_cache?: boolean
 }): Promise<ApiResponse<QueryTaskCreateResult>> {
   const data: Record<string, unknown> = {
-    sql: params.sql,
     datasource_id: params.datasource_id,
     member_datasource_ids: params.member_datasource_ids || [],
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
@@ -41,6 +40,9 @@ export function createQueryTask(params: {
     semantic_config_id: params.semantic_config_id,
     query_text: params.query_text,
     skip_query_cache: params.skip_query_cache ?? false,
+  }
+  if (params.sql !== undefined) {
+    data.sql = params.sql
   }
   if (params.builder_config !== undefined) {
     data.builder_config = params.builder_config

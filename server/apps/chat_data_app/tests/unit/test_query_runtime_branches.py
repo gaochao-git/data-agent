@@ -410,7 +410,6 @@ def test_create_query_task_derives_internal_task_type_from_sql_list(monkeypatch)
     assert asyncio.run(query_runtime.create_query_task(batch))["task_type"] == "sql_batch"
     assert captured[0]["request_payload"]["sql"] == "select 1"
     assert captured[1]["request_payload"]["sql"] == ["select 1", "select 2"]
-
     response = query_runtime.build_query_task_response_data({
         "task_id": "task_a",
         "task_type": "sql",
@@ -440,6 +439,19 @@ def test_create_query_task_derives_internal_task_type_from_sql_list(monkeypatch)
     assert bad_result_response["request_payload"] == {"sql": "select 1"}
     assert bad_result_response["result_payload"] is None
     assert bad_result_response["remote_tasks"] == []
+
+
+def test_query_task_request_allows_builder_without_sql_and_requires_sql_otherwise():
+    builder = QueryTaskCreateRequest(
+        datasource_id="ds_a",
+        query_type="builder",
+        semantic_config_id="cfg_a",
+        semantic_builder_config={"dimensions": [{"semanticName": "城市"}]},
+    )
+
+    assert builder.sql == []
+    with pytest.raises(ValueError, match="SQL 至少包含一条有效语句"):
+        QueryTaskCreateRequest(datasource_id="ds_a")
 
 
 def test_persistent_query_task_result_payload_filters_http_members():

@@ -149,13 +149,17 @@ export const buildBuilderConfigPayload = (params: BuildBuilderConfigParams) => {
   }
 }
 
-export const buildSemanticBuilderConfigPayload = (params: BuildBuilderConfigParams) => {
-  const payload = buildBuilderConfigPayload(params)
-  return {
-    dimensions: payload.dimensions,
-    aggregations: payload.aggregations,
-    filters: payload.filters,
-    orderBy: payload.orderBy,
-    ...buildQueryPaginationPayload(params.pagination),
-  }
-}
+export type BuilderConfigPayload = ReturnType<typeof buildBuilderConfigPayload>
+
+export const toSemanticBuilderConfigPayload = (payload: BuilderConfigPayload) => ({
+  dimensions: payload.dimensions,
+  aggregations: payload.aggregations,
+  filters: payload.filters,
+  orderBy: payload.orderBy,
+  ...(payload.limit === undefined ? {} : { limit: payload.limit }),
+  ...(payload.offset === undefined ? {} : { offset: payload.offset }),
+})
+
+export const snapshotBuilderConfigPayload = (params: BuildBuilderConfigParams) => (
+  JSON.parse(JSON.stringify(buildBuilderConfigPayload(params))) as BuilderConfigPayload
+)

@@ -102,10 +102,10 @@ index.vue
 
 ### 2. 可视化查询
 
-可视化查询先把页面 Builder 配置编译成 SQL，再使用统一异步查询任务执行。
+可视化查询的预览和执行入口分离：预览由后端编译 DSL 返回 SQL；执行只提交 DSL，由查询任务服务端编译后进入统一异步任务。
 
 ```text
-index.vue
+点击“预览 SQL”
   -> QueryBuilder/index.vue
   -> compileCurrentBuilderSql()
   -> api/query.ts: compileSemanticBuilderSql()
@@ -119,7 +119,9 @@ QueryBuilder/index.vue
   -> POST /agents/api/chatdata/query-tasks
   -> routers/query_execution.py: create_query_task()
   -> services/query_task_service.py: create_query_task_for_user()
-  -> services/query_runtime.py: prepare_sql_request_for_execution() / create_query_task()
+  -> services/query_runtime.py: prepare_sql_batch_request_for_execution()
+  -> prepare_sql_request_for_execution()          # 服务端编译 DSL 为实际 SQL
+  -> create_query_task()
   -> QueryTaskService.schedule_query_task()
   -> query_runtime.run_sql_query_task()
   -> build_execute_sql_result_data()
@@ -131,7 +133,8 @@ QueryBuilder/index.vue
 执行模式：
 
 - `compileSemanticBuilderSql()` 只做 DSL 编译预览，不执行 SQL，不写查询任务。
-- 点击执行后调用 `createQueryTask()` 创建 `task_type=sql`、`query_type=builder` 的异步任务。
+- 点击执行只传 `semantic_builder_config`、`semantic_config_id` 和执行对象；不调用预览接口，也不传 SQL。
+- `createQueryTask()` 在服务端按认证用户和指标集编译 Builder DSL，再创建 `task_type=sql`、`query_type=builder` 的异步任务。
 - 后端 `create_query_task_for_user()` 创建任务后立即 `schedule_query_task()` 后台执行。
 - 前端 `useQueryTask.waitForTask()` 轮询 `GET /query-tasks/{task_id}`，只在任务进入 `succeeded`、`partial_success`、`failed`、`cancelled` 等终态后更新页面结果。
 - 可视化查询和 SQL 查询共用 `query_runtime.run_sql_query_task()`、`build_execute_sql_result_data()`、`execute_sql_for_member()`，区别在请求中额外带 `semantic_builder_config`、`semantic_config_id` 和 `query_type=builder`。

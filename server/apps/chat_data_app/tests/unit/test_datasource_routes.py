@@ -3501,45 +3501,60 @@ def test_query_runtime_helper_functions(monkeypatch):
 
 
 def test_compile_semantic_builder_sql_endpoint_error_branches(monkeypatch):
-    monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", lambda **_kwargs: asyncio.sleep(0, result={"sql": "select 1", "builder_config": {"ok": True}}))
-    ok = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(CompileSemanticBuilderSqlRequest(
+    _mock_authenticated_user(monkeypatch, user_id="preview_owner")
+    captured = {}
+
+    async def compile_for_current_user(**kwargs):
+        captured.update(kwargs)
+        return {"sql": "select 1", "builder_config": {"ok": True}}
+
+    body = CompileSemanticBuilderSqlRequest(
         datasource_id="ds_a",
         semantic_config_id="cfg_a",
         semantic_builder_config={"metrics": []},
-    )))
+    )
+    monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", compile_for_current_user)
+    ok = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
     assert _payload(ok)["data"]["sql"] == "select 1"
+    assert captured["user_id"] == "preview_owner"
+
+    monkeypatch.setattr(
+        query_execution_routes,
+        "_get_current_user",
+        lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")),
+    )
+    unauthenticated = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
+    assert _payload(unauthenticated)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+
+    _mock_authenticated_user(monkeypatch, user_id="other_user")
+
+    async def reject_private_config(**kwargs):
+        assert kwargs["user_id"] == "other_user"
+        raise LookupError("语义配置不存在: cfg_private")
+
+    monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", reject_private_config)
+    private_config = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
+    assert _payload(private_config)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def raise_lookup(**_kwargs):
         raise LookupError("配置不存在")
 
     monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", raise_lookup)
-    missing = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(CompileSemanticBuilderSqlRequest(
-        datasource_id="ds_a",
-        semantic_config_id="cfg_a",
-        semantic_builder_config={"metrics": []},
-    )))
+    missing = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
     assert _payload(missing)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def raise_value(**_kwargs):
         raise ValueError("DSL 不合法")
 
     monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", raise_value)
-    invalid = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(CompileSemanticBuilderSqlRequest(
-        datasource_id="ds_a",
-        semantic_config_id="cfg_a",
-        semantic_builder_config={"metrics": []},
-    )))
+    invalid = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
     assert _payload(invalid)["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def raise_runtime(**_kwargs):
         raise RuntimeError("compiler down")
 
     monkeypatch.setattr(query_execution_routes, "compile_semantic_builder_sql", raise_runtime)
-    failed = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(CompileSemanticBuilderSqlRequest(
-        datasource_id="ds_a",
-        semantic_config_id="cfg_a",
-        semantic_builder_config={"metrics": []},
-    )))
+    failed = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
     assert _payload(failed)["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBuilderConfigPayload } from '../builderConfig'
+import { buildBuilderConfigPayload, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload, type BuildBuilderConfigParams } from '../builderConfig'
 import { buildSemanticSelectedTables } from '../semanticSelectedTables'
 
 describe('QueryBuilder configuration utilities', () => {
@@ -8,7 +8,7 @@ describe('QueryBuilder configuration utilities', () => {
       semanticConfigId: 'semantic-1',
       semanticConfigName: '订单指标集',
       selectedTables: [{ name: 'orders', alias: 'o', label: '订单' }],
-      dimensions: [{ id: 'd1', table: 'orders', tableAlias: 'o', column: 'city', label: '城市', transform: 'raw' }],
+      dimensions: [{ id: 'd1', table: 'orders', tableAlias: 'o', column: 'city', label: '城市', transform: 'raw' as const }],
       aggregations: [{ id: 'a1', table: 'orders', tableAlias: 'o', column: 'amount', label: '金额', func: 'SUM' }],
       filters: [
         { id: 'f1', table: 'orders', tableAlias: 'o', column: 'city', operator: '=', value: '上海', logic: 'AND' },
@@ -61,5 +61,44 @@ describe('QueryBuilder configuration utilities', () => {
       expect.objectContaining({ name: 'users', alias: 'u', joinOn: expect.objectContaining({ leftAlias: 'o' }) }),
       expect.objectContaining({ name: 'regions', alias: 'r', joinOn: expect.objectContaining({ leftAlias: 'u' }) }),
     ])
+  })
+
+  it('creates an immutable semantic Builder payload snapshot', () => {
+    const filters = [{ id: 'f1', table: 'orders', tableAlias: 'o', column: 'city', operator: 'IN', value: ['上海'], logic: 'AND' as const }]
+    const snapshot = toSemanticBuilderConfigPayload(snapshotBuilderConfigPayload({
+      semanticConfigId: 'semantic-1',
+      selectedTables: [{ name: 'orders', alias: 'o', label: '订单' }],
+      dimensions: [{ id: 'd1', table: 'orders', tableAlias: 'o', column: 'city', label: '城市', transform: 'raw' as const }],
+      aggregations: [],
+      filters,
+      advancedFilterTree: null,
+      orderBy: [],
+      pagination: { enabled: true, limit: 20, offset: 0 },
+    }))
+
+    filters[0]!.value.push('北京')
+
+    expect(snapshot.filters).toEqual([expect.objectContaining({ value: ['上海'] })])
+  })
+
+  it('keeps the saved Builder config and semantic payload on one snapshot', () => {
+    const filters = [{ id: 'f1', table: 'orders', tableAlias: 'o', column: 'city', operator: '=', value: '上海', logic: 'AND' as const }]
+    const params: BuildBuilderConfigParams = {
+      semanticConfigId: 'semantic-1',
+      selectedTables: [{ name: 'orders', alias: 'o', label: '订单' }],
+      dimensions: [{ id: 'd1', table: 'orders', tableAlias: 'o', column: 'city', label: '城市', transform: 'raw' }],
+      aggregations: [],
+      filters,
+      advancedFilterTree: null,
+      orderBy: [],
+      pagination: { enabled: true, limit: 20, offset: 0 },
+    }
+    const savedConfig = snapshotBuilderConfigPayload(params)
+    const semanticConfig = toSemanticBuilderConfigPayload(savedConfig)
+
+    filters[0]!.value = '北京'
+
+    expect(savedConfig.filters).toEqual(semanticConfig.filters)
+    expect(savedConfig.filters).toEqual([expect.objectContaining({ value: '上海' })])
   })
 })

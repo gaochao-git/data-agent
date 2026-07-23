@@ -6,7 +6,7 @@ const DEFAULT_POLL_INTERVAL_MS = 1500
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
 interface SubmitSqlTaskParams {
-  sql: string[]
+  sql?: string[]
   datasource_id: string
   member_datasource_ids?: string[]
   limit?: number

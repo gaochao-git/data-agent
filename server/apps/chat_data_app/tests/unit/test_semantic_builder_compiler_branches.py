@@ -417,6 +417,25 @@ async def test_compile_semantic_builder_sql_uses_runtime_config(monkeypatch):
     assert result["builder_config"]["dimensions"][0]["column"] == "city"
 
 
+@pytest.mark.asyncio
+async def test_load_runtime_semantic_config_rejects_other_users_private_config(monkeypatch):
+    class PrivateConfigManager:
+        async def get_datasource_async(self, _datasource_id):
+            return {"id": "ds_private", "source_type": "mysql"}
+
+        async def get_runtime_semantic_config_async(self, _datasource_id, config_id, user_id=""):
+            if config_id == "cfg_private" and user_id == "owner_user":
+                return {"id": config_id, "enabled": True, "metrics": [], "dimensions": []}
+            return None
+
+    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: PrivateConfigManager())
+
+    owner_config = await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="owner_user")
+    assert owner_config["id"] == "cfg_private"
+    with pytest.raises(LookupError, match="语义配置不存在"):
+        await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="other_user")
+
+
 def test_semantic_sql_generator_remaining_join_and_metric_branches(monkeypatch):
     config = build_semantic_config()
     config["metrics"].append({"name": "总行数", "expression": "COUNT(*)", "table": "orders"})

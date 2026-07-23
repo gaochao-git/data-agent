@@ -114,7 +114,7 @@ class QueryTaskCreateRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, description="来源会话ID")
     query_text: Optional[str] = Field(default=None, description="原始用户问题或查询说明")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
-    sql: List[str] = Field(..., min_length=1, description="要执行的 SQL 语句列表")
+    sql: List[str] = Field(default_factory=list, description="要执行的 SQL 语句列表；builder 查询由服务端根据 DSL 编译")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
     query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
@@ -125,6 +125,11 @@ class QueryTaskCreateRequest(BaseModel):
     @model_validator(mode="after")
     def validate_sql_list(self):
         self.sql = [str(item or "").strip() for item in self.sql if str(item or "").strip()]
+        query_type = str(self.query_type or "sql").strip().lower()
+        if query_type == "builder":
+            if len(self.sql) > 1:
+                raise ValueError("SQL 批次不支持语义可视化查询")
+            return self
         if not self.sql:
             raise ValueError("SQL 至少包含一条有效语句")
         if len(self.sql) > 1 and self.semantic_builder_config:
