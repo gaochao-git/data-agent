@@ -26,9 +26,33 @@ export const formatDateTimeValue = (value?: Date | string | null): string => {
   return date ? formatLocalDateTime(date) : ''
 }
 
-export const buildRecentDaysDateTimeRange = (days: number): [string, string] => {
+export const buildRecentDaysDateTimeRange = (days: number): [string, string] =>
+  formatDateTimeRange(buildRecentDaysRange(days))
+
+// 以下返回 [Date, Date],供"最近X分钟/小时/天"快捷按钮使用
+export const buildRecentMinutesRange = (minutes: number): [Date, Date] => {
+  const end = new Date()
+  const start = new Date(end)
+  start.setMinutes(start.getMinutes() - minutes)
+  return [start, end]
+}
+
+export const buildRecentHoursRange = (hours: number): [Date, Date] => {
+  const end = new Date()
+  const start = new Date(end)
+  start.setHours(start.getHours() - hours)
+  return [start, end]
+}
+
+export const buildRecentDaysRange = (days: number): [Date, Date] => {
   const end = new Date()
   const start = new Date(end)
   start.setDate(start.getDate() - days)
-  return [formatLocalDateTime(start), formatLocalDateTime(end)]
+  return [start, end]
 }
+
+// 将 [Date, Date] 区间格式化为 el-date-picker 字符串值
+export const formatDateTimeRange = (range: [Date, Date]): [string, string] => [
+  formatLocalDateTime(range[0]),
+  formatLocalDateTime(range[1])
+]

@@ -163,3 +163,4 @@ logs/*
 server/start.sh
 server/coverage.json
 server/coverage.xml
+/.workbuddy/

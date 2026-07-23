@@ -7,7 +7,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cancelGlobalRunningQueryHistory, getGlobalQueryHistory } from '../api'
 import type { DataSource, SqlHistoryItem } from '../types'
-import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
+import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
 import { cleanDisplayError } from '../utils'
 
 const props = withDefaults(defineProps<{
@@ -26,6 +26,17 @@ const pageSize = ref(20)
 const errorDialogVisible = ref(false)
 const errorDialogMessage = ref('')
 const buildDefaultTimeRange = () => buildRecentDaysDateTimeRange(7)
+
+const applyTimeShortcut = (unit: 'minutes' | 'hours' | 'days', value: number) => {
+  const range =
+    unit === 'minutes'
+      ? buildRecentMinutesRange(value)
+      : unit === 'hours'
+        ? buildRecentHoursRange(value)
+        : buildRecentDaysRange(value)
+  filters.value.time_range = formatDateTimeRange(range)
+  handleSearch()
+}
 const filters = ref({
   datasource_id: '',
   username: '',
@@ -313,6 +324,8 @@ defineExpose({
         <select v-model="filters.status" class="h-8 w-28 rounded border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none">
           <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
         </select>
+        <input v-model="filters.username" class="h-8 w-40 rounded border border-slate-200 px-2 text-xs text-slate-700 outline-none" placeholder="用户名" @keyup.enter="handleSearch" />
+        <input v-model="filters.keyword" class="h-8 w-64 rounded border border-slate-200 px-2 text-xs text-slate-700 outline-none" placeholder="SQL 关键词" @keyup.enter="handleSearch" />
         <el-date-picker
           v-model="filters.time_range"
           type="datetimerange"
@@ -322,8 +335,13 @@ defineExpose({
           end-placeholder="结束时间"
           class="global-sql-history-time-picker"
         />
-        <input v-model="filters.username" class="h-8 w-40 rounded border border-slate-200 px-2 text-xs text-slate-700 outline-none" placeholder="用户名" @keyup.enter="handleSearch" />
-        <input v-model="filters.keyword" class="h-8 min-w-[220px] flex-1 rounded border border-slate-200 px-2 text-xs text-slate-700 outline-none" placeholder="SQL 关键词" @keyup.enter="handleSearch" />
+        <div class="flex items-center gap-1">
+          <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyTimeShortcut('minutes', 5)">5分钟</button>
+          <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyTimeShortcut('minutes', 30)">30分钟</button>
+          <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyTimeShortcut('hours', 2)">2小时</button>
+          <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyTimeShortcut('hours', 24)">1天</button>
+          <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyTimeShortcut('days', 7)">7天</button>
+        </div>
         <button class="h-8 rounded bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700" @click="handleSearch">查询</button>
         <button class="h-8 rounded border border-slate-200 px-3 text-xs text-slate-600 hover:bg-slate-50" @click="handleReset">重置</button>
         <button

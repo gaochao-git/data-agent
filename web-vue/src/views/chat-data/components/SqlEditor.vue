@@ -20,7 +20,7 @@ import AiGeneratedNotice from './AiGeneratedNotice.vue'
 import { SQL_FUNCTION_GROUPS, getSqlFunctionCatalog, isQuerySucceeded } from '../utils'
 import type { ChatDataSqlChangePayload, ExecutionTargetOption, SqlHistoryItem } from '../types'
 import type { SqlFunctionCatalogItem, SqlFunctionGroupKey } from '../utils'
-import { buildRecentDaysDateTimeRange } from '../utils/dateTime'
+import { buildRecentDaysDateTimeRange, buildRecentMinutesRange, buildRecentHoursRange, buildRecentDaysRange, formatDateTimeRange } from '../utils/dateTime'
 
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true })
 const renderMarkdown = (text: string) => md.render(text)
@@ -597,6 +597,17 @@ const historyTotal = ref(0)
 const historySourceFilter = ref<'all' | 'sql' | 'agent' | 'builder' | 'dashboard'>('all')
 const historyStatusFilter = ref<'all' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout' | 'kill_failed'>('all')
 const buildDefaultHistoryTimeRange = () => buildRecentDaysDateTimeRange(7)
+
+const applyHistoryTimeShortcut = (unit: 'minutes' | 'hours' | 'days', value: number) => {
+  const range =
+    unit === 'minutes'
+      ? buildRecentMinutesRange(value)
+      : unit === 'hours'
+        ? buildRecentHoursRange(value)
+        : buildRecentDaysRange(value)
+  historyTimeRange.value = formatDateTimeRange(range)
+  loadQueryHistory()
+}
 const historyTimeRange = ref<[string, string] | null>(buildDefaultHistoryTimeRange())
 const defaultVisibleHistoryColumnKeys = [
   'source',
@@ -2542,6 +2553,13 @@ defineExpose({
             style="width: 360px"
             @change="handleHistoryFilterChange"
           />
+          <div class="flex items-center gap-1">
+            <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyHistoryTimeShortcut('minutes', 5)">5分钟</button>
+            <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyHistoryTimeShortcut('minutes', 30)">30分钟</button>
+            <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyHistoryTimeShortcut('hours', 2)">2小时</button>
+            <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyHistoryTimeShortcut('hours', 24)">1天</button>
+            <button class="h-8 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50" @click="applyHistoryTimeShortcut('days', 7)">7天</button>
+          </div>
         </label>
         <el-button :loading="historyLoading" @click="loadQueryHistory">刷新</el-button>
         <el-button plain :loading="stoppingAllHistory" @click="handleCancelAllRunningHistory">停止全部SQL</el-button>
