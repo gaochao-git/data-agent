@@ -358,6 +358,32 @@ def test_build_usage_from_llm_calls_uses_current_call_as_context():
     assert usage["total_tokens"] == 660
 
 
+def test_build_usage_from_llm_calls_includes_cache_metrics_only_when_reported():
+    usage = build_usage_from_llm_calls([
+        {"index": 1, "input_tokens": 100, "actual_input_tokens": 120, "cached_input_tokens": 0},
+        {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
+    ], 1000)
+
+    assert usage["current_cached_input_tokens"] == 320
+    assert usage["cumulative_cached_input_tokens"] == 320
+    assert usage["current_cache_hit_rate"] == 80.0
+    assert usage["cumulative_cache_hit_rate"] == 61.5
+
+    partial_usage = build_usage_from_llm_calls([
+        {"index": 1, "input_tokens": 100, "cached_input_tokens": 80},
+        {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "cached_input_tokens": 320},
+    ], 1000)
+    assert partial_usage["cumulative_cached_input_tokens"] == 320
+    assert partial_usage["cumulative_cache_hit_rate"] == 80.0
+
+    unsupported_usage = build_usage_from_llm_calls([
+        {"index": 1, "input_tokens": 100, "actual_input_tokens": 120},
+    ], 1000)
+    assert "current_cached_input_tokens" not in unsupported_usage
+    assert "cumulative_cached_input_tokens" not in unsupported_usage
+    assert "current_cache_hit_rate" not in unsupported_usage
+
+
 def test_build_usage_from_llm_calls_returns_none_for_empty_calls():
     assert build_usage_from_llm_calls([], 1000) is None
 
@@ -396,6 +422,60 @@ def test_merge_response_usage_supports_message_and_result_wrapper():
     ignored_record = {"input_tokens": 1}
     _merge_response_usage(ignored_record, SimpleNamespace(result=[]))
     assert ignored_record == {"input_tokens": 1}
+
+
+def test_merge_response_usage_extracts_normalized_and_openai_cache_metrics():
+    normalized_record = {"input_tokens": 1}
+    _merge_response_usage(normalized_record, AIMessage(
+        content="ok",
+        usage_metadata={
+            "input_tokens": 100,
+            "output_tokens": 2,
+            "total_tokens": 102,
+            "input_token_details": {"cache_read": 80},
+        },
+    ))
+    assert normalized_record["cached_input_tokens"] == 80
+
+    priority_record = {"input_tokens": 1}
+    _merge_response_usage(priority_record, AIMessage(
+        content="ok",
+        usage_metadata={
+            "input_tokens": 100,
+            "output_tokens": 2,
+            "total_tokens": 102,
+            "input_token_details": {"priority_cache_read": 80},
+        },
+    ))
+    assert priority_record["cached_input_tokens"] == 80
+
+    raw_record = {"input_tokens": 1}
+    _merge_response_usage(raw_record, AIMessage(
+        content="ok",
+        usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
+        response_metadata={"token_usage": {"prompt_tokens_details": {"cached_tokens": 0}}},
+    ))
+    assert raw_record["cached_input_tokens"] == 0
+
+    raw_usage_record = {"input_tokens": 1}
+    _merge_response_usage(raw_usage_record, AIMessage(
+        content="ok",
+        response_metadata={"token_usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 2,
+            "total_tokens": 102,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        }},
+    ))
+    assert raw_usage_record["actual_input_tokens"] == 100
+    assert raw_usage_record["cached_input_tokens"] == 80
+
+    unsupported_record = {"input_tokens": 1}
+    _merge_response_usage(unsupported_record, AIMessage(
+        content="ok",
+        usage_metadata={"input_tokens": 100, "output_tokens": 2, "total_tokens": 102},
+    ))
+    assert "cached_input_tokens" not in unsupported_record
 
 
 def test_bind_and_get_agent_context_usage_handles_weakref_and_attribute_fallback():

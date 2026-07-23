@@ -120,7 +120,11 @@ def create_chat_data_agent(
     )
 
     return create_agent(
-        model=create_streaming_chat_model(model_id=model_id, enable_thinking=enable_thinking),
+        model=create_streaming_chat_model(
+            model_id=model_id,
+            enable_thinking=enable_thinking,
+            stream_usage=True,
+        ),
         tools=tools,
         system_prompt=effective_system_prompt,
         middleware=middleware,

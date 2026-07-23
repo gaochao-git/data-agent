@@ -182,6 +182,10 @@ export interface ChatDataTokenUsage {
   current_input_tokens?: number
   max_input_tokens?: number
   cumulative_input_tokens?: number
+  current_cached_input_tokens?: number
+  cumulative_cached_input_tokens?: number
+  current_cache_hit_rate?: number
+  cumulative_cache_hit_rate?: number
   output_tokens?: number
   total_tokens?: number
   context_window?: number
@@ -199,6 +203,7 @@ export interface ChatDataTokenUsage {
     overhead_tokens?: number
     output_tokens?: number
     actual_input_tokens?: number
+    cached_input_tokens?: number
     actual_total_tokens?: number
     total_tokens?: number
     estimated?: boolean

@@ -417,7 +417,13 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(name="agent")
 
-    monkeypatch.setattr(chat_data_agent, "create_streaming_chat_model", lambda **_kwargs: FakeChatModel())
+    model_kwargs = {}
+
+    def fake_create_streaming_chat_model(**kwargs):
+        model_kwargs.update(kwargs)
+        return FakeChatModel()
+
+    monkeypatch.setattr(chat_data_agent, "create_streaming_chat_model", fake_create_streaming_chat_model)
     monkeypatch.setattr(chat_data_agent, "create_semantic_selection_tools_bundle", fake_create_semantic_selection_tools_bundle)
     monkeypatch.setattr(chat_data_agent, "semantic_query_tool", "semantic_query_tool")
     monkeypatch.setattr(chat_data_agent, "calculator_tool", "calculator_tool")
@@ -438,6 +444,8 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert selection_tool_kwargs["datasource_id"] == "ds_a"
     assert selection_tool_kwargs["user_id"] == "u1"
     assert selection_tool_kwargs["tool_result_budget"] is not None
+    assert model_kwargs["model_id"] == "m1"
+    assert model_kwargs["stream_usage"] is True
     assert captured["checkpointer"] == "ckpt"
     assert captured["system_prompt"] == "智能问数系统提示词"
     assert captured["state_schema"] is chat_data_agent.ChatDataAgentState

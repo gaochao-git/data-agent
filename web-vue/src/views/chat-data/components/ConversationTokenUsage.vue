@@ -138,6 +138,25 @@ const detailRows = computed(() => {
   ))
 })
 
+const formatTokenCount = (value: number) => formatTokenUsageDisplay({ used: value, total: 1 }).split(' / ')[0] || ''
+const formatPercentage = (value: number) => `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`
+const cacheUsageRows = computed(() => {
+  const usage = props.usage
+  if (!usage || typeof usage.cumulative_cached_input_tokens !== 'number') return []
+  const rows = [] as Array<{ label: string; value: string }>
+  if (typeof usage.current_cached_input_tokens === 'number') {
+    rows.push({ label: '当前命中', value: formatTokenCount(usage.current_cached_input_tokens) })
+  }
+  rows.push({ label: '累计命中', value: formatTokenCount(usage.cumulative_cached_input_tokens) })
+  if (typeof usage.current_cache_hit_rate === 'number') {
+    rows.push({ label: '当前命中率', value: formatPercentage(usage.current_cache_hit_rate) })
+  }
+  if (typeof usage.cumulative_cache_hit_rate === 'number') {
+    rows.push({ label: '累计命中率', value: formatPercentage(usage.cumulative_cache_hit_rate) })
+  }
+  return rows
+})
+
 const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => ({
   key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
   label: labelPrefix ? `${labelPrefix} · ${item.label}` : item.label,
@@ -254,6 +273,15 @@ defineExpose({
         <div v-for="row in detailRows" :key="row.label" class="rounded bg-gray-50 px-2 py-1">
           <div class="text-[11px] text-gray-400">{{ row.label }}</div>
           <div class="font-medium text-gray-700">{{ formatTokenUsageDisplay({ used: row.value, total: 1 }).split(' / ')[0] }}</div>
+        </div>
+      </div>
+      <div v-if="cacheUsageRows.length" class="mb-2 border-t border-gray-100 pt-2">
+        <div class="mb-1 text-[11px] text-gray-400">模型缓存</div>
+        <div class="grid grid-cols-2 gap-2">
+          <div v-for="row in cacheUsageRows" :key="row.label" class="rounded bg-emerald-50 px-2 py-1">
+            <div class="text-[11px] text-emerald-600">{{ row.label }}</div>
+            <div class="font-medium text-emerald-800">{{ row.value }}</div>
+          </div>
         </div>
       </div>
       <div v-if="messageRows.length" class="space-y-1.5">

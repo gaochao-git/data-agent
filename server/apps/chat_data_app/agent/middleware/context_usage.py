@@ -364,6 +364,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         "context_compression": current_call.get("context_compression"),
         "breakdown": list(current_call.get("breakdown") or []),
     })
+    _add_cached_input_usage(payload, calls, current_call)
     return payload
 
 
@@ -498,18 +499,170 @@ def _request_context_compression(request: Any) -> dict[str, Any] | None:
 
 
 def _merge_response_usage(record: dict[str, Any], response: Any) -> None:
-    message = None
+    message = _extract_response_message(response)
+    response_usage = _extract_response_usage(message)
+    if response_usage is not None:
+        input_tokens, output_tokens, total_tokens = response_usage
+        record["actual_input_tokens"] = input_tokens
+        record["output_tokens"] = output_tokens
+        record["actual_total_tokens"] = total_tokens
+    cached_input_tokens = _extract_cached_input_tokens(message)
+    if cached_input_tokens is not None:
+        record["cached_input_tokens"] = cached_input_tokens
+
+
+def _add_cached_input_usage(
+    payload: dict[str, Any],
+    calls: list[dict[str, Any]],
+    current_call: dict[str, Any],
+) -> None:
+    """聚合模型实际返回的缓存命中数，缺失时不改变既有 payload。"""
+    cache_calls = [call for call in calls if _optional_non_negative_int(call.get("cached_input_tokens")) is not None]
+    if not cache_calls:
+        return
+    current_cached_tokens = _optional_non_negative_int(current_call.get("cached_input_tokens"))
+    if current_cached_tokens is not None:
+        payload["current_cached_input_tokens"] = current_cached_tokens
+        _add_cache_hit_rate(
+            payload,
+            "current_cache_hit_rate",
+            current_cached_tokens,
+            _optional_non_negative_int(current_call.get("actual_input_tokens")),
+        )
+    calls_with_reported_input = [
+        call for call in cache_calls
+        if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
+    ]
+    cumulative_cached_tokens = sum(
+        _optional_non_negative_int(call.get("cached_input_tokens")) or 0
+        for call in calls_with_reported_input
+    )
+    payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
+    reported_input_tokens = [
+        _optional_non_negative_int(call.get("actual_input_tokens"))
+        for call in calls_with_reported_input
+    ]
+    _add_cache_hit_rate(
+        payload,
+        "cumulative_cache_hit_rate",
+        cumulative_cached_tokens,
+        sum(tokens for tokens in reported_input_tokens if tokens is not None),
+        has_reported_input=bool(calls_with_reported_input),
+    )
+
+
+def _add_cache_hit_rate(
+    payload: dict[str, Any],
+    key: str,
+    cached_tokens: int,
+    input_tokens: int | None,
+    *,
+    has_reported_input: bool = True,
+) -> None:
+    if not has_reported_input or input_tokens is None or input_tokens <= 0:
+        return
+    payload[key] = round((cached_tokens / input_tokens) * 100, 1)
+
+
+def _extract_response_message(response: Any) -> AIMessage | None:
     if isinstance(response, AIMessage):
-        message = response
-    else:
-        result = getattr(response, "result", None)
-        if isinstance(result, list) and result and isinstance(result[0], AIMessage):
-            message = result[0]
-    usage = getattr(message, "usage_metadata", None) if message is not None else None
+        return response
+    result = getattr(response, "result", None)
+    if isinstance(result, list) and result and isinstance(result[0], AIMessage):
+        return result[0]
+    return None
+
+
+def _extract_cached_input_tokens(message: AIMessage | None) -> int | None:
+    if message is None:
+        return None
+    usage = getattr(message, "usage_metadata", None)
     if isinstance(usage, dict):
-        record["actual_input_tokens"] = int(usage.get("input_tokens") or 0)
-        record["output_tokens"] = int(usage.get("output_tokens") or 0)
-        record["actual_total_tokens"] = int(usage.get("total_tokens") or (record["actual_input_tokens"] + record["output_tokens"]))
+        cached_tokens = _cached_tokens_from_details(usage.get("input_token_details"))
+        if cached_tokens is not None:
+            return cached_tokens
+    response_metadata = getattr(message, "response_metadata", None)
+    if not isinstance(response_metadata, dict):
+        return None
+    for payload in (
+        response_metadata.get("token_usage"),
+        response_metadata.get("usage"),
+        response_metadata,
+    ):
+        cached_tokens = _cached_tokens_from_openai_usage(payload)
+        if cached_tokens is not None:
+            return cached_tokens
+    return None
+
+
+def _extract_response_usage(message: AIMessage | None) -> tuple[int, int, int] | None:
+    if message is None:
+        return None
+    usage = getattr(message, "usage_metadata", None)
+    if isinstance(usage, dict) and any(key in usage for key in ("input_tokens", "output_tokens", "total_tokens")):
+        input_tokens = _optional_non_negative_int(usage.get("input_tokens")) or 0
+        output_tokens = _optional_non_negative_int(usage.get("output_tokens")) or 0
+        total_tokens = _optional_non_negative_int(usage.get("total_tokens"))
+        return input_tokens, output_tokens, total_tokens if total_tokens is not None else input_tokens + output_tokens
+    raw_usage = _response_metadata_usage(message)
+    if raw_usage is None:
+        return None
+    input_tokens = _optional_non_negative_int(raw_usage.get("prompt_tokens"))
+    if input_tokens is None:
+        input_tokens = _optional_non_negative_int(raw_usage.get("input_tokens"))
+    output_tokens = _optional_non_negative_int(raw_usage.get("completion_tokens"))
+    if output_tokens is None:
+        output_tokens = _optional_non_negative_int(raw_usage.get("output_tokens"))
+    total_tokens = _optional_non_negative_int(raw_usage.get("total_tokens"))
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return None
+    safe_input_tokens = input_tokens or 0
+    safe_output_tokens = output_tokens or 0
+    return safe_input_tokens, safe_output_tokens, total_tokens if total_tokens is not None else safe_input_tokens + safe_output_tokens
+
+
+def _response_metadata_usage(message: AIMessage) -> dict[str, Any] | None:
+    response_metadata = getattr(message, "response_metadata", None)
+    if not isinstance(response_metadata, dict):
+        return None
+    for payload in (
+        response_metadata.get("token_usage"),
+        response_metadata.get("usage"),
+        response_metadata,
+    ):
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _cached_tokens_from_details(details: Any) -> int | None:
+    if not isinstance(details, dict):
+        return None
+    for key in ("cache_read", "priority_cache_read", "flex_cache_read", "cached_tokens"):
+        cached_tokens = _optional_non_negative_int(details.get(key))
+        if cached_tokens is not None:
+            return cached_tokens
+    return None
+
+
+def _cached_tokens_from_openai_usage(usage: Any) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    cached_tokens = _cached_tokens_from_details(usage.get("input_token_details"))
+    if cached_tokens is not None:
+        return cached_tokens
+    details = usage.get("prompt_tokens_details")
+    return _cached_tokens_from_details(details)
+
+
+def _optional_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        token_count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return token_count if token_count >= 0 else None
 
 
 def _get_agent_context_usage(agent: Any) -> dict[str, Any] | None:
