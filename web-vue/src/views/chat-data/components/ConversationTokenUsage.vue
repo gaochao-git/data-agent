@@ -260,7 +260,7 @@ defineExpose({
     </button>
     <div
       v-if="panelOpen"
-      class="fixed z-[10000] rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs text-gray-600"
+      class="fixed z-[10000] max-h-[calc(100vh-32px)] overflow-y-auto rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
       :style="panelStyle"
     >
       <div class="flex items-center justify-between mb-2">
@@ -269,15 +269,24 @@ defineExpose({
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
-      <div class="grid grid-cols-2 gap-2 mb-2">
+      <div class="grid grid-cols-2 gap-2 mb-2 sm:grid-cols-4">
         <div v-for="row in detailRows" :key="row.label" class="rounded bg-gray-50 px-2 py-1">
           <div class="text-[11px] text-gray-400">{{ row.label }}</div>
           <div class="font-medium text-gray-700">{{ formatTokenUsageDisplay({ used: row.value, total: 1 }).split(' / ')[0] }}</div>
         </div>
       </div>
+      <div class="mb-2">
+        <div class="mb-1 flex items-center justify-between text-[11px] text-gray-400">
+          <span>输入预算占用</span>
+          <span>{{ usageDisplay }} · {{ usagePercentageText }}%</span>
+        </div>
+        <div class="h-1.5 overflow-hidden rounded-full bg-gray-100">
+          <div class="h-full rounded-full bg-blue-400" :style="{ width: `${usagePercentage}%` }"></div>
+        </div>
+      </div>
       <div v-if="cacheUsageRows.length" class="mb-2 border-t border-gray-100 pt-2">
         <div class="mb-1 text-[11px] text-gray-400">模型缓存</div>
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div v-for="row in cacheUsageRows" :key="row.label" class="rounded bg-emerald-50 px-2 py-1">
             <div class="text-[11px] text-emerald-600">{{ row.label }}</div>
             <div class="font-medium text-emerald-800">{{ row.value }}</div>
@@ -314,7 +323,7 @@ defineExpose({
             </button>
           </div>
         </div>
-        <div class="max-h-[300px] overflow-auto pr-1 space-y-1.5">
+        <div class="max-h-[220px] overflow-auto pr-1 space-y-1.5">
           <div v-for="item in messageRows" :key="item.key" class="rounded border border-gray-100 bg-white px-2 py-1">
             <button type="button" class="w-full border-none bg-transparent p-0 text-left cursor-pointer" @click="toggleMessage(item.key)">
               <div class="flex items-center justify-between gap-2">
