@@ -717,6 +717,32 @@ def test_cancel_running_query_history_keeps_batch_when_one_execution_fails(route
     assert asyncio.run(read_task_status()) == "failed"
 
 
+def test_cancel_running_query_history_continues_when_failure_status_update_fails(route_db, monkeypatch):
+    asyncio.run(_seed_running_query_history(route_db))
+    cancelled_ids = []
+
+    async def fake_cancel(execution, **_kwargs):
+        if execution.execution_id == "ex_u1_ds1_pending":
+            raise RuntimeError("stop failed")
+        cancelled_ids.append(execution.execution_id)
+        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+
+    async def failing_update(execution_id, **_kwargs):
+        if execution_id == "ex_u1_ds1_pending":
+            raise RuntimeError("status update failed")
+
+    monkeypatch.setattr(query_providers.query_task_service, "cancel_query_execution", fake_cancel)
+    monkeypatch.setattr(query_providers.query_task_service, "update_query_execution", failing_update)
+
+    response = asyncio.run(query_history_routes.cancel_my_running_query_history(_make_request()))
+    body = _payload(response)
+
+    assert body["status"] == "success"
+    assert body["data"]["cancelled"] == 1
+    assert body["data"]["failed"] == 1
+    assert cancelled_ids == ["ex_u1_ds2_pending"]
+
+
 def test_get_query_history_result_success_and_not_found(route_db):
     asyncio.run(_seed_query_history(route_db))
 

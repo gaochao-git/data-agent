@@ -364,6 +364,8 @@ def test_resolve_execution_time_ms_prefers_explicit_and_falls_back_to_times():
     assert query_runtime.resolve_execution_time_ms(None, finished, started) == 0
     assert query_runtime.resolve_execution_time_ms(True, started, finished) == 5000
     assert query_runtime.resolve_execution_time_ms(None, None, finished) is None
+    assert query_runtime.execution_time_ms_for_storage(86_400_000, "exec_max") == 86_400_000
+    assert query_runtime.execution_time_ms_for_storage(86_400_001, "exec_overflow") == 86_400_000
 
 
 def test_runtime_task_operator_and_execution_id_helpers():

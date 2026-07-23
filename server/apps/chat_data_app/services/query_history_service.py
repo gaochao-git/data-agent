@@ -490,12 +490,20 @@ class QueryHistoryService:
             return await cancel_execution(execution, operator_name=operator_name)
         except Exception as err:
             logger.error("批量停止单条 SQL 失败: execution_id=%s error=%s", execution.execution_id, err, exc_info=True)
-            await update_execution(
-                execution.execution_id,
-                sql_status="kill_failed",
-                error_message="停止执行失败",
-                finished_time=datetime.now(),
-            )
+            try:
+                await update_execution(
+                    execution.execution_id,
+                    sql_status="kill_failed",
+                    error_message="停止执行失败",
+                    finished_time=datetime.now(),
+                )
+            except Exception as update_err:
+                logger.error(
+                    "批量停止失败状态回写异常: execution_id=%s error=%s",
+                    execution.execution_id,
+                    update_err,
+                    exc_info=True,
+                )
             return {
                 "execution_id": execution.execution_id,
                 "status": "kill_failed",

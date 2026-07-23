@@ -36,6 +36,8 @@ from .query_result import (
 
 logger = get_logger(__name__)
 
+MAX_EXECUTION_TIME_MS = 86_400_000
+
 
 def _datasource_source_type(datasource: Optional[Dict[str, Any]]) -> Optional[str]:
     """读取数据源组方言，用于任务创建阶段的快速 SQL 预校验。"""
@@ -132,6 +134,19 @@ def resolve_execution_time_ms(value: Any = None, started_time: Any = None, finis
         return None
 
 
+def execution_time_ms_for_storage(value: Optional[int], execution_id: str) -> Optional[int]:
+    """将异常执行耗时限制在 24 小时，避免污染历史展示和落库失败。"""
+    if value is None or value <= MAX_EXECUTION_TIME_MS:
+        return value
+    logger.warning(
+        "SQL 执行耗时超过 24 小时，按上限存储: execution_id=%s execution_time_ms=%s max=%s",
+        execution_id,
+        value,
+        MAX_EXECUTION_TIME_MS,
+    )
+    return MAX_EXECUTION_TIME_MS
+
+
 def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: Optional[int]) -> Any:
     """将最终耗时同步写入结果负载。"""
     if not isinstance(result_payload, dict) or execution_time_ms is None or "execution_time_ms" not in result_payload:
@@ -208,10 +223,13 @@ async def update_query_execution(
             return
         resolved_execution_time_ms = None
         if execution_time_ms is not None or finished_time is not None:
-            resolved_execution_time_ms = resolve_execution_time_ms(
-                execution_time_ms,
-                started_time or execution.started_time,
-                finished_time or execution.finished_time,
+            resolved_execution_time_ms = execution_time_ms_for_storage(
+                resolve_execution_time_ms(
+                    execution_time_ms,
+                    started_time or execution.started_time,
+                    finished_time or execution.finished_time,
+                ),
+                execution_id,
             )
         if sql_status is not None:
             execution.sql_status = sql_status
