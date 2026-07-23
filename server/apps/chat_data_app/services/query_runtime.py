@@ -27,6 +27,7 @@ from .runtime_config import DEFAULT_ROW_LIMIT
 from .semantic_builder_compiler import compile_semantic_builder_sql
 from .sql_concurrency_limiter import run_with_sql_user_datasource_limit
 from .sql_executor import build_effective_sql, fetch_http_query_task_result, get_executor, validate_sql
+from .sql_parser import validate_raw_single_sql_statement
 from .query_result import (
     QUERY_SUCCEEDED_STATUS,
     build_query_result_payload,
@@ -49,13 +50,29 @@ def _validate_sql_before_task_submit(
     request: ExecuteSqlRequest | QueryTaskCreateRequest,
     datasource: Optional[Dict[str, Any]],
 ) -> None:
-    """在创建异步任务前做快速失败校验；执行器边界仍会按成员数据源复检。"""
+    """在创建任务前拦截危险 SQL，语法错误交由任务结果返回。"""
     if datasource is None:
         return
     sql = str(getattr(request, "sql", "") or "").strip()
     if not sql:
         return
     source_type = _datasource_source_type(datasource)
+    raw_statement = validate_raw_single_sql_statement(sql, source_type=source_type)
+    if not raw_statement.success:
+        # 多语句可能绕过只读限制，必须在任务创建前拒绝；单条语法错误则由每个
+        # 执行对象生成独立失败结果，避免前端将其误判为接口异常。
+        if "一次只能执行一条 SQL" not in raw_statement.error:
+            return
+        error_msg = raw_statement.error
+        emit_dangerous_sql_alarm(
+            sql,
+            error_msg,
+            source_type=source_type,
+            datasource_id=str(getattr(request, "datasource_id", "") or ""),
+            user_id=str(getattr(request, "user_id", "") or ""),
+            execution_scope="task_submit",
+        )
+        raise ValueError(error_msg)
     is_valid, error_msg = validate_sql(sql, source_type=source_type)
     if not is_valid:
         emit_dangerous_sql_alarm(
@@ -173,7 +190,6 @@ async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequ
             member_datasource_id = str((target or {}).get("member_datasource_id") or "").strip()
             member_name = str((target or {}).get("member_name") or (target or {}).get("group_name") or "").strip()
             executor_type = str((target or {}).get("query_executor_type") or "direct").strip().lower() or "direct"
-            effective_sql = build_effective_sql(request.sql, request.limit or DEFAULT_ROW_LIMIT, source_type=(target or {}).get("source_type"))
             execution_id = uuid.uuid4().hex
             execution_map[member_datasource_id] = execution_id
             db.add(ChatDataQueryExecution(
@@ -184,7 +200,8 @@ async def create_query_executions_for_task(task_id: str, request: ExecuteSqlRequ
                 member_datasource_id=member_datasource_id,
                 member_name=member_name,
                 executor_type=executor_type,
-                sql_text=effective_sql,
+                # 执行阶段再生成实际 SQL，语法错误也需要拥有独立的历史明细。
+                sql_text=request.sql,
                 sql_status="pending",
                 delete_flag=0,
                 create_time=now,
@@ -347,8 +364,7 @@ async def execute_sql_for_member(
     """执行单个成员数据源 SQL。"""
     member_datasource_id = execution_target.get("member_datasource_id")
     member_name = execution_target.get("member_name") or execution_target.get("group_name") or ""
-    effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
-    cache_identity = query_cache.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
+    effective_sql = sql
     http_target = query_cache.is_http_execution_target(execution_target)
     local_started_at = time.perf_counter()
 
@@ -386,6 +402,8 @@ async def execute_sql_for_member(
 
     executor = None
     try:
+        effective_sql = build_effective_sql(sql, limit, source_type=execution_target.get("source_type"))
+        cache_identity = query_cache.build_sql_result_cache_identity(execution_target, effective_sql, datasource_id=datasource_id)
         if execution_id:
             if await get_query_execution_status(execution_id) == "cancelled":
                 return {
@@ -1004,6 +1022,35 @@ async def mark_sql_batch_remaining_cancelled(
         )
 
 
+async def mark_sql_batch_precreation_failed(
+    statement_results: List[Dict[str, Any]],
+    execution_maps: Dict[int, Dict[str, str]],
+    start_index: int,
+    error_message: str,
+) -> None:
+    """终态化预创建失败的批次，避免父任务失败但明细长期等待。"""
+    now = datetime.now()
+    for item in statement_results[max(0, start_index):]:
+        if query_result_status(item) in {"pending", "running"}:
+            item.update({"status": "failed", "error": error_message, "results": []})
+    for execution_map in execution_maps.values():
+        for execution_id in execution_map.values():
+            try:
+                await update_query_execution(
+                    execution_id,
+                    sql_status="failed",
+                    error_message=error_message,
+                    finished_time=now,
+                )
+            except Exception as update_err:
+                logger.error(
+                    "SQL 批次预创建失败状态回写异常: execution_id=%s error=%s",
+                    execution_id,
+                    update_err,
+                    exc_info=True,
+                )
+
+
 async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
     """顺序执行 SQL 批次；启动时预创建全部语句的历史执行记录。"""
     if await is_query_task_cancelled(task_id):
@@ -1035,18 +1082,17 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
             execution_maps[index] = await create_query_executions_for_task(task_id, execute_request, operator_name=operator_name)
         except Exception as err:
             logger.error("SQL 批次执行记录创建异常: task_id=%s statement_index=%s error=%s", task_id, index, err, exc_info=True)
-            statement_results[index].update({"status": "failed", "error": str(err) or "SQL 执行记录创建失败", "results": []})
-
-    if any(query_result_status(item) == "failed" for item in statement_results):
-        await update_query_task(
-            task_id,
-            status="failed",
-            progress_text="执行失败",
-            result_payload={"statement_results": statement_results},
-            error_message="SQL 执行记录创建失败",
-            finished_time=datetime.now(),
-        )
-        return
+            error_message = str(err) or "SQL 执行记录创建失败"
+            await mark_sql_batch_precreation_failed(statement_results, execution_maps, 0, error_message)
+            await update_query_task(
+                task_id,
+                status="failed",
+                progress_text="执行失败",
+                result_payload={"statement_results": statement_results},
+                error_message=error_message,
+                finished_time=datetime.now(),
+            )
+            return
 
     for index, statement in enumerate(statements):
         if await is_query_task_cancelled(task_id):
@@ -1072,10 +1118,13 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
                 result_data,
                 operator_name=operator_name,
             )
+            statement_member_results = (persistent_result or {}).get("results") or []
+            if not statement_member_results and query_result_status(result_data) == "failed":
+                statement_member_results = result_data.get("results") or []
             statement_results[index].update({
                 "status": query_result_status(result_data),
                 "error": result_data.get("error"),
-                "results": (persistent_result or {}).get("results") or [],
+                "results": statement_member_results,
             })
         except Exception as err:
             logger.error("SQL 批次语句执行异常: task_id=%s statement_index=%s error=%s", task_id, index, err, exc_info=True)
@@ -1086,23 +1135,30 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
             await mark_sql_batch_remaining_cancelled(task_id, statement_results, execution_maps, index + 1)
             return
 
-    has_failures = any(item.get("status") != QUERY_SUCCEEDED_STATUS for item in statement_results)
-    only_cancelled_failures = has_failures and all(
-        query_result_status(item) in {QUERY_SUCCEEDED_STATUS, "cancelled"}
-        for item in statement_results
-    )
-    final_progress_text = "执行完成"
-    final_error_message = None
-    if has_failures:
-        if only_cancelled_failures:
-            final_progress_text = "执行完成，部分 SQL 已停止"
-            final_error_message = "部分 SQL 已停止"
-        else:
-            final_progress_text = "执行完成，部分 SQL 失败"
-            final_error_message = "部分 SQL 执行失败"
+    statement_statuses = [query_result_status(item) for item in statement_results]
+    has_succeeded = QUERY_SUCCEEDED_STATUS in statement_statuses
+    has_failures = any(status != QUERY_SUCCEEDED_STATUS for status in statement_statuses)
+    all_cancelled = bool(statement_statuses) and all(status == "cancelled" for status in statement_statuses)
+    if all_cancelled:
+        final_status = "cancelled"
+        final_progress_text = "已停止"
+        final_error_message = "已人工取消"
+    elif has_succeeded and has_failures:
+        final_status = "partial_success"
+        only_cancelled_failures = all(status in {QUERY_SUCCEEDED_STATUS, "cancelled"} for status in statement_statuses)
+        final_progress_text = "执行完成，部分 SQL 已停止" if only_cancelled_failures else "执行完成，部分 SQL 失败"
+        final_error_message = "部分 SQL 已停止" if only_cancelled_failures else "部分 SQL 执行失败"
+    elif has_succeeded:
+        final_status = "succeeded"
+        final_progress_text = "执行完成"
+        final_error_message = None
+    else:
+        final_status = "failed"
+        final_progress_text = "执行失败"
+        final_error_message = "SQL 执行失败"
     await update_query_task(
         task_id,
-        status="partial_success" if has_failures else "succeeded",
+        status=final_status,
         progress_text=final_progress_text,
         result_payload={"statement_results": statement_results},
         error_message=final_error_message,

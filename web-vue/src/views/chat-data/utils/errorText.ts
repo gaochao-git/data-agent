@@ -11,6 +11,14 @@ export const cleanDisplayError = (value?: string | null, fallback = '暂无错�
   return normalizeWhitespace(text) || fallback
 }
 
+export const stripAnsiErrorText = (value?: string | null, fallback = '暂无错误信息') => {
+  const rawText = String(value || '').replace(/\r\n?/g, '\n')
+  return rawText
+    .replace(ANSI_ESCAPE_PATTERN, '')
+    .replace(BRACKET_ANSI_PATTERN, '')
+    .trim() || fallback
+}
+
 export const normalizeErrorKey = (value?: string | null) => cleanDisplayError(value, '').toLowerCase()
 
 export const dedupeRepeatedErrorText = (value?: string | null, fallback = '查询失败') => {

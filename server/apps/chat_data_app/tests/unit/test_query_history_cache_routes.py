@@ -1178,7 +1178,7 @@ def test_query_execution_record_lifecycle(route_db, monkeypatch):
 
     executions = asyncio.run(query_runtime.get_query_executions("task_1"))
     assert [item["execution_id"] for item in executions] == ["exec_1", "exec_2"]
-    assert executions[0]["query"] == "select * from orders LIMIT 5"
+    assert executions[0]["query"] == "select * from orders"
     assert executions[0]["operator_name"] == "操作员"
 
     started_time = datetime(2026, 6, 2, 12, 0, 0)

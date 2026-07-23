@@ -158,6 +158,120 @@ def test_sql_batch_filters_http_statement_results_from_persisted_payload(monkeyp
     assert final_statements[1]["results"] == []
 
 
+def test_sql_batch_keeps_all_http_failed_member_results(monkeypatch):
+    updates = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def update_task(_task_id, **kwargs):
+        updates.append(kwargs)
+
+    async def create_executions(_task_id, _request, operator_name=None):
+        return {"m_http_a": "exec_http_a", "m_http_b": "exec_http_b"}
+
+    async def execute_sql(request, **_kwargs):
+        return {
+            "status": "failed",
+            "sql": request.sql,
+            "error": "SQL 语法错误",
+            "results": [
+                {
+                    "member_datasource_id": "m_http_a",
+                    "member_name": "机构A",
+                    "status": "failed",
+                    "sql": request.sql,
+                    "error": "机构A SQL 语法错误",
+                    "columns": [],
+                    "data": [],
+                    "total_count": 0,
+                },
+                {
+                    "member_datasource_id": "m_http_b",
+                    "member_name": "机构B",
+                    "status": "failed",
+                    "sql": request.sql,
+                    "error": "机构B SQL 语法错误",
+                    "columns": [],
+                    "data": [],
+                    "total_count": 0,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_http_failed", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m_http_a", "m_http_b"],
+            "user_id": "user_a",
+            "sql": ["select * from orders limit1 100"],
+        }),
+    }))
+
+    final_update = updates[-1]
+    assert final_update["status"] == "failed"
+    assert final_update["progress_text"] == "执行失败"
+    statement = final_update["result_payload"]["statement_results"][0]
+    assert statement["status"] == "failed"
+    assert [item["member_name"] for item in statement["results"]] == ["机构A", "机构B"]
+    assert [item["error"] for item in statement["results"]] == ["机构A SQL 语法错误", "机构B SQL 语法错误"]
+
+
+def test_sql_batch_precreation_failure_terminalizes_existing_and_pending_records(monkeypatch):
+    updates = []
+    execution_updates = []
+    create_calls = []
+    execute_calls = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def update_task(_task_id, **kwargs):
+        updates.append(kwargs)
+
+    async def create_executions(_task_id, request, operator_name=None):
+        create_calls.append(request.sql)
+        if request.sql == "select 2":
+            raise RuntimeError("执行明细创建失败")
+        return {"m1": "exec_1"}
+
+    async def update_execution(execution_id, **kwargs):
+        execution_updates.append((execution_id, kwargs))
+
+    async def execute_sql(*_args, **_kwargs):
+        execute_calls.append(True)
+        return {"status": "succeeded", "results": []}
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", update_task)
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "update_query_execution", update_execution)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_precreate_failed", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m1"],
+            "user_id": "user_a",
+            "sql": ["select 1", "select 2", "select 3"],
+        }),
+    }))
+
+    assert create_calls == ["select 1", "select 2"]
+    assert execute_calls == []
+    assert execution_updates[0][0] == "exec_1"
+    assert execution_updates[0][1]["sql_status"] == "failed"
+    final_update = updates[-1]
+    assert final_update["status"] == "failed"
+    assert [item["status"] for item in final_update["result_payload"]["statement_results"]] == ["failed", "failed", "failed"]
+
+
 def test_sql_batch_cancellation_stops_before_next_statement(monkeypatch):
     checks = iter([False, False, True])
     executed_sql = []
@@ -245,6 +359,39 @@ def test_sql_batch_reports_partial_stop_when_only_cancelled_failures(monkeypatch
     assert final_update["progress_text"] == "执行完成，部分 SQL 已停止"
     assert final_update["error_message"] == "部分 SQL 已停止"
     assert [item["status"] for item in final_update["result_payload"]["statement_results"]] == ["succeeded", "cancelled"]
+
+
+def test_sql_batch_reports_cancelled_when_every_statement_is_cancelled(monkeypatch):
+    updates = []
+
+    async def not_cancelled(_task_id):
+        return False
+
+    async def create_executions(_task_id, request, operator_name=None):
+        return {"m1": f"exec_{request.sql[-1]}"}
+
+    async def execute_sql(request, **_kwargs):
+        return {"status": "cancelled", "sql": request.sql, "error": "已人工取消", "results": []}
+
+    monkeypatch.setattr(query_runtime, "is_query_task_cancelled", not_cancelled)
+    monkeypatch.setattr(query_runtime, "update_query_task", lambda *_args, **kwargs: asyncio.sleep(0, result=updates.append(kwargs)))
+    monkeypatch.setattr(query_runtime, "create_query_executions_for_task", create_executions)
+    monkeypatch.setattr(query_runtime, "build_execute_sql_result_data", execute_sql)
+    monkeypatch.setattr(query_runtime, "build_persistent_query_task_result_for_request", lambda _request, result, **_kwargs: asyncio.sleep(0, result=result))
+
+    asyncio.run(query_runtime.run_sql_batch_query_task("batch_cancelled", {
+        "request_payload": json.dumps({
+            "datasource_id": "ds_a",
+            "member_datasource_ids": ["m1"],
+            "user_id": "user_a",
+            "sql": ["select 1", "select 2"],
+        }),
+    }))
+
+    final_update = updates[-1]
+    assert final_update["status"] == "cancelled"
+    assert final_update["progress_text"] == "已停止"
+    assert final_update["error_message"] == "已人工取消"
 
 
 def test_create_query_task_derives_internal_task_type_from_sql_list(monkeypatch):
@@ -450,6 +597,18 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
     assert prepared.sql == "select city from orders"
     assert prepared.builder_config is None
     assert prepared.semantic_builder_config == {"dimensions": [{"semanticName": "城市"}]}
+
+
+def test_prepare_sql_request_allows_single_statement_syntax_error_to_return_as_result(monkeypatch):
+    request = ExecuteSqlRequest(sql="select * from orders limit1 100", datasource_id="ds_a")
+    alarms = []
+
+    monkeypatch.setattr(query_runtime, "emit_dangerous_sql_alarm", lambda *args, **kwargs: alarms.append((args, kwargs)))
+
+    prepared = asyncio.run(query_runtime.prepare_sql_request_for_execution(request, {"source_type": "mysql"}))
+
+    assert prepared is request
+    assert alarms == []
 
 
 def test_remote_ref_cache_result_branches(monkeypatch):
@@ -993,6 +1152,31 @@ def test_execute_sql_for_member_executor_exception_closes_and_standardizes_resul
     assert final_updates[0][0] == "ex_1"
     assert final_updates[0][1]["error"] == "executor failed"
     assert final_updates[0][2] is True
+
+
+def test_execute_sql_for_member_effective_sql_error_is_member_failure(monkeypatch):
+    updates = []
+
+    async def update_from_result(execution_id, result, store_result_payload=True):
+        updates.append((execution_id, result, store_result_payload))
+
+    monkeypatch.setattr(query_runtime, "build_effective_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("LIMIT 参数错误")))
+    monkeypatch.setattr(query_runtime, "get_executor", lambda _target: (_ for _ in ()).throw(AssertionError("不应执行数据源")))
+    monkeypatch.setattr(query_runtime, "update_query_execution_from_result", update_from_result)
+
+    result = asyncio.run(query_runtime.execute_sql_for_member(
+        execution_target={"member_datasource_id": "m1", "member_name": "机构1", "source_type": "mysql"},
+        sql="select * from orders",
+        limit=10,
+        timeout=None,
+        execution_id="exec_1",
+    ))
+
+    assert result["status"] == "failed"
+    assert result["sql"] == "select * from orders"
+    assert result["error"] == "LIMIT 参数错误"
+    assert updates[0][0] == "exec_1"
+    assert updates[0][1]["status"] == "failed"
 
 
 class _ScalarResult:

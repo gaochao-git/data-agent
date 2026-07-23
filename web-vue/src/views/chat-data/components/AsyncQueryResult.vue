@@ -8,7 +8,7 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
-import { dedupeRepeatedErrorText, getSafeNumericColumns, isQueryFailed } from '../utils'
+import { getSafeNumericColumns, isQueryFailed, stripAnsiErrorText } from '../utils'
 
 interface QueryResult {
   status?: string | null
@@ -134,8 +134,17 @@ const parseResult = computed<{ result: QueryResult | null; error: string | null 
 
 const activeResult = computed(() => parseResult.value.result)
 const parseError = computed(() => parseResult.value.error)
-const activeErrorText = computed(() => dedupeRepeatedErrorText(activeResult.value?.error, '查询失败'))
+const activeErrorText = computed(() => stripAnsiErrorText(activeResult.value?.error, '查询失败'))
 const activeFailed = computed(() => isQueryFailed(activeResult.value))
+const errorExpanded = ref(false)
+const errorSummary = computed(() => activeErrorText.value.split(/\r?\n/, 1)[0] || '查询失败')
+
+watch(
+  () => props.resultData,
+  () => {
+    errorExpanded.value = false
+  },
+)
 
 const normalizeColumnName = (value: string) => (value || '').replace(/`/g, '').trim().toLowerCase()
 
@@ -373,9 +382,20 @@ const getDimensionKey = (dim: string | { name: string }): string => {
     <!-- 正常展示（包括无数据的情况） -->
     <template v-else>
       <!-- 查询失败 -->
-      <div v-if="activeResult && activeFailed" class="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-sm text-red-600 bg-gradient-to-br from-red-100/50 to-red-200/30">
-        <i class="fa-solid fa-circle-exclamation text-2xl opacity-80"></i>
-        <span class="max-w-full whitespace-pre-wrap break-words text-center">{{ activeErrorText }}</span>
+      <div v-if="activeResult && activeFailed" class="flex-1 overflow-auto bg-red-50/70 p-4 text-sm text-red-700">
+        <button
+          type="button"
+          data-testid="toggle-query-error"
+          :aria-expanded="errorExpanded"
+          :aria-label="errorExpanded ? '收起错误详情' : '展开错误详情'"
+          class="flex w-full items-start gap-2 text-left text-red-700 hover:text-red-900"
+          @click="errorExpanded = !errorExpanded"
+        >
+          <i class="fa-solid fa-circle-exclamation mt-0.5 shrink-0 text-base"></i>
+          <span class="min-w-0 flex-1 break-words font-medium">{{ errorSummary }}</span>
+          <i :class="['fa-solid fa-chevron-down mt-1 shrink-0 text-[10px] transition-transform', errorExpanded && 'rotate-180']"></i>
+        </button>
+        <pre v-if="errorExpanded" class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-red-200 bg-white p-3 font-mono text-xs leading-5 text-red-800">{{ activeErrorText }}</pre>
       </div>
 
       <!-- 内容区域 -->

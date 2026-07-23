@@ -2450,7 +2450,6 @@ defineExpose({
         <QueryResultPanel
           v-if="queryResultPanelItems.length > 0"
           :items="queryResultPanelItems"
-          :merge-repeated-errors="false"
           :on-save="handleSaveToDashboard"
         />
 

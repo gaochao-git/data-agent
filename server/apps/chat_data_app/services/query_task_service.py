@@ -922,10 +922,18 @@ class QueryTaskService:
         operator_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """并发停止多条 SQL 执行记录。"""
-        return await asyncio.gather(*[
-            self.cancel_query_execution(
-                item,
+        async def cancel_one(execution: ChatDataQueryExecution, *, operator_name: Optional[str] = None) -> Dict[str, Any]:
+            return await self.cancel_query_execution(
+                execution,
                 cleanup_without_target=cleanup_without_target,
+                operator_name=operator_name,
+            )
+
+        return await asyncio.gather(*[
+            self.query_history_service.cancel_query_execution_for_batch(
+                item,
+                cancel_execution=cancel_one,
+                update_execution=self.update_query_execution,
                 operator_name=operator_name,
             )
             for item in executions

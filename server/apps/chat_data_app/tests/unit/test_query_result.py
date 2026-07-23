@@ -1,3 +1,6 @@
+import asyncio
+from types import SimpleNamespace
+
 from apps.chat_data_app.services.query_result import (
     build_query_result_payload,
     query_result_status,
@@ -136,6 +139,68 @@ def test_build_sql_task_results_uses_execution_rows_while_task_is_running():
         "total_count": 0,
         "error": None,
     }]
+
+
+def test_build_sql_task_results_keeps_failed_execution_error_without_task_payload():
+    results = QueryTaskService.build_sql_task_results(None, [{
+        "execution_id": "exec_1",
+        "member_datasource_id": "m1",
+        "member_name": "机构1",
+        "sql_status": "failed",
+        "sql_text": "select * from orders limit1 100",
+        "error_message": "SQL 语法错误",
+    }])
+
+    assert results == [{
+        "execution_id": "exec_1",
+        "member_datasource_id": "m1",
+        "member_name": "机构1",
+        "status": "failed",
+        "sql": "select * from orders limit1 100",
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "error": "SQL 语法错误",
+    }]
+
+
+def test_cancel_query_executions_continues_when_one_execution_stops_with_error():
+    updates = []
+
+    class HistoryService:
+        async def cancel_query_execution_for_batch(self, execution, *, cancel_execution, update_execution, operator_name=None):
+            try:
+                return await cancel_execution(execution, operator_name=operator_name)
+            except Exception:
+                await update_execution(execution.execution_id, sql_status="kill_failed")
+                return {"execution_id": execution.execution_id, "status": "kill_failed", "success": False}
+
+    service = QueryTaskService(
+        query_history_service=HistoryService(),
+        datasource_manager_factory=lambda: None,
+        fetch_http_query_task_result=lambda *_args, **_kwargs: None,
+        stop_http_query_task=lambda *_args, **_kwargs: None,
+        kill_mysql_query=lambda *_args, **_kwargs: None,
+    )
+
+    async def cancel_execution(execution, **_kwargs):
+        if execution.execution_id == "exec_failed":
+            raise RuntimeError("stop failed")
+        return {"execution_id": execution.execution_id, "status": "cancelled", "success": True}
+
+    async def update_execution(execution_id, **kwargs):
+        updates.append((execution_id, kwargs))
+
+    service.cancel_query_execution = cancel_execution
+    service.update_query_execution = update_execution
+
+    results = asyncio.run(service.cancel_query_executions([
+        SimpleNamespace(execution_id="exec_failed"),
+        SimpleNamespace(execution_id="exec_ok"),
+    ]))
+
+    assert [item["status"] for item in results] == ["kill_failed", "cancelled"]
+    assert updates == [("exec_failed", {"sql_status": "kill_failed"})]
 
 
 def test_build_sql_task_results_reads_sql_text_from_execution_rows():

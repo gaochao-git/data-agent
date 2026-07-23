@@ -94,9 +94,10 @@ const sourceOptions = [
 
 const statusOptions = [
   { label: '全部状态', value: 'all' },
+  { label: '等待中', value: 'pending' },
+  { label: '执行中', value: 'running' },
   { label: '成功', value: 'succeeded' },
   { label: '失败', value: 'failed' },
-  { label: '运行中', value: 'running' },
   { label: '已取消', value: 'cancelled' },
   { label: '超时', value: 'timeout' },
   { label: '取消失败', value: 'kill_failed' },
@@ -104,7 +105,7 @@ const statusOptions = [
 
 const statusTextMap: Record<string, string> = {
   pending: '等待中',
-  running: '运行中',
+  running: '执行中',
   succeeded: '成功',
   failed: '失败',
   cancelled: '已取消',

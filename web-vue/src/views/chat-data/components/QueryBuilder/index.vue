@@ -2251,6 +2251,7 @@ const executeQuery = async () => {
       query_text: '可视化查询',
       skip_query_cache: queryCacheEnabled.value ? skipQueryCache.value : false,
     }, {
+      returnTerminalTask: true,
       onProgress: (taskStatus) => {
         executingTaskText.value = taskStatus.progress_text || '执行中...'
         executingTaskId.value = taskStatus.task_id
