@@ -48,7 +48,7 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "file_edit", "status": "available", "description": "向 workspace 或 outputs 写入中间文件和最终产物。"},
     {"name": "present_artifacts", "status": "available", "description": "将 outputs 中已生成且已校验的最终产物显式呈现给用户。"},
     {"name": "sandbox_run", "status": "available", "description": "在当前会话沙箱中执行 ls/find/python3/node/bash 等非交互命令。"},
-    {"name": "get_current_time", "status": "available", "description": "获取当前北京时间、时区和星期，用于解析今天、昨天、本周等相对时间。"},
+    {"name": "get_current_time", "status": "available", "description": "获取当前北京时间；必传 detail=false 仅返回时间，detail=true 额外返回时区、偏移、星期和 Unix 时间戳。"},
     {"name": "select_semantic_config_tool", "status": "available", "description": "当前没有手动选择指标集时，从数据源组指标集中选择可回答问题的指标集。"},
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
     {"name": "semantic_query_tool", "status": "available", "description": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},

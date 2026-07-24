@@ -24,16 +24,30 @@ from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services import sql_assist_context
 
 
-def test_current_time_tool_uses_shanghai_timezone_and_weekday():
-    payload = get_current_time_payload(datetime(2026, 7, 24, 10, 30, 0, tzinfo=timezone.utc))
+def test_current_time_tool_returns_detail_only_when_requested():
+    current_time = datetime(2026, 7, 24, 10, 30, 0, tzinfo=timezone.utc)
+    assert get_current_time_payload(current_time, detail=False) == {
+        "current_time": "2026-07-24 18:30:00",
+    }
+
+    payload = get_current_time_payload(current_time, detail=True)
 
     assert payload == {
         "current_time": "2026-07-24 18:30:00",
         "timezone": "Asia/Shanghai",
         "utc_offset": "+08:00",
         "weekday": "周五",
+        "timestamp": 1784889000,
     }
-    assert json.loads(asyncio.run(get_current_time_tool.ainvoke({})))["timezone"] == "Asia/Shanghai"
+    compact_payload = json.loads(asyncio.run(get_current_time_tool.ainvoke({"detail": False})))
+    assert list(compact_payload) == ["current_time"]
+    assert isinstance(compact_payload["current_time"], str)
+    detailed_payload = json.loads(asyncio.run(get_current_time_tool.ainvoke({"detail": True})))
+    assert {"current_time", "timezone", "utc_offset", "weekday", "timestamp"} == set(detailed_payload)
+    assert isinstance(detailed_payload["timestamp"], int)
+
+    with pytest.raises(ValidationError):
+        asyncio.run(get_current_time_tool.ainvoke({}))
 
 
 def _query_result_payload(result: str) -> dict:

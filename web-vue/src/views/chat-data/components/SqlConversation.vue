@@ -22,6 +22,7 @@ import SkillManager from './SkillManager.vue'
 import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
+import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import { parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
 
@@ -887,7 +888,7 @@ const submitQuery = async (
   toolCallsMap.value.clear()
   activeToolCallId.value = null
   sidePanelOpen.value = false
-  closeTokenUsagePanel()
+  resetTokenUsagePanel()
 
   // 确保有会话 ID（懒创建模式）
   let convId = props.conversationId
@@ -1239,7 +1240,7 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
 
     <!-- 右侧：对话主区域和按需打开的工具详情 -->
     <div class="flex-1 flex min-w-0 overflow-hidden">
-      <div class="flex flex-1 flex-col min-w-0 overflow-hidden bg-gray-50">
+      <div class="relative flex flex-1 flex-col min-w-0 overflow-hidden bg-gray-50">
       <!-- 顶部工具栏 -->
       <div v-if="!hideHeader" class="flex items-center justify-between h-13 px-4 shrink-0">
       <div class="w-[200px]"></div>
@@ -1407,6 +1408,7 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
             <ConversationTokenUsage
               ref="tokenUsagePanelRef"
               :usage="tokenUsage"
+              :is-generating="isGenerating"
               compact
             />
           </template>
@@ -1423,6 +1425,7 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
         </ConversationInputBar>
       </div>
     </div>
+        <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
       </div>
       <ConversationSidePanel
         :open="sidePanelOpen"

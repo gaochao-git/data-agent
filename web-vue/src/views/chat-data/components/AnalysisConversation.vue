@@ -21,6 +21,7 @@ import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
+import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import { parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
@@ -1597,7 +1598,7 @@ const submitAnalysisQuery = async (
   }
   isGenerating.value = true
   activeToolCallId.value = null
-  closeTokenUsagePanel()
+  resetTokenUsagePanel()
 
   try {
     let convId = props.conversationId
@@ -1739,7 +1740,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
 <template>
   <div class="relative h-full flex min-h-0 bg-[#F7F8FA]">
-    <div class="flex-1 min-w-0 flex flex-col">
+    <div class="relative flex-1 min-w-0 flex flex-col">
       <div
         ref="chatContainerRef"
         :class="[
@@ -1910,6 +1911,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"
                 :usage="tokenUsage"
+                :is-generating="isGenerating"
                 compact
               />
             </template>
@@ -1926,6 +1928,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           </ConversationInputBar>
         </div>
       </div>
+      <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
     </div>
 
     <ConversationSidePanel

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown } from '../types'
 
 type TokenUsageSort = 'round' | 'desc' | 'asc'
@@ -20,10 +20,12 @@ type TokenUsageRow = {
 interface Props {
   usage: ChatDataTokenUsage | null
   compact?: boolean
+  isGenerating?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   compact: false,
+  isGenerating: false,
 })
 
 const panelOpen = ref(false)
@@ -31,6 +33,7 @@ const sortMode = ref<TokenUsageSort>('round')
 const expandedMessageKeys = ref<Set<string>>(new Set())
 const buttonRef = ref<HTMLElement | null>(null)
 const panelPosition = ref({ left: 24, bottom: 112 })
+const cacheSupportDetected = ref(false)
 
 const PANEL_WIDTH = 460
 const PANEL_MARGIN = 16
@@ -142,20 +145,54 @@ const formatTokenCount = (value: number) => formatTokenUsageDisplay({ used: valu
 const formatPercentage = (value: number) => `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`
 const cacheUsageRows = computed(() => {
   const usage = props.usage
-  if (!usage || typeof usage.cumulative_cached_input_tokens !== 'number') return []
-  const rows = [] as Array<{ label: string; value: string }>
-  if (typeof usage.current_cached_input_tokens === 'number') {
-    rows.push({ label: '当前命中', value: formatTokenCount(usage.current_cached_input_tokens) })
-  }
-  rows.push({ label: '累计命中', value: formatTokenCount(usage.cumulative_cached_input_tokens) })
-  if (typeof usage.current_cache_hit_rate === 'number') {
-    rows.push({ label: '当前命中率', value: formatPercentage(usage.current_cache_hit_rate) })
-  }
-  if (typeof usage.cumulative_cache_hit_rate === 'number') {
-    rows.push({ label: '累计命中率', value: formatPercentage(usage.cumulative_cache_hit_rate) })
-  }
-  return rows
+  if (!cacheSupportDetected.value) return []
+  const pendingValue = props.isGenerating ? '统计中' : '--'
+  return [
+    {
+      label: '当前命中',
+      value: typeof usage?.current_cached_input_tokens === 'number'
+        ? formatTokenCount(usage.current_cached_input_tokens)
+        : pendingValue,
+    },
+    {
+      label: '累计命中',
+      value: typeof usage?.cumulative_cached_input_tokens === 'number'
+        ? formatTokenCount(usage.cumulative_cached_input_tokens)
+        : pendingValue,
+    },
+    {
+      label: '当前命中率',
+      value: typeof usage?.current_cache_hit_rate === 'number'
+        ? formatPercentage(usage.current_cache_hit_rate)
+        : pendingValue,
+    },
+    {
+      label: '累计命中率',
+      value: typeof usage?.cumulative_cache_hit_rate === 'number'
+        ? formatPercentage(usage.cumulative_cache_hit_rate)
+        : pendingValue,
+    },
+  ]
 })
+
+watch(
+  [() => props.usage, () => props.isGenerating],
+  ([usage]) => {
+    if (!usage) {
+      cacheSupportDetected.value = false
+      return
+    }
+    if (
+      typeof usage?.current_cached_input_tokens === 'number'
+      || typeof usage?.cumulative_cached_input_tokens === 'number'
+      || typeof usage?.current_cache_hit_rate === 'number'
+      || typeof usage?.cumulative_cache_hit_rate === 'number'
+    ) {
+      cacheSupportDetected.value = true
+    }
+  },
+  { immediate: true },
+)
 
 const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', keyPrefix = ''): TokenUsageRow => ({
   key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
@@ -210,6 +247,48 @@ const toggleMessage = (key: string) => {
     next.add(key)
   }
   expandedMessageKeys.value = next
+}
+
+const getTypeLabel = (item: TokenUsageRow): string => {
+  if (item.key.includes('request_overhead')) return '协议'
+  if (item.key.includes('tool_schema')) return '工具'
+  const labels: Record<string, string> = {
+    system: '系统',
+    human: '用户',
+    ai: 'AI',
+    assistant: 'AI',
+    tool: '工具',
+    tool_schema: '工具定义',
+  }
+  return labels[item.role || ''] || '其他'
+}
+
+const getTypeClass = (item: TokenUsageRow): string => {
+  if (item.key.includes('request_overhead')) return 'bg-slate-100 text-slate-600'
+  if (item.key.includes('tool_schema')) return 'bg-amber-50 text-amber-700'
+  const classes: Record<string, string> = {
+    system: 'bg-violet-50 text-violet-600',
+    human: 'bg-blue-50 text-blue-600',
+    ai: 'bg-emerald-50 text-emerald-600',
+    assistant: 'bg-emerald-50 text-emerald-600',
+    tool: 'bg-amber-50 text-amber-700',
+    tool_schema: 'bg-slate-100 text-slate-600',
+  }
+  return classes[item.role || ''] || 'bg-slate-100 text-slate-600'
+}
+
+const getTypeTitle = (item: TokenUsageRow): string => (
+  item.key.includes('request_overhead')
+    ? '模型请求协议开销'
+    : item.key.includes('tool_schema')
+      ? '本次请求传入模型的工具定义'
+      : getTypeLabel(item)
+)
+
+const getRowContent = (item: TokenUsageRow): string => {
+  if (item.key.includes('request_overhead')) return '请求协议开销'
+  if (item.key.includes('tool_schema')) return `工具定义（${item.children?.length || 0} 个）`
+  return item.description || item.label
 }
 
 onMounted(() => {
@@ -323,20 +402,29 @@ defineExpose({
             </button>
           </div>
         </div>
-        <div class="max-h-[220px] overflow-auto pr-1 space-y-1.5">
-          <div v-for="item in messageRows" :key="item.key" class="rounded border border-gray-100 bg-white px-2 py-1">
-            <button type="button" class="w-full border-none bg-transparent p-0 text-left cursor-pointer" @click="toggleMessage(item.key)">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-gray-700">{{ item.label }}</span>
-                <span class="font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
-              </div>
-              <div class="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                <div class="h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></div>
-              </div>
-              <div v-if="item.description && !expandedMessageKeys.has(item.key)" class="mt-1 truncate text-[11px] text-gray-400">{{ item.description }}</div>
+        <div class="max-h-[250px] overflow-auto rounded border border-gray-100 bg-white">
+          <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(88px,0.55fr)_34px_42px_48px] items-center gap-2 border-b border-gray-100 bg-slate-50 px-2 py-1 text-[10px] text-gray-400">
+            <span>内容</span>
+            <span>占比</span>
+            <span class="text-center">轮次</span>
+            <span class="text-center">类型</span>
+            <span class="text-right">Token</span>
+          </div>
+          <div v-for="item in messageRows" :key="item.key" class="border-b border-gray-50 last:border-b-0">
+            <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(88px,0.55fr)_34px_42px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
+              <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="h-1 flex-1 overflow-hidden rounded-full bg-gray-100">
+                  <span class="block h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></span>
+                </span>
+                <span class="w-8 text-right font-mono text-[10px] text-gray-400">{{ item.percentage.toFixed(item.percentage % 1 === 0 ? 0 : 1) }}%</span>
+              </span>
+              <span class="text-center text-gray-400">{{ item.round || '-' }}</span>
+              <span :class="['justify-self-center whitespace-nowrap rounded px-1 py-0.5 text-[10px]', getTypeClass(item)]" :title="getTypeTitle(item)">{{ getTypeLabel(item) }}</span>
+              <span class="text-right font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
             </button>
-            <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="mt-2 space-y-1.5">
-              <div v-for="child in item.children" :key="child.key" class="rounded bg-gray-50 p-2">
+            <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="space-y-1 border-t border-gray-100 bg-slate-50 px-2 py-1.5">
+              <div v-for="child in item.children" :key="child.key" class="rounded bg-white p-1.5">
                 <div class="flex items-center justify-between gap-2 text-[11px] text-gray-500">
                   <span>{{ child.label }}</span>
                   <span class="font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
@@ -344,7 +432,7 @@ defineExpose({
                 <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-gray-600">{{ child.content || child.description || '' }}</pre>
               </div>
             </div>
-            <pre v-else-if="expandedMessageKeys.has(item.key)" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>
+            <pre v-else-if="expandedMessageKeys.has(item.key)" class="max-h-40 overflow-auto whitespace-pre-wrap border-t border-gray-100 bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>
           </div>
         </div>
       </div>

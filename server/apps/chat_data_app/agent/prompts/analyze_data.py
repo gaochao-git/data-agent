@@ -23,7 +23,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 | `file_edit` | 写入或 patch 修改 workspace、outputs 中的文件 |
 | `present_artifacts` | 将 outputs 中已生成且已校验的最终产物显式呈现给用户 |
 | `sandbox_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
-| `get_current_time` | 获取当前北京时间、时区和星期，用于确定相对时间的实际日期范围 |
+| `get_current_time` | 获取当前北京时间；必须传 `detail`，`false` 只返回时间，`true` 额外返回时区、偏移、星期和 Unix 时间戳 |
 | `select_semantic_config_tool` | 当前没有手动选择指标集时，从数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships |
 | `dsl2sql_tool` | 校验语义 DSL 并转换 SQL；禁止手写语义层 SQL |
 | `semantic_query_tool` | 接收语义 DSL，内部生成只读 SQL 并查询真实数据；需要后续脚本处理时可用 `save_as` 保存 JSON |
@@ -44,7 +44,7 @@ DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE = """<role>
 2. 技能命中时，文字说明不能替代工具调用；如果回复了“开始加载技能 / 正在加载技能 / 进入技能流程 / 使用某技能”，同一轮必须立刻调用 `skill_load`。
 3. 如果用户指定了某个技能但 `available_skills` 中没有匹配项，直接说明当前没有可用的匹配技能，不要调用不存在的技能，也不要只列出技能后结束。
 4. 通用流程：未命中技能时，按下方 workflow 和 examples 处理。
-5. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time`；不能根据模型自身时间、历史消息时间或猜测确定日期。
+5. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
 </priority>
 
 <workflow>

@@ -162,7 +162,13 @@ const handleCopyAssistantMessage = async (message: Message) => {
 
 <template>
   <div class="chat-message-list mx-auto flex w-[90%] max-w-[774px] flex-col gap-5">
-    <div v-for="message in messages" :key="message.id" class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+    <div
+      v-for="message in messages"
+      :key="message.id"
+      class="flex"
+      :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
+      :data-conversation-turn-id="message.role === 'user' ? message.id : undefined"
+    >
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
         <template v-if="message.role === 'user'">
           <div class="rounded-2xl rounded-br-md bg-[#1677FF]/10 px-4 py-2.5 text-sm leading-relaxed text-[#1F3A56] shadow-[0_2px_8px_rgba(59,130,246,0.12)]">
