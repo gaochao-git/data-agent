@@ -30,6 +30,7 @@ from .agent.prompts.chat_data_builder import build_chat_data_system_prompt
 from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
 from .services.datasource_manager import get_datasource_manager
 from .services.context_budget import sanitize_context_usage_for_response
+from .services.conversation_event_service import conversation_event_service
 from .services.data_analyze_context import build_data_analyze_context
 from .services.execution_target_context import append_selected_execution_targets_to_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
@@ -305,6 +306,85 @@ async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any
     except Exception as exc:
         logger.warning("保存 DataAnalyze 助手消息时间失败: %s", exc)
         return state
+
+
+async def _persist_agent_turn_history(
+    stream_adapter: "_AgentSseStreamAdapter",
+    *,
+    conversation_id: str,
+    user_id: str,
+    username: str | None,
+    turn_id: str,
+) -> None:
+    """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
+    values = getattr(getattr(stream_adapter, "state", None), "values", None)
+    messages = values.get("messages") if isinstance(values, dict) else []
+    if not isinstance(messages, list):
+        return
+    await conversation_event_service.persist_turn(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=username or user_id,
+        turn_id=turn_id,
+        messages=messages,
+        reasoning_segments=stream_adapter.reasoning_segments,
+    )
+
+
+async def _persist_partial_agent_turn_history(
+    stream_adapter: "_AgentSseStreamAdapter | None",
+    *,
+    conversation_id: str,
+    user_id: str,
+    username: str | None,
+    turn_id: str,
+) -> None:
+    """流中断时尽力保存已写入 checkpoint 的可见历史，不影响原始异常。"""
+    if stream_adapter is None:
+        return
+    try:
+        if stream_adapter.state is None and hasattr(stream_adapter.agent, "aget_state"):
+            stream_adapter.state = await stream_adapter.agent.aget_state(stream_adapter.config)
+        await _persist_agent_turn_history(
+            stream_adapter,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            username=username,
+            turn_id=turn_id,
+        )
+    except Exception:
+        logger.warning("流异常后的会话历史补写失败: conversation_id=%s", conversation_id, exc_info=True)
+
+
+async def _backfill_checkpoint_history(
+    agent: Any,
+    config: dict[str, Any],
+    *,
+    conversation_id: str,
+    user_id: str,
+    username: str | None,
+) -> None:
+    """在压缩 middleware 执行前回填旧 checkpoint 尚未迁出的原始历史。"""
+    if not hasattr(agent, "aget_state"):
+        return
+    try:
+        state = await agent.aget_state(config)
+    except Exception:
+        logger.warning("读取 checkpoint 回填历史失败: conversation_id=%s", conversation_id, exc_info=True)
+        return
+    values = getattr(state, "values", None)
+    if not isinstance(values, dict):
+        return
+    messages = values.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+    await conversation_event_service.backfill_checkpoint_history(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=username or user_id,
+        messages=messages,
+        reasoning_segments=values.get("reasoning_segments") or [],
+    )
 
 
 async def _finish_workspace_execution_session(
@@ -1042,6 +1122,8 @@ async def _stream_sql_generation(
         }
     }
 
+    stream_adapter: _AgentSseStreamAdapter | None = None
+    user_message: HumanMessage | None = None
     try:
         async with get_checkpointer() as checkpointer:
             if normalized_skill_names:
@@ -1120,6 +1202,19 @@ async def _stream_sql_generation(
                 enable_thinking=enable_thinking,
                 user_id=user_id,
             )
+            await _backfill_checkpoint_history(
+                agent,
+                config,
+                conversation_id=thread_id,
+                user_id=user_id,
+                username=username,
+            )
+            await conversation_event_service.persist_user_message(
+                conversation_id=thread_id,
+                user_id=user_id,
+                operator_name=username or user_id,
+                message=user_message,
+            )
 
             stream_adapter = _AgentSseStreamAdapter(
                 agent=agent,
@@ -1131,17 +1226,40 @@ async def _stream_sql_generation(
                 debug_label="AI Content from model",
                 reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
             )
-            async for sse_event in stream_adapter.stream_events():
-                yield sse_event
+            try:
+                async for sse_event in stream_adapter.stream_events():
+                    yield sse_event
+            except Exception:
+                await _persist_partial_agent_turn_history(
+                    stream_adapter,
+                    conversation_id=thread_id,
+                    user_id=user_id,
+                    username=username,
+                    turn_id=str(user_message.id or ""),
+                )
+                raise
+            end_payload = await stream_adapter.finish()
+            await _persist_agent_turn_history(
+                stream_adapter,
+                conversation_id=thread_id,
+                user_id=user_id,
+                username=username,
+                turn_id=str(user_message.id or ""),
+            )
             if stream_adapter.disconnected:
                 return
-
-            end_payload = await stream_adapter.finish()
 
         yield _format_sse("message_end", end_payload)
         yield _format_sse("done", "[DONE]")
 
     except Exception as e:
+        await _persist_partial_agent_turn_history(
+            stream_adapter,
+            conversation_id=thread_id,
+            user_id=user_id,
+            username=username,
+            turn_id=str(getattr(user_message, "id", "") or ""),
+        )
         logger.error(f"执行失败: {e}", exc_info=True)
         yield _format_sse("error", {"error": str(e)})
         yield _format_sse("done", "[DONE]")
@@ -1216,6 +1334,8 @@ async def data_analyze_completion_handler(
     async def generate_stream():
         started_at = time.perf_counter()
         last_phase_at = started_at
+        stream_adapter: _AgentSseStreamAdapter | None = None
+        user_message: HumanMessage | None = None
 
         def log_phase(phase: str) -> None:
             nonlocal last_phase_at
@@ -1264,6 +1384,7 @@ async def data_analyze_completion_handler(
                 messages=[_build_user_message(query, semantic_selection_event)],
                 member_datasource_ids=member_datasource_ids or [],
             )
+            user_message = initial_state["messages"][0]
 
             async with get_checkpointer() as checkpointer:
                 execution_session_ref = SandboxExecutionSessionRef()
@@ -1280,6 +1401,19 @@ async def data_analyze_completion_handler(
                     operator_name=username,
                     execution_session_ref=execution_session_ref,
                     enable_thinking=enable_thinking,
+                )
+                await _backfill_checkpoint_history(
+                    agent,
+                    config,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    username=username,
+                )
+                await conversation_event_service.persist_user_message(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    operator_name=username or user_id,
+                    message=user_message,
                 )
                 log_phase("create_agent")
                 if request and await request.is_disconnected():
@@ -1304,6 +1438,17 @@ async def data_analyze_completion_handler(
                     async for sse_event in stream_adapter.stream_events():
                         yield sse_event
                     if stream_adapter.disconnected:
+                        await stream_adapter.finish(
+                            persist_latest_ai_timestamp=True,
+                            prefer_latest_usage=True,
+                        )
+                        await _persist_agent_turn_history(
+                            stream_adapter,
+                            conversation_id=conversation_id,
+                            user_id=user_id,
+                            username=username,
+                            turn_id=str(user_message.id or ""),
+                        )
                         session_success = True
                         return
                     session_success = True
@@ -1311,6 +1456,13 @@ async def data_analyze_completion_handler(
                     session_success = True
                     raise
                 except Exception:
+                    await _persist_partial_agent_turn_history(
+                        stream_adapter,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        username=username,
+                        turn_id=str(user_message.id or ""),
+                    )
                     raise
                 finally:
                     await _finish_workspace_execution_session(execution_session_ref, user_id, success=session_success)
@@ -1319,9 +1471,23 @@ async def data_analyze_completion_handler(
                     persist_latest_ai_timestamp=True,
                     prefer_latest_usage=True,
                 )
+                await _persist_agent_turn_history(
+                    stream_adapter,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    username=username,
+                    turn_id=str(user_message.id or ""),
+                )
                 yield _format_sse("message_end", end_payload)
             yield _format_sse("done", "[DONE]")
         except Exception as e:
+            await _persist_partial_agent_turn_history(
+                stream_adapter,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                username=username,
+                turn_id=str(getattr(user_message, "id", "") or ""),
+            )
             logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
             yield _format_sse("error", {"error": str(e)})
             yield _format_sse("done", "[DONE]")

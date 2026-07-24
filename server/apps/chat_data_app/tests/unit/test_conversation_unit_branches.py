@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from utils import conversation as conversation_module
 from utils.models import Base
+from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 
 
 @pytest.fixture()
@@ -33,6 +34,11 @@ def conversation_db(monkeypatch):
                 raise
 
     monkeypatch.setattr(conversation_module, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        conversation_module.conversation_event_service,
+        "_dao",
+        ConversationEventDao(session_context=lambda: fake_get_session()),
+    )
     yield
     asyncio.run(engine.dispose())
 
@@ -96,14 +102,6 @@ def test_conversation_serializers_and_helpers():
     assert serialized[1]["timestamp"] == "t2"
     assert serialized[2]["timestamp"] == "t3"
 
-    stages = conversation_module._serialize_task_stages([
-        {"run_id": "old", "stage": "s1", "status": "done"},
-        {"run_id": "new", "stage": "s2", "status": "running", "title": "标题", "content": "内容", "steps": ["a", "", "b"]},
-        {"run_id": "new", "stage": "", "status": "bad"},
-        "ignored",
-    ])
-    assert stages == [{"stage": "s2", "status": "running", "title": "标题", "content": "内容", "steps": ["a", "b"]}]
-    assert conversation_module._serialize_task_stages("bad") == []
     assert conversation_module._serialize_semantic_config_selection(None) is None
     assert conversation_module._serialize_semantic_config_selection({"semantic_config_id": ""}) is None
 
@@ -153,12 +151,6 @@ def test_conversation_serializer_object_tool_calls_and_stage_edges():
         "matched_metrics": "bad",
         "matched_dimensions": "bad",
     })
-    stages = conversation_module._serialize_task_stages([
-        {"run_id": "r1", "stage": "thinking", "status": "done", "title": 1, "content": None, "steps": "bad"},
-        {"run_id": "r1", "stage": "plan", "status": "done", "steps": [1, " two ", ""]},
-        {"run_id": "r1", "stage": "execute", "status": "done", "source": "reasoning"},
-    ])
-
     serialized = conversation_module._serialize_messages([SimpleNamespace(type="unknown")])
     human_without_files = HumanMessage(content="无附件", id="h_no_file", additional_kwargs={"file_ids": []})
     human_without_file_payload = conversation_module._serialize_messages([human_without_files])[0]
@@ -170,9 +162,6 @@ def test_conversation_serializer_object_tool_calls_and_stage_edges():
     assert semantic_selection["semantic_config_name"] == "cfg"
     assert semantic_selection["matched_metrics"] == []
     assert semantic_selection["matched_dimensions"] == []
-    assert stages[0] == {"stage": "thinking", "status": "done"}
-    assert stages[1]["steps"] == ["1", " two "]
-    assert stages[2]["source"] == "reasoning"
     assert serialized == []
 
 
@@ -358,9 +347,6 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
                         HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "t1"}),
                         AIMessage(content="回答", id="a1"),
                     ],
-                    "task_stages": [
-                        {"run_id": "run1", "stage": "thinking", "status": "completed", "content": "理解"}
-                    ],
                     "token_usage": raw_token_usage,
                     "conversation_datasource_id": "ds_a",
                 },
@@ -371,7 +357,8 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
 
     assert detail["title"] == "详情标题"
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
-    assert detail["task_stages"][0]["stage"] == "thinking"
+    assert [event["event_type"] for event in detail["history_events"]] == ["user_message", "assistant_message"]
+    assert "task_stages" not in detail
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"]["used"] == 12
     assert detail["token_usage"]["breakdown"][0]["content"] == "[系统提示词已隐藏]"
@@ -421,7 +408,7 @@ async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
 
     assert detail["title"] == "空状态"
     assert detail["messages"] == []
-    assert detail["task_stages"] == []
+    assert "task_stages" not in detail
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"] is None
 

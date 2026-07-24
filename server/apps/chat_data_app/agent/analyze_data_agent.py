@@ -60,6 +60,7 @@ class DataAnalyzeAgentState(AgentState, total=False):
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     token_usage: NotRequired[dict[str, Any] | None]
     context_compression: NotRequired[dict[str, Any] | None]
+    context_summary: NotRequired[str | None]
     conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     datasource_id: NotRequired[str | None]
     semantic_config_id: NotRequired[str | None]

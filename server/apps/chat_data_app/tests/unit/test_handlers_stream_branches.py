@@ -241,6 +241,51 @@ async def test_agent_sse_stream_adapter_llm_connection_alarm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_partial_turn_history_persists_checkpoint_state_without_masking_errors(monkeypatch):
+    persisted = []
+
+    class Agent:
+        async def aget_state(self, config):
+            assert config == {"configurable": {"thread_id": "conv-partial"}}
+            return SimpleNamespace(values={"messages": [AIMessage(content="部分回答", id="assistant-1")]})
+
+    adapter = SimpleNamespace(
+        agent=Agent(),
+        config={"configurable": {"thread_id": "conv-partial"}},
+        state=None,
+        reasoning_segments=[{"id": "reasoning-1", "content": "部分思考", "tool_call_count": 0}],
+    )
+
+    async def persist_turn(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
+
+    await handlers._persist_partial_agent_turn_history(
+        adapter,
+        conversation_id="conv-partial",
+        user_id="user-1",
+        username="用户一",
+        turn_id="turn-1",
+    )
+
+    assert persisted[0]["messages"][0].content == "部分回答"
+    assert persisted[0]["reasoning_segments"][0]["content"] == "部分思考"
+
+    async def persist_turn_error(**_kwargs):
+        raise RuntimeError("event store unavailable")
+
+    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn_error)
+    await handlers._persist_partial_agent_turn_history(
+        adapter,
+        conversation_id="conv-partial",
+        user_id="user-1",
+        username="用户一",
+        turn_id="turn-1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_persist_reasoning_segments_only_writes_delta():
     class Graph:
         def __init__(self):

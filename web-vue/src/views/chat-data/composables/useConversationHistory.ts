@@ -108,6 +108,13 @@ interface HistoryMessagePayload {
   reasoning_turn_id?: unknown
 }
 
+interface HistoryEventPayload {
+  sequence_no?: unknown
+  turn_id?: unknown
+  event_type?: unknown
+  payload?: unknown
+}
+
 const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   if (!value || typeof value !== 'object') return null
   const toolCall = value as { id?: unknown; name?: unknown; args?: unknown }
@@ -151,6 +158,111 @@ const withHistoryToolResult = (toolCall: ToolCallInfo, result: string): ToolCall
     renderType,
     semanticParams,
   }
+}
+
+export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[] => {
+  if (!Array.isArray(historyEvents)) return []
+
+  const events = historyEvents
+    .filter((raw): raw is HistoryEventPayload => Boolean(raw && typeof raw === 'object'))
+    .map((raw, index) => ({ raw, index }))
+    .sort((left, right) => {
+      const leftSequence = Number(left.raw.sequence_no)
+      const rightSequence = Number(right.raw.sequence_no)
+      const normalizedLeft = Number.isFinite(leftSequence) ? leftSequence : left.index
+      const normalizedRight = Number.isFinite(rightSequence) ? rightSequence : right.index
+      return normalizedLeft - normalizedRight
+    })
+
+  const displayMessages: Message[] = []
+  const toolCallTargets = new Map<string, Message>()
+  const persistedReasoningTurnIds = new Set<string>()
+  let activeAssistant: Message | null = null
+  let pendingSemanticConfigSelection: SemanticConfigSelectionInfo | null = null
+
+  const ensureActiveAssistant = (rawMessage: HistoryMessagePayload, turnId?: string): Message => {
+    if (activeAssistant) return activeAssistant
+    activeAssistant = {
+      id: String(rawMessage.id || `assistant-history-${turnId || displayMessages.length}`),
+      role: 'assistant',
+      content: '',
+      timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
+      segments: [],
+    }
+    if (pendingSemanticConfigSelection) {
+      applySemanticConfigSelection(activeAssistant, pendingSemanticConfigSelection)
+      pendingSemanticConfigSelection = null
+    }
+    displayMessages.push(activeAssistant)
+    return activeAssistant
+  }
+
+  for (const { raw, index } of events) {
+    const eventType = String(raw.event_type || '').trim()
+    const turnId = String(raw.turn_id || '').trim()
+    const payload = raw.payload
+    if (!payload || typeof payload !== 'object') continue
+    const messagePayload = payload as HistoryMessagePayload
+
+    if (eventType === 'user_message') {
+      activeAssistant = null
+      pendingSemanticConfigSelection = normalizeSemanticConfigSelection(messagePayload.semantic_config_selection)
+      displayMessages.push({
+        id: String(messagePayload.id || `user-history-${index}`),
+        role: 'user',
+        content: String(messagePayload.content || '').trim(),
+        timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
+      })
+      continue
+    }
+
+    if (eventType === 'reasoning') {
+      const content = normalizeReasoningContent(messagePayload.content)
+      if (!content) continue
+      const assistant = ensureActiveAssistant(messagePayload, turnId)
+      appendHistoryThinkingSegment(assistant, {
+        id: String(messagePayload.id || `thinking-history-${turnId || index}`),
+        content,
+        toolCallCount: 0,
+        reasoningTurnId: turnId || undefined,
+      })
+      if (turnId) persistedReasoningTurnIds.add(turnId)
+      continue
+    }
+
+    if (eventType === 'assistant_message') {
+      const assistant = ensureActiveAssistant(messagePayload, turnId)
+      assistant.timestamp = parseHistoryTimestamp(messagePayload.timestamp) || assistant.timestamp
+      const fallbackReasoning = normalizeReasoningContent(messagePayload.reasoning_content)
+      if (fallbackReasoning && (!turnId || !persistedReasoningTurnIds.has(turnId))) {
+        appendHistoryThinkingSegment(assistant, {
+          id: `thinking-history-${messagePayload.id || assistant.id}-${assistant.thinkingSegments?.length || 0}`,
+          content: fallbackReasoning,
+          toolCallCount: 0,
+          reasoningTurnId: turnId || undefined,
+        })
+      }
+      const rawToolCalls = Array.isArray(messagePayload.tool_calls) ? messagePayload.tool_calls : []
+      for (const rawToolCall of rawToolCalls) {
+        const toolCall = getHistoryToolCall(rawToolCall)
+        if (!toolCall) continue
+        appendHistoryToolCall(assistant, toolCall)
+        toolCallTargets.set(toolCall.tool_call_id, assistant)
+      }
+      appendHistoryTextSegment(assistant, String(messagePayload.content || ''))
+      continue
+    }
+
+    if (eventType !== 'tool_result') continue
+    const toolCallId = String(messagePayload.tool_call_id || '').trim()
+    const target = toolCallTargets.get(toolCallId)
+    if (!target?.toolCalls?.length) continue
+    const result = String(messagePayload.content || '')
+    target.toolCalls = target.toolCalls.map(toolCall => (
+      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result) : toolCall
+    ))
+  }
+  return displayMessages
 }
 
 export const buildHistoryMessages = (
@@ -343,11 +455,14 @@ export function useConversationHistory({
       if (response.ok) {
         const data = await response.json()
         const historyMessages = data.data?.messages || []
+        const historyEvents = data.data?.history_events
         const historyReasoningSegments = normalizeReasoningSegments(data.data?.reasoning_segments)
         const historyTokenUsage = data.data?.token_usage
         tokenUsage && (tokenUsage.value = historyTokenUsage && typeof historyTokenUsage === 'object' ? historyTokenUsage as ChatDataTokenUsage : null)
 
-        messages.value = buildHistoryMessages(historyMessages, historyReasoningSegments)
+        messages.value = Array.isArray(historyEvents) && historyEvents.length > 0
+          ? buildHistoryMessagesFromEvents(historyEvents)
+          : buildHistoryMessages(historyMessages, historyReasoningSegments)
         isFirstMessage.value = messages.value.length === 0
       }
       loadedConversationId.value = convId

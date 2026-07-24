@@ -16,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
+from apps.chat_data_app.services.conversation_event_service import conversation_event_service
 from apps.chat_data_app.services.context_budget import sanitize_context_usage_for_response
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
 from .checkpoint import get_checkpointer
@@ -205,43 +206,6 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                 "timestamp": timestamp
             })
 
-    return serialized
-
-
-def _serialize_task_stages(task_stages: Any) -> List[Dict[str, Any]]:
-    """序列化任务阶段状态，供前端恢复阶段流展示。"""
-    if not isinstance(task_stages, builtins.list):
-        return []
-    latest_run_id = ""
-    for item in task_stages:
-        if isinstance(item, dict) and str(item.get("run_id") or "").strip():
-            latest_run_id = str(item.get("run_id") or "").strip()
-    serialized = []
-    for item in task_stages:
-        if not isinstance(item, dict):
-            continue
-        run_id = str(item.get("run_id") or "").strip()
-        if latest_run_id and run_id != latest_run_id:
-            continue
-        stage = str(item.get("stage") or "").strip()
-        status = str(item.get("status") or "").strip()
-        if not stage or not status:
-            continue
-        stage_data = {
-            "stage": stage,
-            "status": status,
-        }
-        for key in ("title", "content"):
-            value = item.get(key)
-            if isinstance(value, str):
-                stage_data[key] = value
-        source = item.get("source")
-        if source in {"reasoning", "task_stage"}:
-            stage_data["source"] = source
-        steps = item.get("steps")
-        if isinstance(steps, builtins.list):
-            stage_data["steps"] = [str(step) for step in steps if str(step).strip()]
-        serialized.append(stage_data)
     return serialized
 
 
@@ -501,10 +465,14 @@ async def get_detail(
     title = thread.thread_title
     is_favorited = bool(thread.is_favorited) if thread.is_favorited is not None else False
 
-    # 从 checkpoint 获取消息和中断状态
-    messages = []
-    task_stages = []
-    reasoning_segments = []
+    # 事件表是可见历史的权威来源；旧会话尚未迁出时兼容 checkpoint。
+    event_history = await conversation_event_service.load_history(
+        conversation_id=conversation_id,
+        user_id=str(thread.user_id),
+    )
+    messages = builtins.list(event_history.get("messages") or [])
+    history_events = builtins.list(event_history.get("history_events") or [])
+    reasoning_segments = builtins.list(event_history.get("reasoning_segments") or [])
     token_usage = None
     state = None
 
@@ -517,9 +485,26 @@ async def get_detail(
             state = await graph.aget_state(config)
             if state and state.values:
                 raw_messages = state.values.get("messages", [])
-                messages = _serialize_messages(raw_messages)
-                task_stages = _serialize_task_stages(state.values.get("task_stages"))
-                reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
+                if isinstance(raw_messages, builtins.list) and raw_messages:
+                    await conversation_event_service.backfill_checkpoint_history(
+                        conversation_id=conversation_id,
+                        user_id=str(thread.user_id),
+                        operator_name=str(thread.update_by_name or thread.user_id),
+                        messages=raw_messages,
+                        reasoning_segments=state.values.get("reasoning_segments") or [],
+                    )
+                    recovered_history = await conversation_event_service.load_history(
+                        conversation_id=conversation_id,
+                        user_id=str(thread.user_id),
+                    )
+                    if recovered_history.get("history_events"):
+                        messages = builtins.list(recovered_history.get("messages") or [])
+                        history_events = builtins.list(recovered_history.get("history_events") or [])
+                        reasoning_segments = builtins.list(recovered_history.get("reasoning_segments") or [])
+                if not messages:
+                    messages = _serialize_messages(raw_messages)
+                if not reasoning_segments:
+                    reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
                 raw_token_usage = state.values.get("token_usage")
                 if isinstance(raw_token_usage, dict):
                     token_usage = sanitize_context_usage_for_response(raw_token_usage)
@@ -529,7 +514,7 @@ async def get_detail(
         "title": title,
         "datasource_id": _get_checkpoint_datasource_id(state.values if state and state.values else None),
         "messages": messages,
-        "task_stages": task_stages,
+        "history_events": history_events,
         "reasoning_segments": reasoning_segments,
         "token_usage": token_usage,
         "is_favorited": is_favorited,
@@ -607,7 +592,19 @@ async def generate_title(
         logger.info("无 graph agent 使用默认标题: %s -> %s", conversation_id, title)
         return title
 
-    # 从 checkpoint 获取消息
+    thread = await conversation_dao.get_thread(conversation_id, user_id)
+    if not thread:
+        return None
+
+    event_history = await conversation_event_service.load_history(
+        conversation_id=conversation_id,
+        user_id=str(user_id or thread.user_id),
+    )
+    first_message = _get_first_user_message_from_history(event_history.get("messages") or [])
+    if first_message:
+        return await _generate_and_update_title(db_path, conversation_id, first_message, user_id)
+
+    # 旧会话兼容从 checkpoint 获取消息
     config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
     async with get_checkpointer_fn() as checkpointer:
         graph = get_graph(checkpointer)
@@ -628,7 +625,26 @@ async def generate_title(
         logger.warning(f"生成标题失败: {conversation_id} - 没有用户消息")
         return None
 
-    # 使用 LLM 生成标题
+    return await _generate_and_update_title(db_path, conversation_id, first_message, user_id)
+
+
+def _get_first_user_message_from_history(messages: List[Dict[str, Any]]) -> Optional[str]:
+    for message in messages:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if content:
+            return content
+    return None
+
+
+async def _generate_and_update_title(
+    db_path: str,
+    conversation_id: str,
+    first_message: str,
+    user_id: Optional[str],
+) -> str:
+    """根据首条用户消息生成并更新会话标题。"""
     query = first_message.strip()[:500]
     try:
         llm = _get_title_llm()

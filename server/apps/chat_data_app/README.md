@@ -34,6 +34,16 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ## 核心查询链路
 
+## 会话历史与上下文压缩
+
+智能问数与智能分析将模型运行态和用户可见历史分开保存：
+
+- LangGraph checkpoint 的 `messages` 只保存当前模型需要的最近原始消息；`context_summary` 保存累计上下文摘要。
+- `chat_data_conversation_event` 只追加用户消息、思考分段、助手消息和工具结果，是会话历史回放的权威来源；压缩绝不修改该表。
+- 历史接口优先读取事件表。旧会话尚未写入事件时，兼容读取 checkpoint。
+
+部署前必须手工执行 `migrations/20260724_add_conversation_event.sql`。应用启动不会自动建业务表。
+
 ### 统一入口
 
 前端 ChatData 主页面入口是 `web-vue/src/views/chat-data/pages/index.vue`，按 `viewMode` 分成四个用户入口：

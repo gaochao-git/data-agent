@@ -225,6 +225,7 @@ export interface ChatDataContextCompressionInfo {
   compressed_messages?: number
   summary_chars?: number
   compression_skipped_reason?: string
+  legacy_summary_migrated?: boolean
 }
 
 export interface ChatDataMessageEndPayload {

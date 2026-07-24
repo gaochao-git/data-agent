@@ -17,12 +17,16 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent import chat_data_agent, sql_assist_agent
 from apps.chat_data_app.agent.agent_runtime import format_current_time_for_prompt, normalize_response_tool_call_names
-from apps.chat_data_app.agent.middleware import context_usage
+from apps.chat_data_app.agent.middleware import context_compression, context_usage
 from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.middleware import tool_error
 from apps.chat_data_app.agent.prompts import chat_data_builder
-from apps.chat_data_app.services.context_budget import ContextBudget
+from apps.chat_data_app.services.context_budget import (
+    ContextBudget,
+    build_runtime_context_summary_message,
+    count_messages_tokens,
+)
 
 
 class FakeChatModel:
@@ -149,7 +153,7 @@ async def test_context_compression_compresses_completed_old_rounds_and_logs_toke
         ])
     messages.append(HumanMessage(content="当前问题"))
 
-    compressed, report = await compress_messages_for_state(
+    compressed, summary, report = await compress_messages_for_state(
         messages,
         context_window=100,
         message_budget_tokens=10,
@@ -159,7 +163,8 @@ async def test_context_compression_compresses_completed_old_rounds_and_logs_toke
 
     assert report["triggered"] is True
     assert report["estimated_tokens_after"] < report["estimated_tokens_before"]
-    assert compressed[0].content.startswith("[历史对话摘要]")
+    assert summary == "订单历史摘要"
+    assert compressed[0].content.startswith("当前问题")
     assert compressed[-1].content == "当前问题"
     assert len(logs) == 1
     assert "上下文压缩已执行" in logs[0][0]
@@ -176,7 +181,7 @@ async def test_context_compression_update_replaces_persisted_messages():
         ])
     messages.append(HumanMessage(content="当前问题"))
 
-    updates, report = await build_context_compression_update(
+    updates, summary, report = await build_context_compression_update(
         messages,
         context_window=100,
         message_budget_tokens=10,
@@ -187,7 +192,8 @@ async def test_context_compression_update_replaces_persisted_messages():
     assert report["triggered"] is True
     assert isinstance(updates[0], RemoveMessage)
     assert updates[0].id == REMOVE_ALL_MESSAGES
-    assert updates[1].additional_kwargs["context_compression"] is True
+    assert summary == "订单历史摘要"
+    assert updates[1].content == "当前问题"
     assert updates[-1].content == "当前问题"
     replaced = add_messages(messages, updates)
     assert replaced == updates[1:]
@@ -205,7 +211,7 @@ async def test_context_compression_merges_existing_summary_when_threshold_exceed
         HumanMessage(content="当前问题"),
     ]
 
-    updates, report = await build_context_compression_update(
+    updates, summary, report = await build_context_compression_update(
         messages,
         context_window=100,
         message_budget_tokens=1,
@@ -214,8 +220,100 @@ async def test_context_compression_merges_existing_summary_when_threshold_exceed
     )
 
     assert updates is not None
+    assert summary == "订单历史摘要"
     assert report["triggered"] is True
-    assert updates[1].additional_kwargs["compressed_message_count"] == 3
+    assert updates[1].content == "当前问题"
+
+
+@pytest.mark.asyncio
+async def test_context_compression_migrates_legacy_summary_without_triggering_compression():
+    messages = [
+        SystemMessage(
+            content="[历史对话摘要]\n已确认订单指标集",
+            additional_kwargs={"context_compression": True},
+        ),
+        HumanMessage(content="当前问题"),
+    ]
+
+    updates, summary, report = await build_context_compression_update(
+        messages,
+        context_window=10000,
+        message_budget_tokens=9000,
+        config={"enabled": True, "trigger_ratio": 0.70},
+    )
+
+    assert report["triggered"] is False
+    assert report["legacy_summary_migrated"] is True
+    assert summary == "已确认订单指标集"
+    assert updates is not None
+    assert isinstance(updates[0], RemoveMessage)
+    assert [message.content for message in updates[1:]] == ["当前问题"]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_counts_runtime_summary_wrapper_in_trigger_budget():
+    messages = [
+        HumanMessage(content="历史问题"),
+        AIMessage(content="历史回答"),
+        HumanMessage(content="当前问题"),
+    ]
+    previous_summary = "历史摘要"
+    wrapped_summary = build_runtime_context_summary_message(previous_summary)
+    assert wrapped_summary is not None
+    raw_summary_tokens = count_messages_tokens([HumanMessage(content=previous_summary)])
+    wrapped_summary_tokens = count_messages_tokens([wrapped_summary])
+    assert wrapped_summary_tokens > raw_summary_tokens
+
+    _, summary, report = await compress_messages_for_state(
+        messages,
+        context_window=100,
+        message_budget_tokens=count_messages_tokens(messages) + raw_summary_tokens,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        previous_summary=previous_summary,
+        summarizer=lambda _messages: _fake_summary("新的完整摘要"),
+    )
+
+    assert report["triggered"] is True
+    assert summary == "新的完整摘要"
+
+
+@pytest.mark.asyncio
+async def test_context_compression_summarizes_all_completed_content_without_truncation():
+    tool_call = {
+        "id": "call-1",
+        "name": "semantic_query_tool",
+        "args": {"dsl": {"filter": "条件" * 3000}},
+    }
+    complete_tool_result = "完整工具结果 " * 10000
+    messages = [
+        HumanMessage(content="历史问题"),
+        AIMessage(content="", tool_calls=[tool_call]),
+        ToolMessage(content=complete_tool_result, tool_call_id="call-1", name="semantic_query_tool"),
+        AIMessage(content="历史结论"),
+        HumanMessage(content="当前问题"),
+    ]
+    captured = {}
+
+    async def summarize(compressible_messages):
+        captured["messages"] = compressible_messages
+        captured["prompt"] = context_compression._build_summary_prompt(compressible_messages)
+        return "完整历史摘要"
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        context_window=100,
+        message_budget_tokens=1,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=summarize,
+    )
+
+    assert report["triggered"] is True
+    assert report["compressed_messages"] == 4
+    assert summary == "完整历史摘要"
+    assert compressed == [messages[-1]]
+    assert captured["messages"] == messages[:4]
+    assert tool_call["args"]["dsl"]["filter"] in captured["prompt"]
+    assert complete_tool_result.rstrip() in captured["prompt"]
 
 
 async def _fake_summary(text: str) -> str:
@@ -318,8 +416,11 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
     response = await middleware.awrap_model_call(request, handler)
 
     sent_messages = captured["request"].messages
-    assert "历史对话摘要" in captured["request"].system_message.content
+    assert captured["request"].system_message.content == "智能问数系统提示词"
+    assert sent_messages[0].additional_kwargs["context_summary"] is True
+    assert "历史问题" in sent_messages[0].content
     assert sent_messages[-1].content == "当前问题"
+    assert all(message.type != "system" for message in sent_messages)
     token_usage = response.command.update["token_usage"]
     assert token_usage["context_compression"]["triggered"] is False
 

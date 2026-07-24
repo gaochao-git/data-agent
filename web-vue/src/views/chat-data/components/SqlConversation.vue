@@ -205,8 +205,8 @@ const handleSaveToDashboard = (sql: string, chartType: string, memberDatasourceI
 
 const selectedModelValue = computed(() => modelOptions.value.find(m => m.id === selectedModel.value)?.value || selectedModel.value || null)
 
-const resetTokenUsagePanel = () => {
-  tokenUsage.value = null
+const resetTokenUsagePanel = (clearUsage = true) => {
+  if (clearUsage) tokenUsage.value = null
   tokenUsagePanelRef.value?.closePanel()
 }
 
@@ -888,7 +888,8 @@ const submitQuery = async (
   toolCallsMap.value.clear()
   activeToolCallId.value = null
   sidePanelOpen.value = false
-  resetTokenUsagePanel()
+  // Keep the previous request visible until the first usage event of this turn arrives.
+  resetTokenUsagePanel(false)
 
   // 确保有会话 ID（懒创建模式）
   let convId = props.conversationId
@@ -978,7 +979,7 @@ const submitQuery = async (
       null,
       (payload) => handleDashboardSpec(payload, assistantMessageId),
       (payload) => {
-        tokenUsage.value = payload.usage || null
+        if (payload.usage) tokenUsage.value = payload.usage
         updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
       },
       (usage) => {

@@ -179,6 +179,19 @@ def test_build_message_breakdown_keeps_system_message_content_by_default():
     assert rows[0].get("redacted") is None
 
 
+def test_build_message_breakdown_redacts_runtime_context_summary():
+    rows = build_message_breakdown([
+        HumanMessage(content="内部摘要内容", additional_kwargs={"context_summary": True}),
+        HumanMessage(content="当前用户问题"),
+    ])
+
+    assert rows[0]["label"] == "历史摘要（运行态）"
+    assert rows[0]["role"] == "context_summary"
+    assert rows[0]["content"] == SYSTEM_PROMPT_PLACEHOLDER
+    assert rows[0]["redacted"] is True
+    assert rows[1]["round"] == 1
+
+
 def test_build_message_breakdown_redacts_when_explicitly_requested():
     rows = build_message_breakdown([
         SystemMessage(content="# 角色 SECRET_SYSTEM_PROMPT"),

@@ -8,7 +8,7 @@ import weakref
 
 from langchain.agents.middleware import wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -20,6 +20,7 @@ from ...services.context_budget import (
     REQUEST_OVERHEAD_TOKENS,
     SYSTEM_PROMPT_PLACEHOLDER,
     ToolResultBudget,
+    build_runtime_context_summary_message,
     build_context_usage_payload,
     count_messages_tokens,
     count_tools_tokens,
@@ -63,6 +64,7 @@ def create_context_usage_middleware(
             model_id=effective_model_id,
             request_budget=request_budget,
             context_compression=_request_context_compression(request),
+            context_summary=_request_context_summary(request),
         )
         record = _build_llm_call_record(token_usage, model_id=effective_model_id, index=len(records) + 1)
         records.append(record)
@@ -312,22 +314,24 @@ def build_message_breakdown(
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
         message_type = str(getattr(message, "type", "") or "message")
-        redacted = hide_content
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        is_context_summary = bool(additional_kwargs.get("context_summary"))
+        redacted = hide_content or is_context_summary
         content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
-        if message_type == "human":
+        if message_type == "human" and not is_context_summary:
             round_index += 1
         estimated_tokens = count_messages_tokens([message])
         item = {
             "key": f"message_{index}",
-            "label": _message_label(message_type, round_index or 1),
-            "role": message_type,
+            "label": "历史摘要（运行态）" if is_context_summary else _message_label(message_type, round_index or 1),
+            "role": "context_summary" if is_context_summary else message_type,
             "round": round_index or 1,
             "message_index": index,
             "tokens": _scale_tokens(estimated_tokens, scale),
             "estimated_tokens": estimated_tokens,
             "estimated": True,
             "content": content,
-            "description": content[:120],
+            "description": "运行态上下文摘要，内容不对用户展示。" if is_context_summary else content[:120],
         }
         if redacted:
             item["redacted"] = True
@@ -389,10 +393,15 @@ def _build_agent_context_usage(
     model_id: str | None,
     request_budget: ToolResultBudget,
     context_compression: dict[str, Any] | None = None,
+    context_summary: str | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """构造当前模型入口 token usage。"""
     budget = request_budget.configure(system_prompt, tools, model_id=model_id)
-    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(system_prompt, messages)
+    effective_system_prompt, request_messages = _merge_compression_summary_into_system_prompt(
+        system_prompt,
+        messages,
+        context_summary=context_summary,
+    )
     llm_messages = [SystemMessage(content=effective_system_prompt), *request_messages]
     message_tokens = count_messages_tokens(llm_messages)
     tool_tokens = count_tools_tokens(tools)
@@ -449,17 +458,48 @@ def _override_request(request: Any, **kwargs):
     return type(request)(**data)
 
 
-def _merge_compression_summary_into_system_prompt(system_prompt: str, messages: list[Any]) -> tuple[str, list[Any]]:
-    """将压缩摘要合并进唯一 system prompt，避免模型入口出现多个 system 消息。"""
-    if not messages:
-        return system_prompt, []
-    first = messages[0]
-    additional_kwargs = getattr(first, "additional_kwargs", None) or {}
-    if isinstance(first, SystemMessage) and additional_kwargs.get("context_compression"):
-        summary = str(getattr(first, "content", "") or "").strip()
-        if summary:
-            return f"{system_prompt}\n\n## 历史对话摘要\n{summary}", list(messages[1:])
-    return system_prompt, list(messages)
+def _merge_compression_summary_into_system_prompt(
+    system_prompt: str,
+    messages: list[Any],
+    *,
+    context_summary: str | None = None,
+) -> tuple[str, list[Any]]:
+    """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
+    cleaned_messages, legacy_summary = _extract_legacy_compression_summary(messages)
+    summary = _merge_context_summaries(context_summary, legacy_summary)
+    if not summary:
+        return system_prompt, cleaned_messages
+    summary_message = build_runtime_context_summary_message(summary)
+    if summary_message is None:
+        return system_prompt, cleaned_messages
+    return system_prompt, [summary_message, *cleaned_messages]
+
+
+def _extract_legacy_compression_summary(messages: list[Any]) -> tuple[list[Any], str | None]:
+    """兼容旧 checkpoint 摘要，确保模型调用不会附带第二条 system 消息。"""
+    cleaned_messages: list[Any] = []
+    summaries: list[str] = []
+    for message in list(messages or []):
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        if isinstance(message, SystemMessage) and additional_kwargs.get("context_compression"):
+            content = str(getattr(message, "content", "") or "").strip()
+            prefix = "[历史对话摘要]"
+            if content.startswith(prefix):
+                content = content[len(prefix):].lstrip("\n ")
+            if content:
+                summaries.append(content)
+            continue
+        cleaned_messages.append(message)
+    return cleaned_messages, "\n\n".join(summaries) or None
+
+
+def _merge_context_summaries(*summaries: str | None) -> str:
+    unique_summaries: list[str] = []
+    for raw_summary in summaries:
+        summary = str(raw_summary or "").strip()
+        if summary and summary not in unique_summaries:
+            unique_summaries.append(summary)
+    return "\n\n".join(unique_summaries)
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:
@@ -496,6 +536,14 @@ def _request_context_compression(request: Any) -> dict[str, Any] | None:
         return None
     value = state.get("context_compression")
     return value if isinstance(value, dict) else None
+
+
+def _request_context_summary(request: Any) -> str | None:
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return None
+    summary = str(state.get("context_summary") or "").strip()
+    return summary or None
 
 
 def _merge_response_usage(record: dict[str, Any], response: Any) -> None:

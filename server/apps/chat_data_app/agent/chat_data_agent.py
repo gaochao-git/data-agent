@@ -61,6 +61,7 @@ class ChatDataAgentState(AgentState, total=False):
     semantic_config: dict[str, Any] | None
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None
+    context_summary: str | None
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
 
 

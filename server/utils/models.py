@@ -40,6 +40,33 @@ class UserThread(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
 
+class ChatDataConversationEvent(Base):
+    """ChatData 会话的追加式原始事件历史。"""
+    __tablename__ = "chat_data_conversation_event"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "event_key", name="uniq_conv_event_key"),
+        Index("idx_conv_event_seq", "conversation_id", "sequence_no"),
+        Index("idx_conv_event_turn", "conversation_id", "turn_id"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
     __tablename__ = "uploaded_files"

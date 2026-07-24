@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHistoryMessages } from '../useConversationHistory'
+import { buildHistoryMessages, buildHistoryMessagesFromEvents } from '../useConversationHistory'
 
 describe('buildHistoryMessages', () => {
   it('preserves thinking, tool calls, and final text in their original order', () => {
@@ -82,6 +82,42 @@ describe('buildHistoryMessages', () => {
       { type: 'thinkingSegment', thinkingSegmentId: 'thinking-2' },
       { type: 'toolCall', toolCallId: 'tool-query' },
       { type: 'text', content: '第二个回答。' },
+    ])
+  })
+
+  it('replays persisted history events by sequence instead of guessing thought positions', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '查询订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'reasoning', payload: { id: 'thinking-1', content: '先选择指标集' } },
+      {
+        sequence_no: 3,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: { id: 'assistant-1', content: '', tool_calls: [{ id: 'tool-1', name: 'select_semantic_config_tool', args: {} }] },
+      },
+      { sequence_no: 4, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'tool-result-1', tool_call_id: 'tool-1', content: '已选择订单指标集' } },
+      { sequence_no: 5, turn_id: 'turn-1', event_type: 'reasoning', payload: { id: 'thinking-2', content: '继续生成 SQL' } },
+      {
+        sequence_no: 6,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: { id: 'assistant-2', content: '', tool_calls: [{ id: 'tool-2', name: 'dsl2sql_tool', args: {} }] },
+      },
+      { sequence_no: 7, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'tool-result-2', tool_call_id: 'tool-2', content: 'SELECT * FROM orders' } },
+      { sequence_no: 8, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-3', content: '查询已完成。' } },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.segments).toEqual([
+      { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+      { type: 'toolCall', toolCallId: 'tool-1' },
+      { type: 'thinkingSegment', thinkingSegmentId: 'thinking-2' },
+      { type: 'toolCall', toolCallId: 'tool-2' },
+      { type: 'text', content: '查询已完成。' },
+    ])
+    expect(messages[1]!.toolCalls?.map(tool => tool.result)).toEqual([
+      '已选择订单指标集',
+      'SELECT * FROM orders',
     ])
   })
 })

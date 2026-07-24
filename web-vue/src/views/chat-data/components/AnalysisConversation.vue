@@ -101,8 +101,8 @@ type AnalysisSubmitOptions = {
   appendUserMessage?: boolean
 }
 
-const resetTokenUsagePanel = () => {
-  tokenUsage.value = null
+const resetTokenUsagePanel = (clearUsage = true) => {
+  if (clearUsage) tokenUsage.value = null
   tokenUsagePanelRef.value?.closePanel()
 }
 
@@ -1598,7 +1598,8 @@ const submitAnalysisQuery = async (
   }
   isGenerating.value = true
   activeToolCallId.value = null
-  resetTokenUsagePanel()
+  // Keep the previous request visible until the first usage event of this turn arrives.
+  resetTokenUsagePanel(false)
 
   try {
     let convId = props.conversationId
@@ -1663,7 +1664,7 @@ const submitAnalysisQuery = async (
       options.skillName || null,
       undefined,
       (payload) => {
-        tokenUsage.value = payload.usage || null
+        if (payload.usage) tokenUsage.value = payload.usage
         updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
       },
       (usage) => {
