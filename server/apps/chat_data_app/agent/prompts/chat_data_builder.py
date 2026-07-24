@@ -2,7 +2,6 @@
 
 from typing import Any
 
-from ..agent_runtime import format_current_time_for_prompt
 from .chat_data import SQL_GENERATOR_PROMPT_SEMANTIC_QUERY
 from .semantic_layer import build_semantic_prompt
 
@@ -63,7 +62,6 @@ def build_chat_data_system_prompt(
 ) -> str:
     """按当前 state 构造智能问数 system prompt。"""
     prompt_params = {
-        "current_time": format_current_time_for_prompt(),
         "datasource_group_context": format_datasource_group_context_for_llm(_get_prompt_context_value(state, "datasource_group_context")),
         "available_skills_context": available_skills_context or "",
         "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(_get_prompt_context_value(state, "semantic_config_directory_info")),

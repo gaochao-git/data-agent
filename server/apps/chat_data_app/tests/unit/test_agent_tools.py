@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -16,10 +17,23 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.tools import calculator_tool
 from apps.chat_data_app.agent.tools import semantic_query as agent_tools
+from apps.chat_data_app.agent.tools.current_time import get_current_time_payload, get_current_time_tool
 from apps.chat_data_app.agent.prompts.semantic_layer import build_semantic_prompt
 from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services import sql_assist_context
+
+
+def test_current_time_tool_uses_shanghai_timezone_and_weekday():
+    payload = get_current_time_payload(datetime(2026, 7, 24, 10, 30, 0, tzinfo=timezone.utc))
+
+    assert payload == {
+        "current_time": "2026-07-24 18:30:00",
+        "timezone": "Asia/Shanghai",
+        "utc_offset": "+08:00",
+        "weekday": "周五",
+    }
+    assert json.loads(asyncio.run(get_current_time_tool.ainvoke({})))["timezone"] == "Asia/Shanghai"
 
 
 def _query_result_payload(result: str) -> dict:

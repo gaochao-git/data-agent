@@ -456,6 +456,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "dsl2sql_tool",
         "semantic_query_tool",
         "calculator_tool",
+        "get_current_time",
     ]
     assert len(captured["middleware"]) == 5
     assert captured["middleware"][0].name == "ContextCompressionMiddleware"

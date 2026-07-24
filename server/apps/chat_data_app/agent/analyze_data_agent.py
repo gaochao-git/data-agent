@@ -26,13 +26,13 @@ from .agent_runtime import (
     build_standard_agent_middleware,
     create_semantic_selection_tools_bundle,
     create_streaming_chat_model,
-    format_current_time_for_prompt,
 )
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import bind_context_usage_middleware, create_request_context_usage_middleware
 from .chat_data_agent import keep_conversation_datasource_id, merge_reasoning_segments
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
+from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool
 from .tools.file_edit import create_file_edit_tool
 from .tools.file_read import create_file_read_tool
@@ -48,6 +48,7 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "file_edit", "status": "available", "description": "向 workspace 或 outputs 写入中间文件和最终产物。"},
     {"name": "present_artifacts", "status": "available", "description": "将 outputs 中已生成且已校验的最终产物显式呈现给用户。"},
     {"name": "sandbox_run", "status": "available", "description": "在当前会话沙箱中执行 ls/find/python3/node/bash 等非交互命令。"},
+    {"name": "get_current_time", "status": "available", "description": "获取当前北京时间、时区和星期，用于解析今天、昨天、本周等相对时间。"},
     {"name": "select_semantic_config_tool", "status": "available", "description": "当前没有手动选择指标集时，从数据源组指标集中选择可回答问题的指标集。"},
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
     {"name": "semantic_query_tool", "status": "available", "description": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
@@ -142,6 +143,7 @@ def create_data_analyze_tools(
         create_file_edit_tool(root, execution_session_ref),
         create_present_artifacts_tool(execution_session_ref),
         create_sandbox_run_tool(root, execution_session_ref),
+        get_current_time_tool,
         *create_semantic_selection_tools_bundle(
             model_id=model_id,
             datasource_id=datasource_id,
@@ -179,7 +181,6 @@ def build_data_analyze_system_prompt(
     dialect_context_text, dialect_fewshot = build_dialect_prompt_sections(data_context or {})
 
     return DATA_ANALYZE_SYSTEM_PROMPT_TEMPLATE.format(
-        current_time=format_current_time_for_prompt(),
         workspace_root=workspace_root or "未初始化",
         data_context_text=data_context_text,
         available_skills_xml=available_skills_xml,

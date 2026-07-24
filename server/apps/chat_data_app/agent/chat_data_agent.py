@@ -18,6 +18,7 @@ from .agent_runtime import build_standard_agent_middleware, create_semantic_sele
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_chat_data_context_usage_middleware
 from .tools.calculator import calculator_tool
+from .tools.current_time import get_current_time_tool
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
 from .tools.semantic_query import semantic_query_tool
 
@@ -96,6 +97,7 @@ def create_chat_data_agent(
         ),
         semantic_query_tool,
         calculator_tool,
+        get_current_time_tool,
     ]
 
     context_usage_middleware = create_chat_data_context_usage_middleware(
