@@ -201,6 +201,18 @@ async def list_runtime_semantic_config_directory(datasource_id: str | None, user
     if not normalized_datasource_id:
         return []
     ds_manager = get_datasource_manager()
+    if hasattr(ds_manager, "get_semantic_config_directory_async"):
+        directory = await ds_manager.get_semantic_config_directory_async(
+            normalized_datasource_id,
+            normalized_user_id,
+        )
+        return [
+            dict(item)
+            for item in directory or []
+            if isinstance(item, dict)
+            and str(item.get("id") or item.get("semantic_config_id") or "").strip()
+            and bool(item.get("enabled", True))
+        ]
     if hasattr(ds_manager, "get_runtime_semantic_configs_async"):
         configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id, normalized_user_id)
     else:

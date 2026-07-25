@@ -201,6 +201,32 @@ class DataSourceDao:
             "update_by_name": row.get("update_by_name") or "",
         }
 
+    def _semantic_config_visibility_conditions(self, group_id: str, user_id: str = "") -> list[Any]:
+        """Build the shared public/private visibility conditions for semantic configs."""
+        conditions = [SemanticConfig.group_id == group_id, SemanticConfig.delete_flag == 0]
+        normalized_user_id = str(user_id or "").strip()
+        if normalized_user_id:
+            conditions.append(
+                or_(
+                    SemanticConfig.scope_type == "public",
+                    and_(SemanticConfig.scope_type == "private", SemanticConfig.create_by == normalized_user_id),
+                )
+            )
+        return conditions
+
+    def _map_semantic_config_directory_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Map only the fields required by the prompt's semantic-config directory."""
+        metrics = _load_json(row.get("metrics_json"), [])
+        dimensions = _load_json(row.get("dimensions_json"), [])
+        return {
+            "id": row.get("semantic_config_id") or "",
+            "name": row.get("semantic_config_name") or "",
+            "description": row.get("semantic_config_desc") or "",
+            "enabled": bool(row.get("enabled_flag", 1)),
+            "metrics_total": len(metrics) if isinstance(metrics, list) else 0,
+            "dimensions_total": len(dimensions) if isinstance(dimensions, list) else 0,
+        }
+
     def _map_datasource_table_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "table_name": row.get("table_name") or "",
@@ -586,10 +612,7 @@ class DataSourceDao:
     async def get_semantic_configs_by_group_id_async(self, group_id: str, user_id: str = "") -> List[Dict[str, Any]]:
         if not group_id:
             return []
-        normalized_user_id = str(user_id or "").strip()
-        conditions = [SemanticConfig.group_id == group_id, SemanticConfig.delete_flag == 0]
-        if normalized_user_id:
-            conditions.append(or_(SemanticConfig.scope_type == "public", and_(SemanticConfig.scope_type == "private", SemanticConfig.create_by == normalized_user_id)))
+        conditions = self._semantic_config_visibility_conditions(group_id, user_id)
         async with self._session_scope() as session:
             query_result = await session.execute(
                 select(SemanticConfig)
@@ -602,6 +625,31 @@ class DataSourceDao:
             )
             rows = [self._semantic_config_model_to_row(row) for row in query_result.scalars().all()]
         return [self._map_semantic_config_row(row) for row in rows]
+
+    async def get_semantic_config_directory_by_group_id_async(self, group_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+        """Read the lightweight semantic-config directory without loading runtime fields."""
+        if not group_id:
+            return []
+        conditions = self._semantic_config_visibility_conditions(group_id, user_id)
+        async with self._session_scope() as session:
+            query_result = await session.execute(
+                select(
+                    SemanticConfig.semantic_config_id,
+                    SemanticConfig.semantic_config_name,
+                    SemanticConfig.semantic_config_desc,
+                    SemanticConfig.enabled_flag,
+                    SemanticConfig.metrics_json,
+                    SemanticConfig.dimensions_json,
+                )
+                .where(*conditions)
+                .order_by(
+                    case((SemanticConfig.scope_type == "public", 0), else_=1).asc(),
+                    SemanticConfig.semantic_config_name.asc(),
+                    SemanticConfig.id.asc(),
+                )
+            )
+            rows = [dict(row) for row in query_result.mappings().all()]
+        return [self._map_semantic_config_directory_row(row) for row in rows]
 
     async def get_semantic_config_async(self, datasource_id: str, config_id: str) -> Optional[Dict[str, Any]]:
         datasource = await self.get_datasource_async(datasource_id)

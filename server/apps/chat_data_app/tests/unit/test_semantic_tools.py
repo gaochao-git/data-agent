@@ -129,14 +129,17 @@ def test_select_semantic_config_tool_returns_full_directory_for_directory_query(
     captured = {}
 
     class FakeDatasourceManager:
-        async def get_runtime_semantic_configs_async(self, datasource_id, user_id=""):
+        async def get_semantic_config_directory_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_bound"
             captured["user_id"] = user_id
             return [
-                {"id": "sc_order", "name": "订单分析", "description": "订单经营分析", "enabled": True, "metrics": [{"name": "订单数"}], "dimensions": [{"name": "城市"}]},
-                {"id": "sc_disabled", "name": "停用指标集", "enabled": False, "metrics": [{"name": "停用指标"}], "dimensions": []},
-                {"id": "sc_student", "name": "学生课程选课分析", "description": "选课与成绩分析", "enabled": True, "metrics": [{"name": "平均成绩"}], "dimensions": [{"name": "课程"}, {"name": "学生"}]},
+                {"id": "sc_order", "name": "订单分析", "description": "订单经营分析", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+                {"id": "sc_disabled", "name": "停用指标集", "enabled": False, "metrics_total": 1, "dimensions_total": 0},
+                {"id": "sc_student", "name": "学生课程选课分析", "description": "选课与成绩分析", "enabled": True, "metrics_total": 1, "dimensions_total": 2},
             ]
+
+        async def get_runtime_semantic_configs_async(self, *_args, **_kwargs):
+            raise AssertionError("directory query must not load runtime semantic configs")
 
     async def fail_select_semantic_config_for_query(*_args, **_kwargs):
         raise AssertionError("directory query should not call selector llm")

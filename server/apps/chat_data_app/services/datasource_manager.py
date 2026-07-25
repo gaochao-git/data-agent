@@ -337,6 +337,13 @@ class DataSourceManager:
             raise ValueError(f"数据源不存在: {datasource_id}")
         return datasource
 
+    async def _get_datasource_meta_or_raise_async(self, datasource_id: str) -> dict:
+        """读取执行对象解析所需的数据源元信息，不加载表结构和指标集。"""
+        datasource = await self.get_datasource_meta_async(datasource_id)
+        if not datasource:
+            raise ValueError(f"数据源不存在: {datasource_id}")
+        return datasource
+
     async def _load_datasource_async(self, datasource_id: str) -> dict:
         """异步读取最新数据源并补充语义配置。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
@@ -764,8 +771,22 @@ class DataSourceManager:
 
     async def get_execution_datasources_async(self, datasource_id: str, member_datasource_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """异步解析逻辑数据源下可执行的成员数据源列表。"""
-        datasource = await self._get_datasource_or_raise_async(datasource_id)
+        datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
         return self._build_execution_datasource_targets(datasource, member_datasource_ids)
+
+    async def authorize_execution_datasources_async(
+        self,
+        datasource: dict,
+        member_datasource_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """按当前用户机构权限过滤已读取的数据源执行对象。"""
+        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        filtered_datasource = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
+        if not filtered_datasource:
+            raise ValueError("当前用户无可用执行对象权限")
+        return self._build_execution_datasource_targets(filtered_datasource, member_datasource_ids)
 
     async def get_authorized_execution_datasources_async(
         self,
@@ -775,12 +796,13 @@ class DataSourceManager:
         username: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """异步解析当前用户有机构权限的可执行成员数据源列表。"""
-        datasource = await self._get_datasource_or_raise_async(datasource_id)
-        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
-        filtered_datasource = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
-        if not filtered_datasource:
-            raise ValueError("当前用户无可用执行对象权限")
-        return self._build_execution_datasource_targets(filtered_datasource, member_datasource_ids)
+        datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
+        return await self.authorize_execution_datasources_async(
+            datasource,
+            member_datasource_ids,
+            user_id,
+            username,
+        )
 
     async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
         """异步根据数据源组名称获取数据源。"""
@@ -1157,6 +1179,16 @@ class DataSourceManager:
                 and str(config.get("create_by") or "").strip() == normalized_user_id
             )
         ]
+
+    async def get_semantic_config_directory_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
+        """读取当前用户可见的轻量指标集目录，不加载数据源运行态字段。"""
+        normalized_datasource_id = str(datasource_id or "").strip()
+        if not normalized_datasource_id:
+            return []
+        return await self.datasource_dao.get_semantic_config_directory_by_group_id_async(
+            normalized_datasource_id,
+            user_id,
+        )
 
     async def get_runtime_semantic_configs_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
         """异步获取智能问数运行时语义配置列表，并临时合并物理字段字典。"""

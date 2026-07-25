@@ -1014,6 +1014,7 @@ async def _get_execution_targets_async(
     member_datasource_ids: list[str] | None = None,
     user_id: str | None = None,
     username: str | None = None,
+    datasource_meta: dict | None = None,
 ) -> list[dict]:
     if not datasource_id:
         return []
@@ -1022,6 +1023,13 @@ async def _get_execution_targets_async(
         return []
     try:
         ds_manager = get_datasource_manager()
+        if datasource_meta is not None and hasattr(ds_manager, "authorize_execution_datasources_async"):
+            return await ds_manager.authorize_execution_datasources_async(
+                datasource_meta,
+                normalized_member_ids,
+                user_id,
+                username,
+            )
         return await ds_manager.get_authorized_execution_datasources_async(
             datasource_id,
             normalized_member_ids,
@@ -1082,6 +1090,21 @@ async def _stream_sql_generation(
     skill_names: list[str] | None = None,
 ):
     """流式执行智能问数。"""
+    started_at = time.perf_counter()
+    last_phase_at = started_at
+
+    def log_phase(phase: str) -> None:
+        nonlocal last_phase_at
+        now = time.perf_counter()
+        logger.info(
+            "ChatData 阶段耗时: conversation_id=%s phase=%s elapsed_ms=%d total_ms=%d",
+            thread_id,
+            phase,
+            int((now - last_phase_at) * 1000),
+            int((now - started_at) * 1000),
+        )
+        last_phase_at = now
+
     datasource_id = str(datasource_id or "").strip() or None
     semantic_config_id = str(semantic_config_id or "").strip() or None
     normalized_skill_names = []
@@ -1110,6 +1133,7 @@ async def _stream_sql_generation(
             return
     else:
         logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
+    log_phase("resolve_semantic_config")
 
     logger.info("智能问数使用统一语义工具链")
     if semantic_config and not semantic_config_id:
@@ -1126,6 +1150,7 @@ async def _stream_sql_generation(
     user_message: HumanMessage | None = None
     try:
         async with get_checkpointer() as checkpointer:
+            log_phase("open_checkpointer")
             if normalized_skill_names:
                 user_message = _build_user_message(
                     user_query,
@@ -1135,23 +1160,67 @@ async def _stream_sql_generation(
             else:
                 user_message = _build_user_message(user_query, semantic_selection_event)
 
-            semantic_config_directory_info = ""
+            datasource_manager = get_datasource_manager()
+            semantic_directory_task = None
             if not semantic_config:
-                semantic_config_directory_info = await _build_semantic_config_directory_info_async(datasource_id, user_id)
-            datasource_group_context = ""
+                semantic_directory_task = _build_semantic_config_directory_info_async(datasource_id, user_id)
+            datasource_meta_task = None
             if datasource_id:
+                get_datasource_meta = getattr(datasource_manager, "get_datasource_meta_async", None)
+                datasource_meta_task = (
+                    get_datasource_meta(datasource_id)
+                    if callable(get_datasource_meta)
+                    else datasource_manager.get_datasource_async(datasource_id)
+                )
+
+            if semantic_directory_task and datasource_meta_task:
+                semantic_directory_result, datasource_result = await asyncio.gather(
+                    semantic_directory_task,
+                    datasource_meta_task,
+                    return_exceptions=True,
+                )
+                semantic_config_directory_info = "" if isinstance(semantic_directory_result, Exception) else semantic_directory_result
+                datasource = None if isinstance(datasource_result, Exception) else datasource_result
+                if isinstance(semantic_directory_result, Exception):
+                    logger.warning("构造指标集目录说明失败: %s", semantic_directory_result)
+                if isinstance(datasource_result, Exception):
+                    logger.warning("读取数据源组智能问数元信息失败: %s", datasource_result)
+            elif semantic_directory_task:
                 try:
-                    datasource = await get_datasource_manager().get_datasource_async(datasource_id)
+                    semantic_config_directory_info = await semantic_directory_task
+                except Exception as err:
+                    logger.warning("构造指标集目录说明失败: %s", err)
+                    semantic_config_directory_info = ""
+                datasource = None
+            elif datasource_meta_task:
+                semantic_config_directory_info = ""
+                try:
+                    datasource = await datasource_meta_task
+                except Exception as err:
+                    logger.warning("读取数据源组智能问数元信息失败: %s", err)
+                    datasource = None
+            else:
+                semantic_config_directory_info = ""
+                datasource = None
+            log_phase("load_semantic_directory_and_datasource_meta")
+
+            datasource_group_context = ""
+            if datasource_id and datasource is not None:
+                try:
                     datasource_group_context = str((datasource or {}).get("query_context") or "").strip()
                 except Exception as err:
                     logger.warning("读取数据源组智能问数说明失败: %s", err)
+            elif datasource_id:
+                logger.warning("读取数据源组智能问数元信息失败: datasource_id=%s", datasource_id)
             explicit_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
             all_execution_targets = await _get_execution_targets_async(
                 datasource_id,
                 explicit_member_datasource_ids,
                 user_id=user_id,
                 username=username,
+                datasource_meta=datasource,
             )
+            log_phase("authorize_execution_targets")
             available_member_datasource_ids = [
                 _execution_target_member_id(target)
                 for target in all_execution_targets
@@ -1191,6 +1260,7 @@ async def _stream_sql_generation(
                     skill_names=normalized_skill_names,
                 ),
             )
+            log_phase("build_system_prompt")
 
             # 创建智能问数 agent，传入语义配置（如果有）
             agent = create_chat_data_agent(
@@ -1202,6 +1272,7 @@ async def _stream_sql_generation(
                 enable_thinking=enable_thinking,
                 user_id=user_id,
             )
+            log_phase("create_agent")
             await _backfill_checkpoint_history(
                 agent,
                 config,
@@ -1209,12 +1280,14 @@ async def _stream_sql_generation(
                 user_id=user_id,
                 username=username,
             )
+            log_phase("backfill_checkpoint_history")
             await conversation_event_service.persist_user_message(
                 conversation_id=thread_id,
                 user_id=user_id,
                 operator_name=username or user_id,
                 message=user_message,
             )
+            log_phase("persist_user_message")
 
             stream_adapter = _AgentSseStreamAdapter(
                 agent=agent,
@@ -1224,6 +1297,7 @@ async def _stream_sql_generation(
                 visible_message_filter=_is_chat_data_visible_stream_message,
                 disconnect_log_id=thread_id,
                 debug_label="AI Content from model",
+                on_first_message=lambda: log_phase("first_model_chunk"),
                 reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
             )
             try:
@@ -1239,6 +1313,7 @@ async def _stream_sql_generation(
                 )
                 raise
             end_payload = await stream_adapter.finish()
+            log_phase("agent_stream_done")
             await _persist_agent_turn_history(
                 stream_adapter,
                 conversation_id=thread_id,

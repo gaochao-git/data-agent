@@ -152,6 +152,19 @@ class _FakeExecuteResult:
     def scalars(self):
         return _FakeScalarResult(self._rows)
 
+    def mappings(self):
+        return _FakeScalarResult([
+            {
+                "semantic_config_id": row.semantic_config_id,
+                "semantic_config_name": row.semantic_config_name,
+                "semantic_config_desc": row.semantic_config_desc,
+                "enabled_flag": row.enabled_flag,
+                "metrics_json": row.metrics_json,
+                "dimensions_json": row.dimensions_json,
+            }
+            for row in self._rows
+        ])
+
 
 class _FakeOrmSession:
     def __init__(self, rows_by_table=None, executed=None):
@@ -562,18 +575,25 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
         return (
             await store.get_semantic_configs_async("group_a"),
             await store.get_semantic_configs_by_group_id_async("group_a", user_id="user_a"),
+            await store.get_semantic_config_directory_by_group_id_async("group_a", user_id="user_a"),
             await store.get_semantic_config_by_group_id_async("group_a", "sc_public_b"),
             await store.get_semantic_config_async("missing", "sc_public_b"),
         )
 
-    configs, visible_configs, config, missing = asyncio.run(run_checks())
+    configs, visible_configs, directory, config, missing = asyncio.run(run_checks())
 
     assert [item["id"] for item in configs] == ["sc_public_b", "sc_public_a", "sc_private", "sc_hidden"]
     assert [item["id"] for item in visible_configs] == ["sc_public_b", "sc_public_a", "sc_private"]
+    assert directory == [
+        {"id": "sc_public_b", "name": "订单分析", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+        {"id": "sc_public_a", "name": "高规格", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+        {"id": "sc_private", "name": "个人订单", "description": "描述", "enabled": True, "metrics_total": 1, "dimensions_total": 1},
+    ]
     assert config["name"] == "订单分析"
     assert config["metrics"] == [{"name": "订单金额"}]
     assert missing is None
     assert asyncio.run(store.get_semantic_configs_by_group_id_async("")) == []
+    assert asyncio.run(store.get_semantic_config_directory_by_group_id_async("")) == []
     assert asyncio.run(store.get_semantic_config_by_group_id_async("", "sc_public")) is None
     assert asyncio.run(store.get_semantic_config_by_group_id_async("group_a", "missing")) is None
 

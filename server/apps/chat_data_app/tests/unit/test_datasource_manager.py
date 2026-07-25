@@ -287,6 +287,11 @@ def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     })
     manager = _build_manager(store)
 
+    async def fail_get_full_datasource(_datasource_id):
+        raise AssertionError("execution target authorization must not load semantic configs")
+
+    manager.get_datasource_async = fail_get_full_datasource
+
     async def allowed_http(_user_id=None, _username=None):
         return {"direct": set(), "http": {"ORG_HTTP_ALLOWED"}}
 
@@ -622,6 +627,39 @@ def test_runtime_semantic_configs_merge_column_dicts_for_selector_context():
     assert configs[0]["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效；0=无效\n存储格式：tinyint"
     assert configs[0]["metrics"][0]["metadata_supplement"] == "单位：元"
     assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
+
+
+def test_semantic_config_directory_uses_lightweight_dao_read_only():
+    class DirectoryStore:
+        async def get_semantic_config_directory_by_group_id_async(self, group_id: str, user_id: str = ""):
+            assert group_id == "ds_a"
+            assert user_id == "u1"
+            return [{
+                "id": "sc_public",
+                "name": "公共指标集",
+                "description": "轻量目录",
+                "enabled": True,
+                "metrics_total": 2,
+                "dimensions_total": 3,
+            }]
+
+    manager = DataSourceManager.__new__(DataSourceManager)
+    manager.datasource_dao = DirectoryStore()
+
+    async def fail_get_datasource(*_args, **_kwargs):
+        raise AssertionError("directory must not load datasource runtime fields")
+
+    manager.get_datasource_async = fail_get_datasource
+
+    assert asyncio.run(manager.get_semantic_config_directory_async("ds_a", "u1")) == [{
+        "id": "sc_public",
+        "name": "公共指标集",
+        "description": "轻量目录",
+        "enabled": True,
+        "metrics_total": 2,
+        "dimensions_total": 3,
+    }]
+    assert asyncio.run(manager.get_semantic_config_directory_async("", "u1")) == []
 
 
 def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():

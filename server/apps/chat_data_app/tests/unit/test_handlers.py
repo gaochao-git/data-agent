@@ -589,6 +589,55 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     assert called["tables"] is False
 
 
+def test_stream_sql_generation_reuses_datasource_meta_for_context_and_authorization(monkeypatch):
+    import asyncio
+
+    datasource_meta = {
+        "id": "ds_a",
+        "query_context": "按机构查询",
+        "member_sources": [{"member_datasource_id": "m1", "org_code": "ORG_1"}],
+    }
+    calls = {"meta": 0, "authorize": []}
+
+    class FakeDatasourceManager:
+        async def get_datasource_meta_async(self, datasource_id):
+            calls["meta"] += 1
+            assert datasource_id == "ds_a"
+            return datasource_meta
+
+        async def get_datasource_async(self, _datasource_id):
+            raise AssertionError("stream preflight must not load complete datasource runtime fields")
+
+        async def authorize_execution_datasources_async(self, datasource, member_datasource_ids, user_id, username):
+            calls["authorize"].append((datasource, member_datasource_ids, user_id, username))
+            return [{"member_datasource_id": "m1", "member_name": "机构A", "org_code": "ORG_1"}]
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="2"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers._build_semantic_config_directory_info_async",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result="目录"),
+    )
+
+    asyncio.run(_collect_async_iter(_stream_sql_generation(
+        thread_id="conv_reuse_meta",
+        user_query="1+1等于几",
+        datasource_id="ds_a",
+        user_id="u1",
+        username="用户1",
+        member_datasource_ids=["m1"],
+    )))
+
+    assert calls["meta"] == 1
+    assert calls["authorize"] == [(datasource_meta, ["m1"], "u1", "用户1")]
+    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"].startswith("按机构查询")
+
+
 def test_stream_sql_generation_streams_semantic_retrieval_tool_result(monkeypatch):
     import asyncio
 
