@@ -661,6 +661,10 @@ class SemanticQueryInput(BaseModel):
         min_length=1,
         description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
+    save_as: Optional[str] = Field(
+        default=None,
+        description="智能分析会话可选：将完整查询结果写入 workspace/ 下的 .json 文件；普通智能问数不支持",
+    )
 
     @field_validator("dsl", mode="before")
     @classmethod

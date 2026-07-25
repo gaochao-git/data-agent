@@ -35,10 +35,11 @@ def test_data_analyze_tool_metadata_and_dialect_sections():
     assert "当前数据库方言未明确" in analyze_data_agent.build_dialect_prompt_sections({})[0]
 
 
-def test_data_analyze_agent_state_exposes_datasource_context():
+def test_data_analyze_agent_state_exposes_execution_context():
     annotations = analyze_data_agent.DataAnalyzeAgentState.__annotations__
 
-    assert "datasource_id" in annotations
+    assert "execution_context" in annotations
+    assert "analysis_workspace" in annotations
     assert "semantic_config_id" in annotations
     assert "conversation_id" in annotations
     assert "reasoning_segments" in annotations
@@ -72,14 +73,11 @@ def test_data_analyze_prompt_helper_remaining_edges(monkeypatch, tmp_path):
     assert str(tmp_path) in prompt
 
 
-def test_create_data_analyze_tools_wraps_expected_tool_names(monkeypatch, tmp_path):
-    monkeypatch.setattr(analyze_data_agent, "create_tool_retry_guard", lambda tools: tools)
+def test_create_data_analyze_tools_exposes_expected_tool_names(tmp_path):
     tools = analyze_data_agent.create_data_analyze_tools(
         str(tmp_path),
         datasource_id="ds_a",
         semantic_config_id="cfg_a",
-        conversation_id="conv_a",
-        member_datasource_ids=["m1"],
         user_id="u1",
         operator_name="测试用户",
     )

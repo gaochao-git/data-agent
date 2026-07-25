@@ -57,6 +57,23 @@ def _query_result_payload(result: str) -> dict:
     return payload
 
 
+def _semantic_query_state(
+    *,
+    datasource_id: str = "ds_a",
+    available_member_datasource_ids: list[str] | None = None,
+    matched_member_datasource_ids: list[str] | None = None,
+    **state: object,
+) -> dict:
+    return {
+        **state,
+        "execution_context": {
+            "datasource_id": datasource_id,
+            "available_member_datasource_ids": available_member_datasource_ids or [],
+            "matched_member_datasource_ids": matched_member_datasource_ids or [],
+        },
+    }
+
+
 def test_calculator_tool_calculates_decimal_expression_and_rounds():
     result = asyncio.run(calculator_tool.ainvoke({
         "calculations": [
@@ -569,15 +586,14 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     async def fake_execute_sql_real_failed(*_args, **_kwargs):
         return {"success": False, "error": "表不存在"}
 
-    state = {
-        "datasource_id": "ds_a",
-        "user_id": "user_a",
-        "operator_name": "测试用户",
-        "available_member_datasource_ids": ["m1"],
-        "semantic_config_id": "cfg_a",
-        "conversation_id": "conv_a",
-        "messages": [HumanMessage(content="查订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1"],
+        user_id="user_a",
+        operator_name="测试用户",
+        semantic_config_id="cfg_a",
+        conversation_id="conv_a",
+        messages=[HumanMessage(content="查订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -655,12 +671,11 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
         captured["member_datasource_ids"] = member_datasource_ids
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
-    state = {
-        "datasource_id": "ds_a",
-        "available_member_datasource_ids": ["org_b", "org_c"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查指定机构订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_b", "org_c"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查指定机构订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -696,13 +711,11 @@ def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch)
         captured["member_datasource_ids"] = member_datasource_ids
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
-    state = {
-        "datasource_id": "ds_a",
-        "member_datasource_ids": [],
-        "available_member_datasource_ids": ["org_a", "org_b"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查 org_b 订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a", "org_b"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查 org_b 订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -735,13 +748,11 @@ def test_semantic_query_tool_does_not_default_to_state_member_ids(monkeypatch):
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("member_datasource_ids must be a tool parameter")
 
-    state = {
-        "datasource_id": "ds_a",
-        "member_datasource_ids": ["org_a"],
-        "available_member_datasource_ids": ["org_a", "org_b"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a", "org_b"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -772,12 +783,11 @@ def test_semantic_query_tool_rejects_member_ids_outside_available_scope(monkeypa
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute unavailable member id")
 
-    state = {
-        "datasource_id": "ds_a",
-        "available_member_datasource_ids": ["org_a", "org_b"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查指定机构订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a", "org_b"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查指定机构订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -809,13 +819,11 @@ def test_semantic_query_tool_rejects_member_ids_outside_available_member_scope(m
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute unavailable member id")
 
-    state = {
-        "datasource_id": "ds_a",
-        "member_datasource_ids": [],
-        "available_member_datasource_ids": ["org_a", "org_b"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查指定机构订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a", "org_b"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查指定机构订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -847,14 +855,12 @@ def test_semantic_query_tool_rejects_member_ids_conflicting_with_matched_scope(m
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute member id that conflicts with exact query match")
 
-    state = {
-        "datasource_id": "ds_a",
-        "member_datasource_ids": [],
-        "available_member_datasource_ids": ["org_a", "org_b"],
-        "matched_member_datasource_ids": ["org_b"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查机构B订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a", "org_b"],
+        matched_member_datasource_ids=["org_b"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查机构B订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -887,12 +893,11 @@ def test_semantic_query_tool_requires_member_ids(monkeypatch):
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute without explicit member ids")
 
-    state = {
-        "datasource_id": "ds_a",
-        "available_member_datasource_ids": ["m1", "m2"],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1", "m2"],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -923,13 +928,11 @@ def test_semantic_query_tool_rejects_empty_available_member_scope(monkeypatch):
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute without request-visible member ids")
 
-    state = {
-        "datasource_id": "ds_a",
-        "member_datasource_ids": [],
-        "available_member_datasource_ids": [],
-        "semantic_config_id": "cfg_a",
-        "messages": [HumanMessage(content="查订单")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=[],
+        semantic_config_id="cfg_a",
+        messages=[HumanMessage(content="查订单")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -964,16 +967,15 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
         return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
-    state = {
-        "datasource_id": "ds_a",
-        "semantic_config_id": "cfg_a",
-        "available_member_datasource_ids": ["m1"],
-        "messages": [
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1"],
+        semantic_config_id="cfg_a",
+        messages=[
             HumanMessage(content="上一轮问题"),
             AIMessage(content="上一轮回答"),
             HumanMessage(content="最新问题"),
         ],
-    }
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -1025,15 +1027,14 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         })
         return {"success": True, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
-    state = {
-        "datasource_id": "ds_a",
-        "semantic_config_id": "cfg_a",
-        "available_member_datasource_ids": ["org_a"],
-        "user_id": "user_a",
-        "operator_name": "测试用户",
-        "conversation_id": "conv_a",
-        "messages": [HumanMessage(content="用复杂 SQL 查询")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["org_a"],
+        semantic_config_id="cfg_a",
+        user_id="user_a",
+        operator_name="测试用户",
+        conversation_id="conv_a",
+        messages=[HumanMessage(content="用复杂 SQL 查询")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FailGenerator)
@@ -1107,13 +1108,19 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
         "dsl": {"metrics": ["bad"]},
         "semantic_config_id": "cfg_a",
         "member_datasource_ids": ["m1"],
-        "state": {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]},
+        "state": _semantic_query_state(
+            available_member_datasource_ids=["m1"],
+            semantic_config_id="cfg_a",
+        ),
     }))
     empty_sql = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["empty"]},
         "semantic_config_id": "cfg_a",
         "member_datasource_ids": ["m1"],
-        "state": {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]},
+        "state": _semantic_query_state(
+            available_member_datasource_ids=["m1"],
+            semantic_config_id="cfg_a",
+        ),
     }))
 
     assert compile_error == "semantic_query_tool 执行失败: 指标不存在"
@@ -1165,7 +1172,10 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
         "dsl": {"metrics": ["内容"]},
         "semantic_config_id": "cfg_a",
         "member_datasource_ids": ["m1"],
-        "state": {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]},
+        "state": _semantic_query_state(
+            available_member_datasource_ids=["m1"],
+            semantic_config_id="cfg_a",
+        ),
     }))
     payload = _query_result_payload(result)
 
@@ -1183,7 +1193,7 @@ def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
         "dsl": {"metrics": ["订单数"]},
         "semantic_config_id": "cfg_missing",
         "member_datasource_ids": ["m1"],
-        "state": {"datasource_id": "ds_a", "semantic_config_id": "cfg_missing"},
+        "state": _semantic_query_state(semantic_config_id="cfg_missing"),
     }))
 
     assert result == "semantic_query_tool 执行失败: 未找到可用指标集 cfg_missing"
@@ -1219,15 +1229,14 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
         captured["conversation_id"] = conversation_id
         return "artifact_large"
 
-    state = {
-        "datasource_id": "ds_a",
-        "user_id": "user_a",
-        "operator_name": "测试用户",
-        "available_member_datasource_ids": ["m1"],
-        "semantic_config_id": "cfg_a",
-        "conversation_id": "conv_a",
-        "messages": [HumanMessage(content="查大结果")],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1"],
+        user_id="user_a",
+        operator_name="测试用户",
+        semantic_config_id="cfg_a",
+        conversation_id="conv_a",
+        messages=[HumanMessage(content="查大结果")],
+    )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
@@ -1277,11 +1286,11 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
     monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_no_sql")
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
-    state = {
-        "semantic_config_id": "cfg_temp",
-        "semantic_config": {"id": "cfg_temp", "metrics": [], "dimensions": []},
-        "available_member_datasource_ids": ["m1"],
-    }
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1"],
+        semantic_config_id="cfg_temp",
+        semantic_config={"id": "cfg_temp", "metrics": [], "dimensions": []},
+    )
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["临时指标"]},
         "semantic_config_id": "cfg_temp",
@@ -1317,10 +1326,10 @@ def test_semantic_query_tool_injects_explicit_id_into_temp_semantic_config(monke
         "dsl": {"metrics": ["临时指标"]},
         "semantic_config_id": "cfg_temp",
         "member_datasource_ids": ["m1"],
-        "state": {
-            "semantic_config": {"metrics": [], "dimensions": []},
-            "available_member_datasource_ids": ["m1"],
-        },
+        "state": _semantic_query_state(
+            available_member_datasource_ids=["m1"],
+            semantic_config={"metrics": [], "dimensions": []},
+        ),
     }))
 
     assert '"sql": "select temp"' in result
@@ -1343,7 +1352,10 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
         executed_sql.append(sql)
         return {"success": True, "sql": sql, "columns": ["sql"], "data": [{"sql": sql}], "total_count": 1}
 
-    state = {"semantic_config_id": "cfg_a", "available_member_datasource_ids": ["m1"]}
+    state = _semantic_query_state(
+        available_member_datasource_ids=["m1"],
+        semantic_config_id="cfg_a",
+    )
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)

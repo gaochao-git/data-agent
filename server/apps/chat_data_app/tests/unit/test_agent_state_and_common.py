@@ -13,7 +13,8 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.agent import agent_runtime, chat_data_agent
+from apps.chat_data_app.agent import agent_runtime
+from apps.chat_data_app.agent import agent_state
 from apps.chat_data_app.agent.tools import semantic_query as sql_tools
 from apps.chat_data_app.agent.tools import common
 from utils import conversation
@@ -33,10 +34,10 @@ def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
 
 
 def test_state_reducers_keep_first_conversation_datasource():
-    assert chat_data_agent.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
-    assert chat_data_agent.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
-    assert chat_data_agent.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
-    assert chat_data_agent.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
+    assert agent_state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
+    assert agent_state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
+    assert agent_state.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
+    assert agent_state.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
 
 
 def test_agent_runtime_helpers_build_shared_agent_bits():

@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.services.data_analyze_workspace import (
     ensure_data_analyze_workspace,
@@ -46,6 +47,10 @@ def _local_workspace_root(session_ref) -> str:
 
 
 def _install_local_sandbox(monkeypatch):
+    async def fake_get_workspace_execution_session(workspace_root, user_id="system"):
+        _ = user_id
+        return SimpleNamespace(workspace_root=workspace_root)
+
     async def fake_sandbox_read_text_file(*, session_ref, file_path, offset, limit):
         workspace_root = _local_workspace_root(session_ref)
         target = resolve_workspace_path(workspace_root, file_path)
@@ -119,6 +124,7 @@ def _install_local_sandbox(monkeypatch):
     monkeypatch.setattr(file_edit_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
     monkeypatch.setattr(file_edit_tool_module, "sandbox_artifact_payload", fake_sandbox_artifact_payload)
     monkeypatch.setattr(file_edit_tool_module, "sandbox_apply_patch_ops", fake_sandbox_apply_patch_ops)
+    monkeypatch.setattr(sql_tool_module, "get_workspace_execution_session", fake_get_workspace_execution_session)
 
 
 def _create_local_sandbox_tools(monkeypatch, paths, **kwargs):
@@ -127,6 +133,29 @@ def _create_local_sandbox_tools(monkeypatch, paths, **kwargs):
     return {
         tool.name: tool
         for tool in create_data_analyze_tools(paths["root"], execution_session_ref=session_ref, **kwargs)
+    }
+
+
+def _analysis_query_state(
+    paths,
+    *,
+    datasource_id: str | None = "ds_1",
+    semantic_config_id: str | None = "sc_1",
+    member_datasource_ids: list[str] | None = None,
+    conversation_id: str | None = None,
+    user_query: str = "统计销售额",
+) -> dict:
+    return {
+        "execution_context": {
+            "datasource_id": datasource_id,
+            "available_member_datasource_ids": member_datasource_ids or ["m1"],
+            "matched_member_datasource_ids": [],
+        },
+        "semantic_config_id": semantic_config_id,
+        "user_id": "system",
+        "conversation_id": conversation_id,
+        "analysis_workspace": {"workspace_root": paths["root"]},
+        "messages": [HumanMessage(content=user_query)],
     }
 
 
@@ -899,15 +928,15 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths, user_query="统计销售额")
 
     result = await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": input_dsl,
         "save_as": "workspace/current.json",
-        "user_query": "统计销售额",
+        "state": state,
     })
 
     payload = json.loads(result)
@@ -966,13 +995,14 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths, user_query="查询订单数")
 
     result = await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": input_dsl,
+        "state": state,
     })
 
     payload = json.loads(result)
@@ -987,6 +1017,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         "member_datasource_ids": ["m1"],
         "dsl": input_dsl,
         "save_as": "   ",
+        "state": state,
     })
     blank_save_payload = json.loads(blank_save_result)
     assert "result_path" not in blank_save_payload["meta"]
@@ -1039,14 +1070,14 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        conversation_id="conv_large",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths, conversation_id="conv_large")
 
     result = await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["内容"]},
+        "state": state,
     })
 
     payload = json.loads(result)
@@ -1062,28 +1093,33 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
 async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
     paths = ensure_data_analyze_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
     tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths, semantic_config_id="sc_1")
+    state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
     assert await tools_without_datasource["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["订单数"]},
+        "state": state_without_datasource,
     }) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
 
     async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
         return {"success": True, "sql": sql, "columns": [], "data": []}
 
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tool_without_workspace = sql_tool_module.create_bound_semantic_query_tool(
-        datasource_id="ds_1",
-        semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
-        allow_save_as=True,
-    )
-    assert await tool_without_workspace.ainvoke({
+    assert await sql_tool_module.semantic_query_tool.ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["订单数"]},
         "save_as": "workspace/a.json",
+        "state": {
+            "execution_context": {
+                "datasource_id": "ds_1",
+                "available_member_datasource_ids": ["m1"],
+                "matched_member_datasource_ids": [],
+            },
+            "semantic_config_id": "sc_1",
+            "analysis_workspace": {},
+        },
     }) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
 
     tools = _create_local_sandbox_tools(
@@ -1091,35 +1127,39 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths)
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["订单数"]},
         "save_as": "workspace/a.txt",
+        "state": state,
     }) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"sql": "select 1"},
+        "state": state,
     }) == "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
 
-    tool_without_config = sql_tool_module.create_bound_semantic_query_tool(datasource_id="ds_1", member_datasource_ids=["m1"])
-    assert await tool_without_config.ainvoke({
+    assert await sql_tool_module.semantic_query_tool.ainvoke({
         "semantic_config_id": "",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["订单数"]},
+        "state": _analysis_query_state(paths),
     }) == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id"
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": [{"metrics": ["订单数"]}],
+        "state": state,
     }) == "semantic_query_tool 执行失败: dsl 必须是对象"
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"cards": []},
+        "state": state,
     }) == "semantic_query_tool 执行失败: dsl 必须是单个查询对象"
 
 
@@ -1153,10 +1193,10 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths)
 
-    args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"]}
+    args = {"semantic_config_id": "sc_1", "member_datasource_ids": ["m1"], "state": state}
     compile_error = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["bad"]}})
     empty_sql = await tools["semantic_query_tool"].ainvoke({**args, "dsl": {"metrics": ["empty"]}})
 
@@ -1189,11 +1229,12 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
         paths,
         datasource_id="ds_1",
         semantic_config_id="sc_1",
-        member_datasource_ids=["m1"],
     )
+    state = _analysis_query_state(paths)
 
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": {"metrics": ["订单数"]},
+        "state": state,
     }) == "semantic_query_tool 执行失败: 执行失败"

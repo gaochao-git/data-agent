@@ -1,10 +1,9 @@
 """DataAnalyze 通用分析智能体。"""
 
 import json
-from typing import Annotated, Any
+from typing import Any
 
-from langchain.agents import AgentState, create_agent
-from typing_extensions import NotRequired
+from langchain.agents import create_agent
 
 from ..chart_types import get_chart_type_prompt_text
 from ..services.data_analyze_workspace import ensure_data_analyze_workspace
@@ -27,9 +26,9 @@ from .agent_runtime import (
     create_semantic_selection_tools_bundle,
     create_streaming_chat_model,
 )
+from .agent_state import DataAnalyzeAgentState
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import bind_context_usage_middleware, create_request_context_usage_middleware
-from .chat_data_agent import keep_conversation_datasource_id, merge_reasoning_segments
 from .skills import build_builtin_skills_prompt
 from .tools.common import validate_workspace_root
 from .tools.current_time import get_current_time_tool
@@ -38,8 +37,7 @@ from .tools.file_edit import create_file_edit_tool
 from .tools.file_read import create_file_read_tool
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.sandbox_run import create_sandbox_run_tool
-from .tools.semantic_query import create_bound_semantic_query_tool
-from .tools.retry_guard import create_tool_retry_guard
+from .tools.semantic_query import semantic_query_tool
 from .tools.skill_load import create_skill_load_tool
 
 DATA_ANALYZE_TOOL_DEFINITIONS = [
@@ -53,23 +51,6 @@ DATA_ANALYZE_TOOL_DEFINITIONS = [
     {"name": "dsl2sql_tool", "status": "available", "description": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。"},
     {"name": "semantic_query_tool", "status": "available", "description": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。"},
 ]
-
-
-class DataAnalyzeAgentState(AgentState, total=False):
-    """DataAnalyze 单 Agent 状态，供工具、历史和前端恢复读取。"""
-    reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
-    token_usage: NotRequired[dict[str, Any] | None]
-    context_compression: NotRequired[dict[str, Any] | None]
-    context_summary: NotRequired[str | None]
-    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
-    datasource_id: NotRequired[str | None]
-    semantic_config_id: NotRequired[str | None]
-    member_datasource_ids: NotRequired[list[str]]
-    user_id: NotRequired[str | None]
-    operator_name: NotRequired[str | None]
-    conversation_id: NotRequired[str | None]
-    available_member_datasource_ids: NotRequired[list[str]]
-    matched_member_datasource_ids: NotRequired[list[str]]
 
 
 def get_data_analyze_tool_chain() -> list[dict[str, str]]:
@@ -130,9 +111,6 @@ def create_data_analyze_tools(
     *,
     datasource_id: str | None = None,
     semantic_config_id: str | None = None,
-    conversation_id: str | None = None,
-    member_datasource_ids: list[str] | None = None,
-    matched_member_datasource_ids: list[str] | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
@@ -157,21 +135,15 @@ def create_data_analyze_tools(
             tool_result_budget=tool_result_budget,
             datasource_group_context=datasource_group_context,
         ),
-        create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
-        create_bound_semantic_query_tool(
-            datasource_id=datasource_id,
-            semantic_config_id=semantic_config_id,
-            member_datasource_ids=member_datasource_ids,
-            matched_member_datasource_ids=matched_member_datasource_ids,
+        create_dsl2sql_tool(
+            datasource_id,
+            semantic_config_id,
             user_id=user_id,
             operator_name=operator_name,
-            conversation_id=conversation_id,
-            workspace_root=root,
-            execution_session_ref=execution_session_ref,
-            allow_save_as=True,
         ),
+        semantic_query_tool,
     ]
-    return create_tool_retry_guard(tools)
+    return tools
 
 
 def build_data_analyze_system_prompt(
@@ -207,9 +179,6 @@ def create_data_analyze_agent(
     checkpointer=None,
     datasource_id: str | None = None,
     semantic_config_id: str | None = None,
-    conversation_id: str | None = None,
-    member_datasource_ids: list[str] | None = None,
-    matched_member_datasource_ids: list[str] | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
@@ -228,9 +197,6 @@ def create_data_analyze_agent(
         workspace_root,
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
-        conversation_id=conversation_id,
-        member_datasource_ids=member_datasource_ids,
-        matched_member_datasource_ids=matched_member_datasource_ids,
         user_id=user_id,
         operator_name=operator_name,
         execution_session_ref=execution_session_ref,

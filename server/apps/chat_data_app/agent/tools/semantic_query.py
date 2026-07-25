@@ -20,7 +20,11 @@ from ...services.semantic_query_service import (
     normalize_member_datasource_ids,
 )
 from ...services.semantic_sql_generator import SemanticSQLGenerator
-from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_write_text_file
+from ...services.workspace_execution import (
+    SandboxExecutionSessionRef,
+    get_workspace_execution_session,
+    sandbox_write_text_file,
+)
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)
@@ -123,21 +127,14 @@ async def _resolve_semantic_query_config(
 
 
 def _get_execution_context(state: dict | None) -> dict[str, Any]:
-    """读取执行上下文，兼容旧 checkpoint 的顶层字段。"""
-    if not state:
-        return {}
-    context = state.get("execution_context")
-    if isinstance(context, dict):
-        return context
-    return state
+    """读取统一的工具执行上下文。"""
+    context = (state or {}).get("execution_context")
+    return context if isinstance(context, dict) else {}
 
 
 def _get_datasource_id_from_state(state: dict | None) -> str | None:
     context = _get_execution_context(state)
     datasource_id = str(context.get("datasource_id") or "").strip()
-    if datasource_id:
-        return datasource_id
-    datasource_id = str((state or {}).get("datasource_id") or "").strip()
     return datasource_id or None
 
 
@@ -145,13 +142,22 @@ def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[st
     context = _get_execution_context(state)
     available_member_ids = _normalize_member_datasource_ids(
         context.get("available_member_datasource_ids")
-        or (state or {}).get("available_member_datasource_ids")
     )
     matched_member_ids = _normalize_member_datasource_ids(
         context.get("matched_member_datasource_ids")
-        or (state or {}).get("matched_member_datasource_ids")
     )
     return available_member_ids, matched_member_ids
+
+
+def _get_workspace_root_from_state(state: dict | None) -> str | None:
+    """读取分析工作区；未设置时表示普通智能问数会话。"""
+    workspace_context = (state or {}).get("analysis_workspace")
+    workspace_root = str(
+        (workspace_context or {}).get("workspace_root")
+        if isinstance(workspace_context, dict)
+        else ""
+    ).strip()
+    return workspace_root or None
 
 
 def _prepare_tool_request(
@@ -160,7 +166,7 @@ def _prepare_tool_request(
     sql: str | None,
     save_as: str | None,
     workspace_root: str | None,
-    allow_save_as: bool,
+    is_analysis_workspace: bool,
 ) -> _PreparedToolRequest | str:
     has_dsl = dsl is not None
     normalized_sql = str(sql or "").strip()
@@ -178,7 +184,7 @@ def _prepare_tool_request(
 
     save_path = str(save_as or "").strip()
     if save_path:
-        if not allow_save_as:
+        if not is_analysis_workspace:
             return _tool_error("当前工具不支持 save_as")
         if not str(workspace_root or "").strip():
             return _tool_error("当前会话未初始化工作目录，无法保存结果")
@@ -197,14 +203,13 @@ async def _resolve_tool_context(
     state: dict | None,
     semantic_config_id: str | None,
     member_datasource_ids: list[str] | None,
-    require_datasource_id: bool,
 ) -> _ResolvedToolContext | str:
     state = state or {}
     datasource_id = _get_datasource_id_from_state(state)
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     if not normalized_semantic_config_id:
         return _tool_error("缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id")
-    if require_datasource_id and not datasource_id:
+    if not datasource_id:
         return _tool_error("当前会话未绑定数据源")
 
     selected_semantic_config_id = str(
@@ -333,7 +338,8 @@ async def _build_tool_response(
     query_result: dict,
     query: _CompiledToolQuery,
     save_path: str,
-    execution_session_ref: SandboxExecutionSessionRef | None,
+    workspace_root: str | None,
+    user_id: str | None,
     conversation_id: str | None,
 ) -> str:
     if save_path:
@@ -341,7 +347,8 @@ async def _build_tool_response(
             query_result=query_result,
             query=query,
             save_path=save_path,
-            execution_session_ref=execution_session_ref,
+            workspace_root=workspace_root,
+            user_id=user_id,
         )
     if query_result_succeeded(query_result):
         return _build_success_result_response(query_result, query, conversation_id)
@@ -353,8 +360,14 @@ async def _build_saved_result_response(
     query_result: dict,
     query: _CompiledToolQuery,
     save_path: str,
-    execution_session_ref: SandboxExecutionSessionRef | None,
+    workspace_root: str,
+    user_id: str | None,
 ) -> str:
+    execution_session_ref = SandboxExecutionSessionRef()
+    execution_session_ref.current = await get_workspace_execution_session(
+        workspace_root,
+        user_id or "system",
+    )
     write_result = await sandbox_write_text_file(
         session_ref=execution_session_ref,
         file_path=save_path,
@@ -436,13 +449,21 @@ async def semantic_query_tool(
     sql: str | None = None,
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
+    save_as: str | None = None,
 ) -> str:
     """
     执行语义查询并返回统一查询结果。
 
     优先接收语义 DSL，内部生成 SQL 后执行；DSL 明确无法表达时接收只读 SQL 执行。
     """
-    return await _run_semantic_query_tool(dsl=dsl, sql=sql, semantic_config_id=semantic_config_id, member_datasource_ids=member_datasource_ids, state=state)
+    return await _run_semantic_query_tool(
+        dsl=dsl,
+        sql=sql,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        state=state,
+        save_as=save_as,
+    )
 
 
 async def _run_semantic_query_tool(
@@ -453,17 +474,15 @@ async def _run_semantic_query_tool(
     member_datasource_ids: list[str] | None = None,
     state: dict | None = None,
     save_as: str | None = None,
-    workspace_root: str | None = None,
-    execution_session_ref: SandboxExecutionSessionRef | None = None,
-    allow_save_as: bool = False,
-    require_datasource_id: bool = False,
 ) -> str:
+    workspace_root = _get_workspace_root_from_state(state)
+    is_analysis_workspace = isinstance((state or {}).get("analysis_workspace"), dict)
     prepared_request = _prepare_tool_request(
         dsl=dsl,
         sql=sql,
         save_as=save_as,
         workspace_root=workspace_root,
-        allow_save_as=allow_save_as,
+        is_analysis_workspace=is_analysis_workspace,
     )
     if isinstance(prepared_request, str):
         return prepared_request
@@ -472,7 +491,6 @@ async def _run_semantic_query_tool(
         state=state,
         semantic_config_id=semantic_config_id,
         member_datasource_ids=member_datasource_ids,
-        require_datasource_id=require_datasource_id,
     )
     if isinstance(context, str):
         return context
@@ -497,62 +515,10 @@ async def _run_semantic_query_tool(
         query_result=query_result,
         query=query,
         save_path=prepared_request.save_path,
-        execution_session_ref=execution_session_ref,
+        workspace_root=workspace_root,
+        user_id=context.user_id,
         conversation_id=context.conversation_id,
     )
-
-
-def create_bound_semantic_query_tool(
-    *,
-    datasource_id: str | None = None,
-    semantic_config_id: str | None = None,
-    member_datasource_ids: list[str] | None = None,
-    matched_member_datasource_ids: list[str] | None = None,
-    user_id: str = "system",
-    operator_name: str | None = None,
-    conversation_id: str | None = None,
-    workspace_root: str | None = None,
-    execution_session_ref: SandboxExecutionSessionRef | None = None,
-    allow_save_as: bool = False,
-):
-    """创建绑定上下文的统一语义查询工具，供智能分析复用智能问数同一套执行逻辑。"""
-    bound_state = {
-        "datasource_id": str(datasource_id or "").strip() or None,
-        "semantic_config_id": str(semantic_config_id or "").strip() or None,
-        "available_member_datasource_ids": _normalize_member_datasource_ids(member_datasource_ids),
-        "matched_member_datasource_ids": _normalize_member_datasource_ids(matched_member_datasource_ids),
-        "user_id": str(user_id or "system").strip() or "system",
-        "operator_name": str(operator_name or "").strip() or "",
-        "conversation_id": str(conversation_id or "").strip() or None,
-    }
-
-    @tool("semantic_query_tool")
-    async def bound_semantic_query_tool(
-        dsl: Any = None,
-        sql: str | None = None,
-        semantic_config_id: str | None = None,
-        member_datasource_ids: list[str] | None = None,
-        save_as: str | None = None,
-        user_query: str = "",
-    ) -> str:
-        """使用统一语义查询逻辑执行 DSL 或只读 SQL；智能分析可通过 save_as 保存完整结果。"""
-        state = dict(bound_state)
-        if user_query:
-            state["messages"] = [HumanMessage(content=user_query)]
-        return await _run_semantic_query_tool(
-            dsl=dsl,
-            sql=sql,
-            semantic_config_id=semantic_config_id,
-            member_datasource_ids=member_datasource_ids,
-            state=state,
-            save_as=save_as,
-            workspace_root=workspace_root,
-            execution_session_ref=execution_session_ref,
-            allow_save_as=allow_save_as,
-            require_datasource_id=True,
-        )
-
-    return bound_semantic_query_tool
 
 
 def _normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:

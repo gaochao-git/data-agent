@@ -124,7 +124,6 @@ def _build_agent_context_state(
     """构造问数和分析共享的 Agent 状态字段。"""
     state = {
         "conversation_datasource_id": datasource_id,
-        "datasource_id": datasource_id,
         "semantic_config_id": semantic_config_id,
         "user_id": user_id,
         "operator_name": operator_name or "",
@@ -1185,9 +1184,12 @@ async def _generate_data_analyze_stream(
             operator_name=username,
             conversation_id=conversation_id,
             messages=[_build_user_message(query, semantic_selection_event)],
-            member_datasource_ids=semantic_context.selected_member_datasource_ids,
-            available_member_datasource_ids=semantic_context.available_member_datasource_ids,
-            matched_member_datasource_ids=semantic_context.matched_member_datasource_ids,
+            execution_context={
+                "datasource_id": resolved_datasource_id,
+                "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
+                "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
+            },
+            analysis_workspace={"workspace_root": workspace_paths["root"]},
         )
         user_message = initial_state["messages"][0]
 
@@ -1200,9 +1202,6 @@ async def _generate_data_analyze_stream(
                 checkpointer=checkpointer,
                 datasource_id=resolved_datasource_id,
                 semantic_config_id=resolved_semantic_config_id,
-                conversation_id=conversation_id,
-                member_datasource_ids=semantic_context.available_member_datasource_ids,
-                matched_member_datasource_ids=semantic_context.matched_member_datasource_ids,
                 user_id=user_id,
                 operator_name=username,
                 execution_session_ref=execution_session_ref,

@@ -8,12 +8,10 @@ LangChain create_agent 标准 Agent ↔ Tools 循环
 - 是否调用指标集选择工具由同一套提示词根据当前上下文决定
 """
 
-from typing import Annotated, Any
-
-from langchain.agents import AgentState, create_agent
-from typing_extensions import TypedDict
+from langchain.agents import create_agent
 
 from ..services.context_budget import ToolResultBudget
+from .agent_state import ChatDataAgentState
 from .agent_runtime import build_standard_agent_middleware, create_semantic_selection_tools_bundle, create_streaming_chat_model
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_chat_data_context_usage_middleware
@@ -21,41 +19,6 @@ from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
 from .tools.readonly_skill_load import create_readonly_skill_load_tool
 from .tools.semantic_query import semantic_query_tool
-
-
-def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
-    """追加模型原生思考分段，供历史会话恢复。"""
-    return list(existing or []) + list(new or [])
-
-
-def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
-    """数据源组首次绑定后不可被后续轮次覆盖。"""
-    return existing or new
-
-
-class ExecutionContext(TypedDict, total=False):
-    """工具执行所需的数据源和执行对象范围。"""
-
-    datasource_id: str | None
-    available_member_datasource_ids: list[str]
-    matched_member_datasource_ids: list[str]
-
-
-class ChatDataAgentState(AgentState, total=False):
-    """智能问数 Agent 状态。"""
-
-    user_id: str | None
-    operator_name: str | None
-    conversation_id: str | None
-    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
-    execution_context: ExecutionContext
-    semantic_config_id: str | None
-    # 临时指标集不一定持久化到业务库，语义查询工具需要从状态读取它。
-    semantic_config: dict[str, Any] | None
-    token_usage: dict[str, Any] | None
-    context_compression: dict[str, Any] | None
-    context_summary: str | None
-    reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
 
 
 def create_chat_data_agent(
