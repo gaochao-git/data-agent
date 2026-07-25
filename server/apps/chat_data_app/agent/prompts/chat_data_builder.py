@@ -22,16 +22,6 @@ def format_datasource_group_context_for_llm(context: str) -> str:
     return f"\n## 数据源组智能问数说明\n{text}\n"
 
 
-def _get_prompt_context_value(state: dict[str, Any], key: str) -> str:
-    """读取提示词上下文，兼容旧 checkpoint 的顶层字段。"""
-    prompt_context = state.get("prompt_context")
-    if isinstance(prompt_context, dict):
-        value = prompt_context.get(key)
-        if value:
-            return str(value)
-    return str(state.get(key) or "")
-
-
 def build_semantic_layer_context(semantic_config: dict | None) -> str:
     """构建统一语义层上下文。"""
     if not semantic_config:
@@ -55,16 +45,16 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
 
 
 def build_chat_data_system_prompt(
-    state: dict[str, Any],
+    prompt_context: dict[str, Any],
     *,
     semantic_config: dict | None = None,
     available_skills_context: str | None = None,
 ) -> str:
-    """按当前 state 构造智能问数 system prompt。"""
+    """按共享提示词上下文构造智能问数 system prompt。"""
     prompt_params = {
-        "datasource_group_context": format_datasource_group_context_for_llm(_get_prompt_context_value(state, "datasource_group_context")),
+        "datasource_group_context": format_datasource_group_context_for_llm(prompt_context.get("datasource_group_context")),
         "available_skills_context": available_skills_context or "",
-        "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(_get_prompt_context_value(state, "semantic_config_directory_info")),
+        "semantic_config_directory_info": format_semantic_config_directory_info_for_llm(prompt_context.get("semantic_config_directory_info")),
         "semantic_layer_config": build_semantic_layer_context(semantic_config),
     }
     return SQL_GENERATOR_PROMPT_SEMANTIC_QUERY.format(**prompt_params)

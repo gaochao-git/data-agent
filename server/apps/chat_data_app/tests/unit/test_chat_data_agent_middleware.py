@@ -70,7 +70,7 @@ def test_prompt_formatters(monkeypatch):
     assert "当前已选择指标集。" in chat_data_builder.build_semantic_layer_context({"id": "", "name": ""})
 
 
-def test_build_chat_data_system_prompt_uses_state_context(monkeypatch):
+def test_build_chat_data_system_prompt_uses_shared_prompt_context(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.agent.prompts.chat_data_builder.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
 
     system_prompt = chat_data_builder.build_chat_data_system_prompt(
@@ -545,6 +545,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert selection_tool_kwargs["datasource_id"] == "ds_a"
     assert selection_tool_kwargs["user_id"] == "u1"
     assert selection_tool_kwargs["tool_result_budget"] is not None
+    assert selection_tool_kwargs["datasource_group_context"] is None
     assert model_kwargs["model_id"] == "m1"
     assert model_kwargs["stream_usage"] is True
     assert captured["checkpointer"] == "ckpt"

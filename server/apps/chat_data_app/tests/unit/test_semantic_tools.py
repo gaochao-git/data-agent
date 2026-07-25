@@ -40,6 +40,29 @@ def test_extract_datasource_id_from_state():
     assert extract_datasource_group_context(None) == ""
 
 
+def test_select_semantic_config_tool_uses_bound_datasource_group_context(monkeypatch):
+    captured = {}
+
+    async def fake_select_semantic_config_for_query(**kwargs):
+        captured.update(kwargs)
+        return {"semantic_config_ids": []}
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic_tools.select_semantic_config_for_query",
+        fake_select_semantic_config_for_query,
+    )
+    tool = create_semantic_config_selection_tools(
+        include_query_tools=False,
+        datasource_id="ds_bound",
+        datasource_group_context="仅查询已授权机构",
+    )[0]
+
+    asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
+
+    assert captured["datasource_id"] == "ds_bound"
+    assert captured["datasource_group_context"] == "仅查询已授权机构"
+
+
 def test_extract_user_query_reads_last_human_message():
     assert extract_user_query(None) is None
     assert extract_user_query({}) is None

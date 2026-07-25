@@ -73,7 +73,8 @@ def test_data_analyze_prompt_uses_chat_data_directory_format_before_semantic_sel
         data_context={
             "datasource": {"source_type": "mysql"},
             "tables": [],
-            "semantic_config_directory_info": "## 当前用户已选择的执行对象数据源\n本次查询必须只使用以下 member_datasource_ids：\n- 财付通（member_datasource_id: ORG_CODE1）；编码：ORG_CODE1\n\n## 当前可见指标集目录\n1. 名称：订单分析\n   描述：订单域\n   指标数：2；维度数：3",
+            "datasource_group_context": "## 当前用户已选择的执行对象数据源\n本次查询必须只使用以下 member_datasource_ids：\n- 财付通（member_datasource_id: ORG_CODE1）；编码：ORG_CODE1",
+            "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析\n   描述：订单域\n   指标数：2；维度数：3",
             "semantic_configs": [],
         },
         workspace_root="/tmp/workspace",

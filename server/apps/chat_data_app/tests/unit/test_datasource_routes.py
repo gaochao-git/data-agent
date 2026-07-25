@@ -2529,24 +2529,6 @@ def test_update_layout_only_updates_current_dashboard_panels(monkeypatch):
     assert "layout" not in service.panels["panel_c"]
 
 
-def test_execution_target_context_contains_selected_members(monkeypatch):
-    from apps.chat_data_app import handlers
-
-    manager = _FakeDatasourceManager()
-    manager.datasources["ds_a"]["member_sources"] = [
-        {"member_datasource_id": "phy_a", "org_name": "投诉举报1", "source_type": "mysql", "host": "127.0.0.1", "port": 3306, "database": "db_a"},
-        {"member_datasource_id": "phy_b", "org_name": "投诉举报2", "source_type": "mysql", "host": "127.0.0.2", "port": 3306, "database": "db_b"},
-    ]
-    monkeypatch.setattr(handlers, "get_datasource_manager", lambda: manager)
-
-    targets = asyncio.run(handlers._get_execution_targets_async("ds_a", ["phy_a", "phy_b"]))
-    info = handlers._append_user_selected_execution_targets_to_context("", targets, ["phy_a", "phy_b"])
-
-    assert "当前用户已选择的执行对象数据源" in info
-    assert "投诉举报1" in info
-    assert "投诉举报2" in info
-
-
 def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
     from apps.chat_data_app import routes
 

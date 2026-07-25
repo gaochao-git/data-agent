@@ -1,38 +1,38 @@
-"""DataAnalyze 智能体上下文构建。"""
+"""DataAnalyze prompt context built on the shared semantic conversation context."""
 
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
+
+from typing import Any
 
 from utils.logger import get_logger
+
 from ..agent.analyze_data_agent import get_data_analyze_tool_chain
-from .semantic_tools import format_semantic_config_directory_for_prompt
 from .datasource_manager import get_datasource_manager
-from .execution_target_context import (
-    append_selected_execution_targets_to_context,
-    normalize_member_datasource_ids,
+from .semantic_conversation_context import (
+    AgentPromptContext,
 )
 
 logger = get_logger(__name__)
 
 
 def _truncate(value: Any, max_length: int = 120) -> str:
-    """截断文本，避免上下文过大。"""
+    """Trim text before it is included in an analysis prompt."""
     text = str(value or "").strip()
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + "..."
+    return text if len(text) <= max_length else f"{text[:max_length]}..."
 
 
-def _summarize_tables(tables: List[Dict[str, Any]], max_tables: int = 12, max_columns: int = 12) -> List[Dict[str, Any]]:
-    """提取表字段摘要。"""
-    result: List[Dict[str, Any]] = []
-    for table in (tables or [])[:max_tables]:
-        columns = []
-        for column in (table.get("columns") or [])[:max_columns]:
-            columns.append({
+def _summarize_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the bounded table summary needed only by DataAnalyze prompts."""
+    result: list[dict[str, Any]] = []
+    for table in tables[:12]:
+        columns = [
+            {
                 "name": column.get("name") or column.get("column_name") or "",
                 "type": column.get("type") or column.get("mysql_type") or column.get("data_type") or "",
                 "description": _truncate(column.get("description") or column.get("comment") or "", 80),
-            })
+            }
+            for column in (table.get("columns") or [])[:12]
+        ]
         result.append({
             "table_name": table.get("table_name") or "",
             "description": _truncate(table.get("description") or "", 120),
@@ -41,31 +41,11 @@ def _summarize_tables(tables: List[Dict[str, Any]], max_tables: int = 12, max_co
     return result
 
 
-def _semantic_config_directory_item(
-    config: Dict[str, Any],
-    metrics: List[Dict[str, Any]],
-    dimensions: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """构造未选中指标集的轻量目录项。"""
+def _selected_semantic_config_item(config: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the shared runtime config to the bounded analysis prompt format."""
     return {
+        "id": config.get("id") or config.get("semantic_config_id") or "",
         "name": config.get("name") or config.get("semantic_config_name") or "",
-        "description": _truncate(config.get("description") or config.get("semantic_config_desc") or "", 120),
-        "selected": False,
-        "metrics_total": len(metrics),
-        "dimensions_total": len(dimensions),
-    }
-
-
-def _selected_semantic_config_item(
-    config: Dict[str, Any],
-    config_id: str,
-    metrics: List[Dict[str, Any]],
-    dimensions: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """构造已选中指标集的完整语义上下文。"""
-    return {
-        **_semantic_config_directory_item(config, metrics, dimensions),
-        "id": config_id,
         "selected": True,
         "source_type": config.get("source_type") or "",
         "business_description": _truncate(config.get("ontology_rules") or "", 300),
@@ -78,7 +58,7 @@ def _selected_semantic_config_item(
                 "expression": _truncate(item.get("expression") or "", 120),
                 "aggregation": item.get("aggregation") or item.get("agg_func") or "",
             }
-            for item in metrics
+            for item in config.get("metrics") or []
         ],
         "dimensions": [
             {
@@ -90,17 +70,14 @@ def _selected_semantic_config_item(
                 "allowed_values": item.get("allowed_values") or [],
                 "mapping": item.get("mapping") or {},
             }
-            for item in dimensions
+            for item in config.get("dimensions") or []
         ],
         "relationships": config.get("relationships") or [],
     }
 
 
-def _build_data_context_notes(has_selected_semantic_config: bool) -> List[str]:
-    """构造与指标集注入状态一致的上下文说明。"""
-    notes = [
-        "每次语义查询必须在工具参数中明确传入 execution_targets 里的 member_datasource_ids。",
-    ]
+def _build_data_context_notes(has_selected_semantic_config: bool) -> list[str]:
+    notes = ["每次语义查询必须在工具参数中明确传入当前用户可用的 member_datasource_ids。"]
     if has_selected_semantic_config:
         return [
             "当前已手动选择指标集，完整指标、维度和关联关系已注入提示词。",
@@ -114,116 +91,68 @@ def _build_data_context_notes(has_selected_semantic_config: bool) -> List[str]:
     ]
 
 
-def _build_data_analyze_tables(
-    datasource: Dict[str, Any],
-    has_selected_semantic_config: bool,
-) -> List[Dict[str, Any]]:
-    """仅在已选择指标集后注入表结构摘要。"""
-    if not has_selected_semantic_config:
-        return []
-    return _summarize_tables(datasource.get("ds_tables") or [])
-
-
-def _summarize_semantic_configs(configs: List[Dict[str, Any]], semantic_config_id: Optional[str]) -> List[Dict[str, Any]]:
-    """提取语义配置摘要。"""
-    result: List[Dict[str, Any]] = []
-    normalized_selected_id = str(semantic_config_id or "").strip()
-    for config in configs or []:
-        config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
-        metrics = config.get("metrics") or []
-        dimensions = config.get("dimensions") or []
-        is_selected = bool(normalized_selected_id and config_id == normalized_selected_id)
-        if is_selected:
-            result.append(_selected_semantic_config_item(config, config_id, metrics, dimensions))
-        else:
-            result.append(_semantic_config_directory_item(config, metrics, dimensions))
-    return result
-
-
 async def build_data_analyze_context(
-    datasource_id: Optional[str],
-    semantic_config_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-    member_datasource_ids: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """构建 DataAnalyze 可用工具和数据上下文。"""
-    normalized_datasource_id = str(datasource_id or "").strip()
-    normalized_user_id = str(user_id or "").strip()
-    normalized_username = str(username or "").strip()
-    if not normalized_datasource_id:
-        return {
-            "datasource": None,
-            "tables": [],
-            "semantic_configs": [],
-            "tool_chain": get_data_analyze_tool_chain(),
-            "notes": ["当前未选择数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。"],
-        }
+    prompt_context: AgentPromptContext,
+) -> dict[str, Any]:
+    """Add DataAnalyze-only prompt fields to the shared prompt contract."""
+    datasource = prompt_context.get("datasource")
+    if datasource is None:
+        return _empty_data_context(
+            prompt_context,
+            "当前未选择数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。",
+        )
+    if datasource.get("missing"):
+        return _empty_data_context(
+            prompt_context,
+            "未找到当前数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。",
+        )
 
+    selected_config = prompt_context.get("semantic_config")
+    datasource_id = str(datasource.get("id") or "").strip()
+    resolved_datasource = dict(datasource)
+    tables: list[dict[str, Any]] = []
+    if selected_config is not None and datasource_id:
+        resolved_datasource = await _load_datasource_with_tables(datasource_id, resolved_datasource)
+        tables = _summarize_tables(resolved_datasource.get("ds_tables") or [])
+
+    return {
+        "datasource": {
+            "id": datasource_id,
+            "name": resolved_datasource.get("group_name") or resolved_datasource.get("name") or "",
+            "description": _truncate(resolved_datasource.get("ds_description") or resolved_datasource.get("description") or "", 160),
+            "source_type": resolved_datasource.get("source_type") or "",
+        },
+        "execution_targets": list(prompt_context.get("execution_targets") or []),
+        "datasource_group_context": str(prompt_context.get("datasource_group_context") or ""),
+        "tables": tables,
+        "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
+        "semantic_configs": [_selected_semantic_config_item(selected_config)] if selected_config else [],
+        "tool_chain": get_data_analyze_tool_chain(),
+        "notes": _build_data_context_notes(selected_config is not None),
+    }
+
+
+async def _load_datasource_with_tables(
+    datasource_id: str,
+    fallback_datasource: dict[str, Any],
+) -> dict[str, Any]:
+    """Load table metadata only when a selected config makes it useful to analysis."""
     try:
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(normalized_datasource_id)
-        if not datasource:
-            return {
-                "datasource": {"id": normalized_datasource_id, "missing": True},
-                "tables": [],
-                "semantic_configs": [],
-                "tool_chain": get_data_analyze_tool_chain(),
-                "notes": ["未找到当前数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。"],
-            }
-        if normalized_user_id:
-            semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id, normalized_user_id)
-        else:
-            semantic_configs = datasource.get("semantic_configs")
-            if semantic_configs is None:
-                semantic_configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id)
-        semantic_config_context = _summarize_semantic_configs(semantic_configs or [], semantic_config_id)
-        has_selected_semantic_config = any(bool(item.get("selected")) for item in semantic_config_context)
-        selected_member_ids = normalize_member_datasource_ids(member_datasource_ids)
-        execution_targets = await ds_manager.get_authorized_execution_datasources_async(
-            normalized_datasource_id,
-            selected_member_ids,
-            user_id=normalized_user_id,
-            username=normalized_username,
-        ) if selected_member_ids else []
-        execution_target_context = append_selected_execution_targets_to_context("", execution_targets, selected_member_ids)
-        semantic_config_directory_info = ""
-        if not has_selected_semantic_config:
-            semantic_config_directory_info = format_semantic_config_directory_for_prompt(semantic_config_context)
-            if execution_target_context:
-                semantic_config_directory_info = "\n\n".join([
-                    execution_target_context,
-                    semantic_config_directory_info,
-                ]).strip()
-            semantic_config_context = []
-        return {
-            "datasource": {
-                "id": normalized_datasource_id,
-                "name": datasource.get("group_name") or datasource.get("name") or "",
-                "description": _truncate(datasource.get("ds_description") or datasource.get("description") or "", 160),
-                "source_type": datasource.get("source_type") or "",
-            },
-            "execution_targets": [
-                {
-                    "member_datasource_id": str(item.get("member_datasource_id") or "").strip(),
-                    "member_name": item.get("member_name") or item.get("name") or "",
-                    "org_code": item.get("org_code") or (item.get("source_config") or {}).get("org_code") or "",
-                }
-                for item in execution_targets
-                if str(item.get("member_datasource_id") or "").strip()
-            ],
-            "tables": _build_data_analyze_tables(datasource, has_selected_semantic_config),
-            "semantic_config_directory_info": semantic_config_directory_info,
-            "semantic_configs": semantic_config_context,
-            "tool_chain": get_data_analyze_tool_chain(),
-            "notes": _build_data_context_notes(has_selected_semantic_config),
-        }
-    except Exception as err:
-        logger.error("构建 DataAnalyze 上下文失败: datasource_id=%s error=%s", normalized_datasource_id, err, exc_info=True)
-        return {
-            "datasource": {"id": normalized_datasource_id, "error": str(err)},
-            "tables": [],
-            "semantic_configs": [],
-            "tool_chain": get_data_analyze_tool_chain(),
-            "notes": ["读取数据源上下文失败，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。"],
-        }
+        datasource = await get_datasource_manager().get_datasource_async(datasource_id)
+        return datasource or fallback_datasource
+    except Exception as exc:
+        logger.warning("读取智能分析表结构失败: datasource_id=%s error=%s", datasource_id, exc)
+        return fallback_datasource
+
+
+def _empty_data_context(prompt_context: AgentPromptContext, message: str) -> dict[str, Any]:
+    return {
+        "datasource": prompt_context.get("datasource"),
+        "execution_targets": list(prompt_context.get("execution_targets") or []),
+        "datasource_group_context": str(prompt_context.get("datasource_group_context") or ""),
+        "tables": [],
+        "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
+        "semantic_configs": [],
+        "tool_chain": get_data_analyze_tool_chain(),
+        "notes": [message],
+    }

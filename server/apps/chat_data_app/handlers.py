@@ -28,17 +28,16 @@ from .agent import (
 from .agent import analyze_data_agent
 from .agent.prompts.chat_data_builder import build_chat_data_system_prompt
 from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
-from .services.datasource_manager import get_datasource_manager
 from .services.context_budget import sanitize_context_usage_for_response
+from .services.conversation_runtime import stream_agent_turn
 from .services.conversation_event_service import conversation_event_service
 from .services.data_analyze_context import build_data_analyze_context
-from .services.execution_target_context import append_selected_execution_targets_to_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.data_analyze_workspace import ensure_data_analyze_workspace
 from .services.skill_service import skill_service
-from .services.semantic_tools import (
-    format_semantic_config_directory_for_prompt,
-    list_runtime_semantic_config_directory,
+from .services.semantic_conversation_context import (
+    build_agent_prompt_context,
+    prepare_semantic_conversation_context,
 )
 from .services.workspace_execution import (
     SandboxExecutionSessionRef,
@@ -858,205 +857,6 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
     return True
 
 
-async def _get_semantic_config_async(
-    datasource_id: str | None,
-    semantic_config_id: str | None,
-    user_query: str | None = None,
-    user_id: str | None = None,
-) -> dict | None:
-    """异步获取语义配置，避免在 FastAPI 事件循环中同步访问存储。"""
-    if not semantic_config_id or not datasource_id:
-        return None
-
-    try:
-        ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
-        if not datasource:
-            return None
-
-        source_type = datasource.get("source_type", "mysql")
-        normalized_user_id = str(user_id or "").strip()
-        if hasattr(ds_manager, "get_runtime_semantic_config_async"):
-            cfg = await ds_manager.get_runtime_semantic_config_async(datasource_id, semantic_config_id, normalized_user_id) if normalized_user_id else await ds_manager.get_runtime_semantic_config_async(datasource_id, semantic_config_id)
-        else:
-            cfg = await ds_manager.get_semantic_config_async(datasource_id, semantic_config_id, normalized_user_id) if normalized_user_id else await ds_manager.get_semantic_config_async(datasource_id, semantic_config_id)
-        if not cfg:
-            logger.warning(f"未找到指定的语义配置: {semantic_config_id}")
-            return None
-        if not cfg.get("enabled", True):
-            logger.warning(f"指定的语义配置未启用: {semantic_config_id}")
-            return None
-
-        result = cfg.copy()
-        if 'relationships' in result and 'joins' not in result:
-            result['joins'] = result['relationships']
-        if source_type:
-            result['source_type'] = source_type
-        if semantic_config_id and not result.get("id"):
-            result["id"] = semantic_config_id
-        logger.info(f"加载语义配置: {result.get('name', semantic_config_id)}")
-        return result
-    except Exception as e:
-        logger.warning(f"获取语义配置异常: {e}")
-        return None
-
-
-def _execution_target_member_id(target: dict) -> str:
-    return str(target.get("member_datasource_id") or target.get("id") or "").strip()
-
-
-def _execution_target_org_code(target: dict) -> str:
-    source_config = target.get("source_config") or {}
-    return str(target.get("org_code") or source_config.get("org_code") or "").strip()
-
-
-def _execution_target_name(target: dict, index: int) -> str:
-    source_config = target.get("source_config") or {}
-    return str(
-        target.get("member_name")
-        or target.get("org_name")
-        or source_config.get("org_name")
-        or _execution_target_member_id(target)
-        or f"执行对象{index}"
-    ).strip()
-
-
-def _execution_target_terms(target: dict, index: int) -> list[str]:
-    terms = [
-        _execution_target_name(target, index),
-        _execution_target_org_code(target),
-        _execution_target_member_id(target),
-    ]
-    return [term for term in dict.fromkeys(terms) if term]
-
-
-def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
-    return left[0] < right[1] and right[0] < left[1]
-
-
-def _match_execution_targets_from_query(user_query: str | None, execution_targets: list[dict]) -> list[str]:
-    """从用户原文中精确匹配执行对象，长名称优先，避免前缀机构误命中。"""
-    text = str(user_query or "").strip()
-    if not text or not execution_targets:
-        return []
-
-    lowered_text = text.casefold()
-    matches: list[tuple[int, int, int, str]] = []
-    for index, target in enumerate(execution_targets, start=1):
-        member_id = _execution_target_member_id(target)
-        if not member_id:
-            continue
-        for term in _execution_target_terms(target, index):
-            lowered_term = term.casefold()
-            start = lowered_text.find(lowered_term)
-            while start >= 0:
-                end = start + len(lowered_term)
-                matches.append((start, end, len(lowered_term), member_id))
-                start = lowered_text.find(lowered_term, start + 1)
-
-    selected: list[tuple[int, int, int, str]] = []
-    selected_spans: list[tuple[int, int]] = []
-    for item in sorted(matches, key=lambda match: (-match[2], match[0])):
-        span = (item[0], item[1])
-        if any(_spans_overlap(span, selected_span) for selected_span in selected_spans):
-            continue
-        selected.append(item)
-        selected_spans.append(span)
-
-    ordered_member_ids = [
-        item[3]
-        for item in sorted(selected, key=lambda match: match[0])
-    ]
-    return list(dict.fromkeys(ordered_member_ids))
-
-
-def _query_requests_all_execution_targets(user_query: str | None) -> bool:
-    text = str(user_query or "").strip()
-    if not text:
-        return False
-    keywords = ("全部机构", "所有机构", "各机构", "每个机构", "全部执行对象", "所有执行对象")
-    return any(keyword in text for keyword in keywords)
-
-
-def _match_execution_targets_from_query_only(
-    execution_targets: list[dict],
-    user_query: str | None,
-) -> list[str]:
-    """仅从用户原文解析执行对象匹配，不含前端显式选择。"""
-    if _query_requests_all_execution_targets(user_query):
-        return [
-            _execution_target_member_id(target)
-            for target in execution_targets
-            if _execution_target_member_id(target)
-        ]
-    return _match_execution_targets_from_query(user_query, execution_targets)
-
-
-def _normalize_member_datasource_ids(member_datasource_ids: list[str] | None) -> list[str]:
-    return [
-        str(item).strip()
-        for item in member_datasource_ids or []
-        if str(item).strip()
-    ]
-
-
-def _append_user_selected_execution_targets_to_context(
-    query_context: str,
-    execution_targets: list[dict],
-    member_datasource_ids: list[str],
-) -> str:
-    """用户显式选择执行对象时，追加到数据源组智能问数说明末尾。"""
-    return append_selected_execution_targets_to_context(query_context, execution_targets, member_datasource_ids)
-
-
-async def _get_execution_targets_async(
-    datasource_id: str | None,
-    member_datasource_ids: list[str] | None = None,
-    user_id: str | None = None,
-    username: str | None = None,
-    datasource_meta: dict | None = None,
-) -> list[dict]:
-    if not datasource_id:
-        return []
-    normalized_member_ids = _normalize_member_datasource_ids(member_datasource_ids)
-    if not normalized_member_ids:
-        return []
-    try:
-        ds_manager = get_datasource_manager()
-        if datasource_meta is not None and hasattr(ds_manager, "authorize_execution_datasources_async"):
-            return await ds_manager.authorize_execution_datasources_async(
-                datasource_meta,
-                normalized_member_ids,
-                user_id,
-                username,
-            )
-        return await ds_manager.get_authorized_execution_datasources_async(
-            datasource_id,
-            normalized_member_ids,
-            user_id=user_id,
-            username=username,
-        )
-    except Exception as err:
-        logger.warning(f"构造执行对象说明失败: {err}")
-        return []
-
-
-async def _build_semantic_config_directory_info_async(
-    datasource_id: str | None,
-    user_id: str | None = None,
-    enabled: bool = True,
-) -> str:
-    """异步构造当前可见指标集轻量目录说明。"""
-    if not enabled or not datasource_id:
-        return ""
-    try:
-        directory = await list_runtime_semantic_config_directory(datasource_id, user_id)
-        return format_semantic_config_directory_for_prompt(directory)
-    except Exception as err:
-        logger.warning(f"构造指标集目录说明失败: {err}")
-        return ""
-
-
 async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
     """构造智能问数业务知识技能上下文，显式指定的技能必须让模型稳定可见。"""
     _ = user_id
@@ -1074,7 +874,7 @@ async def _build_query_skills_context(user_id: str | None = None, skill_names: l
     )
 
 
-async def _stream_sql_generation(
+async def _generate_chat_data_stream(
     thread_id: str,
     user_query: str,
     datasource_id: str | None = None,
@@ -1114,30 +914,30 @@ async def _stream_sql_generation(
             normalized_skill_names.append(skill_name)
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
 
-    # 获取语义配置
-    # 优先级：temp_semantic_config > semantic_config_id
-    semantic_config = None
     semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-    if temp_semantic_config:
-        # 使用临时配置（用于测试，不保存到数据库）
-        semantic_config = temp_semantic_config
-        logger.info("使用临时语义配置（测试模式）")
-    elif semantic_config_id is not None:
-        semantic_config = await _get_semantic_config_async(datasource_id, semantic_config_id, user_query, user_id)
-        if semantic_config:
-            logger.info(f"使用语义模式: {semantic_config.get('name', semantic_config.get('id'))}")
-        else:
-            logger.warning("智能问数未找到可用指标集")
-            yield _format_sse("error", {"error": f"智能问数未找到可用指标集: {semantic_config_id}"})
-            yield _format_sse("done", "[DONE]")
-            return
+    semantic_context = await prepare_semantic_conversation_context(
+        datasource_id=datasource_id,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        username=username,
+        user_query=user_query,
+        semantic_config=temp_semantic_config,
+    )
+    if semantic_context.semantic_config_error:
+        logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
+        yield _format_sse("error", {"error": semantic_context.semantic_config_error})
+        yield _format_sse("done", "[DONE]")
+        return
+    datasource_id = semantic_context.datasource_id
+    semantic_config_id = semantic_context.semantic_config_id
+    semantic_config = semantic_context.semantic_config
+    if semantic_config:
+        logger.info("智能问数使用手选指标集: %s", semantic_config.get("name") or semantic_config.get("id"))
     else:
         logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
-    log_phase("resolve_semantic_config")
-
-    logger.info("智能问数使用统一语义工具链")
-    if semantic_config and not semantic_config_id:
-        semantic_config_id = str(semantic_config.get("id") or "").strip() or None
+    prompt_context = build_agent_prompt_context(semantic_context)
+    log_phase("prepare_semantic_context")
 
     config = {
         "configurable": {
@@ -1160,100 +960,22 @@ async def _stream_sql_generation(
             else:
                 user_message = _build_user_message(user_query, semantic_selection_event)
 
-            datasource_manager = get_datasource_manager()
-            semantic_directory_task = None
-            if not semantic_config:
-                semantic_directory_task = _build_semantic_config_directory_info_async(datasource_id, user_id)
-            datasource_meta_task = None
-            if datasource_id:
-                get_datasource_meta = getattr(datasource_manager, "get_datasource_meta_async", None)
-                datasource_meta_task = (
-                    get_datasource_meta(datasource_id)
-                    if callable(get_datasource_meta)
-                    else datasource_manager.get_datasource_async(datasource_id)
-                )
-
-            if semantic_directory_task and datasource_meta_task:
-                semantic_directory_result, datasource_result = await asyncio.gather(
-                    semantic_directory_task,
-                    datasource_meta_task,
-                    return_exceptions=True,
-                )
-                semantic_config_directory_info = "" if isinstance(semantic_directory_result, Exception) else semantic_directory_result
-                datasource = None if isinstance(datasource_result, Exception) else datasource_result
-                if isinstance(semantic_directory_result, Exception):
-                    logger.warning("构造指标集目录说明失败: %s", semantic_directory_result)
-                if isinstance(datasource_result, Exception):
-                    logger.warning("读取数据源组智能问数元信息失败: %s", datasource_result)
-            elif semantic_directory_task:
-                try:
-                    semantic_config_directory_info = await semantic_directory_task
-                except Exception as err:
-                    logger.warning("构造指标集目录说明失败: %s", err)
-                    semantic_config_directory_info = ""
-                datasource = None
-            elif datasource_meta_task:
-                semantic_config_directory_info = ""
-                try:
-                    datasource = await datasource_meta_task
-                except Exception as err:
-                    logger.warning("读取数据源组智能问数元信息失败: %s", err)
-                    datasource = None
-            else:
-                semantic_config_directory_info = ""
-                datasource = None
-            log_phase("load_semantic_directory_and_datasource_meta")
-
-            datasource_group_context = ""
-            if datasource_id and datasource is not None:
-                try:
-                    datasource_group_context = str((datasource or {}).get("query_context") or "").strip()
-                except Exception as err:
-                    logger.warning("读取数据源组智能问数说明失败: %s", err)
-            elif datasource_id:
-                logger.warning("读取数据源组智能问数元信息失败: datasource_id=%s", datasource_id)
-            explicit_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)
-            all_execution_targets = await _get_execution_targets_async(
-                datasource_id,
-                explicit_member_datasource_ids,
-                user_id=user_id,
-                username=username,
-                datasource_meta=datasource,
-            )
-            log_phase("authorize_execution_targets")
-            available_member_datasource_ids = [
-                _execution_target_member_id(target)
-                for target in all_execution_targets
-                if _execution_target_member_id(target)
-            ]
-            selected_member_datasource_ids = available_member_datasource_ids
-            matched_member_datasource_ids = _match_execution_targets_from_query_only(all_execution_targets, user_query)
-            if selected_member_datasource_ids:
-                datasource_group_context = _append_user_selected_execution_targets_to_context(
-                    datasource_group_context,
-                    all_execution_targets,
-                    selected_member_datasource_ids,
-                )
             initial_state = _build_agent_context_state(
                 datasource_id=datasource_id,
                 semantic_config_id=semantic_config_id,
+                semantic_config=semantic_config,
                 user_id=user_id,
                 operator_name=username,
                 conversation_id=thread_id,
                 messages=[user_message],
                 execution_context={
                     "datasource_id": datasource_id,
-                    "available_member_datasource_ids": available_member_datasource_ids,
-                    "matched_member_datasource_ids": matched_member_datasource_ids,
-                },
-                semantic_config=semantic_config,
-                prompt_context={
-                    "datasource_group_context": datasource_group_context,
-                    "semantic_config_directory_info": semantic_config_directory_info,
+                    "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
+                    "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
                 },
             )
             system_prompt = build_chat_data_system_prompt(
-                initial_state,
+                prompt_context,
                 semantic_config=semantic_config,
                 available_skills_context=await _build_query_skills_context(
                     user_id=user_id,
@@ -1271,24 +993,9 @@ async def _stream_sql_generation(
                 model_id=model_id,
                 enable_thinking=enable_thinking,
                 user_id=user_id,
+                datasource_group_context=prompt_context["datasource_group_context"],
             )
             log_phase("create_agent")
-            await _backfill_checkpoint_history(
-                agent,
-                config,
-                conversation_id=thread_id,
-                user_id=user_id,
-                username=username,
-            )
-            log_phase("backfill_checkpoint_history")
-            await conversation_event_service.persist_user_message(
-                conversation_id=thread_id,
-                user_id=user_id,
-                operator_name=username or user_id,
-                message=user_message,
-            )
-            log_phase("persist_user_message")
-
             stream_adapter = _AgentSseStreamAdapter(
                 agent=agent,
                 initial_state=initial_state,
@@ -1300,10 +1007,35 @@ async def _stream_sql_generation(
                 on_first_message=lambda: log_phase("first_model_chunk"),
                 reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
             )
-            try:
-                async for sse_event in stream_adapter.stream_events():
-                    yield sse_event
-            except Exception:
+            async def backfill_history() -> None:
+                await _backfill_checkpoint_history(
+                    agent,
+                    config,
+                    conversation_id=thread_id,
+                    user_id=user_id,
+                    username=username,
+                )
+                log_phase("backfill_checkpoint_history")
+
+            async def persist_user_message() -> None:
+                await conversation_event_service.persist_user_message(
+                    conversation_id=thread_id,
+                    user_id=user_id,
+                    operator_name=username or user_id,
+                    message=user_message,
+                )
+                log_phase("persist_user_message")
+
+            async def persist_turn_history() -> None:
+                await _persist_agent_turn_history(
+                    stream_adapter,
+                    conversation_id=thread_id,
+                    user_id=user_id,
+                    username=username,
+                    turn_id=str(user_message.id or ""),
+                )
+
+            async def persist_partial_history() -> None:
                 await _persist_partial_agent_turn_history(
                     stream_adapter,
                     conversation_id=thread_id,
@@ -1311,30 +1043,22 @@ async def _stream_sql_generation(
                     username=username,
                     turn_id=str(user_message.id or ""),
                 )
-                raise
-            end_payload = await stream_adapter.finish()
-            log_phase("agent_stream_done")
-            await _persist_agent_turn_history(
-                stream_adapter,
-                conversation_id=thread_id,
-                user_id=user_id,
-                username=username,
-                turn_id=str(user_message.id or ""),
-            )
-            if stream_adapter.disconnected:
-                return
 
-        yield _format_sse("message_end", end_payload)
-        yield _format_sse("done", "[DONE]")
+            async def log_agent_stream_done() -> None:
+                log_phase("agent_stream_done")
+
+            async for sse_event in stream_agent_turn(
+                stream_adapter=stream_adapter,
+                format_sse=_format_sse,
+                backfill_history=backfill_history,
+                persist_user_message=persist_user_message,
+                persist_turn_history=persist_turn_history,
+                persist_partial_history=persist_partial_history,
+                after_turn=log_agent_stream_done,
+            ):
+                yield sse_event
 
     except Exception as e:
-        await _persist_partial_agent_turn_history(
-            stream_adapter,
-            conversation_id=thread_id,
-            user_id=user_id,
-            username=username,
-            turn_id=str(getattr(user_message, "id", "") or ""),
-        )
         logger.error(f"执行失败: {e}", exc_info=True)
         yield _format_sse("error", {"error": str(e)})
         yield _format_sse("done", "[DONE]")
@@ -1370,7 +1094,7 @@ async def sql_completion_handler(
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
 
     return StreamingResponse(
-        _stream_sql_generation(
+        _generate_chat_data_stream(
             thread_id=conversation_id,
             user_query=query,
             datasource_id=datasource_id,
@@ -1389,94 +1113,116 @@ async def sql_completion_handler(
     )
 
 
-async def data_analyze_completion_handler(
+async def _generate_data_analyze_stream(
     conversation_id: str,
     query: str,
-    options: Optional[Dict[str, Any]] = None,
-    user_id: str = "system",
-    username: str | None = None,
-    request: Request | None = None
-) -> StreamingResponse:
-    """DataAnalyze 智能体 completion 处理器。"""
-    options_data = options or {}
-    model_id = options_data.get("model_id")
-    enable_thinking = _normalize_enable_thinking(options_data.get("enable_thinking"))
-    datasource_id = str(options_data.get("datasource_id") or "").strip() or None
-    semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None
-    member_datasource_ids = options_data.get("member_datasource_ids") or []
-    semantic_config_selection = options_data.get("semantic_config_selection")
+    *,
+    datasource_id: str | None,
+    semantic_config_id: str | None,
+    member_datasource_ids: list[str],
+    semantic_config_selection: dict[str, Any] | None,
+    model_id: str | None,
+    enable_thinking: bool | None,
+    user_id: str,
+    username: str | None,
+    request: Request | None,
+):
+    """Stream one DataAnalyze turn after the completion handler creates its conversation."""
+    started_at = time.perf_counter()
+    last_phase_at = started_at
+    stream_adapter: _AgentSseStreamAdapter | None = None
+    user_message: HumanMessage | None = None
 
-    async def generate_stream():
-        started_at = time.perf_counter()
-        last_phase_at = started_at
-        stream_adapter: _AgentSseStreamAdapter | None = None
-        user_message: HumanMessage | None = None
+    def log_phase(phase: str) -> None:
+        nonlocal last_phase_at
+        now = time.perf_counter()
+        logger.info(
+            "DataAnalyze 阶段耗时: conversation_id=%s phase=%s elapsed_ms=%d total_ms=%d",
+            conversation_id,
+            phase,
+            int((now - last_phase_at) * 1000),
+            int((now - started_at) * 1000),
+        )
+        last_phase_at = now
 
-        def log_phase(phase: str) -> None:
-            nonlocal last_phase_at
-            now = time.perf_counter()
-            logger.info(
-                "DataAnalyze 阶段耗时: conversation_id=%s phase=%s elapsed_ms=%d total_ms=%d",
-                conversation_id,
-                phase,
-                int((now - last_phase_at) * 1000),
-                int((now - started_at) * 1000),
-            )
-            last_phase_at = now
-
+    try:
+        semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
+        semantic_context = await prepare_semantic_conversation_context(
+            datasource_id=datasource_id,
+            semantic_config_id=semantic_config_id,
+            member_datasource_ids=member_datasource_ids,
+            user_id=user_id,
+            username=username,
+            user_query=query,
+        )
+        if semantic_context.semantic_config_error:
+            raise ValueError(semantic_context.semantic_config_error)
+        resolved_datasource_id = semantic_context.datasource_id
+        resolved_semantic_config_id = semantic_context.semantic_config_id
+        prompt_context = build_agent_prompt_context(semantic_context)
+        data_context = await build_data_analyze_context(prompt_context)
+        log_phase("prepare_semantic_context")
+        workspace_paths = await prepare_data_analyze_workspace(conversation_id)
+        log_phase("ensure_workspace")
         try:
-            await conversation.get_or_create_conversation("", DATA_ANALYZE_AGENT_ID, conversation_id, user_id)
-            log_phase("get_or_create_conversation")
-            log_phase("skip_preload_skill")
-            semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
-            data_context_kwargs = {"user_id": user_id, "username": username}
-            if member_datasource_ids:
-                data_context_kwargs["member_datasource_ids"] = member_datasource_ids
-            data_context = await build_data_analyze_context(datasource_id, semantic_config_id, **data_context_kwargs)
-            log_phase("build_data_context")
-            workspace_paths = await prepare_data_analyze_workspace(conversation_id)
-            log_phase("ensure_workspace")
-            try:
-                available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="analyze")
-                available_skills_xml = format_skills_prompt([dict(item) for item in available_skills])
-            except Exception as err:
-                logger.warning("DataAnalyze 技能列表加载失败，回退代码目录: %s", err)
-                available_skills_xml = build_builtin_skills_prompt()
-            system_prompt = analyze_data_agent.build_data_analyze_system_prompt(
-                skill=None,
-                data_context=data_context,
+            available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="analyze")
+            available_skills_xml = format_skills_prompt([dict(item) for item in available_skills])
+        except Exception as err:
+            logger.warning("DataAnalyze 技能列表加载失败，回退代码目录: %s", err)
+            available_skills_xml = build_builtin_skills_prompt()
+        system_prompt = analyze_data_agent.build_data_analyze_system_prompt(
+            skill=None,
+            data_context=data_context,
+            workspace_root=workspace_paths["root"],
+            available_skills_xml=available_skills_xml,
+        )
+        log_phase("build_system_prompt")
+        config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
+        initial_state = _build_agent_context_state(
+            datasource_id=resolved_datasource_id,
+            semantic_config_id=resolved_semantic_config_id,
+            user_id=user_id,
+            operator_name=username,
+            conversation_id=conversation_id,
+            messages=[_build_user_message(query, semantic_selection_event)],
+            member_datasource_ids=semantic_context.selected_member_datasource_ids,
+            available_member_datasource_ids=semantic_context.available_member_datasource_ids,
+            matched_member_datasource_ids=semantic_context.matched_member_datasource_ids,
+        )
+        user_message = initial_state["messages"][0]
+
+        async with get_checkpointer() as checkpointer:
+            execution_session_ref = SandboxExecutionSessionRef()
+            agent = analyze_data_agent.create_data_analyze_agent(
                 workspace_root=workspace_paths["root"],
-                available_skills_xml=available_skills_xml,
-            )
-            log_phase("build_system_prompt")
-            config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-            initial_state = _build_agent_context_state(
-                datasource_id=datasource_id,
-                semantic_config_id=semantic_config_id,
+                system_prompt=system_prompt,
+                model_id=model_id,
+                checkpointer=checkpointer,
+                datasource_id=resolved_datasource_id,
+                semantic_config_id=resolved_semantic_config_id,
+                conversation_id=conversation_id,
+                member_datasource_ids=semantic_context.available_member_datasource_ids,
+                matched_member_datasource_ids=semantic_context.matched_member_datasource_ids,
                 user_id=user_id,
                 operator_name=username,
-                conversation_id=conversation_id,
-                messages=[_build_user_message(query, semantic_selection_event)],
-                member_datasource_ids=member_datasource_ids or [],
+                execution_session_ref=execution_session_ref,
+                enable_thinking=enable_thinking,
+                datasource_group_context=prompt_context["datasource_group_context"],
             )
-            user_message = initial_state["messages"][0]
+            stream_adapter = _AgentSseStreamAdapter(
+                agent=agent,
+                initial_state=initial_state,
+                config=config,
+                request=request,
+                visible_message_filter=_is_data_analyze_visible_stream_message,
+                disconnect_log_message="DataAnalyze 客户端已断开，停止流式输出: %s",
+                disconnect_log_id=conversation_id,
+                include_empty_tool_messages=True,
+                on_first_message=lambda: log_phase("first_model_chunk"),
+                reasoning_turn_id=str(initial_state["messages"][0].additional_kwargs.get("reasoning_turn_id") or "") or None,
+            )
 
-            async with get_checkpointer() as checkpointer:
-                execution_session_ref = SandboxExecutionSessionRef()
-                agent = analyze_data_agent.create_data_analyze_agent(
-                    workspace_root=workspace_paths["root"],
-                    system_prompt=system_prompt,
-                    model_id=model_id,
-                    checkpointer=checkpointer,
-                    datasource_id=datasource_id,
-                    semantic_config_id=semantic_config_id,
-                    conversation_id=conversation_id,
-                    member_datasource_ids=member_datasource_ids,
-                    user_id=user_id,
-                    operator_name=username,
-                    execution_session_ref=execution_session_ref,
-                    enable_thinking=enable_thinking,
-                )
+            async def backfill_history() -> None:
                 await _backfill_checkpoint_history(
                     agent,
                     config,
@@ -1484,6 +1230,8 @@ async def data_analyze_completion_handler(
                     user_id=user_id,
                     username=username,
                 )
+
+            async def persist_user_message() -> None:
                 await conversation_event_service.persist_user_message(
                     conversation_id=conversation_id,
                     user_id=user_id,
@@ -1491,61 +1239,16 @@ async def data_analyze_completion_handler(
                     message=user_message,
                 )
                 log_phase("create_agent")
+
+            async def before_stream() -> bool:
                 if request and await request.is_disconnected():
                     logger.info("DataAnalyze 客户端已断开，停止流式输出: %s", conversation_id)
-                    return
+                    return False
                 execution_session_ref.current = await get_workspace_execution_session(workspace_paths["root"], user_id)
                 log_phase("get_workspace_execution_session")
-                session_success = False
-                stream_adapter = _AgentSseStreamAdapter(
-                    agent=agent,
-                    initial_state=initial_state,
-                    config=config,
-                    request=request,
-                    visible_message_filter=_is_data_analyze_visible_stream_message,
-                    disconnect_log_message="DataAnalyze 客户端已断开，停止流式输出: %s",
-                    disconnect_log_id=conversation_id,
-                    include_empty_tool_messages=True,
-                    on_first_message=lambda: log_phase("first_model_chunk"),
-                    reasoning_turn_id=str(initial_state["messages"][0].additional_kwargs.get("reasoning_turn_id") or "") or None,
-                )
-                try:
-                    async for sse_event in stream_adapter.stream_events():
-                        yield sse_event
-                    if stream_adapter.disconnected:
-                        await stream_adapter.finish(
-                            persist_latest_ai_timestamp=True,
-                            prefer_latest_usage=True,
-                        )
-                        await _persist_agent_turn_history(
-                            stream_adapter,
-                            conversation_id=conversation_id,
-                            user_id=user_id,
-                            username=username,
-                            turn_id=str(user_message.id or ""),
-                        )
-                        session_success = True
-                        return
-                    session_success = True
-                except asyncio.CancelledError:
-                    session_success = True
-                    raise
-                except Exception:
-                    await _persist_partial_agent_turn_history(
-                        stream_adapter,
-                        conversation_id=conversation_id,
-                        user_id=user_id,
-                        username=username,
-                        turn_id=str(user_message.id or ""),
-                    )
-                    raise
-                finally:
-                    await _finish_workspace_execution_session(execution_session_ref, user_id, success=session_success)
-                log_phase("agent_stream_done")
-                end_payload = await stream_adapter.finish(
-                    persist_latest_ai_timestamp=True,
-                    prefer_latest_usage=True,
-                )
+                return True
+
+            async def persist_turn_history() -> None:
                 await _persist_agent_turn_history(
                     stream_adapter,
                     conversation_id=conversation_id,
@@ -1553,22 +1256,74 @@ async def data_analyze_completion_handler(
                     username=username,
                     turn_id=str(user_message.id or ""),
                 )
-                yield _format_sse("message_end", end_payload)
-            yield _format_sse("done", "[DONE]")
-        except Exception as e:
-            await _persist_partial_agent_turn_history(
-                stream_adapter,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                username=username,
-                turn_id=str(getattr(user_message, "id", "") or ""),
-            )
-            logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
-            yield _format_sse("error", {"error": str(e)})
-            yield _format_sse("done", "[DONE]")
 
+            async def persist_partial_history() -> None:
+                await _persist_partial_agent_turn_history(
+                    stream_adapter,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    username=username,
+                    turn_id=str(user_message.id or ""),
+                )
+
+            async def finalize_resources(success: bool) -> None:
+                await _finish_workspace_execution_session(execution_session_ref, user_id, success=success)
+
+            async def log_agent_stream_done() -> None:
+                log_phase("agent_stream_done")
+
+            async for sse_event in stream_agent_turn(
+                stream_adapter=stream_adapter,
+                format_sse=_format_sse,
+                backfill_history=backfill_history,
+                persist_user_message=persist_user_message,
+                before_stream=before_stream,
+                persist_turn_history=persist_turn_history,
+                persist_partial_history=persist_partial_history,
+                finalize_resources=finalize_resources,
+                cleanup_success_on_cancel=True,
+                finalize_stream_kwargs={
+                    "persist_latest_ai_timestamp": True,
+                    "prefer_latest_usage": True,
+                },
+                after_turn=log_agent_stream_done,
+            ):
+                yield sse_event
+    except Exception as e:
+        logger.error("DataAnalyze 对话失败: conversation_id=%s error=%s", conversation_id, e, exc_info=True)
+        yield _format_sse("error", {"error": str(e)})
+        yield _format_sse("done", "[DONE]")
+
+
+async def data_analyze_completion_handler(
+    conversation_id: str,
+    query: str,
+    options: Optional[Dict[str, Any]] = None,
+    user_id: str = "system",
+    username: str | None = None,
+    request: Request | None = None,
+) -> StreamingResponse:
+    """Create a DataAnalyze conversation and return its stream response."""
+    options_data = options or {}
+    datasource_id = str(options_data.get("datasource_id") or "").strip() or None
+    semantic_config_id = str(options_data.get("semantic_config_id") or "").strip() or None
+    member_datasource_ids = options_data.get("member_datasource_ids") or []
+
+    await conversation.get_or_create_conversation("", DATA_ANALYZE_AGENT_ID, conversation_id, user_id)
     return StreamingResponse(
-        generate_stream(),
+        _generate_data_analyze_stream(
+            conversation_id,
+            query,
+            datasource_id=datasource_id,
+            semantic_config_id=semantic_config_id,
+            member_datasource_ids=member_datasource_ids,
+            semantic_config_selection=options_data.get("semantic_config_selection"),
+            model_id=options_data.get("model_id"),
+            enable_thinking=_normalize_enable_thinking(options_data.get("enable_thinking")),
+            user_id=user_id,
+            username=username,
+            request=request,
+        ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
     )

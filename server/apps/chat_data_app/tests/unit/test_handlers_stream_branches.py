@@ -7,6 +7,45 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from apps.chat_data_app import handlers
+from apps.chat_data_app.services.semantic_conversation_context import SemanticConversationContext
+
+
+def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
+    datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
+    semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
+    selected_member_ids = list(dict.fromkeys(
+        str(item).strip()
+        for item in kwargs.get("member_datasource_ids") or []
+        if str(item).strip()
+    ))
+    semantic_config = kwargs.get("semantic_config") or (
+        {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
+        if semantic_config_id else None
+    )
+    return SemanticConversationContext(
+        datasource_id=datasource_id,
+        datasource_meta={"query_context": ""} if datasource_id else None,
+        semantic_config_id=semantic_config_id,
+        semantic_config=semantic_config,
+        semantic_config_directory_info="",
+        execution_targets=[],
+        available_member_datasource_ids=selected_member_ids,
+        matched_member_datasource_ids=[],
+        selected_member_datasource_ids=selected_member_ids,
+        datasource_group_context="",
+    )
+
+
+def _override_semantic_context(monkeypatch, **overrides):
+    async def prepare_context(**kwargs):
+        context = _semantic_context_from_request(**kwargs)
+        values = {
+            key: value(context, kwargs) if callable(value) else value
+            for key, value in overrides.items()
+        }
+        return context.__class__(**{**context.__dict__, **values})
+
+    monkeypatch.setattr(handlers, "prepare_semantic_conversation_context", prepare_context)
 
 
 def tool_event_contents(events: list[str]) -> list[str]:
@@ -364,7 +403,7 @@ async def test_persist_latest_ai_message_timestamp_uses_langchain_agent_model_no
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_tool_chunks_retrieval_completes(monkeypatch):
+async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(
@@ -388,7 +427,7 @@ async def test_stream_sql_generation_tool_chunks_retrieval_completes(monkeypatch
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查销售额",
         datasource_id="ds",
@@ -407,7 +446,7 @@ async def test_stream_sql_generation_tool_chunks_retrieval_completes(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
+async def test_generate_chat_data_stream_emits_thinking_event(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(values={}, tasks=[])
@@ -422,7 +461,7 @@ async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="你好",
         datasource_id="ds",
@@ -436,18 +475,19 @@ async def test_stream_sql_generation_emits_thinking_event(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_missing_semantic_config_and_graph_error(monkeypatch):
-    async def no_semantic(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(handlers, "_get_semantic_config_async", no_semantic)
-    chunks = await collect_stream(handlers._stream_sql_generation(
+async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error(monkeypatch):
+    _override_semantic_context(
+        monkeypatch,
+        semantic_config=None,
+        semantic_config_error="未找到可用指标集: missing",
+    )
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查销售额",
         datasource_id="ds",
         semantic_config_id="missing",
     ))
-    assert "智能问数未找到可用指标集" in "".join(chunks)
+    assert "未找到可用指标集: missing" in "".join(chunks)
 
     class BadCheckpointer:
         async def __aenter__(self):
@@ -456,48 +496,14 @@ async def test_stream_sql_generation_missing_semantic_config_and_graph_error(mon
         async def __aexit__(self, *_args):
             return False
 
+    _override_semantic_context(monkeypatch)
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: BadCheckpointer())
-    chunks = await collect_stream(handlers._stream_sql_generation("conv", "hello"))
+    chunks = await collect_stream(handlers._generate_chat_data_stream("conv", "hello"))
     assert "checkpoint down" in "".join(chunks)
 
 
 @pytest.mark.asyncio
-async def test_semantic_config_fallback_and_execution_target_name_branches(monkeypatch):
-    class LegacyManager:
-        async def get_datasource_async(self, datasource_id):
-            return {"source_type": "", "id": datasource_id}
-
-        async def get_semantic_config_async(self, datasource_id, semantic_config_id):
-            return {"name": "未带 ID 指标集", "enabled": True}
-
-    monkeypatch.setattr(handlers, "get_datasource_manager", lambda: LegacyManager())
-    config = await handlers._get_semantic_config_async("ds_a", "cfg_a")
-
-    assert config["id"] == "cfg_a"
-    assert "source_type" not in config or config["source_type"] == ""
-
-    class NamelessManager:
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            return [
-                {"member_datasource_id": ""},
-                {"member_datasource_id": "m2"},
-                {"member_name": "具名执行对象"},
-            ]
-
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
-    monkeypatch.setattr(handlers, "get_datasource_manager", lambda: NamelessManager())
-    targets = await handlers._get_execution_targets_async("ds_a", ["m1", "m2", "m3"])
-    info = handlers._append_user_selected_execution_targets_to_context("", targets, ["m1", "m2", "m3"])
-
-    assert "m2（member_datasource_id: m2）" in info
-    assert "执行对象1" not in info
-    assert "具名执行对象" not in info
-
-
-@pytest.mark.asyncio
-async def test_stream_sql_generation_disconnect_uses_clean_query_state(monkeypatch):
+async def test_generate_chat_data_stream_disconnect_uses_clean_query_state(monkeypatch):
     class Graph:
         def __init__(self):
             self.initial_state = None
@@ -518,7 +524,7 @@ async def test_stream_sql_generation_disconnect_uses_clean_query_state(monkeypat
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
@@ -532,7 +538,7 @@ async def test_stream_sql_generation_disconnect_uses_clean_query_state(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_initial_state_uses_context_groups(monkeypatch):
+async def test_generate_chat_data_stream_initial_state_uses_context_groups(monkeypatch):
     class Graph:
         def __init__(self):
             self.initial_state = None
@@ -549,7 +555,7 @@ async def test_stream_sql_generation_initial_state_uses_context_groups(monkeypat
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查订单",
         datasource_id="ds_a",
@@ -557,13 +563,13 @@ async def test_stream_sql_generation_initial_state_uses_context_groups(monkeypat
 
     assert "query answer" in "".join(chunks)
     assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
-    assert graph.initial_state["prompt_context"]["datasource_group_context"] == ""
+    assert "prompt_context" not in graph.initial_state
     assert "tables_ddl_info" not in graph.initial_state
     assert "loaded_table_names" not in graph.initial_state
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypatch):
+async def test_generate_chat_data_stream_tool_chunk_missing_id_and_bad_json(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(tasks=[], values={})
@@ -576,7 +582,7 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -588,7 +594,7 @@ async def test_stream_sql_generation_tool_chunk_missing_id_and_bad_json(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_non_query_missing_semantic_config_and_no_selected_tables(monkeypatch):
+async def test_generate_chat_data_stream_non_query_missing_semantic_config_and_no_selected_tables(monkeypatch):
     class Graph:
         def __init__(self):
             self.initial_state = None
@@ -602,26 +608,27 @@ async def test_stream_sql_generation_non_query_missing_semantic_config_and_no_se
 
     graph = Graph()
 
-    async def no_semantic(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(handlers, "_get_semantic_config_async", no_semantic)
+    _override_semantic_context(
+        monkeypatch,
+        semantic_config=None,
+        semantic_config_error="未找到可用指标集: missing",
+    )
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: graph)
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
         semantic_config_id="missing",
     ))
 
-    assert "智能问数未找到可用指标集" in "".join(chunks)
+    assert "未找到可用指标集: missing" in "".join(chunks)
     assert graph.initial_state is None
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_buffer(monkeypatch):
+async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_empty_buffer(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(tasks=[], values={"token_usage": {"total_tokens": 4}})
@@ -638,7 +645,7 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -651,7 +658,7 @@ async def test_stream_sql_generation_tool_call_duplicate_missing_name_and_empty_
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(monkeypatch):
+async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selection(monkeypatch):
     original_resolver = handlers._resolve_active_tool_call_id
 
     class Graph:
@@ -672,7 +679,7 @@ async def test_stream_sql_generation_forced_missing_buffer_and_empty_selection(m
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -799,7 +806,7 @@ async def test_persist_reasoning_segments_keeps_count_on_update_error():
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(monkeypatch):
+async def test_generate_chat_data_stream_thinking_with_content_and_untracked_tool(monkeypatch):
     class Graph:
         async def aget_state(self, _config):
             return SimpleNamespace(values={}, tasks=[])
@@ -821,7 +828,7 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",
@@ -836,7 +843,7 @@ async def test_stream_sql_generation_thinking_with_content_and_untracked_tool(mo
 
 
 @pytest.mark.asyncio
-async def test_stream_sql_generation_message_end_without_token_usage(monkeypatch):
+async def test_generate_chat_data_stream_message_end_without_token_usage(monkeypatch):
     class Graph:
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(tool_calls=[{"id": "tc_pending", "name": "semantic_query_tool"}]), {"langgraph_node": "model"}
@@ -850,7 +857,7 @@ async def test_stream_sql_generation_message_end_without_token_usage(monkeypatch
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(handlers, "create_chat_data_agent", lambda **_kwargs: Graph())
 
-    chunks = await collect_stream(handlers._stream_sql_generation(
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
         thread_id="conv",
         user_query="查",
         datasource_id="ds_a",

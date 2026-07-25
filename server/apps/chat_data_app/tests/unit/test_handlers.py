@@ -1,8 +1,11 @@
 import os
 import sys
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
@@ -12,24 +15,19 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.handlers import (
-    _append_user_selected_execution_targets_to_context,
     _build_query_skills_context,
-    _build_semantic_config_directory_info_async,
     _extract_reasoning_content,
     _format_reasoning_for_display,
     _format_sse,
     _format_thinking_event,
     _format_tool_event,
-    _get_execution_targets_async,
-    _get_semantic_config_async,
     _is_tool_result_error,
-    _match_execution_targets_from_query_only,
     _normalize_enable_thinking,
     _normalize_semantic_selection_payload,
     _append_reasoning_segment,
     _parse_tool_args_buffer,
     _prepare_data_analyze_workspace_sync,
-    _stream_sql_generation,
+    _generate_chat_data_stream,
     _finish_running_tool,
     _register_running_tool,
     _resolve_active_tool_call_id,
@@ -38,6 +36,68 @@ from apps.chat_data_app.handlers import (
     sql_completion_handler,
 )
 from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
+from apps.chat_data_app.services.execution_target_context import append_selected_execution_targets_to_context
+from apps.chat_data_app.services.semantic_conversation_context import SemanticConversationContext
+
+
+def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
+    datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
+    semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
+    selected_ids = list(dict.fromkeys(
+        str(member_id).strip()
+        for member_id in kwargs.get("member_datasource_ids") or []
+        if str(member_id).strip()
+    ))
+    supplied_config = kwargs.get("semantic_config")
+    semantic_config = supplied_config or (
+        {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
+        if semantic_config_id else None
+    )
+    targets = [
+        {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
+        for member_id in selected_ids
+    ]
+    query = str(kwargs.get("user_query") or "")
+    matched_ids = selected_ids if "所有机构" in query or "全部机构" in query else []
+    datasource_group_context = append_selected_execution_targets_to_context("", targets, selected_ids)
+    return SemanticConversationContext(
+        datasource_id=datasource_id,
+        datasource_meta={"query_context": ""} if datasource_id else None,
+        semantic_config_id=semantic_config_id,
+        semantic_config=semantic_config,
+        semantic_config_directory_info=("" if semantic_config else "## 当前可见指标集目录\n1. 名称：测试指标集"),
+        execution_targets=targets,
+        available_member_datasource_ids=selected_ids,
+        matched_member_datasource_ids=matched_ids,
+        selected_member_datasource_ids=selected_ids,
+        datasource_group_context=datasource_group_context,
+    )
+
+
+def _override_semantic_context(monkeypatch, **overrides):
+    async def prepare_context(**kwargs):
+        context = _semantic_context_from_request(**kwargs)
+        values = {
+            key: value(context, kwargs) if callable(value) else value
+            for key, value in overrides.items()
+        }
+        return replace(context, **values)
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.prepare_semantic_conversation_context",
+        prepare_context,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_semantic_conversation_context(monkeypatch):
+    async def prepare_context(**kwargs):
+        return _semantic_context_from_request(**kwargs)
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.prepare_semantic_conversation_context",
+        prepare_context,
+    )
 
 
 def _tool_event_contents(events: list[str]) -> list[str]:
@@ -233,196 +293,6 @@ def test_is_tool_result_error_detects_plain_and_dashboard_errors():
     assert _is_tool_result_error("执行完成") is False
 
 
-def test_append_user_selected_execution_targets_to_context_formats_single_and_multi_targets():
-    targets = [
-        {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
-        {"member_datasource_id": "m2", "member_name": "宁波库", "source_config": {"org_code": "ORG_NB"}},
-    ]
-
-    single = _append_user_selected_execution_targets_to_context("", targets, ["m1"])
-    multi = _append_user_selected_execution_targets_to_context("", targets, ["m1", "m2"])
-    empty = _append_user_selected_execution_targets_to_context("已有说明", targets, [])
-
-    assert "当前用户已选择的执行对象数据源" in single
-    assert "member_datasource_id: m1" in single
-    assert "当前用户已选择的执行对象数据源" in multi
-    assert "宁波库" in multi
-    assert "编码：ORG_NB" in multi
-    assert empty == "已有说明"
-
-
-def test_execution_target_context_uses_only_requested_targets(monkeypatch):
-    import asyncio
-
-    calls = []
-
-    class FakeDatasourceManager:
-        async def get_datasource_async(self, datasource_id):
-            return {
-                "query_context": "当前数据源组按执行对象数据源分库",
-                "source_type": "hive",
-                "query_executor_type": "direct",
-                "member_sources": [
-                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
-                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
-                ],
-            }
-
-        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
-            raise AssertionError("should not expand all datasource group members")
-
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            calls.append(list(member_datasource_ids or []))
-            member_name_map = {"m1": "杭州库", "m2": "宁波库"}
-            return [
-                {"member_datasource_id": member_id, "member_name": member_name_map.get(member_id, member_id), "org_code": member_id}
-                for member_id in member_datasource_ids or []
-            ]
-
-        async def get_authorized_execution_datasources_async(
-            self,
-            datasource_id,
-            member_datasource_ids=None,
-            user_id=None,
-            username=None,
-        ):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-
-    selected_targets = asyncio.run(_get_execution_targets_async("ds_a", ["m1"]))
-    empty_targets = asyncio.run(_get_execution_targets_async("ds_a", None))
-    selected_only = _append_user_selected_execution_targets_to_context("", selected_targets, ["m1"])
-
-    assert calls == [["m1"]]
-    assert "当前用户已选择的执行对象数据源" in selected_only
-    assert "member_datasource_id: m1" in selected_only
-    assert "m2" not in selected_only
-    assert empty_targets == []
-
-
-def test_get_execution_targets_async_does_not_expand_all_members(monkeypatch):
-    import asyncio
-
-    class FakeDatasourceManager:
-        async def get_datasource_async(self, datasource_id):
-            raise AssertionError("should not read datasource group members")
-
-        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
-            raise AssertionError("should not expand all datasource group members")
-
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            return [
-                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
-                for member_id in member_datasource_ids or []
-            ]
-
-        async def get_authorized_execution_datasources_async(
-            self,
-            datasource_id,
-            member_datasource_ids=None,
-            user_id=None,
-            username=None,
-        ):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-
-    empty_targets = asyncio.run(_get_execution_targets_async("ds_a", []))
-    selected_targets = asyncio.run(_get_execution_targets_async("ds_a", ["m1"]))
-
-    assert empty_targets == []
-    assert [target["member_datasource_id"] for target in selected_targets] == ["m1"]
-
-
-def test_match_execution_targets_prefers_long_exact_member_name():
-    targets = [
-        {"member_datasource_id": "ORG_CODE1", "member_name": "运维平台", "org_code": "ORG_CODE1"},
-        {"member_datasource_id": "ORG_CODE2", "member_name": "运维平台1", "org_code": "ORG_CODE2"},
-        {"member_datasource_id": "ORG_CODE3", "member_name": "运维平台2", "org_code": "ORG_CODE3"},
-    ]
-
-    matched_member_ids = _match_execution_targets_from_query_only(
-        targets,
-        "查询运维平台1在2024年的订单数量是多少",
-    )
-
-    assert matched_member_ids == ["ORG_CODE2"]
-
-
-def test_match_execution_targets_matches_all_execution_targets():
-    targets = [
-        {"member_datasource_id": "ORG_CODE1", "member_name": "运维平台", "org_code": "ORG_CODE1"},
-        {"member_datasource_id": "ORG_CODE2", "member_name": "运维平台1", "org_code": "ORG_CODE2"},
-    ]
-
-    matched_member_ids = _match_execution_targets_from_query_only(
-        targets,
-        "查询所有机构2024年的订单数量",
-    )
-
-    assert matched_member_ids == ["ORG_CODE1", "ORG_CODE2"]
-
-
-def test_get_execution_targets_async_empty_and_error(monkeypatch):
-    import asyncio
-
-    assert asyncio.run(_get_execution_targets_async(None, None)) == []
-
-    class EmptyManager:
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            return []
-
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
-    class ErrorManager:
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            raise RuntimeError("manager failed")
-
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_datasource_ids=None, user_id=None, username=None):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: EmptyManager())
-    assert asyncio.run(_get_execution_targets_async("ds_a", None)) == []
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: ErrorManager())
-    assert asyncio.run(_get_execution_targets_async("ds_a", ["m1"])) == []
-
-
-def test_build_semantic_config_directory_info_async(monkeypatch):
-    import asyncio
-    captured = {}
-
-    async def fake_directory(datasource_id, user_id=None):
-        assert datasource_id == "ds_a"
-        captured["user_id"] = user_id
-        return [{
-            "id": "sc_order",
-            "name": "订单分析",
-            "description": "订单经营分析",
-            "metrics_total": 2,
-            "dimensions_total": 4,
-        }]
-
-    async def failing_directory(_datasource_id, _user_id=None):
-        raise RuntimeError("directory failed")
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", fake_directory)
-
-    prompt = asyncio.run(_build_semantic_config_directory_info_async("ds_a", user_id="u1"))
-
-    assert captured["user_id"] == "u1"
-    assert "当前可见指标集目录" in prompt
-    assert "名称：订单分析" in prompt
-    assert "描述：订单经营分析" in prompt
-    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a", enabled=False)) == ""
-    assert asyncio.run(_build_semantic_config_directory_info_async(None)) == ""
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.list_runtime_semantic_config_directory", failing_directory)
-    assert asyncio.run(_build_semantic_config_directory_info_async("ds_a")) == ""
-
-
 def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):
     import asyncio
     calls = {}
@@ -437,61 +307,6 @@ def test_prepare_data_analyze_workspace_sync_and_async(monkeypatch):
 
     async_paths = asyncio.run(prepare_data_analyze_workspace("conv_ws"))
     assert async_paths == paths
-
-
-def test_get_semantic_config_async_branches(monkeypatch):
-    import asyncio
-
-    assert asyncio.run(_get_semantic_config_async(None, "cfg")) is None
-    assert asyncio.run(_get_semantic_config_async("ds", None)) is None
-
-    class FakeManager:
-        def __init__(self, mode="ok"):
-            self.mode = mode
-            self.runtime_called = False
-
-        async def get_datasource_async(self, datasource_id):
-            if self.mode == "missing":
-                return None
-            if self.mode == "raise":
-                raise RuntimeError("db failed")
-            return {
-                "source_type": "hive",
-                "semantic_configs": [
-                    {"id": "disabled", "enabled": False, "relationships": [{"left_table": "a"}]},
-                    {"id": "cfg", "enabled": True, "relationships": [{"left_table": "orders"}]},
-                ],
-            }
-
-        async def get_semantic_config_async(self, datasource_id, config_id):
-            datasource = await self.get_datasource_async(datasource_id)
-            for config in datasource.get("semantic_configs") or []:
-                if config.get("id") == config_id:
-                    return dict(config)
-            return None
-
-        async def get_runtime_semantic_config_async(self, datasource_id, config_id):
-            self.runtime_called = True
-            config = await self.get_semantic_config_async(datasource_id, config_id)
-            if config and config_id == "cfg":
-                config["dimensions"] = [{"name": "订单状态", "metadata_supplement": "枚举值：1=有效"}]
-            return config
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeManager("missing"))
-    assert asyncio.run(_get_semantic_config_async("ds", "cfg")) is None
-
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeManager("raise"))
-    assert asyncio.run(_get_semantic_config_async("ds", "cfg")) is None
-
-    manager = FakeManager("ok")
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: manager)
-    assert asyncio.run(_get_semantic_config_async("ds", "disabled")) is None
-    assert asyncio.run(_get_semantic_config_async("ds", "missing")) is None
-    config = asyncio.run(_get_semantic_config_async("ds", "cfg"))
-    assert manager.runtime_called is True
-    assert config["source_type"] == "hive"
-    assert config["joins"] == [{"left_table": "orders"}]
-    assert config["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效"
 
 
 def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
@@ -556,24 +371,27 @@ async def _collect_async_iter(async_iterable):
     return [item async for item in async_iterable]
 
 
-def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(monkeypatch):
+def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selected(monkeypatch):
     import asyncio
 
+    captured_agent_kwargs = {}
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="5+5=10"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
-    called = {"tables": False}
-
-    async def fail_get_all_tables(*_args, **_kwargs):
-        called["tables"] = True
-        raise AssertionError("query 自动指标集模式不应预加载表结构")
-
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="## 当前可见指标集目录\n1. 名称：订单分析"))
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    def create_agent(**kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", create_agent)
+    _override_semantic_context(
+        monkeypatch,
+        semantic_config_directory_info="## 当前可见指标集目录\n1. 名称：订单分析",
+    )
+
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_auto_semantic_tool",
         user_query="5+5等于多少",
         datasource_id="ds_a",
@@ -583,62 +401,13 @@ def test_stream_sql_generation_enters_agent_when_semantic_config_not_selected(mo
     joined = "".join(events)
     assert "5+5=10" in joined
     assert fake_graph.initial_state["semantic_config_id"] is None
-    assert fake_graph.initial_state["prompt_context"]["semantic_config_directory_info"] == "## 当前可见指标集目录\n1. 名称：订单分析"
+    assert "prompt_context" not in fake_graph.initial_state
+    assert "## 当前可见指标集目录\n1. 名称：订单分析" in captured_agent_kwargs["system_prompt"]
     human_message = fake_graph.initial_state["messages"][0]
     assert "skill_names" not in human_message.additional_kwargs
-    assert called["tables"] is False
 
 
-def test_stream_sql_generation_reuses_datasource_meta_for_context_and_authorization(monkeypatch):
-    import asyncio
-
-    datasource_meta = {
-        "id": "ds_a",
-        "query_context": "按机构查询",
-        "member_sources": [{"member_datasource_id": "m1", "org_code": "ORG_1"}],
-    }
-    calls = {"meta": 0, "authorize": []}
-
-    class FakeDatasourceManager:
-        async def get_datasource_meta_async(self, datasource_id):
-            calls["meta"] += 1
-            assert datasource_id == "ds_a"
-            return datasource_meta
-
-        async def get_datasource_async(self, _datasource_id):
-            raise AssertionError("stream preflight must not load complete datasource runtime fields")
-
-        async def authorize_execution_datasources_async(self, datasource, member_datasource_ids, user_id, username):
-            calls["authorize"].append((datasource, member_datasource_ids, user_id, username))
-            return [{"member_datasource_id": "m1", "member_name": "机构A", "org_code": "ORG_1"}]
-
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="2"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr(
-        "apps.chat_data_app.handlers._build_semantic_config_directory_info_async",
-        lambda *_args, **_kwargs: asyncio.sleep(0, result="目录"),
-    )
-
-    asyncio.run(_collect_async_iter(_stream_sql_generation(
-        thread_id="conv_reuse_meta",
-        user_query="1+1等于几",
-        datasource_id="ds_a",
-        user_id="u1",
-        username="用户1",
-        member_datasource_ids=["m1"],
-    )))
-
-    assert calls["meta"] == 1
-    assert calls["authorize"] == [(datasource_meta, ["m1"], "u1", "用户1")]
-    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"].startswith("按机构查询")
-
-
-def test_stream_sql_generation_streams_semantic_retrieval_tool_result(monkeypatch):
+def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkeypatch):
     import asyncio
 
     payload = {
@@ -665,7 +434,7 @@ def test_stream_sql_generation_streams_semantic_retrieval_tool_result(monkeypatc
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_select_tool_event",
         user_query="按机构查询交易金额",
         datasource_id="ds_a",
@@ -682,7 +451,7 @@ def test_stream_sql_generation_streams_semantic_retrieval_tool_result(monkeypatc
     assert "已查询支付数据" in joined
 
 
-def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(monkeypatch):
+def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -700,11 +469,10 @@ def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(mon
         "user_selected": True,
     }
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_test", "name": "测试指标集"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_user_selected_semantic",
         user_query="商品数量有多少",
         datasource_id="ds_a",
@@ -725,7 +493,7 @@ def test_stream_sql_generation_keeps_user_selected_semantic_config_selection(mon
     assert "skill_names" not in human_message.additional_kwargs
 
 
-def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
+def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -736,7 +504,7 @@ def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_skill_names",
         user_query="查询金额",
         datasource_id="ds_a",
@@ -748,7 +516,7 @@ def test_stream_sql_generation_keeps_explicit_query_skill(monkeypatch):
     assert human_message.additional_kwargs["skill_names"] == ["custom-query-skill", "risk-query-skill"]
 
 
-def test_stream_sql_generation_streams_multiple_semantic_configs_as_tool_result(monkeypatch):
+def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_result(monkeypatch):
     import asyncio
 
     payload = {
@@ -771,7 +539,7 @@ def test_stream_sql_generation_streams_multiple_semantic_configs_as_tool_result(
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_multiple_semantic_tool_event",
         user_query="查询金额",
         datasource_id="ds_a",
@@ -787,7 +555,7 @@ def test_stream_sql_generation_streams_multiple_semantic_configs_as_tool_result(
     assert "event: semantic_config_select_required" not in joined
 
 
-def test_stream_sql_generation_streams_retrieval_without_query_plan(monkeypatch):
+def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypatch):
     import asyncio
 
     payload = {
@@ -810,7 +578,7 @@ def test_stream_sql_generation_streams_retrieval_without_query_plan(monkeypatch)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_retrieval_tool_event",
         user_query="查询订单金额和用户数",
         datasource_id="ds_a",
@@ -824,7 +592,7 @@ def test_stream_sql_generation_streams_retrieval_without_query_plan(monkeypatch)
     assert "已按多个指标集完成查询" in joined
 
 
-def test_stream_sql_generation_streams_retrieval_without_cross_config_decision(monkeypatch):
+def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decision(monkeypatch):
     import asyncio
 
     payload = {
@@ -847,7 +615,7 @@ def test_stream_sql_generation_streams_retrieval_without_cross_config_decision(m
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_cross_config_retrieval",
         user_query="按用户等级关联订单金额",
         datasource_id="ds_a",
@@ -861,7 +629,7 @@ def test_stream_sql_generation_streams_retrieval_without_cross_config_decision(m
     assert "这个问题需要跨指标集合并，当前不支持。" in joined
 
 
-def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch):
+def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -869,11 +637,10 @@ def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_order", "name": "订单分析"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_selected_semantic_no_precheck",
         user_query="查询明细",
         datasource_id="ds_a",
@@ -887,7 +654,7 @@ def test_stream_sql_generation_uses_selected_config_without_precheck(monkeypatch
     assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
-def test_stream_sql_generation_keeps_supported_selected_config(monkeypatch):
+def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -895,11 +662,10 @@ def test_stream_sql_generation_keeps_supported_selected_config(monkeypatch):
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_order", "name": "订单分析"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_keep_semantic",
         user_query="查询订单金额",
         datasource_id="ds_a",
@@ -913,7 +679,7 @@ def test_stream_sql_generation_keeps_supported_selected_config(monkeypatch):
     assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
-def test_stream_sql_generation_runs_after_user_selects_ambiguous_candidate(monkeypatch):
+def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -921,11 +687,10 @@ def test_stream_sql_generation_runs_after_user_selects_ambiguous_candidate(monke
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_order", "name": "订单分析"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_selected_ambiguous_semantic",
         user_query="商品数量是多少",
         datasource_id="ds_a",
@@ -938,7 +703,7 @@ def test_stream_sql_generation_runs_after_user_selects_ambiguous_candidate(monke
     assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
 
 
-def test_stream_sql_generation_does_not_preblock_selected_config(monkeypatch):
+def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -946,11 +711,10 @@ def test_stream_sql_generation_does_not_preblock_selected_config(monkeypatch):
         state=SimpleNamespace(tasks=[], values={}),
     )
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_order", "name": "订单分析"}))
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_no_preblock_semantic",
         user_query="查询退款金额",
         datasource_id="ds_a",
@@ -963,7 +727,7 @@ def test_stream_sql_generation_does_not_preblock_selected_config(monkeypatch):
     assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
 
 
-def test_stream_sql_generation_does_not_block_multiple_semantic_configs(monkeypatch):
+def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monkeypatch):
     import asyncio
 
     payload = {
@@ -985,7 +749,7 @@ def test_stream_sql_generation_does_not_block_multiple_semantic_configs(monkeypa
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_multiple_semantic",
         user_query="查询金额",
         datasource_id="ds_a",
@@ -1000,7 +764,7 @@ def test_stream_sql_generation_does_not_block_multiple_semantic_configs(monkeypa
     assert fake_graph.initial_state["semantic_config_id"] is None
 
 
-def test_stream_sql_generation_does_not_block_cross_config_retrieval(monkeypatch):
+def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeypatch):
     import asyncio
 
     payload = {
@@ -1022,7 +786,7 @@ def test_stream_sql_generation_does_not_block_cross_config_retrieval(monkeypatch
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_cross_semantic_retrieval",
         user_query="查询订单金额和商品库存",
         datasource_id="ds_a",
@@ -1037,7 +801,7 @@ def test_stream_sql_generation_does_not_block_cross_config_retrieval(monkeypatch
     assert fake_graph.initial_state["semantic_config_id"] is None
 
 
-def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
+def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch):
     import asyncio
 
     fake_graph = _FakeGraph(
@@ -1054,7 +818,7 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_a",
         user_query="查订单数",
         datasource_id="ds_a",
@@ -1075,58 +839,24 @@ def test_stream_sql_generation_emits_tool_message_usage_and_done(monkeypatch):
     assert fake_graph.initial_state["operator_name"] == "测试用户"
 
 
-def test_stream_sql_generation_query_mode_uses_only_request_visible_members(monkeypatch):
+def test_generate_chat_data_stream_projects_visible_members_from_shared_context(monkeypatch):
     import asyncio
 
-    class FakeDatasourceManager:
-        async def get_datasource_async(self, datasource_id):
-            return {
-                "query_context": "当前数据源组按执行对象数据源分库",
-                "source_type": "hive",
-                "query_executor_type": "direct",
-                "member_sources": [
-                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
-                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
-                ],
-            }
-
-        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
-            return [
-                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
-                for member_id in member_datasource_ids or []
-            ]
-
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            target_map = {
-                "m1": {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
-                "m2": {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
-            }
-            return [
-                target_map[member_id]
-                for member_id in member_datasource_ids or []
-                if member_id in target_map
-            ]
-
-        async def get_authorized_execution_datasources_async(
-            self,
-            datasource_id,
-            member_datasource_ids=None,
-            user_id=None,
-            username=None,
-        ):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
+    captured_agent_kwargs = {}
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_a", "metrics": [], "dimensions": []}))
 
-    asyncio.run(_collect_async_iter(_stream_sql_generation(
+    def create_agent(**kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", create_agent)
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_members",
         user_query="查询所有机构订单数",
         datasource_id="ds_a",
@@ -1137,56 +867,34 @@ def test_stream_sql_generation_query_mode_uses_only_request_visible_members(monk
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
-    datasource_group_context = fake_graph.initial_state["prompt_context"]["datasource_group_context"]
+    datasource_group_context = captured_agent_kwargs["datasource_group_context"]
     assert "当前用户已选择的执行对象数据源" in datasource_group_context
     assert "member_datasource_id: m1" in datasource_group_context
     assert "m2" not in datasource_group_context
 
 
-def test_stream_sql_generation_query_mode_does_not_expand_empty_member_scope(monkeypatch):
+def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(monkeypatch):
     import asyncio
 
-    class FakeDatasourceManager:
-        async def get_datasource_async(self, datasource_id):
-            return {
-                "query_context": "当前数据源组按执行对象数据源分库",
-                "source_type": "hive",
-                "query_executor_type": "direct",
-                "member_sources": [
-                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
-                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
-                ],
-            }
-
-        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
-            raise AssertionError("should not expand all datasource group members")
-
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            return [
-                {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
-                {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
-            ][:len(member_datasource_ids or [])]
-
-        async def get_authorized_execution_datasources_async(
-            self,
-            datasource_id,
-            member_datasource_ids=None,
-            user_id=None,
-            username=None,
-        ):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
+    captured_agent_kwargs = {}
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_a", "metrics": [], "dimensions": []}))
 
-    asyncio.run(_collect_async_iter(_stream_sql_generation(
+    def create_agent(**kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", create_agent)
+    _override_semantic_context(
+        monkeypatch,
+        datasource_group_context="当前数据源组按执行对象数据源分库",
+    )
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_members",
         user_query="查询所有机构订单数",
         datasource_id="ds_a",
@@ -1197,61 +905,28 @@ def test_stream_sql_generation_query_mode_does_not_expand_empty_member_scope(mon
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
     assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
-    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
+    assert "prompt_context" not in fake_graph.initial_state
+    assert captured_agent_kwargs["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
 
 
-def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatch):
+def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_context(monkeypatch):
     import asyncio
 
-    class FakeDatasourceManager:
-        async def get_datasource_async(self, datasource_id):
-            return {
-                "query_context": "",
-                "source_type": "hive",
-                "query_executor_type": "direct",
-                "member_sources": [
-                    {"member_datasource_id": "m1", "org_name": "杭州库", "org_code": "ORG_HZ"},
-                    {"member_datasource_id": "m2", "org_name": "宁波库", "org_code": "ORG_NB"},
-                ],
-            }
-
-        def _build_execution_datasource_targets(self, datasource, member_datasource_ids=None):
-            return [
-                {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
-                for member_id in member_datasource_ids or []
-            ]
-
-        async def get_execution_datasources_async(self, datasource_id, member_datasource_ids=None):
-            target_map = {
-                "m1": {"member_datasource_id": "m1", "member_name": "杭州库", "org_code": "ORG_HZ"},
-                "m2": {"member_datasource_id": "m2", "member_name": "宁波库", "org_code": "ORG_NB"},
-            }
-            return [
-                target_map[member_id]
-                for member_id in member_datasource_ids or []
-                if member_id in target_map
-            ]
-
-        async def get_authorized_execution_datasources_async(
-            self,
-            datasource_id,
-            member_datasource_ids=None,
-            user_id=None,
-            username=None,
-        ):
-            return await self.get_execution_datasources_async(datasource_id, member_datasource_ids)
-
+    captured_agent_kwargs = {}
     fake_graph = _FakeGraph(
         events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
         state=SimpleNamespace(tasks=[], values={}),
     )
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_datasource_manager", lambda: FakeDatasourceManager())
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result={"id": "cfg_a", "metrics": [], "dimensions": []}))
 
-    asyncio.run(_collect_async_iter(_stream_sql_generation(
+    def create_agent(**kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", create_agent)
+
+    asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_query_member_selected",
         user_query="查询订单数",
         datasource_id="ds_a",
@@ -1261,19 +936,19 @@ def test_stream_sql_generation_query_mode_keeps_selected_member_scope(monkeypatc
     )))
 
     assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-    datasource_group_context = fake_graph.initial_state["prompt_context"]["datasource_group_context"]
+    datasource_group_context = captured_agent_kwargs["datasource_group_context"]
     assert "当前用户已选择的执行对象数据源" in datasource_group_context
     assert "member_datasource_id: m1" in datasource_group_context
     assert "m2" not in datasource_group_context
 
 
-def test_stream_sql_generation_emits_error_when_graph_fails(monkeypatch):
+def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: _FakeGraph(raise_on_stream=True))
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_error",
         user_query="查订单数",
         datasource_id="ds_a",
@@ -1284,31 +959,27 @@ def test_stream_sql_generation_emits_error_when_graph_fails(monkeypatch):
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
 
 
-def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch):
+def test_generate_chat_data_stream_semantic_config_missing_and_temp_mode(monkeypatch):
     import asyncio
 
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_semantic_config_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
-    missing_events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    _override_semantic_context(
+        monkeypatch,
+        semantic_config=None,
+        semantic_config_error="未找到可用指标集: cfg_missing",
+    )
+    missing_events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_missing_semantic",
         user_query="查订单",
         datasource_id="ds_a",
         semantic_config_id="cfg_missing",
     )))
-    assert "智能问数未找到可用指标集" in "".join(missing_events)
+    assert "未找到可用指标集: cfg_missing" in "".join(missing_events)
 
     fake_graph = _FakeGraph(events=[(_FakeMessageChunk(content="语义查询完成"), {"langgraph_node": "model"})])
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
-    async def fake_get_execution_targets(_datasource_id, member_datasource_ids=None, **_kwargs):
-        if not member_datasource_ids:
-            return []
-        return [
-            {"member_datasource_id": "m1", "member_name": "对象", "org_code": "ORG_1"},
-        ]
-
-    monkeypatch.setattr("apps.chat_data_app.handlers._get_execution_targets_async", fake_get_execution_targets)
-    monkeypatch.setattr("apps.chat_data_app.handlers._build_semantic_config_directory_info_async", lambda *_args, **_kwargs: asyncio.sleep(0, result="不应注入目录"))
-    temp_events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    _override_semantic_context(monkeypatch)
+    temp_events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_temp",
         user_query="查订单",
         datasource_id="ds_a",
@@ -1317,11 +988,11 @@ def test_stream_sql_generation_semantic_config_missing_and_temp_mode(monkeypatch
     )))
     joined = "".join(temp_events)
     assert "语义查询完成" in joined
-    assert fake_graph.initial_state["prompt_context"]["datasource_group_context"] == ""
-    assert fake_graph.initial_state["prompt_context"]["semantic_config_directory_info"] == ""
+    assert fake_graph.initial_state["semantic_config"] == {"id": "cfg_temp"}
+    assert "prompt_context" not in fake_graph.initial_state
 
 
-def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch):
+def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypatch):
     import asyncio
 
     class DisconnectRequest:
@@ -1336,7 +1007,7 @@ def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch)
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_disconnect",
         user_query="查订单",
         datasource_id="ds_a",
@@ -1347,7 +1018,7 @@ def test_stream_sql_generation_handles_disconnect_and_cached_tables(monkeypatch)
     assert "loaded_table_names" not in fake_graph.initial_state
 
 
-def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_content(monkeypatch):
+def test_generate_chat_data_stream_handles_state_lookup_failure_and_chunk_without_content(monkeypatch):
     import asyncio
 
     class StateFailGraph(_FakeGraph):
@@ -1361,7 +1032,7 @@ def test_stream_sql_generation_handles_state_lookup_failure_and_chunk_without_co
     monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.handlers.create_chat_data_agent", lambda **_kwargs: fake_graph)
 
-    events = asyncio.run(_collect_async_iter(_stream_sql_generation(
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
         thread_id="conv_state_fail",
         user_query="查订单",
         datasource_id="ds_a",
@@ -1386,7 +1057,7 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
         yield _format_sse("done", "[DONE]")
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", fake_get_or_create)
-    monkeypatch.setattr("apps.chat_data_app.handlers._stream_sql_generation", fake_stream)
+    monkeypatch.setattr("apps.chat_data_app.handlers._generate_chat_data_stream", fake_stream)
 
     response = asyncio.run(sql_completion_handler(
         conversation_id="conv_sql",
@@ -1450,6 +1121,43 @@ def test_data_analyze_completion_handler_streams_stage_tool_usage_and_done(monke
     assert session_calls["cleaned"] == []
 
 
+def test_data_analyze_completion_handler_without_datasource_reaches_agent(monkeypatch):
+    import asyncio
+
+    captured = {}
+
+    class FakeDataAnalyzeGraph:
+        async def astream(self, initial_state, config=None, stream_mode=None):
+            captured["initial_state"] = initial_state
+            yield ("messages", (_FakeMessageChunk(content="先梳理分析思路"), {"langgraph_node": "data_analyze_agent"}))
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={"messages": []}, tasks=[])
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.conversation_event_service.persist_user_message", lambda **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr("apps.chat_data_app.handlers.build_data_analyze_context", lambda *_args, **_kwargs: asyncio.sleep(0, result={"datasource": None}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_data_analyze_workspace", lambda *_args, **_kwargs: asyncio.sleep(0, result={"root": "/tmp/workspace"}))
+    monkeypatch.setattr("apps.chat_data_app.handlers.skill_service.list_skills_async", lambda **_kwargs: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.build_data_analyze_system_prompt", lambda **_kwargs: "system prompt")
+    monkeypatch.setattr("apps.chat_data_app.agent.analyze_data_agent.create_data_analyze_agent", lambda **_kwargs: FakeDataAnalyzeGraph())
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    _patch_data_analyze_workspace_session(monkeypatch)
+
+    response = asyncio.run(data_analyze_completion_handler(
+        conversation_id="conv_da_no_datasource",
+        query="给我一个分析思路",
+        options={},
+        user_id="u1",
+    ))
+    events = asyncio.run(_collect_async_iter(response.body_iterator))
+    joined = "".join(item.decode("utf-8") if isinstance(item, bytes) else item for item in events)
+
+    assert "UnboundLocalError" not in joined
+    assert "先梳理分析思路" in joined
+    assert captured["initial_state"]["datasource_id"] is None
+
+
 def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch):
     import asyncio
 
@@ -1466,8 +1174,8 @@ def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch)
             yield ("messages", (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}))
             yield ("messages", (_FakeMessageChunk(content="分析完成"), {"langgraph_node": "data_analyze_agent"}))
 
-    async def fake_build_context(datasource_id, semantic_config_id, user_id=None, **_kwargs):
-        captured["context_args"] = (datasource_id, semantic_config_id, user_id)
+    async def fake_build_context(prompt_context):
+        captured["prompt_context"] = prompt_context
         return {"datasource": {"source_type": "mysql"}}
 
     def fake_create_graph(**kwargs):
@@ -1496,7 +1204,8 @@ def test_data_analyze_completion_handler_streams_semantic_retrieval(monkeypatch)
     assert '"semantic_config_ids": ["cfg_sales"]' in _tool_event_contents(decoded_events)[-1]
     assert "event: semantic_config_selected" not in joined
     assert "分析完成" in joined
-    assert captured["context_args"] == ("ds_a", None, "u1")
+    assert captured["prompt_context"]["datasource"]["id"] == "ds_a"
+    assert captured["prompt_context"]["semantic_config"] is None
     assert captured["graph_kwargs"]["semantic_config_id"] is None
     assert captured["graph_kwargs"]["datasource_id"] == "ds_a"
     assert captured["initial_state"]["datasource_id"] == "ds_a"

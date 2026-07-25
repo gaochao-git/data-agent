@@ -68,6 +68,8 @@ class DataAnalyzeAgentState(AgentState, total=False):
     user_id: NotRequired[str | None]
     operator_name: NotRequired[str | None]
     conversation_id: NotRequired[str | None]
+    available_member_datasource_ids: NotRequired[list[str]]
+    matched_member_datasource_ids: NotRequired[list[str]]
 
 
 def get_data_analyze_tool_chain() -> list[dict[str, str]]:
@@ -111,15 +113,15 @@ def _format_data_context_for_prompt(data_context: dict[str, Any]) -> str:
     """格式化注入系统提示词的数据上下文。"""
     if not isinstance(data_context, dict):
         return "{}"
+    datasource_group_context = str(data_context.get("datasource_group_context") or "").strip()
     semantic_config_directory_info = str(data_context.get("semantic_config_directory_info") or "").strip()
     semantic_configs = data_context.get("semantic_configs")
     if semantic_config_directory_info and not semantic_configs:
-        return "\n".join([
-            semantic_config_directory_info,
-            "",
-            "## 当前指标集",
-            "本轮未提供完整指标集。业务数据分析或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。",
-        ])
+        sections = [datasource_group_context, semantic_config_directory_info, "## 当前指标集"]
+        sections.append(
+            "本轮未提供完整指标集。业务数据分析或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。"
+        )
+        return "\n\n".join(section for section in sections if section)
     return json.dumps(data_context or {}, ensure_ascii=False, indent=2)
 
 
@@ -130,11 +132,13 @@ def create_data_analyze_tools(
     semantic_config_id: str | None = None,
     conversation_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
+    matched_member_datasource_ids: list[str] | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
     model_id: str | None = None,
     tool_result_budget: ToolResultBudget | None = None,
+    datasource_group_context: str | None = None,
 ) -> list[Any]:
     """在 DataAnalyzeAgent 内组装当前允许模型调用的工具。"""
     root = validate_workspace_root(workspace_root)
@@ -151,12 +155,14 @@ def create_data_analyze_tools(
             include_query_tools=False,
             user_id=user_id,
             tool_result_budget=tool_result_budget,
+            datasource_group_context=datasource_group_context,
         ),
         create_dsl2sql_tool(datasource_id, semantic_config_id, user_id=user_id, operator_name=operator_name),
         create_bound_semantic_query_tool(
             datasource_id=datasource_id,
             semantic_config_id=semantic_config_id,
             member_datasource_ids=member_datasource_ids,
+            matched_member_datasource_ids=matched_member_datasource_ids,
             user_id=user_id,
             operator_name=operator_name,
             conversation_id=conversation_id,
@@ -203,10 +209,12 @@ def create_data_analyze_agent(
     semantic_config_id: str | None = None,
     conversation_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
+    matched_member_datasource_ids: list[str] | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
     execution_session_ref: SandboxExecutionSessionRef | None = None,
     enable_thinking: bool | None = None,
+    datasource_group_context: str | None = None,
 ):
     """创建 LangChain 通用分析 agent。"""
     llm = create_streaming_chat_model(
@@ -222,11 +230,13 @@ def create_data_analyze_agent(
         semantic_config_id=semantic_config_id,
         conversation_id=conversation_id,
         member_datasource_ids=member_datasource_ids,
+        matched_member_datasource_ids=matched_member_datasource_ids,
         user_id=user_id,
         operator_name=operator_name,
         execution_session_ref=execution_session_ref,
         model_id=model_id,
         tool_result_budget=tool_result_budget,
+        datasource_group_context=datasource_group_context,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,

@@ -114,14 +114,9 @@ def extract_datasource_id(state: Optional[Dict]) -> Optional[str]:
 
 
 def extract_datasource_group_context(state: Optional[Dict]) -> str:
-    """从 state 中提取当前数据源组智能问数说明。"""
+    """从未绑定工具上下文的 state 中提取数据源组说明。"""
     if not state:
         return ""
-    prompt_context = state.get("prompt_context")
-    if isinstance(prompt_context, dict):
-        context = str(prompt_context.get("datasource_group_context") or "").strip()
-        if context:
-            return context
     return str(state.get("datasource_group_context") or "").strip()
 
 
@@ -338,10 +333,12 @@ def create_semantic_config_selection_tools(
     semantic_config: Dict[str, Any] | None = None,
     user_id: str | None = None,
     tool_result_budget: ToolResultBudget | None = None,
+    datasource_group_context: str | None = None,
 ):
     """创建统一语义查询工具。"""
     bound_datasource_id = str(datasource_id or "").strip() or None
     bound_user_id = str(user_id or "").strip()
+    bound_datasource_group_context = str(datasource_group_context or "").strip()
     bound_semantic_config = dict(semantic_config or {}) if semantic_config else None
     bound_semantic_config_id = str((bound_semantic_config or {}).get("id") or "").strip()
 
@@ -385,7 +382,7 @@ def create_semantic_config_selection_tools(
                 user_query=user_query,
                 model_id=model_id,
                 user_id=bound_user_id,
-                datasource_group_context=extract_datasource_group_context(state),
+                datasource_group_context=bound_datasource_group_context or extract_datasource_group_context(state),
             )
             selected_config_ids = [
                 str(config_id).strip()

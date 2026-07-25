@@ -101,6 +101,7 @@ def create_semantic_selection_tools_bundle(
     user_id: str | None = None,
     tool_result_budget: ToolResultBudget | None = None,
     include_query_tools: bool = True,
+    datasource_group_context: str | None = None,
     selection_tool_factory: Callable[..., list[Any]] = create_semantic_config_selection_tools,
 ) -> list[Any]:
     """创建指标集选择工具 bundle，统一问数和分析的公共参数。"""
@@ -114,6 +115,8 @@ def create_semantic_selection_tools_bundle(
         kwargs["datasource_id"] = datasource_id
     if semantic_config is not None:
         kwargs["semantic_config"] = semantic_config
+    if datasource_group_context:
+        kwargs["datasource_group_context"] = datasource_group_context
     return selection_tool_factory(**kwargs)
 
 

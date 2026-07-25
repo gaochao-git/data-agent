@@ -41,13 +41,6 @@ class ExecutionContext(TypedDict, total=False):
     matched_member_datasource_ids: list[str]
 
 
-class PromptContext(TypedDict, total=False):
-    """注入 system prompt 的只读上下文。"""
-
-    datasource_group_context: str
-    semantic_config_directory_info: str
-
-
 class ChatDataAgentState(AgentState, total=False):
     """智能问数 Agent 状态。"""
 
@@ -56,8 +49,8 @@ class ChatDataAgentState(AgentState, total=False):
     conversation_id: str | None
     conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     execution_context: ExecutionContext
-    prompt_context: PromptContext
     semantic_config_id: str | None
+    # 临时指标集不一定持久化到业务库，语义查询工具需要从状态读取它。
     semantic_config: dict[str, Any] | None
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None
@@ -73,6 +66,7 @@ def create_chat_data_agent(
     model_id: str | None = None,
     enable_thinking: bool | None = None,
     user_id: str | None = None,
+    datasource_group_context: str | None = None,
 ):
     """
     创建智能问数 Agent（带持久化）
@@ -95,6 +89,7 @@ def create_chat_data_agent(
             semantic_config=semantic_config,
             user_id=user_id,
             tool_result_budget=tool_result_budget,
+            datasource_group_context=datasource_group_context,
         ),
         semantic_query_tool,
         calculator_tool,
