@@ -101,11 +101,11 @@ metadata:
 
 1. 确认已经看到 `skill_load("skill-creator")` 返回 `[skill_load]`。
 2. 需要设计复杂工作流时读取：
-   - `/mnt/user-data/runtime-skills/skill-creator/references/workflows.md`
+   - `/mnt/skills/public/skill-creator/references/workflows.md`
 3. 需要约束输出格式时读取：
-   - `/mnt/user-data/runtime-skills/skill-creator/references/output-patterns.md`
+   - `/mnt/skills/public/skill-creator/references/output-patterns.md`
 4. 生成后如有脚本可用，使用：
-   - `/mnt/user-data/runtime-skills/skill-creator/scripts/quick_validate.py`
+   - `/mnt/skills/public/skill-creator/scripts/quick_validate.py`
 
 `skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
 
@@ -183,7 +183,7 @@ metadata:
 如能访问技能目录，可运行：
 
 ```bash
-python /mnt/user-data/runtime-skills/skill-creator/scripts/quick_validate.py <skill-directory>
+python /mnt/skills/public/skill-creator/scripts/quick_validate.py <skill-directory>
 ```
 
 ## 输出要求

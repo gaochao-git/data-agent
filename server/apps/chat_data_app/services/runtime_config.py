@@ -38,6 +38,21 @@ TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHATDATA_TOOL_RESULT_OFFLOAD_S
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
 DEFAULT_CONTEXT_WINDOW = 128000
+
+# ---- 单一 ChatData Agent 运行配置 ----
+# ``workspace_backend`` 与 Bash 是独立维度：文件工具始终可用，只有 Bash 可关闭。
+CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = str(
+    os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local"
+).strip().lower() or "local"
+if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
+    logger.warning(
+        "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND=%r 非法，回退 local",
+        CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
+    )
+    CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = "local"
+CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
+# 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
+CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHATDATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.70
 CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHATDATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
@@ -67,17 +82,25 @@ def is_context_usage_system_prompt_visible() -> bool:
 def get_chat_data_runtime_config() -> dict:
     """读取智能问数前端运行时配置。"""
     from .llm_config import get_chat_data_model_options
-    from .feature_gate import is_data_analyze_enabled
 
     model_options = get_chat_data_model_options()
     default_model = model_options.get("default_model")
     return {
         "models": model_options["models"],
-        "data_analyze_enabled": is_data_analyze_enabled(),
+        "runtime_options": {
+            "workspace_backend": CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
+            "bash_enabled": CHAT_DATA_DEFAULT_BASH_ENABLED,
+        },
+        "user_overridable": CHAT_DATA_CAPABILITY_USER_OVERRIDABLE,
         "default_row_limit": DEFAULT_ROW_LIMIT,
         "query_cache_enabled": QUERY_CACHE_ENABLED,
         "context_window": get_context_window(default_model),
     }
+
+
+def is_chat_data_runtime_option_user_overridable() -> bool:
+    """是否允许用户在前端手动覆盖系统默认运行选项。"""
+    return CHAT_DATA_CAPABILITY_USER_OVERRIDABLE
 
 
 def normalize_row_limit(limit: int | None) -> int:

@@ -483,7 +483,7 @@ class AccuracyEvaluationRunRequest(BaseModel):
     datasource_id: str = Field(..., description="数据源 ID")
     semantic_config_id: str = Field(..., description="语义配置 ID")
     model_id: Optional[str] = Field(default=None, description="模型 ID")
-    agent_id: Literal["chat_data", "chat_data_data_analyze"] = Field(default="chat_data", description="Agent ID")
+    agent_id: Literal["chat_data"] = Field(default="chat_data", description="Agent ID")
     query_mode: str = Field(default="query", description="智能问数模式")
     limit: Optional[int] = Field(default=10, ge=1, le=200, description="最多评测用例数")
     case_ids: List[str] = Field(default_factory=list, description="指定评测用例 ID")
@@ -663,7 +663,7 @@ class SemanticQueryInput(BaseModel):
     )
     save_as: Optional[str] = Field(
         default=None,
-        description="智能分析会话可选：将完整查询结果写入 workspace/ 下的 .json 文件；普通智能问数不支持",
+        description="可选：将完整查询结果写入当前会话 workspace/ 下的 .json 文件",
     )
 
     @field_validator("dsl", mode="before")

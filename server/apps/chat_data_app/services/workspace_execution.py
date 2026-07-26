@@ -1,4 +1,4 @@
-"""OpenSandbox workspace execution for DataAnalyze."""
+"""OpenSandbox workspace execution for ChatData conversations."""
 
 from __future__ import annotations
 
@@ -6,19 +6,18 @@ import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import timedelta
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
-import tarfile
 import time
 from typing import Any
 from urllib.parse import unquote
 
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
+from utils.storage_paths import CHAT_DATA_HOME, DATA_ROOT
 from ..chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
 
 logger = get_logger(__name__)
@@ -26,8 +25,8 @@ logger = get_logger(__name__)
 OPENSANDBOX_BACKEND = "opensandbox"
 OPENSANDBOX_REMOTE_HOST_VOLUME_MODE = "remote-host-volume"
 MAX_OUTPUT_CHARS = 12000
-EXCLUDED_NAMES = {".cache", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "__pycache__", "node_modules", "venv"}
-SEED_DIRS = ("uploads", "workspace", "outputs")
+
+
 def _sandbox_root() -> str:
     root = str(os.getenv("OPENSANDBOX_WORKSPACE_ROOT") or "/mnt").strip().rstrip("/")
     return root or "/mnt"
@@ -49,8 +48,8 @@ def sandbox_uploads_dir() -> str:
     return f"{sandbox_thread_root()}/uploads"
 
 
-def sandbox_runtime_skills_dir() -> str:
-    return f"{sandbox_thread_root()}/runtime-skills"
+def sandbox_skills_root() -> str:
+    return f"{_sandbox_root()}/skills"
 
 
 @dataclass
@@ -59,6 +58,9 @@ class SandboxExecutionSession:
     sandbox_id: str
     workspace_root: str
     host_workspace_path: str
+    mode: str = "sandbox"
+    runtime_skill_mounts: tuple[object, ...] = ()
+    cache_key: str = ""
 
 
 @dataclass
@@ -83,41 +85,57 @@ def require_sandbox_session(session_ref: SandboxExecutionSessionRef | None) -> S
     return session
 
 
-def _sanitize_path_part(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower())
-    normalized = re.sub(r"-+", "-", normalized).strip("-")
-    return normalized or "thread"
+def _resolve_host_root(name: str, default_path: Path) -> Path:
+    configured = str(os.getenv(name) or "").strip()
+    path = Path(configured or default_path).expanduser()
+    if not path.is_absolute() or path == Path("/") or "\x00" in str(path):
+        raise ValueError(f"{name} 配置非法")
+    return path.resolve()
 
 
-def get_host_workspace_path(workspace_root: str, user_id: str = "system") -> str:
-    """返回 OpenSandbox 宿主机上的当前会话工作区叶子目录。"""
-    remote_root = str(os.getenv("OPENSANDBOX_HOST_WORKSPACE_ROOT") or "/data/opensandbox-workspaces").strip().rstrip("/")
-    if not remote_root or remote_root in {"/", "."} or "\x00" in remote_root:
-        raise ValueError("OPENSANDBOX_HOST_WORKSPACE_ROOT 配置非法")
-    project = _sanitize_path_part(os.getenv("OPENSANDBOX_HOST_PROJECT_NAME") or "fxcjg")
-    user = _sanitize_path_part(user_id or "system")
-    conversation_id = _sanitize_path_part(Path(workspace_root).resolve().name)
-    date_part = _workspace_date_part(workspace_root)
-    return f"{remote_root}/{project}/{user}/{date_part}/{conversation_id}"
-
-
-def _workspace_date_part(workspace_root: str) -> str:
-    marker = Path(workspace_root).resolve() / ".sandbox_workspace_meta.json"
-    if marker.exists():
-        try:
-            payload = json.loads(marker.read_text(encoding="utf-8"))
-            value = str(payload.get("date") or "").strip()
-            if re.fullmatch(r"\d{8}", value):
-                return value
-        except Exception:
-            logger.warning("读取沙箱工作区元数据失败: %s", marker, exc_info=True)
-    from datetime import datetime
-    date_part = datetime.now().strftime("%Y%m%d")
+def _translate_host_path(path: Path, *, application_root: Path, host_root_name: str) -> str:
+    resolved = path.expanduser().resolve()
+    root = application_root.expanduser().resolve()
     try:
-        marker.write_text(json.dumps({"date": date_part}, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        logger.warning("写入沙箱工作区元数据失败: %s", marker, exc_info=True)
-    return date_part
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"路径不在允许的根目录内: {path}") from exc
+    host_root = _resolve_host_root(host_root_name, root)
+    return str(host_root / relative)
+
+
+def get_host_workspace_path(workspace_root: str) -> str:
+    """把应用可见的会话路径翻译为 OpenSandbox 宿主机同一共享卷路径。"""
+    return _translate_host_path(
+        Path(workspace_root),
+        application_root=Path(CHAT_DATA_HOME),
+        host_root_name="CHAT_DATA_HOST_HOME",
+    )
+
+
+def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
+    name = str(getattr(mount, "name", "")).strip()
+    category = str(getattr(mount, "category", "")).strip()
+    source_dir = Path(getattr(mount, "source_dir", "")).expanduser().resolve()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or category not in {"public", "custom"}:
+        raise ValueError("运行时技能挂载配置非法")
+    if not source_dir.is_dir():
+        raise ValueError(f"技能目录不存在: {source_dir}")
+    return name, category, source_dir
+
+
+def _get_host_skill_path(source_dir: Path, category: str) -> str:
+    if category == "custom":
+        return _translate_host_path(
+            source_dir,
+            application_root=Path(DATA_ROOT) / "chat_data_skills" / "user",
+            host_root_name="OPENSANDBOX_HOST_USER_SKILLS_ROOT",
+        )
+    return _translate_host_path(
+        source_dir,
+        application_root=Path(__file__).resolve().parents[1] / "agent" / "skills",
+        host_root_name="OPENSANDBOX_HOST_SYSTEM_SKILLS_ROOT",
+    )
 
 
 def _import_opensandbox_sdk() -> tuple[Any, Any, Any, Any]:
@@ -149,8 +167,16 @@ def _str_to_bool(value: str | None, default: bool = False) -> bool:
     return text in {"1", "true", "yes", "on"}
 
 
-def _workspace_session_cache_key(workspace_root: str, user_id: str = "system") -> str:
-    return get_host_workspace_path(workspace_root, user_id)
+def _workspace_session_cache_key(
+    workspace_root: str,
+    mode: str = "sandbox",
+    runtime_skill_mounts: tuple[object, ...] = (),
+) -> str:
+    mounted_skills = sorted(
+        f"{category}/{name}:{source_dir}"
+        for name, category, source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts)
+    )
+    return f"{get_host_workspace_path(workspace_root)}#{mode}#{'|'.join(mounted_skills)}"
 
 
 def _workspace_session_ttl_seconds() -> int:
@@ -190,10 +216,10 @@ def _network_allow_targets() -> list[str]:
 def _validate_workspace_backend_config() -> None:
     backend = str(os.getenv("WORKSPACE_EXECUTION_BACKEND") or OPENSANDBOX_BACKEND).strip().lower()
     if backend != OPENSANDBOX_BACKEND:
-        raise ValueError("DataAnalyze 当前仅支持 OpenSandbox 执行后端，不支持 WORKSPACE_EXECUTION_BACKEND=" + backend)
+        raise ValueError("ChatData 当前仅支持 OpenSandbox 执行后端，不支持 WORKSPACE_EXECUTION_BACKEND=" + backend)
     sync_mode = str(os.getenv("OPENSANDBOX_WORKSPACE_SYNC_MODE") or OPENSANDBOX_REMOTE_HOST_VOLUME_MODE).strip().lower()
     if sync_mode != OPENSANDBOX_REMOTE_HOST_VOLUME_MODE:
-        raise ValueError("DataAnalyze 当前仅支持 OpenSandbox remote-host-volume 工作区，不支持 OPENSANDBOX_WORKSPACE_SYNC_MODE=" + sync_mode)
+        raise ValueError("ChatData 当前仅支持 OpenSandbox remote-host-volume 工作区，不支持 OPENSANDBOX_WORKSPACE_SYNC_MODE=" + sync_mode)
 
 
 def _sandbox_python_bin() -> str:
@@ -235,64 +261,31 @@ def _build_network_policy() -> Any | None:
     return NetworkPolicy(defaultAction=action, egress=egress_rules)
 
 
-def _build_volumes(workspace_root: str, user_id: str = "system") -> list[Any]:
+def _build_volumes(workspace_root: str, runtime_skill_mounts: tuple[object, ...] = ()) -> list[Any]:
     _, _, _, models = _import_opensandbox_sdk()
     Host, _, _, Volume = models
-    host_workspace_path = get_host_workspace_path(workspace_root, user_id)
-    # DataAnalyze 在 skill_load 时将技能上传到 /mnt/user-data/runtime-skills，因此运行沙箱只挂载当前会话叶子目录。
-    # 写入权限由工具层限制在 workspace/outputs，uploads/runtime-skills 不作为写入目标暴露给模型。
-    return [
-        _build_host_volume(Host=Host, Volume=Volume, name="thread-user-data", host_path=host_workspace_path, mount_path=sandbox_thread_root(), read_only=False)
+    volumes = [
+        _build_host_volume(
+            Host=Host,
+            Volume=Volume,
+            name="thread-user-data",
+            host_path=get_host_workspace_path(workspace_root),
+            mount_path=sandbox_thread_root(),
+            read_only=False,
+        )
     ]
-
-
-def _should_exclude(path: Path) -> bool:
-    return any(part in EXCLUDED_NAMES for part in path.parts)
-
-
-def _build_seed_tar_bytes(thread_dir: str | Path) -> bytes:
-    root = Path(thread_dir).resolve()
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        for dirname in SEED_DIRS:
-            source = root / dirname
-            if not source.exists():
-                continue
-            for current_root, dirnames, filenames in os.walk(source):
-                current = Path(current_root)
-                dirnames[:] = [item for item in dirnames if item not in EXCLUDED_NAMES]
-                relative_current = current.relative_to(root)
-                if _should_exclude(relative_current):
-                    continue
-                tar.add(current, arcname=relative_current.as_posix(), recursive=False)
-                for filename in filenames:
-                    file_path = current / filename
-                    relative = file_path.relative_to(root)
-                    if _should_exclude(relative):
-                        continue
-                    tar.add(file_path, arcname=relative.as_posix(), recursive=False)
-    return buffer.getvalue()
-
-
-def _build_directory_tar_bytes(source_dir: str | Path) -> bytes:
-    root = Path(source_dir).resolve()
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        for current_root, dirnames, filenames in os.walk(root):
-            current = Path(current_root)
-            dirnames[:] = [item for item in dirnames if item not in EXCLUDED_NAMES]
-            relative_current = current.relative_to(root)
-            if relative_current.parts and _should_exclude(relative_current):
-                continue
-            arcname = "." if relative_current == Path(".") else relative_current.as_posix()
-            tar.add(current, arcname=arcname, recursive=False)
-            for filename in filenames:
-                file_path = current / filename
-                relative = file_path.relative_to(root)
-                if _should_exclude(relative):
-                    continue
-                tar.add(file_path, arcname=relative.as_posix(), recursive=False)
-    return buffer.getvalue()
+    for name, category, source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts):
+        volumes.append(
+            _build_host_volume(
+                Host=Host,
+                Volume=Volume,
+                name=f"skill-{category}-{name}",
+                host_path=_get_host_skill_path(source_dir, category),
+                mount_path=f"{sandbox_skills_root()}/{category}/{name}",
+                read_only=True,
+            )
+        )
+    return volumes
 
 
 async def _write_sandbox_file(*, sandbox: Any, path: str, data: bytes) -> None:
@@ -384,7 +377,12 @@ async def run_sandbox_python_json(*, session: SandboxExecutionSession, script_bo
         raise ValueError(f"sandbox filesystem execution returned invalid JSON: {text[:200]}") from exc
 
 
-async def prepare_workspace_execution_session(workspace_root: str, user_id: str = "system") -> SandboxExecutionSession:
+async def prepare_workspace_execution_session(
+    workspace_root: str,
+    user_id: str = "system",
+    mode: str = "sandbox",
+    runtime_skill_mounts: tuple[object, ...] = (),
+) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
     timeout_seconds = _env_int("OPENSANDBOX_TIMEOUT_SECONDS", 600)
@@ -395,9 +393,9 @@ async def prepare_workspace_execution_session(workspace_root: str, user_id: str 
         "timeout": timedelta(seconds=timeout_seconds),
         "ready_timeout": timedelta(seconds=ready_timeout),
         "entrypoint": ["sleep", "infinity"],
-        "volumes": _build_volumes(workspace_root, user_id),
+        "volumes": _build_volumes(workspace_root, runtime_skill_mounts),
         "connection_config": _connection_config(timeout_seconds),
-        "metadata": {"managed_by": "fxcjg", "module": "chat_data_app", "workspace_backend": OPENSANDBOX_BACKEND},
+        "metadata": {"managed_by": "fxcjg", "module": "chat_data_app", "workspace_backend": OPENSANDBOX_BACKEND, "sandbox_mode": mode},
     }
     network_policy = _build_network_policy()
     if network_policy is not None:
@@ -407,15 +405,21 @@ async def prepare_workspace_execution_session(workspace_root: str, user_id: str 
         sandbox=sandbox,
         sandbox_id=str(getattr(sandbox, "id", "") or ""),
         workspace_root=workspace_root,
-        host_workspace_path=get_host_workspace_path(workspace_root, user_id),
+        host_workspace_path=get_host_workspace_path(workspace_root),
+        mode=mode,
+        runtime_skill_mounts=runtime_skill_mounts,
+        cache_key=_workspace_session_cache_key(workspace_root, mode, runtime_skill_mounts),
     )
-    await _ensure_workspace_dirs(session=session)
-    await _seed_workspace_if_needed(session=session)
     return session
 
 
-async def get_workspace_execution_session(workspace_root: str, user_id: str = "system") -> SandboxExecutionSession:
-    cache_key = _workspace_session_cache_key(workspace_root, user_id)
+async def get_workspace_execution_session(
+    workspace_root: str,
+    user_id: str = "system",
+    mode: str = "sandbox",
+    runtime_skill_mounts: tuple[object, ...] = (),
+) -> SandboxExecutionSession:
+    cache_key = _workspace_session_cache_key(workspace_root, mode, runtime_skill_mounts)
     now = time.monotonic()
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
@@ -429,7 +433,12 @@ async def get_workspace_execution_session(workspace_root: str, user_id: str = "s
         if cached is not None:
             _WORKSPACE_EXECUTION_SESSION_CACHE.pop(cache_key, None)
             await release_workspace_execution_session(cached.session)
-        session = await prepare_workspace_execution_session(workspace_root, user_id)
+        session = await prepare_workspace_execution_session(
+            workspace_root,
+            user_id,
+            mode,
+            runtime_skill_mounts,
+        )
         _WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = CachedSandboxExecutionSession(
             session=session,
             expires_at=time.monotonic() + _workspace_session_ttl_seconds(),
@@ -440,7 +449,11 @@ async def get_workspace_execution_session(workspace_root: str, user_id: str = "s
 async def attach_workspace_execution_session(session: SandboxExecutionSession | None, user_id: str = "system") -> None:
     if session is None:
         return
-    cache_key = _workspace_session_cache_key(session.workspace_root, user_id)
+    cache_key = session.cache_key or _workspace_session_cache_key(
+        session.workspace_root,
+        session.mode,
+        session.runtime_skill_mounts,
+    )
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.session is not session:
         await release_workspace_execution_session(cached.session)
@@ -453,7 +466,11 @@ async def attach_workspace_execution_session(session: SandboxExecutionSession | 
 async def invalidate_workspace_execution_session(session: SandboxExecutionSession | None, user_id: str = "system") -> None:
     if session is None:
         return
-    cache_key = _workspace_session_cache_key(session.workspace_root, user_id)
+    cache_key = session.cache_key or _workspace_session_cache_key(
+        session.workspace_root,
+        session.mode,
+        session.runtime_skill_mounts,
+    )
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.session is session:
         _WORKSPACE_EXECUTION_SESSION_CACHE.pop(cache_key, None)
@@ -485,46 +502,20 @@ async def release_workspace_execution_session(session: SandboxExecutionSession |
         logger.warning("OpenSandbox close sandbox 失败: %s", exc, exc_info=True)
 
 
-async def _seed_workspace_if_needed(*, session: SandboxExecutionSession) -> None:
-    await _ensure_workspace_dirs(session=session)
-    marker_path = f"{sandbox_thread_root()}/.fxcjg-host-workspace-initialized"
-    exit_code, _, _ = await run_command_in_sandbox(session=session, command="bash -lc " + shlex.quote(f"test -f {shlex.quote(marker_path)}"), timeout_seconds=30)
-    if exit_code == 0:
-        return
-    archive_path = f"/tmp/fxcjg-host-seed-{_sanitize_path_part(Path(session.workspace_root).name)}.tar.gz"
-    archive_data = await asyncio.to_thread(_build_seed_tar_bytes, session.workspace_root)
-    await _write_sandbox_file(sandbox=session.sandbox, path=archive_path, data=archive_data)
-    command = (
-        "bash -lc "
-        + shlex.quote(
-            "set -e; "
-            f"mkdir -p {shlex.quote(sandbox_thread_root())}; "
-            f"tar --no-same-owner --no-same-permissions -xzf {shlex.quote(archive_path)} -C {shlex.quote(sandbox_thread_root())}; "
-            f"mkdir -p {shlex.quote(sandbox_uploads_dir())} {shlex.quote(sandbox_workspace_dir())} {shlex.quote(sandbox_outputs_dir())} {shlex.quote(sandbox_runtime_skills_dir())}; "
-            f"touch {shlex.quote(marker_path)}; "
-            f"rm -f {shlex.quote(archive_path)}"
-        )
+def _sandbox_runtime_skill_roots(runtime_skill_mounts: tuple[object, ...]) -> tuple[str, ...]:
+    """返回当前会话已授权的沙箱技能只读挂载根目录。"""
+    return tuple(
+        f"{sandbox_skills_root()}/{category}/{name}"
+        for name, category, _source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts)
     )
-    exit_code, stdout, stderr = await run_command_in_sandbox(session=session, command=command, timeout_seconds=60)
-    if exit_code != 0:
-        raise ValueError("初始化 OpenSandbox host 工作区失败: " + (stderr or stdout).strip())
 
 
-async def _ensure_workspace_dirs(*, session: SandboxExecutionSession) -> None:
-    command = (
-        "bash -lc "
-        + shlex.quote(
-            "set -e; "
-            f"mkdir -p {shlex.quote(sandbox_uploads_dir())} {shlex.quote(sandbox_workspace_dir())} "
-            f"{shlex.quote(sandbox_outputs_dir())} {shlex.quote(sandbox_runtime_skills_dir())}"
-        )
-    )
-    exit_code, stdout, stderr = await run_command_in_sandbox(session=session, command=command, timeout_seconds=30)
-    if exit_code != 0:
-        raise ValueError("初始化 OpenSandbox 工作目录失败: " + (stderr or stdout).strip())
-
-
-def sandbox_visible_path(path: str, *, writable: bool = False) -> str:
+def sandbox_visible_path(
+    path: str,
+    *,
+    writable: bool = False,
+    runtime_skill_mounts: tuple[object, ...] = (),
+) -> str:
     raw = unquote(str(path or "").strip())
     while raw.startswith("./"):
         raw = raw[2:]
@@ -536,10 +527,10 @@ def sandbox_visible_path(path: str, *, writable: bool = False) -> str:
         ("/mnt/user-data/workspace", sandbox_workspace_dir()),
         ("/mnt/user-data/outputs", sandbox_outputs_dir()),
         ("/mnt/user-data/uploads", sandbox_uploads_dir()),
-        ("/mnt/user-data/runtime-skills", sandbox_runtime_skills_dir()),
         ("/workspace", sandbox_workspace_dir()),
         ("/outputs", sandbox_outputs_dir()),
         ("/uploads", sandbox_uploads_dir()),
+        (sandbox_skills_root(), sandbox_skills_root()),
     )
     sandbox_path = ""
     for prefix, target_prefix in mappings:
@@ -555,9 +546,11 @@ def sandbox_visible_path(path: str, *, writable: bool = False) -> str:
         sandbox_path = f"{sandbox_thread_root()}/{raw.lstrip('/')}"
     if ".." in PurePosixPath(sandbox_path).parts:
         raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
-    allowed_roots = (sandbox_workspace_dir(), sandbox_outputs_dir(), sandbox_uploads_dir(), sandbox_runtime_skills_dir())
-    if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in allowed_roots):
-        raise ValueError(f"只允许访问 workspace/outputs/uploads/runtime-skills: {path}")
+    workspace_roots = (sandbox_workspace_dir(), sandbox_outputs_dir(), sandbox_uploads_dir())
+    skill_roots = _sandbox_runtime_skill_roots(runtime_skill_mounts)
+    readable_roots = workspace_roots + skill_roots
+    if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in readable_roots):
+        raise ValueError(f"只允许访问 workspace/、outputs/、uploads/ 或当前已加载的技能路径: {path}")
     if writable:
         writable_roots = (sandbox_workspace_dir(), sandbox_outputs_dir())
         if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in writable_roots):
@@ -570,7 +563,7 @@ def sandbox_path_to_visible(path: str) -> str:
         (sandbox_workspace_dir(), f"{sandbox_thread_root()}/workspace"),
         (sandbox_outputs_dir(), f"{sandbox_thread_root()}/outputs"),
         (sandbox_uploads_dir(), f"{sandbox_thread_root()}/uploads"),
-        (sandbox_runtime_skills_dir(), sandbox_runtime_skills_dir()),
+        (sandbox_skills_root(), sandbox_skills_root()),
     )
     value = str(path or "").strip()
     for prefix, visible in mappings:
@@ -583,7 +576,7 @@ def sandbox_path_to_visible(path: str) -> str:
 
 async def sandbox_read_text_file(*, session_ref: SandboxExecutionSessionRef, file_path: str, offset: int, limit: int) -> dict[str, Any]:
     session = require_sandbox_session(session_ref)
-    target = sandbox_visible_path(file_path)
+    target = sandbox_visible_path(file_path, runtime_skill_mounts=session.runtime_skill_mounts)
     try:
         data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
     except FileNotFoundError:
@@ -859,119 +852,6 @@ print(json.dumps({"actions": actions}, ensure_ascii=False))
 ''',
     )
     return [str(item) for item in result.get("actions") or []]
-
-
-async def upload_skill_directory_to_sandbox(*, session_ref: SandboxExecutionSessionRef, skill_name: str, source_dir: Path) -> str:
-    session = require_sandbox_session(session_ref)
-    safe_name = _sanitize_path_part(skill_name)
-    if safe_name != skill_name:
-        raise ValueError(f"非法技能名称: {skill_name}")
-    target_dir = f"{sandbox_runtime_skills_dir()}/{skill_name}"
-    archive_path = f"/tmp/fxcjg-skill-{skill_name}.tar.gz"
-    archive_data = await asyncio.to_thread(_build_directory_tar_bytes, source_dir)
-    await _write_sandbox_file(sandbox=session.sandbox, path=archive_path, data=archive_data)
-    command = (
-        "bash -lc "
-        + shlex.quote(
-            "set -e; "
-            f"rm -rf {shlex.quote(target_dir)}; "
-            f"mkdir -p {shlex.quote(target_dir)}; "
-            f"tar --no-same-owner --no-same-permissions -xzf {shlex.quote(archive_path)} -C {shlex.quote(target_dir)}; "
-            f"rm -f {shlex.quote(archive_path)}"
-        )
-    )
-    exit_code, stdout, stderr = await run_command_in_sandbox(session=session, command=command, timeout_seconds=60)
-    if exit_code != 0:
-        raise ValueError("上传技能到 OpenSandbox 失败: " + (stderr or stdout).strip())
-    return sandbox_path_to_visible(target_dir)
-
-
-async def read_workspace_file_from_sandbox(*, workspace_root: str, file_path: str, user_id: str = "system", max_bytes: int = 1024 * 1024) -> dict[str, Any]:
-    session = await get_workspace_execution_session(workspace_root, user_id)
-    try:
-        target = sandbox_visible_path(file_path)
-        data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
-        if len(data) > max_bytes:
-            raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
-        result = {
-            "path": sandbox_path_to_visible(target),
-            "relative_path": sandbox_path_to_visible(target).lstrip("/"),
-            "content": data.decode("utf-8", errors="replace"),
-            "size": len(data),
-        }
-    except Exception:
-        await invalidate_workspace_execution_session(session, user_id)
-        raise
-    return result
-
-
-async def list_workspace_files_from_sandbox(*, workspace_root: str, user_id: str = "system") -> list[dict[str, Any]]:
-    session = await get_workspace_execution_session(workspace_root, user_id)
-    try:
-        result = await run_sandbox_python_json(
-            session=session,
-            payload={
-                "roots": [
-                    {"path": sandbox_uploads_dir(), "source": "uploads"},
-                    {"path": sandbox_runtime_skills_dir(), "source": "runtime-skills"},
-                    {"path": sandbox_workspace_dir(), "source": "workspace"},
-                    {"path": sandbox_outputs_dir(), "source": "outputs"},
-                ],
-            },
-            script_body=r'''
-from pathlib import Path
-import json
-roots = payload.get("roots") or []
-items = []
-for root_item in roots:
-    root = Path(root_item.get("path") or "")
-    source = str(root_item.get("source") or root.name)
-    if not root.exists():
-        continue
-    for item in sorted(root.rglob("*")):
-        if not item.is_file():
-            continue
-        stat = item.stat()
-        relative = item.relative_to(root).as_posix()
-        visible_path = "/mnt/user-data/" + source + (("/" + relative) if relative else "")
-        row = {
-            "path": visible_path,
-            "relative_path": visible_path,
-            "directory": source,
-            "name": item.name,
-            "size": stat.st_size,
-            "mtime": stat.st_mtime,
-            "source": source,
-        }
-        if source == "outputs" and item.name.lower().endswith(".json") and stat.st_size <= 1048576:
-            try:
-                row["content_hex"] = item.read_bytes().hex()
-            except Exception:
-                pass
-        items.append(row)
-print(json.dumps({"files": items}, ensure_ascii=False))
-''',
-            timeout_seconds=30,
-        )
-        files: list[dict[str, Any]] = []
-        for item in result.get("files") or []:
-            if not isinstance(item, dict):
-                continue
-            content_hex = item.pop("content_hex", "")
-            if content_hex:
-                try:
-                    artifact = _artifact_payload_from_bytes(visible_path=str(item.get("path") or ""), data=bytes.fromhex(str(content_hex)))
-                    item.update(artifact)
-                except Exception:
-                    logger.warning("识别 outputs 产物失败: %s", item.get("path"), exc_info=True)
-            elif str(item.get("source") or "") == "outputs":
-                item.update(_artifact_payload_from_bytes(visible_path=str(item.get("path") or ""), data=b""))
-            files.append(item)
-        result_files = files
-    except Exception:
-        await invalidate_workspace_execution_session(session, user_id)
-        raise
-    return result_files
 
 
 def truncate_output(text: str, limit: int = MAX_OUTPUT_CHARS) -> tuple[str, bool]:

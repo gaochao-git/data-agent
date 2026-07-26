@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 智能分析独立会话页
- * 左侧展示流式消息与工具调用，右侧展示当前工具结果/分析产物预览。
+ * ChatData 会话页。
+ * 左侧展示流式消息与工具调用，右侧展示当前工具结果和工作区产物预览。
  */
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -10,9 +10,9 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getDataAnalyzeWorkspaceFileContent, getDataAnalyzeWorkspaceFiles, importDataAnalyzeWorkspaceSkill } from '../api'
+import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, importConversationWorkspaceSkill } from '../api'
 import type { Dashboard } from '../api/dashboard'
-import type { DataAnalyzeWorkspaceFile } from '../api'
+import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
 import ChartSpecRenderer from './ChartSpecRenderer.vue'
 import { normalizeChartType } from '../chartTypes'
@@ -30,11 +30,10 @@ import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 interface Props {
   datasource?: DataSource | null
   conversationId?: string | null
-  conversationAgentId?: string
   selectedDatasourceId?: string
   semanticConfigId?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
-  ensureConversationId?: (agentId?: string) => Promise<string | null>
+  ensureConversationId?: () => Promise<string | null>
   ensureConversationDatasource?: () => Promise<boolean>
   executionTargets?: ExecutionTargetOption[]
   executionTargetMultiple?: boolean
@@ -54,7 +53,6 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   firstMessageComplete: [conversationId: string]
-  agentChange: [agentId: 'chat_data' | 'chat_data_data_analyze']
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
@@ -63,14 +61,9 @@ const emit = defineEmits<{
 
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
-const dataAnalyzeEnabled = ref(false)
-const agentOptions = computed(() => [
-  { id: 'chat_data', label: '问数', disabled: false },
-  { id: 'chat_data_data_analyze', label: '分析', disabled: !dataAnalyzeEnabled.value },
-] as const)
-const selectedAgent = ref<'chat_data' | 'chat_data_data_analyze'>(
-  'chat_data'
-)
+const userOverridable = ref(false)
+const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
+const selectedRuntimeOptions = ref({ ...defaultRuntimeOptions.value })
 const modelOptions = ref<ChatDataModelOption[]>([])
 const selectedModel = computed({
   get: () => props.selectedModelId || '',
@@ -116,9 +109,9 @@ const sidePanelOpen = ref(false)
 const sidePanelTab = ref<'console' | 'tool'>('console')
 const selectedConsoleFilePath = ref<string | null>(null)
 const selectedConsoleDirectoryPath = ref<string | null>(null)
-const collapsedConsoleDirectories = ref<Set<string>>(new Set(['uploads', 'runtime-skills']))
+const collapsedConsoleDirectories = ref<Set<string>>(new Set(['uploads']))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
-const workspaceFiles = ref<DataAnalyzeWorkspaceFile[]>([])
+const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
@@ -183,8 +176,8 @@ const {
   handleSkillCommandKeyDown,
 } = useSkillCommandMenu({
   input,
-  enabled: computed(() => selectedAgent.value === 'chat_data_data_analyze'),
-  agent: 'analyze',
+  enabled: computed(() => true),
+  agent: '',
 })
 
 const findToolCallById = (id: string | null) => {
@@ -307,7 +300,6 @@ interface ProducedFileDirectory extends ProducedFileTreeNode {
 
 const PRODUCED_FILE_DIRECTORIES: Array<{ name: string; label: string }> = [
   { name: 'uploads', label: '用户上传文件' },
-  { name: 'runtime-skills', label: '运行技能文件' },
   { name: 'workspace', label: '智能体中间文件' },
   { name: 'outputs', label: '智能体输出文件' },
 ]
@@ -321,6 +313,8 @@ const toSandboxDisplayPath = (path: unknown): string => {
 
 const pushProducedFile = (files: ProducedFile[], path: string, source: string, status: string) => {
   const relativePath = normalizeVisiblePath(path)
+  const rootDirectory = relativePath.split('/')[0]
+  if (!['uploads', 'workspace', 'outputs'].includes(rootDirectory)) return
   const displayPath = relativePath ? toSandboxDisplayPath(relativePath) : ''
   if (!path || !relativePath) return
   files.push({ path, fullPath: displayPath, relativePath, displayPath, source, status })
@@ -504,36 +498,7 @@ const parseToolResultPayload = (result?: string): Record<string, unknown> | null
   }
 }
 
-const parseSkillLoadList = (result: string, field: string): string[] => {
-  const match = String(result || '').match(new RegExp(`^${field}=(.+)$`, 'm'))
-  if (!match) return []
-  try {
-    const parsed = JSON.parse(match[1] || '[]')
-    return Array.isArray(parsed) ? parsed.map(item => String(item || '').trim()).filter(Boolean) : []
-  } catch {
-    return []
-  }
-}
-
-const getSkillLoadProducedPaths = (tool: ToolCallInfo): string[] => {
-  const result = String(tool.result || '')
-  const runtimePath = result.match(/^runtime_path=([^\n]+)/m)?.[1]?.trim()
-  if (!runtimePath) return []
-  const paths = [`${runtimePath}/SKILL.md`]
-  for (const reference of parseSkillLoadList(result, 'references')) {
-    paths.push(`${runtimePath}/references/${reference}.md`)
-  }
-  for (const script of parseSkillLoadList(result, 'scripts')) {
-    paths.push(`${runtimePath}/scripts/${script}`)
-  }
-  for (const asset of parseSkillLoadList(result, 'assets')) {
-    paths.push(`${runtimePath}/assets/${asset}`)
-  }
-  return paths
-}
-
 const getToolProducedPaths = (tool: ToolCallInfo): string[] => {
-  if (tool.tool_name === 'skill_load') return getSkillLoadProducedPaths(tool)
   if (!['file_edit', 'semantic_query_tool', 'file_read'].includes(tool.tool_name)) return []
   const payload = parseToolResultPayload(tool.result)
   const argPath = typeof tool.args?.file_path === 'string' ? tool.args.file_path : ''
@@ -666,7 +631,6 @@ const normalizeVisiblePath = (path: unknown): string => {
 const replaceVisiblePathsForDisplay = (text: string): string => {
   return String(text || '')
     .replace(/(?<!\/mnt\/user-data)\/(workspace|outputs|uploads)(?=\/|["'\s,}\]]|$)/g, '/mnt/user-data/$1')
-    .replace(/(?<!\/mnt\/user-data)\/runtime-skills(?=\/|["'\s,}\]]|$)/g, '/mnt/user-data/runtime-skills')
 }
 
 const getFileEditResultPath = (result?: string): string => {
@@ -927,7 +891,7 @@ const handleImportWorkspaceSkill = async () => {
   if (!confirmed) return
   importingWorkspaceSkillPath.value = skillDirPath
   try {
-    const response = await importDataAnalyzeWorkspaceSkill(conversationId, { skill_dir_path: skillDirPath })
+    const response = await importConversationWorkspaceSkill(conversationId, { skill_dir_path: skillDirPath })
     const skill = response.data
     importedSkillIdForManager.value = skill?.skill_id || skill?.name || null
     await refreshCommandSkills()
@@ -941,15 +905,15 @@ const handleImportWorkspaceSkill = async () => {
 }
 
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
-  if (!conversationId || selectedAgent.value !== 'chat_data_data_analyze') {
+  if (!conversationId) {
     workspaceFiles.value = []
     workspaceFileContents.value = {}
     return
   }
   isWorkspaceFilesLoading.value = true
   try {
-    const response = await getDataAnalyzeWorkspaceFiles(conversationId)
-    if (conversationId !== localConversationId.value || selectedAgent.value !== 'chat_data_data_analyze') return
+    const response = await getConversationWorkspaceFiles(conversationId)
+    if (conversationId !== localConversationId.value) return
     workspaceFiles.value = response.data?.files || []
   } catch (err) {
     if (conversationId !== localConversationId.value) return
@@ -963,7 +927,7 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
 }
 
 const scheduleWorkspaceFilesRefresh = () => {
-  if (selectedAgent.value !== 'chat_data_data_analyze' || !localConversationId.value) return
+  if (!localConversationId.value) return
   if (workspaceFilesRefreshTimer.value !== null) {
     window.clearTimeout(workspaceFilesRefreshTimer.value)
   }
@@ -977,7 +941,7 @@ const loadWorkspaceFileContent = async (conversationId: string | null | undefine
   if (!conversationId || !path || workspaceFileContents.value[path] !== undefined) return
   loadingWorkspaceFilePath.value = path
   try {
-    const response = await getDataAnalyzeWorkspaceFileContent(conversationId, path)
+    const response = await getConversationWorkspaceFileContent(conversationId, path)
     if (conversationId !== localConversationId.value) return
     workspaceFileContents.value = {
       ...workspaceFileContents.value,
@@ -1163,8 +1127,19 @@ const openConsolePanel = () => {
   sidePanelOpen.value = true
 }
 
+const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
+  const fieldName = String(payload?.fieldName || '').trim()
+  if (!fieldName) return
+  selectedSkill.value = null
+  const currentInput = input.value.trim()
+  const prefix = payload.fieldType === 'dimension' ? '按' : '查询'
+  input.value = currentInput ? `${currentInput}、${fieldName}` : `${prefix}${fieldName}`
+  inputBarRef.value?.focus()
+}
+
 defineExpose({
   openConsolePanel,
+  fillSemanticFieldQuestion,
 })
 
 const syncHistoryToolCalls = () => {
@@ -1227,12 +1202,13 @@ const loadModelOptions = async () => {
   try {
     const response = await getChatDataConfig()
     const models = response.data?.models || []
-    dataAnalyzeEnabled.value = !!response.data?.data_analyze_enabled
-    if (props.conversationAgentId === 'chat_data_data_analyze' && dataAnalyzeEnabled.value) {
-      selectedAgent.value = 'chat_data_data_analyze'
-    } else if (selectedAgent.value === 'chat_data_data_analyze' && !dataAnalyzeEnabled.value) {
-      selectedAgent.value = 'chat_data'
+    const cfg = response.data?.runtime_options
+    defaultRuntimeOptions.value = {
+      workspace_backend: cfg?.workspace_backend === 'sandbox' ? 'sandbox' : 'local',
+      bash_enabled: !!cfg?.bash_enabled,
     }
+    userOverridable.value = !!response.data?.user_overridable
+    selectedRuntimeOptions.value = { ...defaultRuntimeOptions.value }
     modelOptions.value = models
     const defaultModel = models.find(item => item.is_default)?.id || models[0]?.id || ''
     if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
@@ -1253,7 +1229,9 @@ const selectCommandSkill = (skill: SkillInfo) => {
   inputBarRef.value?.focus()
 }
 
-const handleDisabledAgentClick = () => ElMessage.info('功能暂未开放')
+const onRuntimeOptionsChange = (options: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean }) => {
+  selectedRuntimeOptions.value = options
+}
 
 const clearSelectedSkill = () => {
   clearSelectedSkillBase()
@@ -1273,21 +1251,6 @@ watch(
     recommendationPage.value = 0
   }
 )
-
-watch(
-  () => props.conversationAgentId,
-  (agentId) => {
-    selectedAgent.value = agentId === 'chat_data_data_analyze' && dataAnalyzeEnabled.value ? 'chat_data_data_analyze' : 'chat_data'
-  }
-)
-
-watch(selectedAgent, (agentId) => {
-  selectedSkill.value = null
-  if (agentId !== props.conversationAgentId) {
-    emit('agentChange', agentId)
-  }
-  loadWorkspaceFiles(localConversationId.value)
-})
 
 watch(
   () => props.conversationId,
@@ -1604,7 +1567,7 @@ const submitAnalysisQuery = async (
   try {
     let convId = props.conversationId
     if (!convId && props.ensureConversationId) {
-      convId = await props.ensureConversationId('chat_data_data_analyze')
+      convId = await props.ensureConversationId()
     }
     if (!convId) {
       ElMessage.error('无法创建会话')
@@ -1660,7 +1623,7 @@ const submitAnalysisQuery = async (
       options.semanticConfigIdOverride !== undefined ? options.semanticConfigIdOverride : (props.semanticConfigId || null),
       selectedModelValue.value,
       selectedMemberDatasourceIds.value,
-      'chat_data_data_analyze',
+      'chat_data',
       options.skillName || null,
       undefined,
       (payload) => {
@@ -1671,7 +1634,8 @@ const submitAnalysisQuery = async (
         tokenUsage.value = usage
       },
       effectiveSemanticConfigSelection,
-      enableDeepThinking.value
+      enableDeepThinking.value,
+      selectedRuntimeOptions.value
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
@@ -1683,15 +1647,6 @@ const submitAnalysisQuery = async (
 
 const handleSubmit = async () => {
   if (!input.value.trim() || isGenerating.value) return
-  if (selectedAgent.value === 'chat_data_data_analyze' && !dataAnalyzeEnabled.value) {
-    ElMessage.info('功能暂未开放')
-    selectedAgent.value = 'chat_data'
-    return
-  }
-  if (selectedAgent.value === 'chat_data') {
-    emit('agentChange', 'chat_data')
-    return
-  }
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -1887,23 +1842,23 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <ConversationInputBar
             ref="inputBarRef"
             v-model:input="input"
-            v-model:selected-agent="selectedAgent"
             v-model:selected-model="selectedModel"
             v-model:enable-deep-thinking="enableDeepThinking"
-            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入分析任务，输入 / 可选择技能' : '请输入分析任务，输入 / 可选择技能'"
+            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能' : '请输入任务，输入 / 可选择技能'"
             :selected-skill-title="selectedSkillTitle"
-            :agent-options="agentOptions"
+            :runtime-options="selectedRuntimeOptions"
+            :user-overridable="userOverridable"
             :model-options="modelOptions"
             :is-generating="isGenerating"
             :can-submit="Boolean(input.trim() && selectedDatasource)"
             :input-focused="inputFocused"
-            :show-skill-button="selectedAgent === 'chat_data_data_analyze'"
+            show-skill-button
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
             @open-skill-manager="isSkillManagerOpen = true"
-            @disabled-agent-click="handleDisabledAgentClick"
+            @update:runtime-options="onRuntimeOptionsChange"
             @keydown="handleKeyDown"
             @focus="inputFocused = true"
             @blur="inputFocused = false"
@@ -2122,7 +2077,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[640px] overflow-hidden">
-        <SkillManager :initial-skill-id="importedSkillIdForManager" default-skill-scope="analyze" agent="analyze" />
+        <SkillManager :initial-skill-id="importedSkillIdForManager" default-skill-scope="all" />
       </div>
     </el-dialog>
   </div>

@@ -85,9 +85,16 @@ type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 // ============ 技能 API ============
 
+export interface ChatDataRuntimeOptions {
+  workspace_backend: 'local' | 'sandbox'
+  bash_enabled: boolean
+}
+
 export interface ChatDataRuntimeConfig {
   models: ChatDataModelOption[]
-  data_analyze_enabled?: boolean
+  runtime_options?: ChatDataRuntimeOptions
+  /** 是否允许用户在前端手动覆盖系统默认运行选项。 */
+  user_overridable?: boolean
   default_row_limit?: number
   query_cache_enabled?: boolean
 }
@@ -96,7 +103,7 @@ export interface AccuracyEvaluationRunParams {
   datasource_id?: string
   semantic_config_id?: string
   model_id?: string
-  agent_id?: 'chat_data' | 'chat_data_data_analyze'
+  agent_id?: 'chat_data'
   query_mode?: string
   limit?: number
   case_ids?: string[]
@@ -775,7 +782,7 @@ export function createConversation(data: {
   })
 }
 
-export interface DataAnalyzeWorkspaceFile {
+export interface ConversationWorkspaceFile {
   path: string
   relative_path: string
   directory: string
@@ -790,26 +797,26 @@ export interface DataAnalyzeWorkspaceFile {
   dashboard_spec?: unknown
 }
 
-/** 获取智能分析会话工作区文件 */
-export function getDataAnalyzeWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: DataAnalyzeWorkspaceFile[] }>> {
+/** 获取会话工作区文件。 */
+export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[] }>> {
   return request({
-    url: `/agents/api/chatdata/data-analyze/conversations/${conversationId}/workspace-files`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files`,
     method: 'get'
   })
 }
 
-/** 读取智能分析会话工作区文本文件 */
-export function getDataAnalyzeWorkspaceFileContent(conversationId: string, path: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
+/** 读取会话工作区文本文件。 */
+export function getConversationWorkspaceFileContent(conversationId: string, path: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
   return request({
-    url: `/agents/api/chatdata/data-analyze/conversations/${conversationId}/workspace-files/content`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
     method: 'get',
     params: { path }
   })
 }
 
-export function importDataAnalyzeWorkspaceSkill(conversationId: string, data: { skill_dir_path: string }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
+export function importConversationWorkspaceSkill(conversationId: string, data: { skill_dir_path: string }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
   return request({
-    url: `/agents/api/chatdata/data-analyze/conversations/${conversationId}/workspace-skills/import`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-skills/import`,
     method: 'post',
     data
   })

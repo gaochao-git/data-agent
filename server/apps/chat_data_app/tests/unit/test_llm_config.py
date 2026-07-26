@@ -123,15 +123,18 @@ def test_chat_data_model_options_reads_model_configs(monkeypatch):
     }
 
 
-def test_chat_data_runtime_config_reads_data_analyze_feature(monkeypatch):
+def test_chat_data_runtime_config_reads_runtime_options(monkeypatch):
     _set_models(monkeypatch, "qwen3.5-35b-a3b;0.2;256000")
-    monkeypatch.setenv("CHAT_DATA_ANALYZE_ENABLED", "true")
+    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
+    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
+    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
 
     result = get_chat_data_runtime_config()
 
     assert result["models"][0]["id"] == "qwen3.5-35b-a3b"
     assert "default_model" not in result
-    assert result["data_analyze_enabled"] is True
+    assert result["runtime_options"] == {"workspace_backend": "sandbox", "bash_enabled": True}
+    assert result["user_overridable"] is True
     assert result["context_window"] == 256000
 
 
@@ -179,8 +182,11 @@ def test_chat_data_model_config_rejects_invalid_format(monkeypatch):
         raise AssertionError(f"invalid CHAT_DATA_MODEL was accepted: {value}")
 
 
-def test_data_analyze_agent_uses_configured_model_without_fallback(monkeypatch):
-    from apps.chat_data_app.agent import analyze_data_agent
+def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent import data_agent
+    from apps.chat_data_app.agent.agent_state import ChatDataAgentState
+    from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
+    from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
 
     created_models = []
     created_temperatures = []
@@ -199,12 +205,17 @@ def test_data_analyze_agent_uses_configured_model_without_fallback(monkeypatch):
         return object()
 
     _set_models(monkeypatch, "qwen3.6-35b-a3b;0.2;128000")
-    monkeypatch.setattr(analyze_data_agent, "get_chat_data_llm", fake_get_chat_data_llm)
-    monkeypatch.setattr(analyze_data_agent, "create_agent", fake_create_agent)
-    monkeypatch.setattr(analyze_data_agent, "create_data_analyze_tools", lambda *args, **kwargs: [])
+    monkeypatch.setattr(data_agent, "get_chat_data_llm", fake_get_chat_data_llm)
+    monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *args, **kwargs: [])
 
-    analyze_data_agent.create_data_analyze_agent(
-        workspace_root="/tmp/fxcjg_test_data/workspace",
+    data_agent.create_data_agent(
+        AgentRuntimeOptions(workspace_backend="local", bash_enabled=False),
+        workspace_runtime=ConversationWorkspaceRuntime(
+            workspace_root=str(tmp_path),
+            user_id="u1",
+            backend="local",
+        ),
         system_prompt="test",
         model_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
     )
@@ -214,4 +225,4 @@ def test_data_analyze_agent_uses_configured_model_without_fallback(monkeypatch):
     middleware_names = [getattr(item, "name", "") for item in captured["middleware"]]
     assert "ToolCallNameNormalizerMiddleware" in middleware_names
     assert "ToolErrorMiddleware" in middleware_names
-    assert captured["state_schema"] is analyze_data_agent.DataAnalyzeAgentState
+    assert captured["state_schema"] is ChatDataAgentState

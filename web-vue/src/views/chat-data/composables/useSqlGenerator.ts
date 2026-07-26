@@ -87,7 +87,8 @@ export function useSqlGenerator() {
     onMessageEnd?: (payload: ChatDataMessageEndPayload) => void,
     onTokenUsage?: (payload: ChatDataTokenUsage) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
-    enableThinking?: boolean
+    enableThinking?: boolean,
+    runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -105,6 +106,14 @@ export function useSqlGenerator() {
         datasource_id: datasourceId,
         mode,  // generate: 仅生成SQL, query: 生成并执行
         enable_thinking: enableThinking === true,
+      }
+
+      // 仅当服务端允许用户覆盖时，runtime_options 才会改变实际运行配置。
+      if (runtimeOptions && typeof runtimeOptions === 'object') {
+        options.runtime_options = {
+          workspace_backend: runtimeOptions.workspace_backend,
+          bash_enabled: runtimeOptions.bash_enabled,
+        }
       }
 
       // 模型选择

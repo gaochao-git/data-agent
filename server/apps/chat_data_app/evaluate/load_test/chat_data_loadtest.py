@@ -4,7 +4,7 @@
 Examples:
   python server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py --requests 10 --concurrency 2 --mode generate
   python server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py --requests 20 --concurrency 4 --datasource-id ds_xxx --semantic-config-id sem_xxx
-  python server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py --agent-id chat_data_data_analyze --requests 5 --concurrency 1 --datasource-id ds_xxx
+  python server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py --agent-id chat_data --requests 5 --concurrency 1 --datasource-id ds_xxx
 本地开发电脑：
 /Users/gaochao/work/miniconda3/envs/fxcjg/bin/python server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py \
 --base-url http://127.0.0.1:5001 \
@@ -508,7 +508,7 @@ def parse_args() -> argparse.Namespace:
     load_default_env()
     parser = argparse.ArgumentParser(description="ChatData 智能问数 SSE 并发压测脚本")
     parser.add_argument("--base-url", default="http://127.0.0.1:5001", help="后端地址，不带 /api")
-    parser.add_argument("--agent-id", default="chat_data", choices=["chat_data", "chat_data_data_analyze", "chat_data_sql_assist"])
+    parser.add_argument("--agent-id", default="chat_data", choices=["chat_data", "chat_data_sql_assist"])
     parser.add_argument("--requests", type=int, default=10, help="总请求数")
     parser.add_argument("--concurrency", type=int, default=2, help="并发 worker 数")
     parser.add_argument("--queries-file", help="JSON 文件，格式为字符串数组或 {\"queries\": [...]}")

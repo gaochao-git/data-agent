@@ -1,7 +1,8 @@
-"""DataAnalyze file_edit tool."""
+"""ChatData file_edit tool."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,13 +10,14 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.data_analyze_workspace import resolve_workspace_path
-from ...services.workspace_execution import (
-    SandboxExecutionSessionRef,
-    sandbox_apply_patch_ops,
-    sandbox_artifact_payload,
-    sandbox_write_text_file,
+from ...services.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    resolve_workspace_path,
+    workspace_apply_patch_ops,
+    workspace_artifact_payload,
+    workspace_write_text_file,
 )
+from .artifact_payloads import load_chart_spec_artifact_payload, load_dashboard_spec_artifact_payload
 from .common import json_dumps
 
 logger = get_logger(__name__)
@@ -259,7 +261,13 @@ def _attach_dashboard_next_action(payload: dict[str, Any], *, operation: str, pa
             return
 
 
-def create_file_edit_tool(workspace_root: str, execution_session_ref: SandboxExecutionSessionRef | None = None):
+def _load_artifact_payload(workspace_root: str, paths: list[str]) -> dict[str, Any]:
+    return load_chart_spec_artifact_payload(workspace_root, paths) or load_dashboard_spec_artifact_payload(
+        workspace_root, paths
+    )
+
+
+def create_file_edit_tool(workspace_runtime: ConversationWorkspaceRuntime):
     @tool("file_edit")
     async def file_edit(
         operation: str = "write",
@@ -303,7 +311,20 @@ def create_file_edit_tool(workspace_root: str, execution_session_ref: SandboxExe
             if normalized_operation == "patch":
                 ops = parse_patch(str(patch))
                 touched_paths = _visible_paths_for_ops(ops)
-                actions = await sandbox_apply_patch_ops(session_ref=execution_session_ref, ops=_ops_to_sandbox_payload(ops), dry_run=dry_run)
+                if workspace_runtime.backend == "local":
+                    actions = await asyncio.to_thread(
+                        apply_patch_ops,
+                        ops,
+                        root=workspace_runtime.workspace_root,
+                        dry_run=dry_run,
+                    )
+                else:
+                    actions = await workspace_apply_patch_ops(
+                        workspace_runtime,
+                        ops=_ops_to_sandbox_payload(ops),
+                        dry_run=dry_run,
+                        local_apply=apply_patch_ops,
+                    )
                 payload = {
                     "operation": "patch",
                     "dry_run": dry_run,
@@ -312,7 +333,11 @@ def create_file_edit_tool(workspace_root: str, execution_session_ref: SandboxExe
                 }
                 if not dry_run:
                     for path in reversed(touched_paths):
-                        payload.update(await sandbox_artifact_payload(session_ref=execution_session_ref, file_path=path))
+                        payload.update(await workspace_artifact_payload(
+                            workspace_runtime,
+                            file_path=path,
+                            local_loader=_load_artifact_payload,
+                        ))
                         if payload.get("artifact_type"):
                             break
                 _attach_dashboard_next_action(payload, operation="patch", paths=touched_paths)
@@ -323,9 +348,18 @@ def create_file_edit_tool(workspace_root: str, execution_session_ref: SandboxExe
             if normalized_mode not in {"overwrite", "append"}:
                 return "mode 只支持 overwrite / append；局部修改请使用 patch 参数"
             text = content if isinstance(content, str) else json_dumps(content)
-            payload = await sandbox_write_text_file(session_ref=execution_session_ref, file_path=file_path, content=text, mode=normalized_mode)
+            payload = await workspace_write_text_file(
+                workspace_runtime,
+                file_path=file_path,
+                content=text,
+                mode=normalized_mode,
+            )
             visible_path = str(payload.get("file_path") or file_path)
-            payload.update(await sandbox_artifact_payload(session_ref=execution_session_ref, file_path=visible_path))
+            payload.update(await workspace_artifact_payload(
+                workspace_runtime,
+                file_path=visible_path,
+                local_loader=_load_artifact_payload,
+            ))
             _attach_dashboard_next_action(payload, operation="write", paths=[visible_path])
             return _tool_result(payload)
         except Exception as exc:

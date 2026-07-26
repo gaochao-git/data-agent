@@ -390,6 +390,69 @@ async def test_get_checkpoint_datasource_id_reads_persisted_state():
 
 
 @pytest.mark.asyncio
+async def test_get_checkpoint_workspace_backend_defaults_local_without_checkpoint():
+    class Checkpointer:
+        async def aget_tuple(self, _config):
+            return None
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    def get_graph(_checkpointer):
+        raise AssertionError("新会话没有 checkpoint 时不应创建 Agent graph")
+
+    assert await conversation_module.get_checkpoint_workspace_backend(
+        "new_conversation",
+        get_graph,
+        lambda: CheckpointerContext(),
+    ) == "local"
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_workspace_backend_reads_persisted_value():
+    class Checkpointer:
+        async def aget_tuple(self, _config):
+            return SimpleNamespace(checkpoint={"channel_values": {"workspace": {"workspace_backend": "sandbox"}}})
+
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return Checkpointer()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    assert await conversation_module.get_checkpoint_workspace_backend(
+        "sandbox_conversation",
+        None,
+        lambda: CheckpointerContext(),
+    ) == "sandbox"
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_workspace_backend_reads_graph_state_without_tuple_reader():
+    class CheckpointerContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Graph:
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={"workspace": {"workspace_backend": "sandbox"}})
+
+    assert await conversation_module.get_checkpoint_workspace_backend(
+        "sandbox_conversation",
+        lambda _checkpointer: Graph(),
+        lambda: CheckpointerContext(),
+    ) == "sandbox"
+
+
+@pytest.mark.asyncio
 async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
     await conversation_module.sync_thread_to_db("u1", "conv_empty_graph", "agent_a", title="空状态", is_new=True)
 

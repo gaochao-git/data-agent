@@ -15,11 +15,10 @@ from utils.checkpoint import get_checkpointer
 from utils.database import get_session
 from utils.logger import get_logger
 
-from ..agent import get_chat_data_graph
-from ..agent.analyze_data_agent import get_data_analyze_graph
+from ..agent import get_data_agent_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
-from .semantic_common import AGENT_ID, DATA_ANALYZE_AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
+from .semantic_common import AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
 from .semantic_json_parser import parse_llm_json
 from .llm_config import get_chat_data_llm
 from .sql_parser import extract_physical_tables
@@ -157,13 +156,10 @@ async def _load_history_conversation_context(conversation_id: str) -> Optional[D
         return None
     try:
         agent_id = await conversation.get_agent_id("", normalized_id)
-        if agent_id == DATA_ANALYZE_AGENT_ID:
-            graph_getter = get_data_analyze_graph
-        elif agent_id == AGENT_ID:
-            graph_getter = get_chat_data_graph
-        else:
+        if agent_id != AGENT_ID:
             logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
             return None
+        graph_getter = lambda checkpointer=None: get_data_agent_graph(checkpointer=checkpointer)
         detail = await conversation.get_detail("", normalized_id, graph_getter, get_checkpointer)
         messages = (detail or {}).get("messages") if isinstance(detail, dict) else []
         if not isinstance(messages, list):

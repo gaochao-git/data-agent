@@ -38,7 +38,6 @@ from ..services.evaluation_service import (
     scene_case_set_id,
     validate_eval_case_ids,
 )
-from ..services.feature_gate import ensure_agent_available, feature_disabled_error_code
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
 from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload, is_time_logical_dimension
@@ -59,9 +58,6 @@ def _evaluation_http_exception_code(exc: HTTPException) -> int:
     """评测路由 HTTPException 固定业务码映射。"""
     if exc.status_code == 404:
         return SEMANTIC_CONFIG_NOT_FOUND_CODE
-    feature_code = feature_disabled_error_code(exc)
-    if feature_code is not None:
-        return feature_code
     return chatdata_http_exception_error_code(exc.status_code)
 
 
@@ -441,9 +437,7 @@ async def _build_accuracy_runner_args(payload: AccuracyEvaluationRunRequest, cur
 
     if not payload.datasource_id or not payload.semantic_config_id:
         raise ValueError("评测需要指定数据源和指标集")
-    ensure_agent_available(payload.agent_id)
     return AccuracyRunConfig(
-        agent_id=payload.agent_id,
         query_mode=payload.query_mode,
         model_id=payload.model_id,
         datasource_id=payload.datasource_id,
@@ -606,7 +600,6 @@ async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, 
     try:
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
-        ensure_agent_available(payload.agent_id)
         report = await _run_accuracy_evaluation_payload(payload, request, current_user)
         return business_response(data=report, msg="评测完成")
     except HTTPException as e:
@@ -627,7 +620,6 @@ async def _run_accuracy_evaluation_stream_route(payload: AccuracyEvaluationRunRe
     try:
         current_user = _get_current_user(request)
         await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
-        ensure_agent_available(payload.agent_id)
     except (HTTPException, ValueError) as e:
         message = str(getattr(e, "detail", None) or e)
         return StreamingResponse(_accuracy_error_stream(message), media_type="text/event-stream")

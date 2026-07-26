@@ -50,7 +50,7 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 | `viewMode` | 页面能力 | 前端主组件 |
 |---|---|---|
-| `conversation` | 数据智能体 | `SqlConversation.vue` / `AnalysisConversation.vue` |
+| `conversation` | 数据智能体 | `AnalysisConversation.vue` |
 | `builder` | 可视化查询 | `QueryBuilder/index.vue` |
 | `editor` | SQL 查询 | `SqlEditor.vue` |
 | `dashboard` | 看板查询 | `Dashboard/DashboardEditor.vue` |
@@ -59,19 +59,19 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ### 1. 数据智能体
 
-数据智能体包含问数和分析两个 agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。
+数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend` 只决定工作区使用受限本地目录还是 OpenSandbox，只有 `bash_enabled` 决定是否注册 `sandbox_run`。
+
+本地 ChatData 会话文件型数据统一位于 `CHAT_DATA_HOME`：留空时为 `${DATA_ROOT}/chat_data`，会话工作区路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/` 三个子目录；文件工具可读三者、仅可写前两者。`artifacts/` 也是 `CHAT_DATA_HOME` 下的工具结果卸载存储。用户技能继续保存在既有 `${DATA_ROOT}/chat_data_skills/user/`，不迁移到会话目录；`skill_load` 成功后仅在运行时只读暴露为 `/mnt/skills/public/<技能名>/` 或 `/mnt/skills/custom/<技能名>/`。
 
 ```text
 index.vue
-  -> SqlConversation.vue / AnalysisConversation.vue
+  -> AnalysisConversation.vue
   -> composables/useSqlGenerator.ts
   -> api/index.ts: streamCompletion()
   -> POST /agents/api/chatdata/conversations/{conversation_id}/completion
   -> routers/conversations.py: completion()
-  -> handlers.py:
-       agent_id=chat_data              -> sql_completion_handler()
-       agent_id=chat_data_data_analyze -> data_analyze_completion_handler()
-  -> agent/chat_data_agent.py 或 agent/analyze_data_agent.py
+  -> handlers.py: sql_completion_handler()
+  -> agent/data_agent.py
   -> dsl2sql_tool / semantic_query_tool
   -> services/semantic_query_service.py
   -> services/query_runtime.py: execute_agent_sql()
@@ -79,7 +79,7 @@ index.vue
   -> services/sql_executor.py
 ```
 
-问数主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径。智能分析也复用同一套 `dsl2sql_tool` 和 `semantic_query_tool`，区别主要在工作区、技能和分析产物处理。
+主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
 
 执行模式：
 

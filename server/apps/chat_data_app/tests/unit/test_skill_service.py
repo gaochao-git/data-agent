@@ -13,8 +13,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.skills import clear_metadata_cache, parse_metadata
-from apps.chat_data_app.agent.analyze_data_agent import build_data_analyze_system_prompt
+from apps.chat_data_app.agent.skills import clear_metadata_cache, format_skills_prompt, parse_metadata
+from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
+from apps.chat_data_app.agent.prompts.unified import build_unified_system_prompt
 from apps.chat_data_app.services import skill_service as skill_service_module
 from apps.chat_data_app.services.skill_service import SkillService, skill_service
 
@@ -657,36 +658,36 @@ def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(t
     assert updated["skill_publish_status"] == "published"
 
 
-def test_data_analyze_prompt_injects_skill_metadata_not_skill_body():
+def test_unified_prompt_injects_skill_metadata_not_skill_body():
     clear_metadata_cache()
 
-    prompt = build_data_analyze_system_prompt(
-        skill={"name": "dashboard-generation", "title": "看板生成技能"},
+    available_skills_xml = format_skills_prompt([
+        {"name": "dashboard-generation", "title": "看板生成技能", "description": "生成数据看板"},
+    ])
+    prompt = build_unified_system_prompt(
+        AgentRuntimeOptions(workspace_backend="local", bash_enabled=True),
         data_context={"datasource": {"id": "ds_1"}, "semantic_configs": []},
         workspace_root="/tmp/workspace",
+        available_skills_xml=available_skills_xml,
     )
 
-    role_index = prompt.index("<role>")
-    environment_index = prompt.index("<environment>")
-    data_context_index = prompt.index("<data_context>")
-    tools_index = prompt.index("<available_tools>")
-    skills_index = prompt.index("<available_skills>")
-    chart_types_index = prompt.index("<supported_chart_types>")
-    dialect_index = prompt.index("<dialect_context>")
-    priority_index = prompt.index("<priority>")
-    workflow_index = prompt.index("<workflow>")
-    examples_index = prompt.index("<examples")
-    assert role_index < environment_index < data_context_index < tools_index < skills_index < chart_types_index < dialect_index < priority_index < workflow_index < examples_index
+    # 技能元数据（名称/标题）应被注入，技能正文（runtime 目录）不应进入提示词
+    assert "看板生成技能" in prompt
     assert "<runtime>" not in prompt
-    assert "<available_skills>" in prompt
-    assert prompt.count("<available_skills>") == 1
-    assert prompt.count("<supported_chart_types>") == 1
-    assert prompt.count("<dialect_context>") == 1
-    assert prompt.count("<available_tools>") == 1
-    assert prompt.count("<priority>") == 1
-    assert prompt.count("<workflow>") == 1
-    assert prompt.count("<examples") == 3
-    assert "<selected_skill>" not in prompt
+    assert "dashboard-generation" in prompt
+
+    # 统一提示词使用 markdown 标题结构，工作空间态包含以下段落
+    assert "# 角色" in prompt
+    assert "## 环境" in prompt
+    assert "# 数据上下文" in prompt
+    assert "## 可用工具" in prompt
+    assert "## 支持图表类型" in prompt
+    assert "## 方言上下文" in prompt
+    assert "## 优先级" in prompt
+    assert "## 执行连续性" in prompt
+    # 工作空间态应暴露文件工具与 sandbox_run
+    assert "`file_read`" in prompt
+    assert "`sandbox_run`" in prompt
     assert "数据上下文文件" not in prompt
     assert "禁止调用：" not in prompt
     assert "analysis_plan" not in prompt

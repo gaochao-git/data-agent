@@ -10,11 +10,9 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
-from utils.storage_paths import NL2SQL_BASE_DIR
 from ..daos.datasource_dao import DataSourceDao
 from .datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials, sanitize_source_config
 from .execution_permission import (
@@ -292,9 +290,7 @@ def _build_meta_source_config(datasource: dict) -> Dict[str, Any]:
 class DataSourceManager:
     """数据源管理器。"""
 
-    def __init__(self, base_dir: Optional[str] = None):
-        self.base_dir = Path(base_dir or NL2SQL_BASE_DIR)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self):
         self.datasource_dao = DataSourceDao()
         logger.info("数据源 DAO 已启用")
 

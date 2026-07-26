@@ -34,7 +34,6 @@ SEVEN_TUPLE_KEYS = ("nl", "gold_dsl", "gold_sql", "query_type", "difficulty", "s
 class AccuracyRunConfig:
     """准确率评测运行配置，供 API 层显式传入。"""
 
-    agent_id: str = "chat_data"
     query_mode: str = "query"
     model_id: str | None = None
     datasource_id: str | None = None
@@ -309,22 +308,14 @@ def flush_sse_event(*, state: dict[str, Any], tool_traces: list[ToolTrace]) -> N
 async def consume_internal_completion(
     *,
     conversation_id: str,
-    agent_id: str,
     query: str,
     options: dict[str, Any],
     user_id: str,
 ) -> tuple[list[ToolTrace], str]:
     """内部调用智能问数 handler，避免评测通过 URL 反调自身。"""
-    from apps.chat_data_app.handlers import data_analyze_completion_handler, sql_completion_handler
-    from apps.chat_data_app.services.feature_gate import ensure_agent_available_for_internal_run
+    from apps.chat_data_app.handlers import sql_completion_handler
 
-    if agent_id == "chat_data_data_analyze":
-        ensure_agent_available_for_internal_run(agent_id)
-        response = await data_analyze_completion_handler(conversation_id, query, options=options, user_id=user_id)
-    elif agent_id == "chat_data":
-        response = await sql_completion_handler(conversation_id, query, options=options, user_id=user_id)
-    else:
-        raise ValueError(f"不支持的评测 Agent: {agent_id}")
+    response = await sql_completion_handler(conversation_id, query, options=options, user_id=user_id)
 
     tool_traces: list[ToolTrace] = []
     state: dict[str, Any] = {"current_event": "message", "data_lines": [], "error": ""}
@@ -431,7 +422,6 @@ async def collect_live_case_traces(
     return await asyncio.wait_for(
         consume_internal_completion(
             conversation_id=conversation_id,
-            agent_id=args.agent_id,
             query=question,
             options=build_completion_options(args, datasource_id, semantic_config_id),
             user_id=args.user_id,

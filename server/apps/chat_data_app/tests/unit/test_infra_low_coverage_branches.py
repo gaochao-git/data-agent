@@ -15,9 +15,10 @@ import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.agent.tools import skill_load
-from apps.chat_data_app.routers import data_analyze_workspace, dependencies
-from apps.chat_data_app.services import data_analyze_workspace as data_analyze_workspace_service
+from apps.chat_data_app.routers import conversation_workspace, dependencies
+from apps.chat_data_app.services import conversation_workspace as conversation_workspace_service
 from apps.chat_data_app.services import semantic_common
+from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode
@@ -1296,63 +1297,6 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     assert "<category>" not in minimal_prompt
 
 
-@pytest.mark.asyncio
-async def test_data_analyze_workspace_routes_branches(monkeypatch, tmp_path):
-    user = SimpleNamespace(user_id="u1", username="用户1")
-    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
-    monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: user)
-    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda conversation_id, user_id: asyncio.sleep(0, result=conversation_id == "conv_ok"))
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda conversation_id: {"root": str(tmp_path / conversation_id)})
-    monkeypatch.setattr(data_analyze_workspace, "list_workspace_files_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result=[{"path": "a.txt"}]))
-    monkeypatch.setattr(data_analyze_workspace, "read_workspace_file_from_sandbox", lambda **_kwargs: asyncio.sleep(0, result={"content": "hello"}))
-
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("denied", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv_ok", SimpleNamespace()))["data"]["files"] == [{"path": "a.txt"}]
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("denied", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv_ok", "a.txt", SimpleNamespace()))["data"]["content"] == "hello"
-
-    skill_dir = tmp_path / "conv_ok" / "workspace" / "skill-a"
-    monkeypatch.setattr(data_analyze_workspace, "resolve_workspace_path", lambda root, path: (tmp_path / "conv_ok" / path).resolve())
-    monkeypatch.setattr(data_analyze_workspace.skill_service, "import_user_skill_from_directory_async", lambda path, user_id, operator_name="": asyncio.sleep(0, result={"path": str(path), "user_id": user_id, "operator_name": operator_name}))
-    imported = _payload(await data_analyze_workspace.import_data_analyze_workspace_skill(
-        "conv_ok",
-        SkillImportFromWorkspaceRequest(skill_dir_path="workspace/skill-a"),
-        SimpleNamespace(),
-    ))
-    assert imported["data"]["path"] == str(skill_dir.resolve())
-    assert imported["data"]["operator_name"] == "用户1"
-
-    outside = _payload(await data_analyze_workspace.import_data_analyze_workspace_skill(
-        "conv_ok",
-        SkillImportFromWorkspaceRequest(skill_dir_path="../outside"),
-        SimpleNamespace(),
-    ))
-    assert outside["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID
-
-
-@pytest.mark.asyncio
-async def test_data_analyze_workspace_exception_branches(monkeypatch):
-    monkeypatch.setattr(data_analyze_workspace, "get_data_analyze_unavailable_response", lambda: None)
-    monkeypatch.setattr(data_analyze_workspace, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="用户1"))
-    monkeypatch.setattr(data_analyze_workspace, "can_access_data_analyze_conversation", lambda *_args: asyncio.sleep(0, result=True))
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(ValueError("bad workspace")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-    monkeypatch.setattr(data_analyze_workspace, "ensure_data_analyze_workspace", lambda _conversation_id: (_ for _ in ()).throw(RuntimeError("disk down")))
-    assert _payload(await data_analyze_workspace.list_data_analyze_workspace_files("conv", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_LIST_FAILED
-    assert _payload(await data_analyze_workspace.read_data_analyze_workspace_file("conv", "a.txt", SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
-    assert _payload(await data_analyze_workspace.import_data_analyze_workspace_skill("conv", SkillImportFromWorkspaceRequest(skill_dir_path="workspace/a"), SimpleNamespace()))["code"] == ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_FAILED
-
-    class FakeConversationDao:
-        async def exists_user_agent_thread(self, conversation_id, user_id, agent_id):
-            return conversation_id == "conv" and user_id == "u1" and agent_id == semantic_common.DATA_ANALYZE_AGENT_ID
-
-    monkeypatch.setattr(data_analyze_workspace_service, "conversation_dao", FakeConversationDao())
-    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("conv", "u1") is True
-    assert await data_analyze_workspace_service.can_access_data_analyze_conversation("", "u1") is False
-
-
 def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     assert calculator._format_decimal(calculator.Decimal("1.2300")) == "1.23"
     assert calculator._calculate_item({"expression": ""})["error"] == "expression 不能为空"
@@ -1382,8 +1326,9 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
 
     monkeypatch.setattr(skill_load, "resolve_skill_name", lambda name: name.strip())
     monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result={"path": str(skill_dir / "SKILL.md"), "title": "技能A", "description": "描述"}))
-    built, source_dir = asyncio.run(skill_load._build_skill_payload_async(" skill-a ", user_id="u1"))
+    built, source_dir, category = asyncio.run(skill_load._build_skill_payload_async(" skill-a ", user_id="u1"))
     assert source_dir == skill_dir
+    assert category == "public"
     assert built["references"] == ["guide"]
     assert built["scripts"] == ["run.py"]
     assert built["assets"] == ["a.png"]
@@ -1392,11 +1337,15 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="技能不存在"):
         asyncio.run(skill_load._build_skill_payload_async("missing"))
 
-    tool = skill_load.create_skill_load_tool(str(tmp_path), user_id="u1")
-    monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=(dict(built), skill_dir)))
-    monkeypatch.setattr(skill_load, "upload_skill_directory_to_sandbox", lambda **_kwargs: asyncio.sleep(0, result="/sandbox/skill-a"))
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(tmp_path / "workspace-root"),
+        user_id="u1",
+        backend="local",
+    )
+    tool = skill_load.create_skill_load_tool(runtime, user_id="u1")
+    monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=(dict(built), skill_dir, category)))
     result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
-    assert "runtime_path=/sandbox/skill-a" in result
+    assert "runtime_path=/mnt/skills/public/skill-a" in result
 
     async def raise_payload(*_args, **_kwargs):
         raise RuntimeError("load failed")

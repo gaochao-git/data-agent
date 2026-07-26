@@ -21,7 +21,6 @@ from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import evaluation
 from apps.chat_data_app.schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
 from apps.chat_data_app.services.evaluation_service import build_evaluation_service
-from apps.chat_data_app.services.feature_gate import DATA_ANALYZE_DISABLED_CODE
 from utils.models import Base, ChatDataEvalCase, ChatDataEvalCaseSet, ChatDataEvalRun, ChatDataEvalRunCase
 
 
@@ -303,8 +302,7 @@ def test_eval_run_payload_formatters_include_summary_and_case_defaults():
     assert case_payload["semantic_accuracy"] == 1
 
 
-def test_build_accuracy_runner_args_validates_scene(monkeypatch):
-    monkeypatch.setattr(evaluation, "ensure_agent_available", lambda _agent_id: None)
+def test_build_accuracy_runner_args_validates_scene():
 
     payload = AccuracyEvaluationRunRequest(
         datasource_id="ds_a",
@@ -320,36 +318,17 @@ def test_build_accuracy_runner_args_validates_scene(monkeypatch):
 
     args = asyncio.run(evaluation._build_accuracy_runner_args(payload, SimpleNamespace(user_id="u1")))
 
-    assert args.agent_id == "chat_data"
     assert args.datasource_id == "ds_a"
     assert args.semantic_config_id == "cfg_a"
     assert args.case_id == ["case_1"]
     assert args.limit == 5
 
-    analyze_args = asyncio.run(evaluation._build_accuracy_runner_args(
+    with pytest.raises(ValueError, match="agent_id"):
         AccuracyEvaluationRunRequest(
             datasource_id="ds_a",
             semantic_config_id="cfg_a",
-            agent_id="chat_data_data_analyze",
-        ),
-        SimpleNamespace(user_id="u1"),
-    ))
-    assert analyze_args.agent_id == "chat_data_data_analyze"
-
-    def raise_disabled(_agent_id):
-        raise evaluation.HTTPException(status_code=403, detail="智能分析功能暂未开放")
-
-    monkeypatch.setattr(evaluation, "ensure_agent_available", raise_disabled)
-    with pytest.raises(evaluation.HTTPException) as exc_info:
-        asyncio.run(evaluation._build_accuracy_runner_args(
-            AccuracyEvaluationRunRequest(
-                datasource_id="ds_a",
-                semantic_config_id="cfg_a",
-                agent_id="chat_data_data_analyze",
-            ),
-            SimpleNamespace(user_id="u1"),
-        ))
-    assert exc_info.value.status_code == 403
+            agent_id="unsupported_agent",
+        )
 
 
 def test_generate_draft_case_by_llm_handles_nl_and_sql(monkeypatch):
@@ -904,34 +883,6 @@ def test_run_accuracy_evaluation_payload_success_and_failure(monkeypatch):
     assert ("upsert", "run_payload", "case_1", 1) in calls
     assert any(call[0] == "update" and call[2].get("status") == "succeeded" for call in calls)
     assert any(call[0] == "update" and call[2].get("status") == "failed" for call in calls)
-
-
-def test_run_accuracy_evaluation_route_rejects_disabled_agent(monkeypatch):
-    async def fake_permission(*_args, **_kwargs):
-        return {"id": "cfg_a"}
-
-    async def fake_run(*_args, **_kwargs):
-        raise AssertionError("disabled agent should be rejected before running evaluation")
-
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", fake_permission)
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", fake_run)
-    monkeypatch.setattr(
-        evaluation,
-        "ensure_agent_available",
-        lambda _agent_id: (_ for _ in ()).throw(evaluation.HTTPException(status_code=403, detail="智能分析功能暂未开放")),
-    )
-
-    response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(
-            datasource_id="ds_a",
-            semantic_config_id="cfg_a",
-            agent_id="chat_data_data_analyze",
-        ),
-        None,
-    ))
-
-    assert json.loads(response.body.decode("utf-8"))["code"] == DATA_ANALYZE_DISABLED_CODE
 
 
 def test_accuracy_sse_iter_handles_cancelled(monkeypatch):

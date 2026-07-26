@@ -1,23 +1,23 @@
-"""DataAnalyze file_read tool."""
+"""ChatData file_read tool."""
 
 from __future__ import annotations
 
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.workspace_execution import SandboxExecutionSessionRef, sandbox_read_text_file
+from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_read_text_file
 from .common import DEFAULT_READ_LIMIT, MAX_READ_LIMIT, format_lines
 
 logger = get_logger(__name__)
 
 
-def create_file_read_tool(workspace_root: str, execution_session_ref: SandboxExecutionSessionRef | None = None):
+def create_file_read_tool(workspace_runtime: ConversationWorkspaceRuntime):
     @tool("file_read")
     async def file_read(file_path: str, offset: int = 0, limit: int = DEFAULT_READ_LIMIT) -> str:
         """
-        读取当前会话目录中的文本文件，支持 workspace/outputs/uploads/runtime-skills。
+        读取当前会话的 workspace、outputs、uploads 文本文件，或当前已加载技能的只读 /mnt/skills 路径。
 
-        读取 runtime-skills 下的 reference/asset 前，必须先通过 skill_load 成功加载对应技能。
+        读取技能 reference/asset 前，必须先通过 skill_load 成功加载对应技能。
         skill_load 返回内容已经包含 SKILL.md 正文，通常不要用 file_read 读取 SKILL.md 本身。
         """
         try:
@@ -25,8 +25,12 @@ def create_file_read_tool(workspace_root: str, execution_session_ref: SandboxExe
                 return "offset 必须大于等于 0"
             if limit < 1 or limit > MAX_READ_LIMIT:
                 return f"limit 必须在 1-{MAX_READ_LIMIT} 之间"
-            _ = workspace_root
-            result = await sandbox_read_text_file(session_ref=execution_session_ref, file_path=file_path, offset=offset, limit=limit)
+            result = await workspace_read_text_file(
+                workspace_runtime,
+                file_path=file_path,
+                offset=offset,
+                limit=limit,
+            )
             visible_path = str(result.get("path") or file_path)
             if not result.get("exists"):
                 return f"文件不存在: {file_path}"

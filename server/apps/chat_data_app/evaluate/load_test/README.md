@@ -60,6 +60,5 @@ server/apps/chat_data_app/evaluate/load_test/chat_data_loadtest.py \
 
 ## Agent ID
 
-- `chat_data`：智能问数。
-- `chat_data_data_analyze`：数据分析/图表处理智能体。
+- `chat_data`：统一的数据查询、分析和图表处理智能体。
 - `chat_data_sql_assist`：SQL 辅助。

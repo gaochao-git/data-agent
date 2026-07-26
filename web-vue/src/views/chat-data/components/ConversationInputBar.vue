@@ -1,26 +1,20 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import ConversationAgentSelector from './ConversationAgentSelector.vue'
-
-type AgentId = 'chat_data' | 'chat_data_data_analyze'
-
-interface AgentOption {
-  id: AgentId
-  label: string
-  disabled?: boolean
-}
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 interface ModelOption {
   id: string
   label: string
 }
 
+export interface ChatDataRuntimeOptions {
+  workspace_backend: 'local' | 'sandbox'
+  bash_enabled: boolean
+}
+
 interface Props {
   input: string
   placeholder: string
   selectedSkillTitle?: string
-  selectedAgent: AgentId
-  agentOptions: readonly AgentOption[]
   selectedModel: string
   modelOptions: ModelOption[]
   enableDeepThinking: boolean
@@ -29,6 +23,10 @@ interface Props {
   inputFocused?: boolean
   showSkillButton?: boolean
   submitTitle?: string
+  /** 系统默认运行选项（来自 /config 的 runtime_options）。 */
+  runtimeOptions?: ChatDataRuntimeOptions
+  /** 是否允许用户手动选择运行选项。关闭时面板只读。 */
+  userOverridable?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -36,26 +34,84 @@ const props = withDefaults(defineProps<Props>(), {
   inputFocused: false,
   showSkillButton: true,
   submitTitle: '发送 (Enter)',
+  userOverridable: false,
 })
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const modelMenuRef = ref<HTMLElement | null>(null)
 const modelMenuOpen = ref(false)
+const sandboxMenuRef = ref<HTMLElement | null>(null)
+const sandboxMenuOpen = ref(false)
 
 const emit = defineEmits<{
   submit: []
   stop: []
   clearSkill: []
   openSkillManager: []
-  disabledAgentClick: [option: AgentOption]
   keydown: [event: KeyboardEvent]
   focus: []
   blur: []
   'update:input': [value: string]
-  'update:selectedAgent': [value: AgentId]
   'update:selectedModel': [value: string]
   'update:enableDeepThinking': [value: boolean]
+  'update:runtime-options': [value: ChatDataRuntimeOptions]
 }>()
 
+// ---- 能力面板：参考「模型选择 + 深度思考」的聚合下拉 ----
+// 一个 pill 下拉内完成两件事：上面选运行模式（本地/沙箱），下面放 Bash 开关（参考深度思考）。
+const sandboxModeOptions: { value: 'local' | 'sandbox'; label: string; desc: string; icon: string }[] = [
+  { value: 'local', label: '本地', desc: '在本地目录进行操作', icon: 'fa-folder' },
+  { value: 'sandbox', label: '沙箱', desc: '在隔离沙箱中操作', icon: 'fa-box' },
+]
+
+/** 初始运行模式：本地则按默认，否则一律沙箱。 */
+const workspaceBackend = ref<'local' | 'sandbox'>(
+  props.runtimeOptions?.workspace_backend === 'sandbox' ? 'sandbox' : 'local'
+)
+/** Bash 是唯一影响工具注册的开关，与工作区后端独立。 */
+const bashEnabled = ref<boolean>(
+  !!props.runtimeOptions?.bash_enabled
+)
+
+const sandboxModeMeta = computed(
+  () => sandboxModeOptions.find(o => o.value === workspaceBackend.value) ?? sandboxModeOptions[0]!
+)
+// pill 触发文字：模式 +（Bash 开启时附加 ·Bash 标识）
+const sandboxTriggerLabel = computed(() =>
+  bashEnabled.value ? `${sandboxModeMeta.value.label}·Bash` : sandboxModeMeta.value.label
+)
+const sandboxTriggerIcon = computed(() => sandboxModeMeta.value.icon)
+
+const systemCapLabel = computed(() => {
+  const c = props.runtimeOptions
+  if (!c) return '系统默认'
+  const mode = c.workspace_backend === 'local' ? '本地' : '沙箱'
+  return `${mode}${c.bash_enabled ? ' · Bash' : ''}`
+})
+
+const emitRuntimeOptions = () => {
+  emit('update:runtime-options', {
+    workspace_backend: workspaceBackend.value,
+    bash_enabled: bashEnabled.value,
+  })
+}
+
+const selectSandboxMode = (mode: 'local' | 'sandbox') => {
+  workspaceBackend.value = mode
+  emitRuntimeOptions()
+}
+
+const toggleBash = () => {
+  bashEnabled.value = !bashEnabled.value
+  emitRuntimeOptions()
+}
+
+watch(() => props.runtimeOptions, (value) => {
+  if (!value) return
+  workspaceBackend.value = value.workspace_backend === 'sandbox' ? 'sandbox' : 'local'
+  bashEnabled.value = !!value.bash_enabled
+}, { deep: true })
+
+// ---- 模型选择器 ----
 const boxClass = computed(() => [
   'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
   props.inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
@@ -85,7 +141,9 @@ const handleDocumentClick = (event: MouseEvent) => {
   const target = event.target
   if (!(target instanceof Node)) return
   if (modelMenuRef.value?.contains(target)) return
+  if (sandboxMenuRef.value?.contains(target)) return
   modelMenuOpen.value = false
+  sandboxMenuOpen.value = false
 }
 
 const focus = () => {
@@ -133,12 +191,78 @@ onBeforeUnmount(() => {
       </div>
       <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
         <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
-          <ConversationAgentSelector
-            :model-value="selectedAgent"
-            :options="agentOptions"
-            @update:model-value="emit('update:selectedAgent', $event)"
-            @disabled-click="emit('disabledAgentClick', $event)"
-          />
+          <!-- 能力面板：运行模式 pill 下拉（上面选模式，下面 Bash 开关，参考模型选择+深度思考） -->
+          <template v-if="userOverridable">
+            <div ref="sandboxMenuRef" class="relative">
+              <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
+                <button
+                  type="button"
+                  class="flex items-center gap-1 border-none bg-transparent p-0 text-xs cursor-pointer"
+                  title="切换运行模式 / Bash"
+                  @click="sandboxMenuOpen = !sandboxMenuOpen"
+                >
+                  <i class="fa-solid text-[10px]" :class="[sandboxTriggerIcon, workspaceBackend === 'local' ? 'text-green-500' : 'text-purple-500']"></i>
+                  <span :class="['truncate', workspaceBackend === 'local' ? 'text-green-600' : 'text-purple-600']">{{ sandboxTriggerLabel }}</span>
+                  <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
+                </button>
+              </div>
+              <!-- 下拉菜单：上面选运行模式，下面 Bash 开关 -->
+              <div
+                v-if="sandboxMenuOpen"
+                class="absolute left-0 bottom-8 z-50 w-[230px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+              >
+                <!-- 运行模式列表 -->
+                <button
+                  v-for="opt in sandboxModeOptions"
+                  :key="opt.value"
+                  type="button"
+                  :class="[
+                    'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
+                    workspaceBackend === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
+                  ]"
+                  @click="selectSandboxMode(opt.value)"
+                >
+                  <div class="flex min-w-0 items-center gap-2">
+                    <i class="fa-solid text-[11px] text-gray-400" :class="opt.icon"></i>
+                    <div class="min-w-0">
+                      <div class="font-medium">{{ opt.label }}</div>
+                      <div class="text-[11px] text-gray-400">{{ opt.desc }}</div>
+                    </div>
+                  </div>
+                  <i v-if="workspaceBackend === opt.value" class="fa-solid fa-check text-[10px] flex-shrink-0"></i>
+                </button>
+                <!-- 分隔线 + Bash 开关（参考深度思考） -->
+                <div class="my-1 border-t border-gray-100"></div>
+                <button
+                  type="button"
+                  :class="[
+                    'flex w-full items-center justify-between gap-3 border-none bg-transparent px-3 py-2 text-left text-xs cursor-pointer',
+                    'hover:bg-gray-50'
+                  ]"
+                  role="switch"
+                  :aria-checked="bashEnabled"
+                  :title="bashEnabled ? '关闭 Bash 执行' : '开启 Bash 执行'"
+                  @click="toggleBash"
+                >
+                  <span class="flex min-w-0 items-center gap-2">
+                    <i class="fa-solid fa-terminal text-[11px]" :class="bashEnabled ? 'text-orange-500' : 'text-gray-400'"></i>
+                    <span class="truncate">Bash</span>
+                  </span>
+                  <span :class="['cap-switch', bashEnabled && 'cap-switch-on']"><span class="cap-switch-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+          </template>
+          <!-- 只读模式：显示系统默认能力标签 -->
+          <div
+            v-else
+            class="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500"
+            title="系统默认能力配置（不可覆盖）"
+          >
+            <i class="fa-solid fa-shield-halved text-[10px]"></i>
+            <span>{{ systemCapLabel }}</span>
+          </div>
+
           <button
             v-if="showSkillButton"
             type="button"
@@ -255,6 +379,48 @@ onBeforeUnmount(() => {
 <style scoped>
 .chat-input-box {
   container-type: inline-size;
+}
+
+.cap-switch {
+  position: relative;
+  display: inline-block;
+  width: 26px;
+  height: 14px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #e5e7eb;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.cap-switch:hover {
+  background: #d1d5db;
+}
+
+.cap-switch-on {
+  background: #1677ff;
+}
+
+.cap-switch-on:hover {
+  background: #0f6be8;
+}
+
+.cap-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.22);
+  transition: transform 0.15s ease;
+}
+
+.cap-switch-on .cap-switch-thumb {
+  transform: translateX(12px);
 }
 
 .deep-thinking-switch {

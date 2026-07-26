@@ -2,15 +2,23 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-
 os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
-from apps.chat_data_app.agent.analyze_data_agent import build_data_analyze_system_prompt
+from apps.chat_data_app.agent.prompts.unified import build_unified_system_prompt
+from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.chart_types import get_chart_type_prompt_text
+
+
+def _prompt(data_context: dict, *, bash_enabled: bool = False) -> str:
+    return build_unified_system_prompt(
+        AgentRuntimeOptions(workspace_backend="local", bash_enabled=bash_enabled),
+        data_context=data_context,
+        workspace_root="/tmp/workspace",
+    )
 
 
 def test_chart_type_prompt_text_uses_registry():
@@ -23,12 +31,8 @@ def test_chart_type_prompt_text_uses_registry():
     assert "起点字段 + 终点字段" in prompt
 
 
-def test_data_analyze_hive_prompt_injects_only_hive_dialect_examples():
-    prompt = build_data_analyze_system_prompt(
-        skill=None,
-        data_context={"datasource": {"source_type": "hive"}, "semantic_configs": []},
-        workspace_root="/tmp/workspace",
-    )
+def test_unified_hive_prompt_injects_only_hive_dialect_examples():
+    prompt = _prompt({"datasource": {"source_type": "hive"}, "semantic_configs": []})
 
     assert "当前数据库方言：Hive" in prompt
     assert "DATE_FORMAT(time_col, 'yyyy-MM')" in prompt
@@ -38,12 +42,8 @@ def test_data_analyze_hive_prompt_injects_only_hive_dialect_examples():
     assert "当前数据库方言：MySQL" not in prompt
 
 
-def test_data_analyze_mysql_prompt_injects_only_mysql_dialect_examples():
-    prompt = build_data_analyze_system_prompt(
-        skill=None,
-        data_context={"datasource": {"source_type": "mysql"}, "semantic_configs": []},
-        workspace_root="/tmp/workspace",
-    )
+def test_unified_mysql_prompt_injects_only_mysql_dialect_examples():
+    prompt = _prompt({"datasource": {"source_type": "mysql"}, "semantic_configs": []})
 
     assert "当前数据库方言：MySQL" in prompt
     assert "DATE_FORMAT(time_col, '%Y-%m')" in prompt
@@ -53,34 +53,31 @@ def test_data_analyze_mysql_prompt_injects_only_mysql_dialect_examples():
     assert "当前数据库方言：Hive" not in prompt
 
 
-def test_data_analyze_prompt_uses_single_agent_tool_chain():
-    prompt = build_data_analyze_system_prompt(
-        skill=None,
-        data_context={"datasource": {"source_type": "mysql"}, "semantic_configs": []},
-        workspace_root="/tmp/workspace",
-    )
+def test_unified_prompt_only_exposes_bash_when_enabled():
+    without_bash = _prompt({"datasource": {"source_type": "mysql"}, "semantic_configs": []})
+    with_bash = _prompt({"datasource": {"source_type": "mysql"}, "semantic_configs": []}, bash_enabled=True)
 
-    assert "`sandbox_run`" in prompt
-    assert "`semantic_query_tool`" in prompt
-    assert "analysis_plan" not in prompt
-    assert "理解节点" not in prompt
-    assert "规划节点" not in prompt
+    assert "`sandbox_run`" not in without_bash
+    assert "`sandbox_run`" in with_bash
+    assert "`semantic_query_tool`" in without_bash
+    assert "`calculator_tool`" in without_bash
+    assert "analysis_plan" not in without_bash
+    assert "理解节点" not in without_bash
+    assert "规划节点" not in without_bash
 
 
-def test_data_analyze_prompt_uses_chat_data_directory_format_before_semantic_selected():
-    prompt = build_data_analyze_system_prompt(
-        skill=None,
-        data_context={
-            "datasource": {"source_type": "mysql"},
-            "tables": [],
-            "datasource_group_context": "## 当前用户已选择的执行对象数据源\n本次查询必须只使用以下 member_datasource_ids：\n- 财付通（member_datasource_id: ORG_CODE1）；编码：ORG_CODE1",
-            "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析\n   描述：订单域\n   指标数：2；维度数：3",
-            "semantic_configs": [],
-        },
-        workspace_root="/tmp/workspace",
-    )
+def test_unified_prompt_uses_chat_data_directory_before_semantic_selected():
+    prompt = _prompt({
+        "datasource": {"source_type": "mysql"},
+        "tables": [],
+        "datasource_group_context": "## 当前用户已选择的执行对象数据源\n本次查询必须只使用以下 member_datasource_ids：\n- 财付通（member_datasource_id: ORG_CODE1）；编码：ORG_CODE1",
+        "semantic_config_directory_info": "## 当前可见指标集目录\n1. 名称：订单分析\n   描述：订单域\n   指标数：2；维度数：3",
+        "semantic_configs": [],
+    })
 
-    data_context_text = prompt[prompt.index("<data_context>"):prompt.index("</data_context>")]
+    marker = prompt.index("# 数据上下文")
+    end = prompt.index("\n## 可用工具", marker)
+    data_context_text = prompt[marker:end]
     assert "## 当前用户已选择的执行对象数据源" in data_context_text
     assert "财付通（member_datasource_id: ORG_CODE1）" in data_context_text
     assert "## 当前可见指标集目录" in data_context_text

@@ -6,7 +6,6 @@ from typing import Any, Dict, Set
 
 AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
-DATA_ANALYZE_AGENT_ID = "chat_data_data_analyze"
 LOGICAL_TYPE_VALUES = {"text", "number", "date", "datetime", "enum"}
 
 

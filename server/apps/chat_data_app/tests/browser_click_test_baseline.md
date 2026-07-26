@@ -113,7 +113,7 @@
 
 ## 11. 会话历史（智能问数 / 智能分析）
 
-- **增**：点击侧边栏「新建会话」（智能问数 `SqlConversation.vue` / 智能分析 `AnalysisConversation.vue`），清空当前状态；发送第一条消息后服务端才真正创建会话。
+- **增**：点击侧边栏「新建会话」（数据智能体 `AnalysisConversation.vue`），清空当前状态；发送第一条消息后服务端才真正创建会话。
 - **查**：在会话侧边栏（或 `ConversationSidebar.vue`）切换历史会话，会话标题、消息、工具调用、查询结果、生成文件可恢复；智能分析会话的文件树、预览、下载同样可恢复。
 - **改**：修改会话标题后保存，列表与头部展示同步更新（后端 `PUT /{conversation_id}/title`、`POST /{conversation_id}/title`；前端 `updateConversationTitle`）。
 - **删**：在侧边栏删除会话，确认后有 loading；取消不改变列表，确认成功后列表与快捷入口实时移除该会话。

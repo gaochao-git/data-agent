@@ -20,11 +20,7 @@ from ...services.semantic_query_service import (
     normalize_member_datasource_ids,
 )
 from ...services.semantic_sql_generator import SemanticSQLGenerator
-from ...services.workspace_execution import (
-    SandboxExecutionSessionRef,
-    get_workspace_execution_session,
-    sandbox_write_text_file,
-)
+from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_write_text_file
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)
@@ -150,13 +146,16 @@ def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[st
 
 
 def _get_workspace_root_from_state(state: dict | None) -> str | None:
-    """读取分析工作区；未设置时表示普通智能问数会话。"""
-    workspace_context = (state or {}).get("analysis_workspace")
-    workspace_root = str(
-        (workspace_context or {}).get("workspace_root")
+    """读取当前会话工作区。"""
+    workspace_context = (state or {}).get("workspace")
+    workspace_root = (
+        workspace_context.get("workspace_root")
         if isinstance(workspace_context, dict)
-        else ""
-    ).strip()
+        else None
+    )
+    if not isinstance(workspace_root, str):
+        return None
+    workspace_root = workspace_root.strip()
     return workspace_root or None
 
 
@@ -166,7 +165,7 @@ def _prepare_tool_request(
     sql: str | None,
     save_as: str | None,
     workspace_root: str | None,
-    is_analysis_workspace: bool,
+    has_workspace: bool,
 ) -> _PreparedToolRequest | str:
     has_dsl = dsl is not None
     normalized_sql = str(sql or "").strip()
@@ -184,8 +183,8 @@ def _prepare_tool_request(
 
     save_path = str(save_as or "").strip()
     if save_path:
-        if not is_analysis_workspace:
-            return _tool_error("当前工具不支持 save_as")
+        if not has_workspace:
+            return _tool_error("当前会话未初始化工作目录，无法保存结果")
         if not str(workspace_root or "").strip():
             return _tool_error("当前会话未初始化工作目录，无法保存结果")
         if not save_path.lower().endswith(".json"):
@@ -339,6 +338,7 @@ async def _build_tool_response(
     query: _CompiledToolQuery,
     save_path: str,
     workspace_root: str | None,
+    workspace_backend: str | None,
     user_id: str | None,
     conversation_id: str | None,
 ) -> str:
@@ -348,6 +348,7 @@ async def _build_tool_response(
             query=query,
             save_path=save_path,
             workspace_root=workspace_root,
+            workspace_backend=workspace_backend,
             user_id=user_id,
         )
     if query_result_succeeded(query_result):
@@ -361,15 +362,16 @@ async def _build_saved_result_response(
     query: _CompiledToolQuery,
     save_path: str,
     workspace_root: str,
+    workspace_backend: str,
     user_id: str | None,
 ) -> str:
-    execution_session_ref = SandboxExecutionSessionRef()
-    execution_session_ref.current = await get_workspace_execution_session(
-        workspace_root,
-        user_id or "system",
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=user_id or "system",
+        backend="sandbox" if workspace_backend == "sandbox" else "local",
     )
-    write_result = await sandbox_write_text_file(
-        session_ref=execution_session_ref,
+    write_result = await workspace_write_text_file(
+        runtime,
         file_path=save_path,
         content=json_dumps(query_result),
         mode="overwrite",
@@ -476,13 +478,15 @@ async def _run_semantic_query_tool(
     save_as: str | None = None,
 ) -> str:
     workspace_root = _get_workspace_root_from_state(state)
-    is_analysis_workspace = isinstance((state or {}).get("analysis_workspace"), dict)
+    workspace_context = (state or {}).get("workspace")
+    has_workspace = isinstance(workspace_context, dict)
+    workspace_backend = str((workspace_context or {}).get("workspace_backend") or "local")
     prepared_request = _prepare_tool_request(
         dsl=dsl,
         sql=sql,
         save_as=save_as,
         workspace_root=workspace_root,
-        is_analysis_workspace=is_analysis_workspace,
+        has_workspace=has_workspace,
     )
     if isinstance(prepared_request, str):
         return prepared_request
@@ -516,6 +520,7 @@ async def _run_semantic_query_tool(
         query=query,
         save_path=prepared_request.save_path,
         workspace_root=workspace_root,
+        workspace_backend=workspace_backend,
         user_id=context.user_id,
         conversation_id=context.conversation_id,
     )

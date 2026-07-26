@@ -88,6 +88,7 @@ kill -9 $(lsof -ti :5001)
 - `LOG_LEVEL` / `LOG_DIR` / `LOG_APP_NAME`：日志配置，默认按应用名分为应用日志、访问日志和告警日志；日志 IDC 使用启动时识别出的环境名
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
+- `CHAT_DATA_HOME`：ChatData 会话文件型持久化根目录，留空时使用 `${DATA_ROOT}/chat_data`；包含用户隔离的会话工作区与 artifact。用户技能仍使用既有 `${DATA_ROOT}/chat_data_skills/user`
 - `CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` / `CHAT_DATA_MODEL`：智能问数模型配置，其中 `CHAT_DATA_API_KEY` 存放 SM4 加密后的密文；`CHAT_DATA_MODEL` 格式为 `模型名;温度;上下文窗口`，多个模型用逗号分隔
 - `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key

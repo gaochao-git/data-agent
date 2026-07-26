@@ -11,7 +11,6 @@ import useUserStore from '@/store/modules/user'
 import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { BuilderDragFieldData, DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
-import SqlConversation from '../components/SqlConversation.vue'
 import AnalysisConversation from '../components/AnalysisConversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
@@ -497,14 +496,13 @@ const handleCloseSemanticConfig = () => {
 const conversations = ref<ConversationItem[]>([])
 const currentConversationId = ref<string | null>(null)
 const currentConversationTitle = ref<string>('新会话')
-const currentConversationAgentId = ref<'chat_data' | 'chat_data_data_analyze'>('chat_data')
 const currentConversationDatasourceId = ref<string | null>(null)
 const isLoadingConversations = ref(false)
 const isLoadingMoreConversations = ref(false)
 const hasMoreConversations = ref(false)
 const conversationPage = ref(1)
 const conversationPageSize = 20
-const conversationKey = ref(0) // 用于强制重新渲染 SqlConversation
+const conversationKey = ref(0)
 const showHistoryPopover = ref(false)
 const hasEnteredConversationOnce = ref(false)
 const conversationsLoaded = ref(false)
@@ -536,11 +534,10 @@ const canShowNewConversationButton = computed(() => {
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
-const sqlConversationRef = ref<InstanceType<typeof SqlConversation> | null>(null)
-const analysisConversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
+const conversationRef = ref<InstanceType<typeof AnalysisConversation> | null>(null)
 
-const openAnalysisConsole = () => {
-  analysisConversationRef.value?.openConsolePanel()
+const openConversationConsole = () => {
+  conversationRef.value?.openConsolePanel()
 }
 
 // 加载数据源
@@ -588,7 +585,7 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
 
 const normalizeConversationResponse = (
   payload: unknown,
-  fallbackAgentId: 'chat_data' | 'chat_data_data_analyze' = 'chat_data'
+  fallbackAgentId = 'chat_data'
 ): { items: ConversationItem[]; hasMore: boolean } => {
   const payloadObj = payload as { conversations?: unknown[]; has_more?: boolean } | null
   const rawList = Array.isArray(payload)
@@ -612,7 +609,7 @@ const normalizeConversationResponse = (
 
 // 加载会话列表
 const loadConversations = async (page = 1) => {
-  const agentId = currentConversationAgentId.value
+  const agentId = 'chat_data'
   const loadSeq = ++conversationLoadSeq
   const isFirstPage = page === 1
   if (isFirstPage) {
@@ -622,7 +619,7 @@ const loadConversations = async (page = 1) => {
   }
   try {
     const res = await getConversations(agentId, undefined, { page, page_size: conversationPageSize })
-    if (loadSeq !== conversationLoadSeq || currentConversationAgentId.value !== agentId) return
+    if (loadSeq !== conversationLoadSeq) return
     const { items, hasMore }: { items: ConversationItem[]; hasMore: boolean } = res.status === 'success'
       ? normalizeConversationResponse(res.data, agentId)
       : { items: [], hasMore: false }
@@ -662,16 +659,14 @@ const loadMoreConversations = async () => {
 }
 
 // 确保会话 ID 存在（懒创建模式，只在发送消息时才创建）
-const ensureConversationId = async (agentId: string = 'chat_data'): Promise<string | null> => {
-  const normalizedAgentId = agentId === 'chat_data_data_analyze' ? 'chat_data_data_analyze' : 'chat_data'
-  if (currentConversationId.value && currentConversationAgentId.value === normalizedAgentId) {
+const ensureConversationId = async (): Promise<string | null> => {
+  if (currentConversationId.value) {
     return currentConversationId.value
   }
   try {
-    const res = await createConversation({ agent_id: normalizedAgentId })
+    const res = await createConversation({ agent_id: 'chat_data' })
     if (res.status === 'success' && res.data?.id) {
       currentConversationId.value = res.data.id
-      currentConversationAgentId.value = normalizedAgentId
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = selectedDatasourceId.value || null
       return res.data.id
@@ -741,23 +736,6 @@ const handleNewConversation = () => {
   conversationKey.value++ // 强制重新渲染以清空消息
 }
 
-const handleAgentChange = (agentId: 'chat_data' | 'chat_data_data_analyze') => {
-  if (currentConversationAgentId.value === agentId) return
-  currentConversationAgentId.value = agentId
-  currentConversationId.value = null
-  currentConversationTitle.value = '新会话'
-  currentConversationDatasourceId.value = null
-  conversationLoadSeq++
-  conversations.value = []
-  conversationsLoaded.value = false
-  conversationPage.value = 1
-  hasMoreConversations.value = false
-  isLoadingConversations.value = false
-  isLoadingMoreConversations.value = false
-  conversationKey.value++
-  void ensureConversationsLoaded(true)
-}
-
 const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
   try {
     const response = await getConversationContext(conversationId)
@@ -790,7 +768,6 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationId.value = id
   hasEnteredConversationOnce.value = true
   currentConversationTitle.value = conv?.title || '会话'
-  currentConversationAgentId.value = conv?.agent_id === 'chat_data_data_analyze' ? 'chat_data_data_analyze' : 'chat_data'
   currentConversationDatasourceId.value = conversationDatasourceId || null
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
@@ -1433,8 +1410,8 @@ const handleInsertColumn = (tableName: string, columnName: string) => {
 }
 
 const handleFillSemanticQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
-  if (viewMode.value !== 'conversation' || currentConversationAgentId.value !== 'chat_data') return
-  sqlConversationRef.value?.fillSemanticFieldQuestion(payload)
+  if (viewMode.value !== 'conversation') return
+  conversationRef.value?.fillSemanticFieldQuestion(payload)
 }
 
 const handleConversationDatasetSelected = (configId: string | null) => {
@@ -1542,10 +1519,10 @@ onUnmounted(() => {
             <i class="fa-solid fa-circle-plus text-[13px]"></i>
           </button>
           <button
-            v-if="viewMode === 'conversation' && currentConversationAgentId === 'chat_data_data_analyze'"
+            v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex items-center justify-center border border-slate-200 rounded-xl bg-white text-slate-500 cursor-pointer shadow-sm hover:text-slate-700 hover:bg-slate-50"
             title="控制台"
-            @click="openAnalysisConsole"
+            @click="openConversationConsole"
           >
             <i class="fa-solid fa-terminal text-[12px]"></i>
           </button>
@@ -1791,44 +1768,11 @@ onUnmounted(() => {
           <div v-show="viewMode === 'conversation'" class="absolute inset-0 overflow-hidden">
             <div class="h-full flex min-h-0">
               <div class="flex-1 min-w-0 min-h-0">
-                <SqlConversation
-                  v-if="currentConversationAgentId === 'chat_data'"
-                  ref="sqlConversationRef"
-                  :key="conversationKey"
-                  :datasources="datasources"
-                  :datasource="currentDatasource"
-                  :conversation-id="currentConversationId"
-                  :conversation-title="currentConversationTitle"
-                  :conversation-agent-id="currentConversationAgentId"
-                  :selected-datasource-id="selectedDatasourceId"
-                  :semantic-config-id="conversationSemanticConfigId"
-                  :semantic-config-selection="conversationSemanticConfigSelection"
-                  :semantic-configs="enabledSemanticConfigs"
-                  :ensure-conversation-id="ensureConversationId"
-                  :ensure-conversation-datasource="ensureConversationDatasource"
-                  :execution-targets="executionTargets"
-                  :execution-target-multiple="true"
-                  :selected-member-datasource-ids="conversationMemberDatasourceIds"
-                  v-model:selected-model-id="selectedConversationModelId"
-                  hide-header
-                  hide-datasource-selector
-                  hide-execution-target-selector
-                  hide-sidebar
-                  class="h-full"
-                  @first-message-complete="handleFirstMessageComplete"
-                  @datasource-change="handleDatasourceChange"
-                  @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
-                  @agent-change="handleAgentChange"
-                  @dashboard-created="handleDashboardCreatedFromConversation"
-                  @semantic-config-selected="handleConversationSemanticConfigSelected"
-                />
                 <AnalysisConversation
-                  v-else
-                  ref="analysisConversationRef"
+                  ref="conversationRef"
                   :key="conversationKey"
                   :datasource="currentDatasource"
                   :conversation-id="currentConversationId"
-                  :conversation-agent-id="currentConversationAgentId"
                   :selected-datasource-id="selectedDatasourceId"
                   :semantic-config-id="conversationSemanticConfigId"
                   :semantic-config-selection="conversationSemanticConfigSelection"
@@ -1840,7 +1784,6 @@ onUnmounted(() => {
                   v-model:selected-model-id="selectedConversationModelId"
                   class="h-full"
                   @first-message-complete="handleFirstMessageComplete"
-                  @agent-change="handleAgentChange"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"

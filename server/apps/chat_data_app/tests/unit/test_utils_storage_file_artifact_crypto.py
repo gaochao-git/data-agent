@@ -88,6 +88,17 @@ def test_storage_paths_requires_data_root(monkeypatch):
     assert resolved.name == "relative-data"
 
 
+def test_storage_paths_chat_data_home_defaults_and_honors_override(monkeypatch, tmp_path):
+    monkeypatch.delenv("CHAT_DATA_HOME", raising=False)
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data"))
+
+    assert storage_paths._resolve_data_root() == tmp_path / "data"
+    assert storage_paths._resolve_chat_data_home() == tmp_path / "data" / "chat_data"
+
+    monkeypatch.setenv("CHAT_DATA_HOME", str(tmp_path / "custom-chat-data"))
+    assert storage_paths._resolve_chat_data_home() == tmp_path / "custom-chat-data"
+
+
 @pytest.mark.asyncio
 async def test_file_manager_save_read_delete_and_list(tmp_path):
     upload = SimpleNamespace(

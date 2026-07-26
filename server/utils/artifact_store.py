@@ -34,12 +34,12 @@ from typing import Optional
 from pathlib import Path
 
 from utils.logger import get_logger
-from utils.storage_paths import NL2SQL_BASE_DIR
+from utils.storage_paths import CHAT_DATA_HOME
 
 logger = get_logger(__name__)
 
-# 默认 Artifact 存储根目录（使用 DATA_ROOT/nl2sql/artifacts）
-_DEFAULT_ARTIFACT_DIR = Path(NL2SQL_BASE_DIR) / "artifacts"
+# 默认 Artifact 存储根目录。
+_DEFAULT_ARTIFACT_DIR = Path(CHAT_DATA_HOME) / "artifacts"
 
 
 class ArtifactStore:
@@ -50,7 +50,7 @@ class ArtifactStore:
         初始化 Artifact 存储
 
         Args:
-            base_dir: 存储根目录，默认为 server/data/artifacts
+            base_dir: 存储根目录，默认为 CHAT_DATA_HOME/artifacts
         """
         self.base_dir = Path(base_dir) if base_dir else _DEFAULT_ARTIFACT_DIR
         self.base_dir.mkdir(parents=True, exist_ok=True)

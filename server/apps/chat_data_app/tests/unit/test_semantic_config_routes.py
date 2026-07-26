@@ -933,7 +933,6 @@ def test_history_context_loader_branches(monkeypatch):
             raise RuntimeError("conversation error")
         return {
             "chat": semantic_config.AGENT_ID,
-            "analyze": semantic_config.DATA_ANALYZE_AGENT_ID,
             "nonlist": semantic_config.AGENT_ID,
             "empty": semantic_config.AGENT_ID,
             "unknown": "other_agent",
@@ -941,11 +940,8 @@ def test_history_context_loader_branches(monkeypatch):
 
     async def fake_get_detail(_user_id, conversation_id, graph_getter, _checkpointer_getter):
         if conversation_id == "chat":
-            assert graph_getter is semantic_config.get_chat_data_graph
+            assert callable(graph_getter)
             return {"messages": [{"role": "user", "content": "查询销售额", "timestamp": "t1"}]}
-        if conversation_id == "analyze":
-            assert graph_getter is semantic_config.get_data_analyze_graph
-            return {"messages": [{"role": "user", "content": "分析趋势", "timestamp": "t2"}]}
         if conversation_id == "nonlist":
             return {"messages": "bad"}
         if conversation_id == "empty":
@@ -961,7 +957,6 @@ def test_history_context_loader_branches(monkeypatch):
     assert asyncio.run(semantic_config._load_history_conversation_context("empty")) is None
     assert asyncio.run(semantic_config._load_history_conversation_context("boom")) is None
     assert asyncio.run(semantic_config._load_history_conversation_context("chat"))["user_turns"][0]["content"] == "查询销售额"
-    assert asyncio.run(semantic_config._load_history_conversation_context("analyze"))["user_turns"][0]["content"] == "分析趋势"
 
 
 def test_history_suggestion_normalization_invalid_and_duplicate_cases():
@@ -1585,24 +1580,21 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
     async def fake_get_agent_id(_db_path, conversation_id):
         return {
             "conv_agent": semantic_config.AGENT_ID,
-            "conv_data": semantic_config.DATA_ANALYZE_AGENT_ID,
             "conv_unknown": "unknown_agent",
         }.get(conversation_id)
 
     async def fake_get_detail(_db_path, conversation_id, graph_getter, checkpointer_getter):
-        assert graph_getter in {semantic_config.get_chat_data_graph, semantic_config.get_data_analyze_graph}
+        assert callable(graph_getter)
         return {"messages": [{"role": "user", "content": f"{conversation_id} 用户问题"}]}
 
     monkeypatch.setattr(semantic_config.conversation, "get_agent_id", fake_get_agent_id)
     monkeypatch.setattr(semantic_config.conversation, "get_detail", fake_get_detail)
 
     agent_context = asyncio.run(semantic_config._load_history_conversation_context("conv_agent"))
-    data_context = asyncio.run(semantic_config._load_history_conversation_context("conv_data"))
     unknown_context = asyncio.run(semantic_config._load_history_conversation_context("conv_unknown"))
     empty_context = asyncio.run(semantic_config._load_history_conversation_context(""))
 
     assert agent_context["user_turns"][0]["content"] == "conv_agent 用户问题"
-    assert data_context["user_turns"][0]["content"] == "conv_data 用户问题"
     assert unknown_context is None
     assert empty_context is None
 

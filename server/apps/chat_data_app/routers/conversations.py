@@ -9,7 +9,7 @@ from typing import Callable, Optional, Dict, Any, List
 from fastapi import APIRouter, Query, UploadFile, File, Request
 from pydantic import BaseModel
 
-from utils.error_codes import ErrorCode, ensure_defined_error_code
+from utils.error_codes import ErrorCode
 from utils import conversation
 from utils import file_manager
 from utils.response import business_response
@@ -39,18 +39,10 @@ class CompletionRequest(BaseModel):
     file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
 
 
-class AgentAvailabilityResult(BaseModel):
-    """Agent 可用性检查结果。"""
-    enabled: bool = True
-    message: str = ""
-    code: int = ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
-
-
 # ============ Agent 配置注册 ============
 
 _agent_configs: Dict[str, Dict[str, Any]] = {}
 _completion_handlers: Dict[str, Callable] = {}
-_agent_availability_checkers: Dict[str, Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]] = {}
 _default_db_path: Optional[str] = None  # 默认数据库路径（用于通过 conversation_id 查询 agent_id）
 
 
@@ -94,44 +86,6 @@ def register_completion_handler(agent_id: str, handler: Callable):
         handler: 处理函数，签名为 async def handler(conversation_id, query, options) -> StreamingResponse
     """
     _completion_handlers[agent_id] = handler
-
-
-def register_agent_availability_checker(agent_id: str, checker: Callable[[], bool | AgentAvailabilityResult | Dict[str, Any]]):
-    """注册 agent 可用性检查器。"""
-    _agent_availability_checkers[agent_id] = checker
-
-
-def _normalize_agent_availability_result(result: bool | AgentAvailabilityResult | Dict[str, Any] | None) -> AgentAvailabilityResult:
-    """统一 agent 可用性检查结果。"""
-    if isinstance(result, AgentAvailabilityResult):
-        return result
-    if isinstance(result, dict):
-        return AgentAvailabilityResult(
-            enabled=bool(result.get("enabled", True)),
-            message=str(result.get("message") or ""),
-            code=ensure_defined_error_code(result.get("code") or ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED),
-        )
-    return AgentAvailabilityResult(enabled=bool(True if result is None else result))
-
-
-def get_agent_availability(agent_id: str) -> AgentAvailabilityResult:
-    """读取 agent 可用性，未注册检查器时默认可用。"""
-    checker = _agent_availability_checkers.get(agent_id)
-    if not checker:
-        return AgentAvailabilityResult(enabled=True)
-    return _normalize_agent_availability_result(checker())
-
-
-def _agent_unavailable_response(agent_id: str):
-    """构造 agent 不可用响应。"""
-    availability = get_agent_availability(agent_id)
-    if availability.enabled:
-        return None
-    return business_response(
-        msg=availability.message or "功能暂未开放",
-        code=availability.code,
-        status="error",
-    )
 
 
 def get_agent_config(agent_id: str) -> Optional[Dict[str, Any]]:
@@ -274,10 +228,6 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         config = get_agent_config(request.agent_id)
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-        unavailable_response = _agent_unavailable_response(request.agent_id)
-        if unavailable_response:
-            return unavailable_response
-
         result = await conversation.create(config["db_path"], request.agent_id, user_id)
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
@@ -321,12 +271,7 @@ async def list_conversations(
             unknown_agent_ids = [item for item in requested_agent_ids if not get_agent_config(item)]
             if unknown_agent_ids:
                 return business_response(msg=f"未知的 agent_id: {','.join(unknown_agent_ids)}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-            enabled_agent_ids = [
-                item
-                for item in requested_agent_ids
-                if get_agent_availability(item).enabled
-            ]
-            rows = await conversation.list_by_agent_ids(enabled_agent_ids, user_id, page_size + 1, offset) if enabled_agent_ids else []
+            rows = await conversation.list_by_agent_ids(requested_agent_ids, user_id, page_size + 1, offset)
             result = {
                 "conversations": rows[:page_size],
                 "page": page,
@@ -338,10 +283,7 @@ async def list_conversations(
             config = get_agent_config(agent_id)
             if not config:
                 return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-            if get_agent_availability(agent_id).enabled:
-                rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
-            else:
-                rows = []
+            rows = await conversation.list(config["db_path"], agent_id, user_id, page_size + 1, offset)
             result = {
                 "conversations": rows[:page_size],
                 "page": page,
@@ -350,12 +292,7 @@ async def list_conversations(
             }
         else:
             # 不指定 agent_id，查询所有智能体的会话
-            enabled_agent_configs = {
-                item_agent_id: config
-                for item_agent_id, config in _agent_configs.items()
-                if get_agent_availability(item_agent_id).enabled
-            }
-            result = await conversation.list_all(enabled_agent_configs, user_id, page_size)
+            result = await conversation.list_all(_agent_configs, user_id, page_size)
         return business_response(data=result, msg="获取对话列表成功")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
@@ -579,10 +516,6 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
-        unavailable_response = _agent_unavailable_response(request.agent_id)
-        if unavailable_response:
-            return unavailable_response
-
         options = dict(request.options or {})
         requested_datasource_id = str(options.get("datasource_id") or "").strip()
         datasource_binding_response = await _completion_datasource_binding_response(

@@ -20,9 +20,17 @@ def _resolve_data_root() -> Path:
     return path
 
 
+def _resolve_chat_data_home() -> Path:
+    value = os.getenv("CHAT_DATA_HOME")
+    if value:
+        return Path(value).expanduser().resolve()
+    return (_resolve_data_root() / "chat_data").resolve()
+
+
 _BASE_PATH = _resolve_data_root()
 
 DATA_ROOT = str(_BASE_PATH)
+CHAT_DATA_HOME = str(_resolve_chat_data_home())
 COMPLAINTS_BASE_DIR = str(_BASE_PATH / "complaints")
 VIOLATION_BASE_DIR = str(_BASE_PATH / "violation")
 CASE_LIBRARY_BASE_DIR = str(_BASE_PATH / "case_library")
@@ -202,6 +210,7 @@ def get_complaints_real_path(user_id: str, base_id: str, relative_path: str, sco
 
 __all__ = [
     "DATA_ROOT",
+    "CHAT_DATA_HOME",
     "COMPLAINTS_BASE_DIR",
     "ComplaintScopeContext",
     "VIOLATION_BASE_DIR",

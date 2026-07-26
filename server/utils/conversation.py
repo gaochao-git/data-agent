@@ -406,6 +406,13 @@ def _get_checkpoint_datasource_id(values: Dict[str, Any] | None) -> Optional[str
     return datasource_id or None
 
 
+def _get_checkpoint_workspace_backend(values: Dict[str, Any] | None) -> str:
+    """读取会话最近一轮使用的工作区后端。"""
+    workspace = (values or {}).get("workspace")
+    backend = str(workspace.get("workspace_backend") or "") if isinstance(workspace, dict) else ""
+    return "sandbox" if backend == "sandbox" else "local"
+
+
 async def get_checkpoint_datasource_id(
     conversation_id: str,
     get_graph: Callable,
@@ -422,6 +429,31 @@ async def get_checkpoint_datasource_id(
         graph = get_graph(checkpointer)
         state = await graph.aget_state(config)
     return _get_checkpoint_datasource_id(state.values if state and state.values else None)
+
+
+async def get_checkpoint_workspace_backend(
+    conversation_id: str,
+    get_graph: Callable,
+    get_checkpointer_fn: Callable,
+) -> str:
+    """读取会话最近一轮持久化的工作区后端。"""
+    if get_checkpointer_fn is None:
+        return "local"
+    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
+    async with get_checkpointer_fn() as checkpointer:
+        getter = getattr(checkpointer, "aget_tuple", None)
+        if callable(getter):
+            checkpoint_tuple = await getter(config)
+            checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple else None
+            values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+            # aget_tuple 已经确认该会话是否存在 checkpoint。新建会话在首轮
+            # completion 持久化前没有 checkpoint，应直接使用默认本地工作区。
+            return _get_checkpoint_workspace_backend(values if isinstance(values, dict) else None)
+        if get_graph is None:
+            return "local"
+        graph = get_graph(checkpointer)
+        state = await graph.aget_state(config)
+    return _get_checkpoint_workspace_backend(state.values if state and state.values else None)
 
 
 async def _get_checkpoint_datasource_id_from_tuple(checkpointer: Any, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:

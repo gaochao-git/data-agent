@@ -2103,7 +2103,7 @@ def test_datasource_manager_name_scope_and_column_finder_edges():
     assert asyncio.run(manager.get_default_datasource_async()) is None
 
 
-def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch, tmp_path):
+def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
     created = {}
 
     class FakeDatasourceDao:
@@ -2113,10 +2113,9 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch, t
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DataSourceDao", FakeDatasourceDao)
     monkeypatch.setattr("apps.chat_data_app.services.datasource_manager._datasource_manager_instance", None)
 
-    manager = DataSourceManager(base_dir=str(tmp_path))
+    manager = DataSourceManager()
 
     assert created["called"] is True
-    assert manager.base_dir == tmp_path
 
     first = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
     second = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()

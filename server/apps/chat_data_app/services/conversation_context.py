@@ -1,4 +1,4 @@
-"""DataAnalyze prompt context built on the shared semantic conversation context."""
+"""Conversation prompt context built on the shared semantic conversation context."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from typing import Any
 
 from utils.logger import get_logger
 
-from ..agent.analyze_data_agent import get_data_analyze_tool_chain
 from .datasource_manager import get_datasource_manager
 from .semantic_conversation_context import (
     AgentPromptContext,
@@ -76,7 +75,7 @@ def _selected_semantic_config_item(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_data_context_notes(has_selected_semantic_config: bool) -> list[str]:
+def _build_conversation_context_notes(has_selected_semantic_config: bool) -> list[str]:
     notes = ["每次语义查询必须在工具参数中明确传入当前用户可用的 member_datasource_ids。"]
     if has_selected_semantic_config:
         return [
@@ -91,18 +90,18 @@ def _build_data_context_notes(has_selected_semantic_config: bool) -> list[str]:
     ]
 
 
-async def build_data_analyze_context(
+async def build_conversation_prompt_context(
     prompt_context: AgentPromptContext,
 ) -> dict[str, Any]:
-    """Add DataAnalyze-only prompt fields to the shared prompt contract."""
+    """Add bounded data metadata to the single Agent prompt contract."""
     datasource = prompt_context.get("datasource")
     if datasource is None:
-        return _empty_data_context(
+        return _empty_conversation_context(
             prompt_context,
             "当前未选择数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。",
         )
     if datasource.get("missing"):
-        return _empty_data_context(
+        return _empty_conversation_context(
             prompt_context,
             "未找到当前数据源，可先按通用分析框架生成分析思路、指标假设和后续工具步骤。",
         )
@@ -127,8 +126,7 @@ async def build_data_analyze_context(
         "tables": tables,
         "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
         "semantic_configs": [_selected_semantic_config_item(selected_config)] if selected_config else [],
-        "tool_chain": get_data_analyze_tool_chain(),
-        "notes": _build_data_context_notes(selected_config is not None),
+        "notes": _build_conversation_context_notes(selected_config is not None),
     }
 
 
@@ -141,11 +139,11 @@ async def _load_datasource_with_tables(
         datasource = await get_datasource_manager().get_datasource_async(datasource_id)
         return datasource or fallback_datasource
     except Exception as exc:
-        logger.warning("读取智能分析表结构失败: datasource_id=%s error=%s", datasource_id, exc)
+        logger.warning("读取会话表结构失败: datasource_id=%s error=%s", datasource_id, exc)
         return fallback_datasource
 
 
-def _empty_data_context(prompt_context: AgentPromptContext, message: str) -> dict[str, Any]:
+def _empty_conversation_context(prompt_context: AgentPromptContext, message: str) -> dict[str, Any]:
     return {
         "datasource": prompt_context.get("datasource"),
         "execution_targets": list(prompt_context.get("execution_targets") or []),
@@ -153,6 +151,5 @@ def _empty_data_context(prompt_context: AgentPromptContext, message: str) -> dic
         "tables": [],
         "semantic_config_directory_info": str(prompt_context.get("semantic_config_directory_info") or ""),
         "semantic_configs": [],
-        "tool_chain": get_data_analyze_tool_chain(),
         "notes": [message],
     }

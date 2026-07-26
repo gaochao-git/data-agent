@@ -17,14 +17,16 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.services.data_analyze_workspace import (
-    ensure_data_analyze_workspace,
+from apps.chat_data_app.services.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    ensure_conversation_workspace,
     list_workspace_files,
     read_workspace_text_file,
     resolve_workspace_path,
     to_visible_path,
 )
-from apps.chat_data_app.agent.analyze_data_agent import create_data_analyze_tools
+from apps.chat_data_app.agent.data_agent import assemble_tools
+from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
 
@@ -35,104 +37,15 @@ present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agen
 skill_load_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.skill_load")
 
 
-def _sandbox_visible_path(workspace_root: str, target: Path) -> str:
-    visible = to_visible_path(workspace_root, target)
-    if visible.startswith(("/workspace/", "/outputs/", "/uploads/", "/runtime-skills/")):
-        return f"/mnt/user-data{visible}"
-    return visible
-
-
-def _local_workspace_root(session_ref) -> str:
-    return str(getattr(session_ref, "workspace_root", "") or "")
-
-
-def _install_local_sandbox(monkeypatch):
-    async def fake_get_workspace_execution_session(workspace_root, user_id="system"):
-        _ = user_id
-        return SimpleNamespace(workspace_root=workspace_root)
-
-    async def fake_sandbox_read_text_file(*, session_ref, file_path, offset, limit):
-        workspace_root = _local_workspace_root(session_ref)
-        target = resolve_workspace_path(workspace_root, file_path)
-        visible_path = _sandbox_visible_path(workspace_root, target)
-        if not target.exists():
-            return {"exists": False, "path": visible_path}
-        if target.is_dir():
-            return {"exists": True, "is_dir": True, "path": visible_path}
-        data = target.read_bytes()
-        if b"\x00" in data[:4096]:
-            return {"exists": True, "is_binary": True, "path": visible_path}
-        lines = data.decode("utf-8", errors="replace").splitlines()
-        start = max(0, int(offset or 0))
-        count = max(1, int(limit or 1))
-        selected = lines[start:start + count]
-        return {
-            "exists": True,
-            "is_dir": False,
-            "is_binary": False,
-            "path": visible_path,
-            "lines": selected,
-            "total_lines": len(lines),
-            "start_line": start + 1,
-            "end_line": start + len(selected),
-            "has_more": start + len(selected) < len(lines),
-        }
-
-    async def fake_sandbox_write_text_file(*, session_ref, file_path, content, mode):
-        workspace_root = _local_workspace_root(session_ref)
-        target = resolve_workspace_path(workspace_root, file_path, writable=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if mode == "overwrite":
-            target.write_text(str(content), encoding="utf-8")
-        else:
-            with target.open("a", encoding="utf-8") as file_obj:
-                file_obj.write(str(content))
-        return {
-            "operation": "write",
-            "file_path": _sandbox_visible_path(workspace_root, target),
-            "mode": mode,
-            "bytes": len(str(content).encode("utf-8")),
-        }
-
-    async def fake_sandbox_artifact_payload(*, session_ref, file_path):
-        workspace_root = _local_workspace_root(session_ref)
-        target = resolve_workspace_path(workspace_root, file_path)
-        visible_path = _sandbox_visible_path(workspace_root, target)
-        if not target.exists() or not target.is_file() or not visible_path.startswith("/mnt/user-data/outputs/"):
-            return {}
-        return _artifact_payload_from_bytes(visible_path=visible_path, data=target.read_bytes())
-
-    async def fake_sandbox_apply_patch_ops(*, session_ref, ops, dry_run):
-        workspace_root = _local_workspace_root(session_ref)
-        parsed_ops = []
-        for item in ops:
-            kind = item.get("kind")
-            path = str(item.get("visible_path") or item.get("path") or "")
-            if kind == "add":
-                parsed_ops.append(file_edit_tool_module.AddOp(path=path, lines=[str(line) for line in item.get("lines") or []]))
-            elif kind == "delete":
-                parsed_ops.append(file_edit_tool_module.DeleteOp(path=path))
-            elif kind == "update":
-                hunks = [
-                    file_edit_tool_module.Hunk(lines=[str(line) for line in hunk.get("lines") or []])
-                    for hunk in item.get("hunks") or []
-                ]
-                parsed_ops.append(file_edit_tool_module.UpdateOp(path=path, hunks=hunks))
-        return file_edit_tool_module.apply_patch_ops(parsed_ops, root=workspace_root, dry_run=dry_run)
-
-    monkeypatch.setattr(file_read_tool_module, "sandbox_read_text_file", fake_sandbox_read_text_file)
-    monkeypatch.setattr(file_edit_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
-    monkeypatch.setattr(file_edit_tool_module, "sandbox_artifact_payload", fake_sandbox_artifact_payload)
-    monkeypatch.setattr(file_edit_tool_module, "sandbox_apply_patch_ops", fake_sandbox_apply_patch_ops)
-    monkeypatch.setattr(sql_tool_module, "get_workspace_execution_session", fake_get_workspace_execution_session)
-
-
-def _create_local_sandbox_tools(monkeypatch, paths, **kwargs):
-    _install_local_sandbox(monkeypatch)
-    session_ref = SimpleNamespace(workspace_root=paths["root"])
+def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=paths["root"],
+        user_id="system",
+        backend="local",
+    )
     return {
         tool.name: tool
-        for tool in create_data_analyze_tools(paths["root"], execution_session_ref=session_ref, **kwargs)
+        for tool in assemble_tools(AgentRuntimeOptions(), runtime, **kwargs)
     }
 
 
@@ -154,29 +67,30 @@ def _analysis_query_state(
         "semantic_config_id": semantic_config_id,
         "user_id": "system",
         "conversation_id": conversation_id,
-        "analysis_workspace": {"workspace_root": paths["root"]},
+        "workspace": {"workspace_root": paths["root"], "workspace_backend": "local"},
         "messages": [HumanMessage(content=user_query)],
     }
 
 
-def test_ensure_data_analyze_workspace_creates_expected_dirs():
-    paths = ensure_data_analyze_workspace("conv_workspace_test")
+def test_ensure_conversation_workspace_creates_expected_dirs():
+    paths = ensure_conversation_workspace("conv_workspace_test", "user_a")
 
     assert Path(paths["root"]).exists()
+    assert Path(paths["root"]).as_posix().endswith("users/user_a/threads/conv_workspace_test/user-data")
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
-    assert Path(paths["runtime_skills"]).exists()
+    assert "runtime_skills" not in paths
 
 
 def test_ensure_workspace_rejects_invalid_conversation_id():
     for conversation_id in ["", ".", "..", ".hidden", "../bad"]:
         with pytest.raises(ValueError):
-            ensure_data_analyze_workspace(conversation_id)
+            ensure_conversation_workspace(conversation_id)
 
 
-def test_resolve_workspace_path_rejects_escape():
-    paths = ensure_data_analyze_workspace("conv_workspace_escape")
+def test_resolve_workspace_path_rejects_escape_and_symlink_escape(tmp_path):
+    paths = ensure_conversation_workspace(f"conv_workspace_escape_{uuid.uuid4().hex}")
 
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "../secret.txt")
@@ -184,18 +98,24 @@ def test_resolve_workspace_path_rejects_escape():
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "/tmp/secret.txt")
 
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private", encoding="utf-8")
+    (Path(paths["workspace"]) / "outside-link.txt").symlink_to(outside)
+    with pytest.raises(ValueError):
+        resolve_workspace_path(paths["root"], "workspace/outside-link.txt")
+
 
 def test_resolve_workspace_path_restricts_writes():
-    paths = ensure_data_analyze_workspace("conv_workspace_writes")
+    paths = ensure_conversation_workspace("conv_workspace_writes")
 
     writable = resolve_workspace_path(paths["root"], "workspace/plan.md", writable=True)
     assert writable.name == "plan.md"
     with pytest.raises(ValueError):
-        resolve_workspace_path(paths["root"], "runtime-skills/demo/SKILL.md", writable=True)
+        resolve_workspace_path(paths["root"], "other-files/demo/SKILL.md", writable=True)
 
 
 def test_resolve_workspace_path_accepts_short_absolute_aliases():
-    paths = ensure_data_analyze_workspace(f"conv_workspace_alias_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_alias_{uuid.uuid4().hex}")
 
     workspace_file = resolve_workspace_path(paths["root"], "/workspace/demo.json", writable=True)
     outputs_file = resolve_workspace_path(paths["root"], "/outputs/sales.chart.json", writable=True)
@@ -205,20 +125,22 @@ def test_resolve_workspace_path_accepts_short_absolute_aliases():
 
 
 def test_workspace_json_list_read_and_visible_paths():
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_ops_{uuid.uuid4().hex}")
+    conversation_id = f"conv_workspace_file_ops_{uuid.uuid4().hex}"
+    paths = ensure_conversation_workspace(conversation_id)
     context_file = Path(paths["workspace"]) / "context.json"
     context_file.write_text('{"用户": "张三"}', encoding="utf-8")
     visible_path = to_visible_path(paths["root"], context_file)
 
     assert visible_path == "/workspace/context.json"
     assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"
-    assert resolve_workspace_path(paths["root"], "") == Path(paths["root"]).resolve()
+    with pytest.raises(ValueError):
+        resolve_workspace_path(paths["root"], "")
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
-    files = list_workspace_files(Path(paths["root"]).name)
+    files = list_workspace_files(conversation_id)
     assert any(item["path"] == "/workspace/context.json" and item["directory"] == "workspace" for item in files)
 
-    payload = read_workspace_text_file(Path(paths["root"]).name, "/mnt/user-data/workspace/context.json")
+    payload = read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/context.json")
     assert payload["path"] == "/workspace/context.json"
     assert payload["relative_path"] == "workspace/context.json"
     assert '"用户": "张三"' in payload["content"]
@@ -229,18 +151,19 @@ def test_workspace_json_list_read_and_visible_paths():
 
 
 def test_read_workspace_text_file_rejects_missing_and_large_files():
-    paths = ensure_data_analyze_workspace(f"conv_workspace_read_errors_{uuid.uuid4().hex}")
+    conversation_id = f"conv_workspace_read_errors_{uuid.uuid4().hex}"
+    paths = ensure_conversation_workspace(conversation_id)
     with pytest.raises(FileNotFoundError):
-        read_workspace_text_file(Path(paths["root"]).name, "workspace/missing.txt")
+        read_workspace_text_file(conversation_id, "workspace/missing.txt")
 
     target = Path(paths["workspace"]) / "big.txt"
     target.write_text("abcdef", encoding="utf-8")
     with pytest.raises(ValueError):
-        read_workspace_text_file(Path(paths["root"]).name, "workspace/big.txt", max_bytes=3)
+        read_workspace_text_file(conversation_id, "workspace/big.txt", max_bytes=3)
 
 
 @pytest.mark.asyncio
-async def test_skill_load_tool_builds_payload_and_uploads(monkeypatch, tmp_path):
+async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tmp_path):
     skill_dir = tmp_path / "demo-skill"
     (skill_dir / "references").mkdir(parents=True)
     (skill_dir / "scripts").mkdir()
@@ -258,22 +181,19 @@ async def test_skill_load_tool_builds_payload_and_uploads(monkeypatch, tmp_path)
         assert user_id == "u1"
         return {"path": str(skill_dir / "SKILL.md"), "title": "演示技能", "description": "演示说明"}
 
-    async def fake_upload_skill_directory_to_sandbox(*, session_ref, skill_name, source_dir):
-        assert session_ref is None
-        assert skill_name == "demo-skill"
-        assert source_dir == skill_dir
-        return "/mnt/user-data/runtime-skills/demo-skill"
-
     monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
-    monkeypatch.setattr(skill_load_tool_module, "upload_skill_directory_to_sandbox", fake_upload_skill_directory_to_sandbox)
-
-    tool = skill_load_tool_module.create_skill_load_tool(str(tmp_path), user_id="u1")
+    workspace_root = tmp_path / "workspace-root"
+    workspace_root.mkdir()
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+    tool = skill_load_tool_module.create_skill_load_tool(runtime, user_id="u1")
     result = await tool.ainvoke({"skill_name": "demo-skill"})
 
     assert result.startswith("[skill_load]\n")
     assert "skill_name=demo-skill" in result
     assert "title=演示技能" in result
-    assert "runtime_path=/mnt/user-data/runtime-skills/demo-skill" in result
+    assert "runtime_path=/mnt/skills/public/demo-skill" in result
     assert 'references=["guide"]' in result
     assert 'scripts=["run.py"]' in result
     assert 'assets=["demo.txt"]' in result
@@ -332,8 +252,8 @@ def test_outputs_standard_file_artifact_detected_by_native_suffix():
 
 @pytest.mark.asyncio
 async def test_file_edit_accepts_structured_content(monkeypatch):
-    paths = ensure_data_analyze_workspace("conv_workspace_file_edit")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace("conv_workspace_file_edit")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "file_path": "workspace/plan.json",
@@ -347,8 +267,8 @@ async def test_file_edit_accepts_structured_content(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_edit_rejects_invalid_operation_and_mode(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_edit_invalid_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_invalid_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     bad_operation = await tools["file_edit"].ainvoke({"operation": "delete", "file_path": "workspace/a.txt"})
     bad_mode = await tools["file_edit"].ainvoke({"operation": "write", "mode": "bad", "file_path": "workspace/a.txt"})
@@ -358,59 +278,48 @@ async def test_file_edit_rejects_invalid_operation_and_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_edit_append_and_sandbox_write_failure(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_edit_append_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+async def test_file_edit_append_uses_local_workspace(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_append_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     await tools["file_edit"].ainvoke({"file_path": "workspace/a.txt", "content": "first\n"})
     await tools["file_edit"].ainvoke({"file_path": "workspace/a.txt", "content": "second\n", "mode": "append"})
     assert (Path(paths["workspace"]) / "a.txt").read_text(encoding="utf-8") == "first\nsecond\n"
 
-    async def raise_write(**_kwargs):
-        raise RuntimeError("write failed")
-
-    monkeypatch.setattr(file_edit_tool_module, "sandbox_write_text_file", raise_write)
     result = await tools["file_edit"].ainvoke({"file_path": "workspace/b.txt", "content": "x"})
-    assert result == "file_edit 执行失败: write failed"
+    assert "[file_edit]" in result
+    assert (Path(paths["workspace"]) / "b.txt").read_text(encoding="utf-8") == "x"
 
 
 @pytest.mark.asyncio
 async def test_present_artifacts_returns_outputs_artifact_payload(monkeypatch):
-    async def fake_sandbox_artifact_payload(*, session_ref, file_path):
-        assert file_path == "/mnt/user-data/outputs/sales.chart.json"
-        return {
-            "file_path": "/mnt/user-data/outputs/sales.chart.json",
-            "artifact_type": "chart_spec",
-            "renderer": "chart",
-            "artifact_version": "v1",
-            "artifact_payload": {"title": "销售额趋势"},
-            "chart_spec": {"title": "销售额趋势"},
-        }
+    paths = ensure_conversation_workspace("conv_present_artifacts")
+    chart_path = Path(paths["outputs"]) / "sales.chart.json"
+    chart_path.write_text(json.dumps({
+        "version": "1.0", "title": "销售额趋势", "chart_type": "line",
+        "data": [{"month": "2026-01", "sales": 120}],
+        "encoding": {"x": "month", "y": ["sales"]},
+    }, ensure_ascii=False), encoding="utf-8")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    monkeypatch.setattr(present_artifacts_tool_module, "sandbox_artifact_payload", fake_sandbox_artifact_payload)
-    tools = {tool.name: tool for tool in create_data_analyze_tools(ensure_data_analyze_workspace("conv_present_artifacts")["root"])}
-
-    result = await tools["present_artifacts"].ainvoke({"files": ["/mnt/user-data/outputs/sales.chart.json"]})
+    result = await tools["present_artifacts"].ainvoke({"files": ["/outputs/sales.chart.json"]})
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 1
     assert payload["errors"] == []
     assert payload["artifacts"][0]["artifact_type"] == "chart_spec"
-    assert payload["artifacts"][0]["file_path"] == "/mnt/user-data/outputs/sales.chart.json"
+    assert payload["artifacts"][0]["file_path"] == "/outputs/sales.chart.json"
     assert payload["artifacts"][0]["name"] == "sales"
     assert payload["artifacts"][0]["mime_type"] == "application/json"
-    assert payload["artifacts"][0]["renderer"] == "chart"
+    assert "renderer" not in payload["artifacts"][0]
     assert "artifact_payload" not in payload["artifacts"][0]
     assert "chart_spec" not in payload["artifacts"][0]
 
 
 @pytest.mark.asyncio
 async def test_present_artifacts_rejects_non_artifact(monkeypatch):
-    async def fake_sandbox_artifact_payload(*, session_ref, file_path):
-        return {}
-
-    monkeypatch.setattr(present_artifacts_tool_module, "sandbox_artifact_payload", fake_sandbox_artifact_payload)
-    tools = {tool.name: tool for tool in create_data_analyze_tools(ensure_data_analyze_workspace("conv_present_artifacts_reject")["root"])}
+    paths = ensure_conversation_workspace("conv_present_artifacts_reject")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["present_artifacts"].ainvoke({"files": ["workspace/draft.json"]})
 
@@ -422,18 +331,15 @@ async def test_present_artifacts_rejects_non_artifact(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_present_artifacts_skips_empty_file_and_records_payload_errors(monkeypatch):
-    async def fake_sandbox_artifact_payload(*, session_ref, file_path):
-        raise RuntimeError(f"bad artifact: {file_path}")
-
-    monkeypatch.setattr(present_artifacts_tool_module, "sandbox_artifact_payload", fake_sandbox_artifact_payload)
-    tools = {tool.name: tool for tool in create_data_analyze_tools(ensure_data_analyze_workspace("conv_present_artifacts_error")["root"])}
+    paths = ensure_conversation_workspace("conv_present_artifacts_error")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["present_artifacts"].ainvoke({"files": ["", "outputs/bad.unknown"]})
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 0
     assert payload["artifacts"] == []
-    assert payload["errors"] == [{"file_path": "outputs/bad.unknown", "error": "bad artifact: outputs/bad.unknown"}]
+    assert payload["errors"] == [{"file_path": "outputs/bad.unknown", "error": "文件不是可展示的 outputs 产物"}]
 
 
 def test_present_artifacts_display_name_and_mime_helpers():
@@ -448,8 +354,8 @@ def test_present_artifacts_display_name_and_mime_helpers():
 
 @pytest.mark.asyncio
 async def test_file_read_default_limit_is_500(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_read_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["workspace"]) / "long.txt"
     target.write_text("\n".join(f"line {index}" for index in range(1, 602)), encoding="utf-8")
 
@@ -464,8 +370,8 @@ async def test_file_read_default_limit_is_500(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_read_outputs_graph_chart_spec_returns_content(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_read_graph_chart_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_graph_chart_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "chart_spec_graph.json"
     target.write_text(json.dumps({
         "version": "1.0",
@@ -484,8 +390,8 @@ async def test_file_read_outputs_graph_chart_spec_returns_content(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_read_rejects_invalid_offset_and_limit(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_read_invalid_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_invalid_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "offset": -1}) == "offset 必须大于等于 0"
     assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 0}) == "limit 必须在 1-1000 之间"
@@ -494,8 +400,8 @@ async def test_file_read_rejects_invalid_offset_and_limit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_read_reports_missing_dir_binary_empty_and_offset_overflow(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_read_edges_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_edges_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
     (Path(paths["workspace"]) / "empty.txt").write_text("", encoding="utf-8")
     (Path(paths["workspace"]) / "one.txt").write_text("line1\n", encoding="utf-8")
     (Path(paths["workspace"]) / "bin.dat").write_bytes(b"a\x00b")
@@ -514,24 +420,19 @@ async def test_file_read_reports_missing_dir_binary_empty_and_offset_overflow(mo
 
 
 @pytest.mark.asyncio
-async def test_file_read_returns_error_when_sandbox_read_fails(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_read_fail_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+async def test_file_read_rejects_local_path_escape(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_fail_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    async def raise_read(**_kwargs):
-        raise RuntimeError("sandbox down")
+    result = await tools["file_read"].ainvoke({"file_path": "../demo.txt"})
 
-    monkeypatch.setattr(file_read_tool_module, "sandbox_read_text_file", raise_read)
-
-    result = await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt"})
-
-    assert result == "file_read 执行失败: sandbox down"
+    assert result.startswith("file_read 执行失败: 路径越界")
 
 
 @pytest.mark.asyncio
 async def test_file_edit_patch_updates_file(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_patch_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_patch_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     patch = """*** Begin Patch
 *** Add File: workspace/demo.txt
@@ -553,8 +454,8 @@ async def test_file_edit_patch_updates_file(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_edit_patch_dry_run_does_not_write_file(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_file_patch_dry_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_file_patch_dry_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
     patch = """*** Begin Patch
 *** Add File: workspace/dry.txt
 +dry
@@ -692,8 +593,8 @@ def test_file_edit_next_action_helpers_cover_path_variants():
 
 @pytest.mark.asyncio
 async def test_file_edit_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_dashboard_draft_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_dashboard_draft_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -702,14 +603,14 @@ async def test_file_edit_write_workspace_dashboard_spec_has_no_dashboard_artifac
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/workspace/dashboard_draft.json"
+    assert payload["file_path"] == "/workspace/dashboard_draft.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_chart_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_chart_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -724,7 +625,7 @@ async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/monthly_simple_bar.chart.json"
+    assert payload["file_path"] == "/outputs/monthly_simple_bar.chart.json"
     assert payload["artifact_type"] == "chart_spec"
     assert payload["artifact_version"] == "v1"
     assert payload["artifact_payload"]["title"] == "销售额趋势"
@@ -733,8 +634,8 @@ async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_file_edit_write_workspace_chart_spec_has_no_chart_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_chart_draft_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_chart_draft_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -749,14 +650,14 @@ async def test_file_edit_write_workspace_chart_spec_has_no_chart_artifact_type(m
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/workspace/chart_spec_sales_trend_draft.json"
+    assert payload["file_path"] == "/workspace/chart_spec_sales_trend_draft.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_write_non_chart_json_has_no_chart_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_non_chart_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_non_chart_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -765,14 +666,14 @@ async def test_file_edit_write_non_chart_json_has_no_chart_artifact_type(monkeyp
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/query_result.json"
+    assert payload["file_path"] == "/outputs/query_result.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_write_empty_line_chart_has_no_chart_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_empty_chart_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_empty_chart_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -787,14 +688,14 @@ async def test_file_edit_write_empty_line_chart_has_no_chart_artifact_type(monke
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/empty_chart.json"
+    assert payload["file_path"] == "/outputs/empty_chart.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_write_invalid_chart_spec_has_no_chart_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_invalid_chart_write_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_write_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -807,14 +708,14 @@ async def test_file_edit_write_invalid_chart_spec_has_no_chart_artifact_type(mon
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/invalid_chart.json"
+    assert payload["file_path"] == "/outputs/invalid_chart.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_write_chart_spec_with_missing_encoding_field_has_no_chart_artifact_type(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_invalid_chart_encoding_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_encoding_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["file_edit"].ainvoke({
         "operation": "write",
@@ -829,14 +730,14 @@ async def test_file_edit_write_chart_spec_with_missing_encoding_field_has_no_cha
     })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/invalid_chart_encoding.json"
+    assert payload["file_path"] == "/outputs/invalid_chart_encoding.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
 async def test_file_edit_patch_returns_dashboard_spec_payload(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_dashboard_patch_{uuid.uuid4().hex}")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace(f"conv_workspace_dashboard_patch_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "dashboard.dashboard.json"
     target.write_text(json.dumps({
         "dashboard_name": "旧看板",
@@ -857,15 +758,15 @@ async def test_file_edit_patch_returns_dashboard_spec_payload(monkeypatch):
     result = await tools["file_edit"].ainvoke({"operation": "patch", "patch": patch})
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/dashboard.dashboard.json"
+    assert payload["file_path"] == "/outputs/dashboard.dashboard.json"
     assert payload["artifact_type"] == "dashboard_spec"
     assert payload["dashboard_spec"]["dashboard_name"] == "新看板"
 
 
 @pytest.mark.asyncio
 async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
-    paths = ensure_data_analyze_workspace("conv_workspace_file_patch_uploads")
-    tools = _create_local_sandbox_tools(monkeypatch, paths)
+    paths = ensure_conversation_workspace("conv_workspace_file_patch_uploads")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
 
     patch = """*** Begin Patch
 *** Add File: uploads/demo.txt
@@ -879,7 +780,7 @@ async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
     writes = []
     input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
 
@@ -915,15 +816,10 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
             "execution_time_ms": 12,
         }
 
-    async def fake_sandbox_write_text_file(*, session_ref, file_path, content, mode):
-        writes.append({"file_path": file_path, "content": content, "mode": mode})
-        return {"file_path": "/mnt/user-data/workspace/current.json"}
-
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(sql_tool_module, "sandbox_write_text_file", fake_sandbox_write_text_file)
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
@@ -943,25 +839,22 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     assert payload["type"] == "query_result"
     assert payload["status"] == "succeeded"
     assert payload["data"] is None
-    assert payload["meta"]["result_path"] == "/mnt/user-data/workspace/current.json"
+    assert payload["meta"]["result_path"] == "/workspace/current.json"
     assert payload["meta"]["sql"] == "select month, sales from t"
     assert "dsl" not in payload["meta"]
     assert "datasource_id" not in payload["meta"]
     assert "member_datasource_ids" not in payload["meta"]
-    assert not (Path(paths["workspace"]) / "current.json").exists()
-    assert writes[0]["file_path"] == "workspace/current.json"
-    assert writes[0]["mode"] == "overwrite"
-    saved = json.loads(writes[0]["content"])
+    saved = json.loads((Path(paths["workspace"]) / "current.json").read_text(encoding="utf-8"))
     assert saved["results"][0]["data"][0]["sales"] == 120
 
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
     input_dsl = {"metrics": ["订单数"]}
 
     async def fake_get_config(*_args, **_kwargs):
-        return {"id": "sc_1", "metrics": [], "dimensions": []}
+        return {"id": "sc_1", "metrics": [{"name": "订单数"}], "dimensions": []}
 
     class FakeGenerator:
         def __init__(self, _semantic_config):
@@ -990,7 +883,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
@@ -1026,7 +919,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_offload_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_offload_{uuid.uuid4().hex}")
 
     async def fake_get_config(*_args, **_kwargs):
         return {"id": "sc_1", "metrics": [], "dimensions": []}
@@ -1065,7 +958,7 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     monkeypatch.setattr(sql_tool_module, "save_query_result", fake_save_query_result)
     monkeypatch.setattr(sql_tool_module, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
@@ -1091,8 +984,8 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
-    tools_without_datasource = _create_local_sandbox_tools(monkeypatch, paths, semantic_config_id="sc_1")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
+    tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths, semantic_config_id="sc_1")
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
     assert await tools_without_datasource["semantic_query_tool"].ainvoke({
@@ -1106,10 +999,14 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
         return {"success": True, "sql": sql, "columns": [], "data": []}
 
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
+    async def fake_get_config(*_args, **_kwargs):
+        return {"id": "sc_1", "metrics": [{"name": "订单数"}], "dimensions": []}
+
+    monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     assert await sql_tool_module.semantic_query_tool.ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["订单数"]},
+        "sql": "select 1",
         "save_as": "workspace/a.json",
         "state": {
             "execution_context": {
@@ -1118,11 +1015,11 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
                 "matched_member_datasource_ids": [],
             },
             "semantic_config_id": "sc_1",
-            "analysis_workspace": {},
+            "workspace": {},
         },
     }) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
 
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
@@ -1143,18 +1040,20 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
         "state": state,
     }) == "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
 
-    assert await sql_tool_module.semantic_query_tool.ainvoke({
-        "semantic_config_id": "",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["订单数"]},
-        "state": _analysis_query_state(paths),
-    }) == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 select_semantic_config_tool 后显式传入 semantic_config_id"
-    assert await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": [{"metrics": ["订单数"]}],
-        "state": state,
-    }) == "semantic_query_tool 执行失败: dsl 必须是对象"
+    with pytest.raises(ValueError, match="semantic_config_id"):
+        await sql_tool_module.semantic_query_tool.ainvoke({
+            "semantic_config_id": "",
+            "member_datasource_ids": ["m1"],
+            "dsl": {"metrics": ["订单数"]},
+            "state": _analysis_query_state(paths),
+        })
+    with pytest.raises(ValueError, match="dsl"):
+        await tools["semantic_query_tool"].ainvoke({
+            "semantic_config_id": "sc_1",
+            "member_datasource_ids": ["m1"],
+            "dsl": [{"metrics": ["订单数"]}],
+            "state": state,
+        })
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
@@ -1165,7 +1064,7 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_compile_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_compile_{uuid.uuid4().hex}")
 
     async def fake_get_config(*_args, **_kwargs):
         return {"id": "sc_1", "metrics": [], "dimensions": []}
@@ -1188,7 +1087,7 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
@@ -1206,7 +1105,7 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
-    paths = ensure_data_analyze_workspace(f"conv_workspace_exec_error_{uuid.uuid4().hex}")
+    paths = ensure_conversation_workspace(f"conv_workspace_exec_error_{uuid.uuid4().hex}")
 
     async def fake_get_config(*_args, **_kwargs):
         return {"id": "sc_1", "metrics": [], "dimensions": []}
@@ -1224,7 +1123,7 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    tools = _create_local_sandbox_tools(
+    tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",

@@ -22,14 +22,12 @@ class FakeRequest:
 def router_state(monkeypatch):
     original_configs = dict(conversation_router._agent_configs)
     original_completion = dict(conversation_router._completion_handlers)
-    original_availability = dict(conversation_router._agent_availability_checkers)
     original_db_path = conversation_router._default_db_path
 
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
-    conversation_router._agent_availability_checkers.clear()
     conversation_router._default_db_path = "db"
     conversation_router._agent_configs.update({
         "agent_a": {
@@ -54,16 +52,12 @@ def router_state(monkeypatch):
     conversation_router._agent_configs.update(original_configs)
     conversation_router._completion_handlers.clear()
     conversation_router._completion_handlers.update(original_completion)
-    conversation_router._agent_availability_checkers.clear()
-    conversation_router._agent_availability_checkers.update(original_availability)
     conversation_router._default_db_path = original_db_path
 
 
 def test_registration_and_auth_helpers(router_state, monkeypatch):
     conversation_router.register_completion_handler("agent_b", lambda **_kwargs: None)
-    conversation_router.register_agent_availability_checker("agent_b", lambda: False)
     assert "agent_b" in conversation_router._completion_handlers
-    assert conversation_router.get_agent_availability("agent_b").enabled is False
     assert conversation_router.get_agent_config("agent_a")["db_path"] == "db"
 
     monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: SimpleNamespace(username="name-only"))
@@ -109,17 +103,6 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     assert created["data"]["id"] == "conv_new"
     assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="missing"), request))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
-    conversation_router.register_agent_availability_checker(
-        "agent_a",
-        lambda: conversation_router.AgentAvailabilityResult(
-            enabled=False,
-            message="功能暂未开放",
-            code=ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED,
-        ),
-    )
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
-    conversation_router._agent_availability_checkers.pop("agent_a", None)
-
     async def fake_list(_db_path, agent_id, user_id, limit, offset):
         assert agent_id == "agent_a"
         assert user_id == "u1"
@@ -146,15 +129,6 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     assert listed_all["data"]["agent_count"] == 2
     assert payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="missing", page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
     assert payload(await conversation_router.list_conversations(request, agent_id="missing", agent_ids=None, page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
-
-    conversation_router.register_agent_availability_checker("agent_a", lambda: {"enabled": False, "message": "禁用", "code": ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED})
-    hidden_one = payload(await conversation_router.list_conversations(request, agent_id="agent_a", agent_ids=None, page=1, page_size=20))
-    hidden_many = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="agent_a,agent_nograph", page=1, page_size=20))
-    hidden_all = payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids=None, page=1, page_size=20))
-    assert hidden_one["data"]["conversations"] == []
-    assert hidden_many["data"]["conversations"] == [{"id": "c2"}]
-    assert hidden_all["data"]["agent_count"] == 1
-    conversation_router._agent_availability_checkers.pop("agent_a", None)
 
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
@@ -275,16 +249,6 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
     assert calls[-1]["file_ids"] == ["f1"]
     assert calls[-1]["username"] == "用户一"
     assert calls[-1]["request"] is request
-
-    conversation_router.register_agent_availability_checker("agent_a", lambda: False)
-    disabled_response = payload(await conversation_router.completion(
-        "owned",
-        conversation_router.CompletionRequest(agent_id="agent_a", query="hello"),
-        request,
-    ))
-    assert disabled_response["code"] == ErrorCode.CHATDATA_DATA_ANALYZE_DISABLED
-    assert calls[-1]["query"] == "hello"
-    conversation_router._agent_availability_checkers.pop("agent_a", None)
 
     assert payload(await conversation_router.completion("", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert payload(await conversation_router.completion("owned", conversation_router.CompletionRequest(agent_id="agent_a", query=""), request))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD

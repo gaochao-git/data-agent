@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app import routes
+from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services import semantic_builder_compiler, semantic_conversation_context, semantic_tools
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from apps.chat_data_app.routers import conversations as conversation_router
@@ -59,7 +61,7 @@ class FakeGraph:
 
 @asynccontextmanager
 async def fake_checkpointer():
-    yield None
+    yield InMemorySaver()
 
 
 def _patch_completion_dependencies(monkeypatch, graph):
@@ -74,7 +76,7 @@ def _patch_completion_dependencies(monkeypatch, graph):
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "create_chat_data_agent", lambda **_kwargs: graph)
+    monkeypatch.setattr(handler_module, "create_data_agent", lambda *_args, **_kwargs: graph)
 
 
 def _post_completion(client, auth_headers, conversation_id, query, options=None):
@@ -310,18 +312,17 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda **_kwargs: asyncio.sleep(0, result=""))
+    monkeypatch.setattr(handler_module, "_build_query_skills_context", lambda *_args, **_kwargs: asyncio.sleep(0, result=""))
     for module in (semantic_builder_compiler, semantic_conversation_context, semantic_tools):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
-    for module_name in (
-        "apps.chat_data_app.agent.chat_data_agent",
-        "server.apps.chat_data_app.agent.chat_data_agent",
-        "apps.chat_data_app.agent.agent_runtime",
-        "server.apps.chat_data_app.agent.agent_runtime",
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None:
-            monkeypatch.setattr(module, "create_streaming_chat_model", lambda **_kwargs: fake_llm)
+
+    async def fake_get_dashboard_spec_semantic_config(*_args, **_kwargs):
+        return dict(config)
+
+    monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_dashboard_spec_semantic_config)
+    from apps.chat_data_app.agent import data_agent
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda *_args, **_kwargs: fake_llm)
 
     response = _post_completion(
         client,

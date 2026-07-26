@@ -16,8 +16,7 @@ from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 from utils.response import business_response
-from ..agent import get_chat_data_graph
-from ..agent.analyze_data_agent import get_data_analyze_graph
+from ..agent import get_data_agent_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,
@@ -42,7 +41,6 @@ from ..services.semantic_history_learning_service import (
 )
 from ..services.semantic_common import (
     AGENT_ID,
-    DATA_ANALYZE_AGENT_ID,
     _can_mutate_semantic_config,
     _is_private_semantic_config_owner,
     _is_public_semantic_config,
@@ -129,13 +127,10 @@ async def _load_history_conversation_context(conversation_id: str) -> Optional[D
         return None
     try:
         agent_id = await conversation.get_agent_id("", normalized_id)
-        if agent_id == DATA_ANALYZE_AGENT_ID:
-            graph_getter = get_data_analyze_graph
-        elif agent_id == AGENT_ID:
-            graph_getter = get_chat_data_graph
-        else:
+        if agent_id != AGENT_ID:
             logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
             return None
+        graph_getter = lambda checkpointer=None: get_data_agent_graph(checkpointer=checkpointer)
         detail = await conversation.get_detail("", normalized_id, graph_getter, get_checkpointer)
         messages = (detail or {}).get("messages") if isinstance(detail, dict) else []
         if not isinstance(messages, list):

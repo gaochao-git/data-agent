@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
-from ...services.data_analyze_workspace import resolve_workspace_path, to_visible_path
+from ...services.conversation_workspace import resolve_workspace_path, to_visible_path
 
 def _iter_targets(root: str, targets: list[str | Path]):
     for item in reversed(targets):
