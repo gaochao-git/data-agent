@@ -15,7 +15,11 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.tools import sandbox_run
 from apps.chat_data_app.services import workspace_execution
-from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.services.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    RuntimeSkillMount,
+    WorkspacePathMapping,
+)
 from apps.chat_data_app.services.workspace_execution import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
@@ -313,56 +317,72 @@ def test_workspace_execution_config_and_output_helpers(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _replace_local_workspace_paths 回归测试
+# WorkspacePathMapping 回归测试
 # 历史 bug：裸别名 /uploads 会误匹配物理根内部的 server/uploads 段，导致路径
 # 自引用反复展开（指数膨胀）；且正则里 [\\w] 写成双反斜杠使 \w 失效，导致
-# user-data/workspace 也被别名误改。以下用例钉死正确行为。
+# user-data/workspace 也被别名误改。以下用例钉死 translate 正确行为，并覆盖
+# 反向 mask（输出遮蔽）与技能路径翻译。
 # ---------------------------------------------------------------------------
 
 _CLEAN_ROOT = "/tmp/fxcjg_test_data/users/u1/threads/t1/user-data"  # 不含 /mnt/user-data/
 _BAD_ROOT = "/tmp/fxcjg_test_data/mnt/user-data/uploads/users/u1/threads/t1/user-data"
 
 
-def test_replace_workspace_paths_clean_config_no_explosion():
-    out = sandbox_run._replace_local_workspace_paths(
-        "ls -la /mnt/user-data/workspace", _CLEAN_ROOT
-    )
+def _translate(cmd: str) -> str:
+    return WorkspacePathMapping(workspace_root=_CLEAN_ROOT).translate(cmd)
+
+
+def test_path_mapping_clean_config_no_explosion():
+    out = _translate("ls -la /mnt/user-data/workspace")
     assert out == f"ls -la {_CLEAN_ROOT}/workspace"
-    # 关键：结果中不得残留 /mnt/user-data/，也不得出现路径套娃（长度可控）
     assert "/mnt/user-data/" not in out
     assert len(out) < 400
 
 
-def test_replace_workspace_paths_bare_alias_translated():
-    out = sandbox_run._replace_local_workspace_paths("cd /workspace && ls -la", _CLEAN_ROOT)
-    assert out == f"cd {_CLEAN_ROOT}/workspace && ls -la"
+def test_path_mapping_bare_alias_translated():
+    assert _translate("cd /workspace && ls -la") == f"cd {_CLEAN_ROOT}/workspace && ls -la"
 
 
-def test_replace_workspace_paths_mid_command_translated():
-    # 虚拟路径位于命令中间（非末尾）也必须翻译
-    out = sandbox_run._replace_local_workspace_paths("cd /workspace && pwd", _CLEAN_ROOT)
-    assert out == f"cd {_CLEAN_ROOT}/workspace && pwd"
+def test_path_mapping_mid_command_translated():
+    assert _translate("cd /workspace && pwd") == f"cd {_CLEAN_ROOT}/workspace && pwd"
 
 
-def test_replace_workspace_paths_subdir_preserved():
-    out = sandbox_run._replace_local_workspace_paths("cat /workspace/sub/x.py", _CLEAN_ROOT)
-    assert out == f"cat {_CLEAN_ROOT}/workspace/sub/x.py"
+def test_path_mapping_subdir_preserved():
+    assert _translate("cat /workspace/sub/x.py") == f"cat {_CLEAN_ROOT}/workspace/sub/x.py"
 
 
-def test_replace_workspace_paths_outputs_and_uploads():
-    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/outputs", _CLEAN_ROOT) == f"ls {_CLEAN_ROOT}/outputs"
-    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/uploads", _CLEAN_ROOT) == f"ls {_CLEAN_ROOT}/uploads"
+def test_path_mapping_outputs_and_uploads():
+    assert _translate("ls /mnt/user-data/outputs") == f"ls {_CLEAN_ROOT}/outputs"
+    assert _translate("ls /mnt/user-data/uploads") == f"ls {_CLEAN_ROOT}/uploads"
 
 
-def test_replace_workspace_paths_plain_command_untouched():
-    assert sandbox_run._replace_local_workspace_paths("echo hello && pwd", _CLEAN_ROOT) == "echo hello && pwd"
+def test_path_mapping_plain_command_untouched():
+    assert _translate("echo hello && pwd") == "echo hello && pwd"
 
 
-def test_replace_workspace_paths_no_partial_match():
+def test_path_mapping_no_partial_match():
     # /workspaceX 不应被当成 /workspace 别名误吞
-    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/workspaceX", _CLEAN_ROOT) == "ls /mnt/user-data/workspaceX"
+    assert _translate("ls /mnt/user-data/workspaceX") == "ls /mnt/user-data/workspaceX"
 
 
-def test_replace_workspace_paths_bad_root_raises():
+def test_path_mapping_bad_root_raises():
     with pytest.raises(ValueError, match="配置异常"):
-        sandbox_run._replace_local_workspace_paths("ls -la /mnt/user-data/workspace", _BAD_ROOT)
+        WorkspacePathMapping(workspace_root=_BAD_ROOT)
+
+
+def test_path_mapping_mask_restores_virtual_paths():
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT)
+    assert mapping.mask(f"pwd -> {_CLEAN_ROOT}/workspace/sub/x.py") == "pwd -> /mnt/user-data/workspace/sub/x.py"
+    assert mapping.mask(f"ls {_CLEAN_ROOT}/outputs") == "ls /mnt/user-data/outputs"
+    assert mapping.mask(f"ls {_CLEAN_ROOT}/uploads") == "ls /mnt/user-data/uploads"
+
+
+def test_path_mapping_skill_translate_and_mask_roundtrip():
+    skill_dir = Path("/srv/skills/public/dashboard-generation")
+    mount = RuntimeSkillMount(name="dashboard-generation", category="public", source_dir=skill_dir)
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, skill_mounts=(mount,))
+    cmd = "cat /mnt/skills/public/dashboard-generation/references/guide.md"
+    translated = mapping.translate(cmd)
+    assert translated == f"cat {skill_dir}/references/guide.md"
+    # 反向遮蔽后应还原为原始虚拟路径
+    assert mapping.mask(translated) == cmd

@@ -204,6 +204,81 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
     return f"/{relative}"
 
 
+@dataclass
+class WorkspacePathMapping:
+    """虚拟路径 ↔ 物理路径映射，本地模式命令翻译与输出遮蔽的单一入口。
+
+    虚拟前缀（白名单）：
+      - 工作区：``/mnt/user-data/{workspace,outputs,uploads}`` 及其裸别名
+        ``/workspace``、``/outputs``、``/uploads``
+      - 已登记技能：``/mnt/skills/{public,custom}/<name>/...``
+
+    - ``translate``：正向，把文本里的虚拟路径翻成物理路径，交给本地 subprocess。
+    - ``mask``：反向，把输出里的物理路径还原为虚拟路径，避免向模型泄漏宿主机路径。
+      边界感知，单次替换，物理根内含 ``/uploads`` 等段也不会自引用膨胀。
+    """
+
+    workspace_root: str
+    skill_mounts: tuple[RuntimeSkillMount, ...] = ()
+
+    # 裸别名仅在路径边界处匹配：前置负向断言挡住 server/uploads 之类内部段，
+    # 后置负向断言挡住 /workspaceX 误吞。与工作区虚拟前缀共用同一套边界规则。
+    _ALIAS_RE = re.compile(r"(?<![\w/])/(workspace|outputs|uploads)(?![\w])")
+    _VIRTUAL_RE = re.compile(r"/mnt/user-data/(workspace|outputs|uploads)(?![\w])")
+
+    def __post_init__(self) -> None:
+        root = self.workspace_root.rstrip("/")
+        # 物理根绝不能包含虚拟前缀 /mnt/user-data/；若包含说明 DATA_ROOT/CHAT_DATA_HOME
+        # 被误配成 sandbox 挂载点路径，继续替换会导致路径指数膨胀。
+        if "/mnt/user-data/" in root:
+            raise ValueError(
+                "workspace_root 配置异常：物理根不应包含 /mnt/user-data/，"
+                "请检查 DATA_ROOT/CHAT_DATA_HOME 环境变量是否误用了 sandbox 虚拟挂载点路径"
+            )
+        self._root = root
+        self._physical_workspace = {
+            "workspace": f"{root}/workspace",
+            "outputs": f"{root}/outputs",
+            "uploads": f"{root}/uploads",
+        }
+        # virtual_root -> 物理 source_dir；按虚拟根长度降序，避免子串误伤。
+        self._skill_physical = {
+            mount.visible_root: str(mount.source_dir) for mount in self.skill_mounts
+        }
+
+    def translate(self, text: str) -> str:
+        """正向：命令/文本中的虚拟路径 → 物理路径。"""
+        if not text:
+            return text
+        out = text
+        # 1) 裸别名规范化成 /mnt/user-data/ 形式（边界安全，不误伤物理根内部段）。
+        out = self._ALIAS_RE.sub(r"/mnt/user-data/\1", out)
+        # 2) 技能虚拟 → 物理（最长优先）。
+        for virtual_root, physical in sorted(
+            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
+            out = out.replace(virtual_root, physical)
+        # 3) 工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
+        out = self._VIRTUAL_RE.sub(lambda m: f"{self._root}/{m.group(1)}", out)
+        return out
+
+    def mask(self, text: str) -> str:
+        """反向：输出中的物理路径 → 虚拟路径，遮蔽宿主机绝对路径。"""
+        if not text:
+            return text
+        out = text
+        # 1) 技能物理 → 虚拟（最长优先）。
+        for virtual_root, physical in sorted(
+            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
+            if physical:
+                out = out.replace(physical, virtual_root)
+        # 2) 工作区物理 → 虚拟。
+        for name in ("workspace", "outputs", "uploads"):
+            out = out.replace(self._physical_workspace[name], f"/mnt/user-data/{name}")
+        return out
+
+
 def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[dict[str, Any]]:
     """列出会话工作区中的可见文件，不跟随逃逸符号链接。"""
     paths = ensure_conversation_workspace(conversation_id, user_id)
