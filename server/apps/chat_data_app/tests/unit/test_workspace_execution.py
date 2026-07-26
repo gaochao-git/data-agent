@@ -310,3 +310,59 @@ def test_workspace_execution_config_and_output_helpers(monkeypatch):
     )
     assert chart["artifact_type"] == "chart_spec"
     assert workspace_execution.truncate_output("abcdef", limit=3) == ("abc\n...[truncated]", True)
+
+
+# ---------------------------------------------------------------------------
+# _replace_local_workspace_paths 回归测试
+# 历史 bug：裸别名 /uploads 会误匹配物理根内部的 server/uploads 段，导致路径
+# 自引用反复展开（指数膨胀）；且正则里 [\\w] 写成双反斜杠使 \w 失效，导致
+# user-data/workspace 也被别名误改。以下用例钉死正确行为。
+# ---------------------------------------------------------------------------
+
+_CLEAN_ROOT = "/tmp/fxcjg_test_data/users/u1/threads/t1/user-data"  # 不含 /mnt/user-data/
+_BAD_ROOT = "/tmp/fxcjg_test_data/mnt/user-data/uploads/users/u1/threads/t1/user-data"
+
+
+def test_replace_workspace_paths_clean_config_no_explosion():
+    out = sandbox_run._replace_local_workspace_paths(
+        "ls -la /mnt/user-data/workspace", _CLEAN_ROOT
+    )
+    assert out == f"ls -la {_CLEAN_ROOT}/workspace"
+    # 关键：结果中不得残留 /mnt/user-data/，也不得出现路径套娃（长度可控）
+    assert "/mnt/user-data/" not in out
+    assert len(out) < 400
+
+
+def test_replace_workspace_paths_bare_alias_translated():
+    out = sandbox_run._replace_local_workspace_paths("cd /workspace && ls -la", _CLEAN_ROOT)
+    assert out == f"cd {_CLEAN_ROOT}/workspace && ls -la"
+
+
+def test_replace_workspace_paths_mid_command_translated():
+    # 虚拟路径位于命令中间（非末尾）也必须翻译
+    out = sandbox_run._replace_local_workspace_paths("cd /workspace && pwd", _CLEAN_ROOT)
+    assert out == f"cd {_CLEAN_ROOT}/workspace && pwd"
+
+
+def test_replace_workspace_paths_subdir_preserved():
+    out = sandbox_run._replace_local_workspace_paths("cat /workspace/sub/x.py", _CLEAN_ROOT)
+    assert out == f"cat {_CLEAN_ROOT}/workspace/sub/x.py"
+
+
+def test_replace_workspace_paths_outputs_and_uploads():
+    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/outputs", _CLEAN_ROOT) == f"ls {_CLEAN_ROOT}/outputs"
+    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/uploads", _CLEAN_ROOT) == f"ls {_CLEAN_ROOT}/uploads"
+
+
+def test_replace_workspace_paths_plain_command_untouched():
+    assert sandbox_run._replace_local_workspace_paths("echo hello && pwd", _CLEAN_ROOT) == "echo hello && pwd"
+
+
+def test_replace_workspace_paths_no_partial_match():
+    # /workspaceX 不应被当成 /workspace 别名误吞
+    assert sandbox_run._replace_local_workspace_paths("ls /mnt/user-data/workspaceX", _CLEAN_ROOT) == "ls /mnt/user-data/workspaceX"
+
+
+def test_replace_workspace_paths_bad_root_raises():
+    with pytest.raises(ValueError, match="配置异常"):
+        sandbox_run._replace_local_workspace_paths("ls -la /mnt/user-data/workspace", _BAD_ROOT)

@@ -194,9 +194,9 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     assert "skill_name=demo-skill" in result
     assert "title=演示技能" in result
     assert "runtime_path=/mnt/skills/public/demo-skill" in result
-    assert 'references=["guide"]' in result
-    assert 'scripts=["run.py"]' in result
-    assert 'assets=["demo.txt"]' in result
+    assert 'references=["/mnt/skills/public/demo-skill/references/guide.md"]' in result
+    assert 'scripts=["/mnt/skills/public/demo-skill/scripts/run.py"]' in result
+    assert 'assets=["/mnt/skills/public/demo-skill/assets/demo.txt"]' in result
     assert "# 演示技能" in result
 
 

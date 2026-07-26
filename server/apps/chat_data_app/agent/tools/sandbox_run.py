@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 import asyncio
 import os
@@ -10,7 +11,11 @@ from pathlib import PurePosixPath
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.conversation_workspace import ConversationWorkspaceRuntime, resolve_workspace_path
+from ...services.conversation_workspace import (
+    ConversationWorkspaceRuntime,
+    resolve_workspace_path,
+    to_visible_path,
+)
 from ...services.workspace_execution import (
     OPENSANDBOX_BACKEND,
     run_command_in_sandbox,
@@ -101,6 +106,34 @@ def _replace_local_skill_paths(command: str, workspace_runtime: ConversationWork
     return rewritten
 
 
+_WORKSPACE_VIRTUAL_RE = re.compile(r"/mnt/user-data/(workspace|outputs|uploads)(?![\w])")
+# 裸别名 /workspace、/outputs、/uploads 仅在路径边界处匹配：
+# 前置负向断言要求 / 之前不是单词字符也不是斜杠（空格、引号、括号、= 等之前可以，字符串开头也可以），
+# 这样物理根内部的 server/uploads 之类路径段不会被误伤；后置负向断言要求之后不是单词字符
+# （允许紧跟 / 或结尾或标点），避免把一个更长的段误截断。
+_WORKSPACE_ALIAS_RE = re.compile(r"(?<![\w/])/(workspace|outputs|uploads)(?![\w])")
+
+
+def _replace_local_workspace_paths(command: str, workspace_root: str) -> str:
+    """将虚拟工作区路径（/mnt/user-data/* 及别名 /workspace 等）替换为物理绝对路径，供本地 subprocess 执行。"""
+    root = workspace_root.rstrip("/")
+    # 防御：workspace_root 是物理根，绝不应包含虚拟前缀 /mnt/user-data/。
+    # 若包含，说明 DATA_ROOT/CHAT_DATA_HOME 被误配成含 sandbox 虚拟挂载点的路径，
+    # 此时继续替换会把物理根内部的虚拟前缀反复展开，导致路径指数膨胀。
+    if "/mnt/user-data/" in root:
+        raise ValueError(
+            "workspace_root 配置异常：物理根不应包含 /mnt/user-data/，"
+            "请检查 DATA_ROOT/CHAT_DATA_HOME 环境变量是否误用了 sandbox 虚拟挂载点路径"
+        )
+    # 1) 先把裸别名（/workspace 等）规范成 /mnt/user-data/ 形式。
+    #    使用边界断言，避免误匹配物理根内部的 server/uploads 之类路径段。
+    command = _WORKSPACE_ALIAS_RE.sub(r"/mnt/user-data/\1", command)
+    # 2) 再统一把 /mnt/user-data/(workspace|outputs|uploads) 翻译成物理路径。
+    #    干净配置下 root 不含 /mnt/user-data/，单次替换即可，不会自引用膨胀。
+    command = _WORKSPACE_VIRTUAL_RE.sub(lambda m: f"{root}/{m.group(1)}", command)
+    return command
+
+
 async def run_sandbox_command(
     *,
     command: str,
@@ -116,7 +149,10 @@ async def run_sandbox_command(
         local_cwd = _local_visible_path(workspace_runtime, cwd or "workspace")
         inner = "cd {cwd} && {command}".format(
             cwd=shlex.quote(str(local_cwd)),
-            command=_replace_local_skill_paths(safe_command, workspace_runtime),
+            command=_replace_local_workspace_paths(
+                _replace_local_skill_paths(safe_command, workspace_runtime),
+                workspace_runtime.workspace_root,
+            ),
         )
         process = await asyncio.create_subprocess_exec(
             "bash",
@@ -139,7 +175,7 @@ async def run_sandbox_command(
             process.kill()
             await process.wait()
             exit_code, stdout_text, stderr_text, timed_out = 124, "", "command timed out", True
-        cwd_value = str(local_cwd)
+        cwd_value = to_visible_path(workspace_runtime.workspace_root, local_cwd)
         backend = "local"
         sandbox_id = ""
     else:

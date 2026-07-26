@@ -74,7 +74,8 @@ def test_unified_prompt_uses_builtin_skills_and_workspace(tmp_path, monkeypatch)
     )
 
     assert "<skills>默认</skills>" in prompt
-    assert str(tmp_path) in prompt
+    assert "/mnt/user-data/workspace" in prompt
+    assert str(tmp_path) not in prompt  # 物理路径不得泄漏到提示词
     assert "`sandbox_run`" not in prompt
 
 

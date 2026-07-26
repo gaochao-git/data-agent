@@ -63,15 +63,31 @@ class SkillLoadInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 def format_skill_load_result(payload: dict[str, Any]) -> str:
-    """格式化 skill_load 工具结果，供模型工具和编排预加载复用。"""
+    """格式化 skill_load 工具结果，供模型工具和编排预加载复用。
+
+    references/scripts/assets 一律输出可直接 file_read 的完整虚拟路径，避免模型自行
+    拼接前缀时写出 /mnt/user-data/runtime-skills/ 等不存在的路径。
+    """
+    visible_root = payload["visible_path"]
+    references_full = [
+        f"{visible_root}/references/{ref}.md" for ref in payload.get("references") or []
+    ]
+    scripts_full = [
+        f"{visible_root}/scripts/{script}" for script in payload.get("scripts") or []
+    ]
+    assets_full = [
+        f"{visible_root}/assets/{asset}" for asset in payload.get("assets") or []
+    ]
     return (
         "[skill_load]\n"
         f"skill_name={payload['name']}\n"
         f"title={payload['title']}\n"
-        f"runtime_path={payload['visible_path']}\n"
-        f"references={json.dumps(payload['references'], ensure_ascii=False)}\n"
-        f"scripts={json.dumps(payload['scripts'], ensure_ascii=False)}\n"
-        f"assets={json.dumps(payload.get('assets') or [], ensure_ascii=False)}\n\n"
+        f"runtime_path={visible_root}\n"
+        "⚠️ 读取技能参考文件必须使用上面的 runtime_path 拼接，禁止自造路径前缀；"
+        "错误示例 /mnt/user-data/runtime-skills/、缺少 /mnt/skills/ 前缀的写法都会让 file_read 直接报错。\n"
+        f"references={json.dumps(references_full, ensure_ascii=False)}\n"
+        f"scripts={json.dumps(scripts_full, ensure_ascii=False)}\n"
+        f"assets={json.dumps(assets_full, ensure_ascii=False)}\n\n"
         f"{payload['skill_md']}"
     )
 
@@ -265,6 +281,8 @@ def create_skill_load_tool(workspace_runtime: ConversationWorkspaceRuntime, user
 
         返回完整 SKILL.md 正文、references/scripts/assets 清单与只读 `/mnt/skills/...` 路径。
         技能目录保留在既有技能仓库，不复制到会话 workspace；`file_read` 可读取已加载技能的引用资源。
+
+        读取参考文件时，严格使用本工具返回的 runtime_path 拼接 references/ 子路径，不要自行猜测或省略路径前缀。
 
         前端选中技能不等于已加载技能。只有本工具成功返回 [skill_load] 后，才算技能已加载。
         返回内容已包含 SKILL.md 正文，不需要再用 file_read 读取 SKILL.md 本身。
