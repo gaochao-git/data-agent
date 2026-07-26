@@ -40,10 +40,11 @@ def test_agent_tool_metadata_and_dialect_sections():
     with_bash = AgentRuntimeOptions(bash_enabled=True)
 
     assert [item["name"] for item in get_agent_tool_chain(without_bash)] == [
-        "skill_load", "file_read", "file_edit", "present_artifacts", "get_current_time",
+        "skill_load", "file_read", "file_edit", "list_dir", "present_artifacts", "get_current_time",
         "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
     ]
-    assert get_agent_tool_chain(with_bash)[4]["name"] == "sandbox_run"
+    names = [item["name"] for item in get_agent_tool_chain(with_bash)]
+    assert names.index("list_dir") < names.index("sandbox_run")
     assert "`skill_load`" in get_agent_allowed_tool_names_text(without_bash)
     assert "`sandbox_run`" not in get_agent_allowed_tool_names_text(without_bash)
     assert "Hive" in build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
@@ -106,7 +107,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     )]
 
     assert tool_names == [
-        "skill_load", "file_read", "file_edit", "present_artifacts", "get_current_time",
+        "skill_load", "file_read", "file_edit", "list_dir", "present_artifacts", "get_current_time",
         "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
     ]
     assert bash_tool_names[-1] == "sandbox_run"

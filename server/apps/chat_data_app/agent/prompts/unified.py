@@ -38,6 +38,10 @@ UNIFIED_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "desc": "向 workspace 或 outputs 写入中间文件和最终产物。",
     },
     {
+        "name": "list_dir",
+        "desc": "列出 workspace、outputs、uploads 或已加载技能的只读 /mnt/skills 目录内容；浏览目录优先用它，find/grep 等高级能力才用 sandbox_run。",
+    },
+    {
         "name": "present_artifacts",
         "desc": "将 outputs 中已生成且已校验的最终产物显式呈现给用户。",
     },
@@ -384,7 +388,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。"""
 
 BASH_WORKFLOW_BLOCK = """## Bash 使用
-- 需要列目录或运行脚本时，可使用 `sandbox_run(command="ls -la /mnt/user-data/workspace")` 或 `sandbox_run(command="find /mnt/user-data/workspace -maxdepth 2 -type f")`；不要臆测文件是否存在。
+- 浏览目录统一使用 `list_dir(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `sandbox_run`。不要臆测文件是否存在。
 - Bash 只处理当前会话工作区；生成最终产物仍须写入 outputs 并调用 `present_artifacts`。"""
 
 CHART_BLOCK = """## 支持图表类型

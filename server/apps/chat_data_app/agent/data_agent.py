@@ -23,6 +23,7 @@ from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool
 from .tools.file_edit import create_file_edit_tool
 from .tools.file_read import create_file_read_tool
+from .tools.list_dir import create_list_dir_tool
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.sandbox_run import create_sandbox_run_tool
 from .tools.semantic_query import semantic_query_tool
@@ -56,6 +57,7 @@ def assemble_tools(
         create_skill_load_tool(workspace_runtime, user_id=user_id),
         create_file_read_tool(workspace_runtime),
         create_file_edit_tool(workspace_runtime),
+        create_list_dir_tool(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),
         get_current_time_tool,
         *selection_bundle,

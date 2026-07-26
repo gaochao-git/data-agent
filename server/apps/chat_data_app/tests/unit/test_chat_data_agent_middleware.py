@@ -561,6 +561,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "skill_load",
         "file_read",
         "file_edit",
+        "list_dir",
         "present_artifacts",
         "get_current_time",
         "select_semantic_config_tool",
