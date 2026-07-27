@@ -119,6 +119,7 @@ const workspaceFilesRefreshTimer = ref<number | null>(null)
 const isSkillManagerOpen = ref(false)
 const importedSkillIdForManager = ref<string | null>(null)
 const importingWorkspaceSkillPath = ref<string | null>(null)
+const importedWorkspaceSkillIds = ref<Record<string, string>>({})
 const activeAssistantMessageId = ref<string | null>(null)
 const localConversationId = ref<string | null>(props.conversationId || null)
 const conversationIdRef = toRef(props, 'conversationId')
@@ -312,7 +313,7 @@ const toSandboxDisplayPath = (path: unknown): string => {
 
 const pushProducedFile = (files: ProducedFile[], path: string, source: string, status: string) => {
   const relativePath = normalizeVisiblePath(path)
-  const rootDirectory = relativePath.split('/')[0]
+  const rootDirectory = relativePath.split('/')[0] || ''
   if (!['uploads', 'workspace', 'outputs'].includes(rootDirectory)) return
   const displayPath = relativePath ? toSandboxDisplayPath(relativePath) : ''
   if (!path || !relativePath) return
@@ -882,17 +883,20 @@ const canImportWorkspaceSkillDir = (path: string): boolean => {
   return Boolean(normalized && localConversationId.value && workspaceSkillDirectories.value.has(normalized))
 }
 
-const handleImportWorkspaceSkill = async () => {
+const handleImportWorkspaceSkill = async (path = selectedWorkspaceSkillDir.value) => {
   const conversationId = localConversationId.value
-  const skillDirPath = selectedWorkspaceSkillDir.value
+  const skillDirPath = normalizeVisiblePath(path)
   if (!conversationId || !skillDirPath) return
-  const confirmed = window.confirm(`确定导入技能目录「${skillDirPath.split('/').pop() || skillDirPath}」吗？导入后会作为用户技能草稿，可在技能管理中继续编辑。`)
-  if (!confirmed) return
   importingWorkspaceSkillPath.value = skillDirPath
   try {
     const response = await importConversationWorkspaceSkill(conversationId, { skill_dir_path: skillDirPath })
     const skill = response.data
-    importedSkillIdForManager.value = skill?.skill_id || skill?.name || null
+    const skillId = skill?.skill_id || skill?.name || ''
+    importedWorkspaceSkillIds.value = {
+      ...importedWorkspaceSkillIds.value,
+      [skillDirPath]: skillId,
+    }
+    importedSkillIdForManager.value = skillId || null
     await refreshCommandSkills()
     isSkillManagerOpen.value = true
     ElMessage.success('技能已导入，可在技能管理中继续编辑')
@@ -1171,6 +1175,31 @@ const handleScroll = () => {
 const isToolErrorResult = (content?: string) => {
   const text = String(content || '').trim()
   return text.includes('执行失败') || text.toLowerCase().startsWith('error:')
+}
+
+type WorkspaceSkillCandidate = {
+  path: string
+  name: string
+}
+
+const getMessageWorkspaceSkillCandidates = (message: Message): WorkspaceSkillCandidate[] => {
+  const candidates = new Map<string, WorkspaceSkillCandidate>()
+  for (const tool of message.toolCalls || []) {
+    if (tool.tool_name !== 'file_edit' || tool.status !== 'completed' || isToolErrorResult(tool.result)) continue
+    const path = normalizeVisiblePath(getFileEditResultPath(tool.result) || tool.args?.file_path)
+    if (!/^(workspace|outputs)\/.+\/SKILL\.md$/i.test(path)) continue
+    const skillPath = path.slice(0, -'/SKILL.md'.length)
+    candidates.set(skillPath, {
+      path: skillPath,
+      name: skillPath.split('/').pop() || skillPath,
+    })
+  }
+  return Array.from(candidates.values())
+}
+
+const openImportedWorkspaceSkill = (path: string) => {
+  importedSkillIdForManager.value = importedWorkspaceSkillIds.value[path] || null
+  isSkillManagerOpen.value = true
 }
 
 const getMessageToolCall = (message: Message, toolCallId: string) => {
@@ -1752,6 +1781,42 @@ const handleKeyDown = (event: KeyboardEvent) => {
           @select-tool="selectToolCall"
         >
           <template #assistant-extra="{ message: msg }">
+            <div v-if="getMessageWorkspaceSkillCandidates(msg).length" class="mt-3 space-y-2">
+              <div
+                v-for="skill in getMessageWorkspaceSkillCandidates(msg)"
+                :key="skill.path"
+                class="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3.5 py-3"
+              >
+                <div class="flex min-w-0 items-center gap-2.5">
+                  <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
+                    <i class="fa-solid fa-wand-magic-sparkles text-xs"></i>
+                  </span>
+                  <div class="min-w-0">
+                    <div class="truncate text-sm font-semibold text-slate-800">{{ skill.name }}</div>
+                    <div class="mt-0.5 text-[11px] text-slate-500">技能已生成，可导入为个人草稿</div>
+                  </div>
+                </div>
+                <button
+                  v-if="!importedWorkspaceSkillIds[skill.path]"
+                  type="button"
+                  :disabled="importingWorkspaceSkillPath === skill.path"
+                  class="shrink-0 h-8 rounded-md border border-emerald-200 bg-white px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                  @click="handleImportWorkspaceSkill(skill.path)"
+                >
+                  <i v-if="importingWorkspaceSkillPath === skill.path" class="fa-solid fa-spinner fa-spin mr-1"></i>
+                  {{ importingWorkspaceSkillPath === skill.path ? '导入中' : '导入技能' }}
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="shrink-0 h-8 rounded-md border border-emerald-200 bg-white px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                  @click="openImportedWorkspaceSkill(skill.path)"
+                >
+                  <i class="fa-solid fa-pen-to-square mr-1"></i>
+                  编辑草稿
+                </button>
+              </div>
+            </div>
             <div v-if="getDashboardPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
                   <div
                     v-for="tool in getDashboardPreviewTools(msg)"
