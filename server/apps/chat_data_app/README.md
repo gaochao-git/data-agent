@@ -59,11 +59,32 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ### 1. 数据智能体
 
-数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend` 只决定工作区使用受限本地目录还是 OpenSandbox，只有 `bash_enabled` 决定是否注册 `sandbox_run`。
+数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）与 `bash_enabled`（安全策略）是两个独立维度：前者只决定工作区跑在受限本地目录还是 OpenSandbox，后者决定 `sandbox_run` 是否注册。两者职责不同且必须耦合选型，详见下文「运行环境后端与 Bash 安全模型」。
 
 ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`；文件工具可读三者、仅可写前两者。大查询结果位于会话 `outputs/.tool-results/query_result/`，前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/`；两者分别只读挂载为 `/mnt/skills/system/<技能名>/` 与 `/mnt/skills/user/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
 生产多实例将 `CHAT_DATA_HOME` 配置为所有应用实例与 OpenSandbox 宿主机均可访问的同一 POSIX 共享目录（GFS/NFS/CephFS/EFS/RWX PVC）。local 与 sandbox 使用相同会话目录；`OPENSANDBOX_HOST_CHAT_DATA_HOME` 仅在宿主机路径不同的时候做相对路径翻译。共享文件由挂载基础设施保证，不使用 MinIO，也不在应用代码中做多节点同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
+
+### 运行环境后端与 Bash 安全模型
+
+运行环境后端（`workspace_backend`）与 Bash 开关（`bash_enabled`）职责不同，选型必须耦合，不能分开理解：
+
+- **`workspace_backend` 是「运行环境标准化」，不是安全设备。** 选 `sandbox`（OpenSandbox）的目的只是把代码执行场所钉死为统一的 Python 版本、预装依赖、可复现环境，且不让 `pip install` / 临时进程 / 环境变量污染宿主生产服务。它的容器隔离（FS/网络/进程边界）只是顺带能力，本职是给代码一个一致的运行场所。
+- **`bash_enabled` 是真正的「安全策略控制」。** 它决定 Bash 工具是否注册；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/sandbox_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
+
+**但 Bash 工具的校验是「策略轨道」而非「执行之墙」：** agent 可先用 `file_edit` 把任意脚本写到 `workspace/`，再 `bash evil.sh` 执行——脚本内容完全不被检查；local 模式下子进程以宿主权限运行，校验是唯一闸门且可被引号/进程替换绕过。因此 Bash 工具的开关是 policy（是否允许代码执行），**enforcement（真正把越界代码关住）要由沙箱容器兜底**。
+
+两个维度正交，组合成 2×2 矩阵，由部署者自行选择（代码不强制）：
+
+| 运行模式（`bash_enabled`） | 隔离模式（`workspace_backend`） | 含义与风险 |
+|---|---|---|
+| 受控（`false`） | 本地（`local`） | 无代码执行；文件工具经 `resolve_workspace_path` 严格限制在 `workspace` / `outputs` / `uploads` + 受权限管控的只读技能目录，100% 受控。**最轻量、最安全，推荐默认**。此时 sandbox 只增加 VM 开销与 I/O 延迟，无安全收益 |
+| 受控（`false`） | 沙箱（`sandbox`） | 无代码执行，但工具仍走容器 RPC；标准化运行环境在此无代码可作用，仅增开销，通常无意义 |
+| 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
+| 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
+
+- **文件工具（`file_read` / `file_edit` / `list_dir` / `present_artifacts`）始终可用且始终严格路径管控**，安全语义不随 backend 改变；只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
+- `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
 
 ```text
 index.vue
@@ -497,7 +518,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 回答
 ```
 
-`skill_load` 可加载系统技能或当前用户可见的已发布用户技能。加载后仅向当前会话提供该技能目录的只读访问；脚本是否能执行只由 `bash_enabled` 决定。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
+`skill_load` 可加载系统技能或当前用户可见的已发布用户技能。加载后仅向当前会话提供该技能目录的只读访问；脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
 
 指标集检索分两层：
 

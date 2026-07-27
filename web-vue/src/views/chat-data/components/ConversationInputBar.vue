@@ -57,13 +57,13 @@ const emit = defineEmits<{
 }>()
 
 // ---- 能力面板：参考「模型选择 + 深度思考」的聚合下拉 ----
-// 一个 pill 下拉内完成两件事：上面选运行模式（本地/沙箱），下面放 Bash 开关（参考深度思考）。
+// 一个 pill 下拉内完成两件事：上面选隔离模式（本地/沙箱），下面放运行模式开关 Bash（参考深度思考）。
 const sandboxModeOptions: { value: 'local' | 'sandbox'; label: string; desc: string; icon: string }[] = [
   { value: 'local', label: '本地', desc: '在本地目录进行操作', icon: 'fa-folder' },
   { value: 'sandbox', label: '沙箱', desc: '在隔离沙箱中操作', icon: 'fa-box' },
 ]
 
-/** 初始运行模式：本地则按默认，否则一律沙箱。 */
+/** 初始隔离模式：本地则按默认，否则一律沙箱。 */
 const workspaceBackend = ref<'local' | 'sandbox'>(
   props.runtimeOptions?.workspace_backend === 'sandbox' ? 'sandbox' : 'local'
 )
@@ -191,14 +191,14 @@ onBeforeUnmount(() => {
       </div>
       <div class="flex items-center justify-between gap-2 px-4 py-2 pb-3">
         <div class="chat-input-toolbar flex min-w-0 flex-1 items-center gap-2">
-          <!-- 能力面板：运行模式 pill 下拉（上面选模式，下面 Bash 开关，参考模型选择+深度思考） -->
+          <!-- 能力面板：隔离模式 pill 下拉（上面选隔离模式，下面运行模式开关 Bash，参考模型选择+深度思考） -->
           <template v-if="userOverridable">
             <div ref="sandboxMenuRef" class="relative">
               <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
                 <button
                   type="button"
                   class="flex items-center gap-1 border-none bg-transparent p-0 text-xs cursor-pointer"
-                  title="切换运行模式 / Bash"
+                  title="切换隔离模式 / 运行模式"
                   @click="sandboxMenuOpen = !sandboxMenuOpen"
                 >
                   <i class="fa-solid text-[10px]" :class="[sandboxTriggerIcon, workspaceBackend === 'local' ? 'text-green-500' : 'text-purple-500']"></i>
@@ -206,12 +206,12 @@ onBeforeUnmount(() => {
                   <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
                 </button>
               </div>
-              <!-- 下拉菜单：上面选运行模式，下面 Bash 开关 -->
+              <!-- 下拉菜单：上面选隔离模式，下面运行模式开关 -->
               <div
                 v-if="sandboxMenuOpen"
                 class="absolute left-0 bottom-8 z-50 w-[230px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
               >
-                <!-- 运行模式列表 -->
+                <!-- 隔离模式列表 -->
                 <button
                   v-for="opt in sandboxModeOptions"
                   :key="opt.value"
@@ -253,15 +253,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </template>
-          <!-- 只读模式：显示系统默认能力标签 -->
-          <div
-            v-else
-            class="flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500"
-            title="系统默认能力配置（不可覆盖）"
-          >
-            <i class="fa-solid fa-shield-halved text-[10px]"></i>
-            <span>{{ systemCapLabel }}</span>
-          </div>
+          <!-- userOverridable=false 时完全隐藏隔离模式选择器 -->
 
           <button
             v-if="showSkillButton"

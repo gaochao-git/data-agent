@@ -40,7 +40,16 @@ QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECON
 DEFAULT_CONTEXT_WINDOW = 128000
 
 # ---- 单一 ChatData Agent 运行配置 ----
-# ``workspace_backend`` 与 Bash 是独立维度：文件工具始终可用，只有 Bash 可关闭。
+# ``workspace_backend``（隔离模式：本地/沙箱）与 ``bash_enabled``（运行模式：受控/灵活）是两个正交维度：
+# - workspace_backend=sandbox（OpenSandbox）的职责是「标准化运行环境」：把代码执行场所钉死为
+#   统一的 Python 版本、预装依赖、可复现环境，且不污染宿主生产服务。它的容器隔离（FS/网络/进程
+#   边界）只是顺带能力，本职不是安全隔离设备。
+# - bash_enabled 才是真正的安全控制：决定 Bash 工具是否注册；注册后对命令做黑名单与路径词法校验。
+#   但这些校验是「策略轨道」而非「执行之墙」——agent 可写脚本落盘再执行，内容不被审计，
+#   因此 bash_enabled=true（灵活模式）推荐配合 sandbox 后端由容器隔离兜底，但本地亦可
+#   （local+true 即子进程以宿主权限执行代码，仅在可信 / 纯本地开发场景使用）。两个维度正交，组合交给部署者。
+# - bash_enabled=false（受控模式）时文件工具仍严格路径管控，用 local 即可，无需 sandbox 开销。
+# 完整选型矩阵见 chat_data_app/README.md「运行环境后端与 Bash 安全模型」。
 CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = str(
     os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local"
 ).strip().lower() or "local"
