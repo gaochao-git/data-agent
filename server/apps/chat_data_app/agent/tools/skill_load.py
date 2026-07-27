@@ -115,7 +115,9 @@ async def _build_skill_payload_async(skill_name: str, user_id: str = "") -> tupl
         lambda: sorted(str(item.relative_to(assets_root)) for item in assets_root.rglob("*") if item.is_file()) if assets_root.exists() else []
     )
     skill_md = await asyncio.to_thread(source_skill_md.read_text, encoding="utf-8", errors="replace")
-    category = "custom" if str(metadata.get("source") or "") == "user" else "public"
+    category = str(metadata.get("source") or "").strip()
+    if category not in {"system", "user"}:
+        raise ValueError("技能来源无效")
     return {
         "name": resolved_name,
         "title": metadata.get("title") or resolved_name,

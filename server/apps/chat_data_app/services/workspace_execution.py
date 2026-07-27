@@ -149,7 +149,7 @@ def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
     name = str(getattr(mount, "name", "")).strip()
     category = str(getattr(mount, "category", "")).strip()
     source_dir = Path(getattr(mount, "source_dir", "")).expanduser().resolve()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or category not in {"public", "custom"}:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or category not in {"system", "user"}:
         raise ValueError("运行时技能挂载配置非法")
     if not source_dir.is_dir():
         raise ValueError(f"技能目录不存在: {source_dir}")
@@ -158,7 +158,7 @@ def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
 
 def _get_host_skill_path(source_dir: Path, category: str) -> str:
     resolved = source_dir.expanduser().resolve()
-    skill_root_name = "user" if category == "custom" else "system"
+    skill_root_name = category
     root = (Path(CHAT_DATA_HOME) / "skills" / skill_root_name).expanduser().resolve()
     if resolved != root and root not in resolved.parents:
         raise ValueError(f"技能不在 CHAT_DATA_HOME/skills/{skill_root_name} 内: {source_dir}")

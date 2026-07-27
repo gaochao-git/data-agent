@@ -1324,10 +1324,10 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     (skill_dir / "assets" / "a.png").write_bytes(b"png")
 
     monkeypatch.setattr(skill_load, "resolve_skill_name", lambda name: name.strip())
-    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result={"path": str(skill_dir / "SKILL.md"), "title": "技能A", "description": "描述"}))
+    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result={"path": str(skill_dir / "SKILL.md"), "title": "技能A", "description": "描述", "source": "system"}))
     built, source_dir, category = asyncio.run(skill_load._build_skill_payload_async(" skill-a ", user_id="u1"))
     assert source_dir == skill_dir
-    assert category == "public"
+    assert category == "system"
     assert built["references"] == ["guide"]
     assert built["scripts"] == ["run.py"]
     assert built["assets"] == ["a.png"]
@@ -1344,7 +1344,7 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     tool = skill_load.create_skill_load_tool(runtime, user_id="u1")
     monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=(dict(built), skill_dir, category)))
     result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
-    assert "runtime_path=/mnt/skills/public/skill-a" in result
+    assert "runtime_path=/mnt/skills/system/skill-a" in result
 
     async def raise_payload(*_args, **_kwargs):
         raise RuntimeError("load failed")

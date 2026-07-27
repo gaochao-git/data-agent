@@ -93,7 +93,7 @@ def create_list_dir_tool(workspace_runtime: ConversationWorkspaceRuntime):
 
         参数：
         - path: 目标目录。支持 workspace / outputs / uploads 及其别名 /mnt/user-data/*、/workspace 等；
-          或技能路径 /mnt/skills/public/<技能名>/...、/mnt/skills/custom/<技能名>/...。默认 "workspace"。
+          或技能路径 /mnt/skills/system/<技能名>/...、/mnt/skills/user/<技能名>/...。默认 "workspace"。
         - max_depth: 递归深度，默认 2；1 表示只列当前目录，最大 5。
 
         约束：

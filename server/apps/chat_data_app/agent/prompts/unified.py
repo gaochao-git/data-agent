@@ -369,7 +369,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` patch 失败后必须重新 `file_read`，基于最新内容重写 patch，不能凭记忆或上一次失败 patch 重试。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
-- `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/public/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/public/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
+- `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/system/<技能名>` 或 `/mnt/skills/user/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/system/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。中间文件放 `workspace`，校验后写入 outputs。
 - `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板或文件时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；只能展示 `/mnt/user-data/outputs/...` 下的最终产物，不要展示 workspace、uploads 或技能目录。
 

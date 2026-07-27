@@ -39,7 +39,7 @@ class RuntimeSkillMount:
     """一个经权限校验后可在当前运行中只读访问的技能目录。"""
 
     name: str
-    category: Literal["public", "custom"]
+    category: Literal["system", "user"]
     source_dir: Path
 
     @property
@@ -75,7 +75,7 @@ class ConversationWorkspaceRuntime:
         self,
         *,
         name: str,
-        category: Literal["public", "custom"],
+        category: Literal["system", "user"],
         source_dir: Path,
     ) -> str:
         """登记本轮可读技能；已创建沙箱时在下次访问前重建只读挂载。"""
@@ -102,7 +102,7 @@ class ConversationWorkspaceRuntime:
 
         不再依赖本运行显式「加载」登记（无注册门控，对齐 deer-flow：技能发现基于
         磁盘/数据库，读取等价于普通文件读取）。解析时按 ``user_id`` 做权限校验，只允许
-        访问当前用户有权读到的技能（public=系统内置，custom=该用户自己的技能）。命中后
+        访问当前用户有权读到的技能（system=系统内置，user=该用户自己的技能）。命中后
         结果缓存在 ``runtime_skills`` 以便同请求内复用，但缓存不作为访问前提。
         """
         raw = str(path or "").strip().replace("\\", "/")
@@ -113,7 +113,7 @@ class ConversationWorkspaceRuntime:
         if len(parts) < 5 or parts[1:3] != ("mnt", "skills"):
             raise ValueError(f"技能路径无效: {path}")
         category, name = parts[3], parts[4]
-        if category not in {"public", "custom"}:
+        if category not in {"system", "user"}:
             raise ValueError(f"技能路径无效: {path}")
         mount = await self._resolve_skill_mount_async(category, name)
         relative_parts = parts[5:]
@@ -140,8 +140,7 @@ class ConversationWorkspaceRuntime:
         metadata = await skill_service.resolve_skill_path_async(name, user_id=self.user_id)
         if not metadata:
             raise ValueError(f"技能不存在或无权限访问: {name}")
-        source = str(metadata.get("source") or "user")
-        actual_category = "custom" if source == "user" else "public"
+        actual_category = _runtime_skill_category(metadata)
         if actual_category != category:
             raise ValueError(f"技能路径类别不匹配: {category}/{name}")
         source_md = Path(str(metadata.get("path") or "")).resolve()
@@ -157,8 +156,7 @@ class ConversationWorkspaceRuntime:
         metadata = await skill_service.resolve_skill_path_async(name, user_id=self.user_id)
         if not metadata:
             return None
-        source = str(metadata.get("source") or "user")
-        category = "custom" if source == "user" else "public"
+        category = _runtime_skill_category(metadata)
         source_md = Path(str(metadata.get("path") or "")).resolve()
         source_dir = source_md.parent
         if not source_dir.is_dir():
@@ -169,7 +167,7 @@ class ConversationWorkspaceRuntime:
         if self.backend != "sandbox":
             raise ValueError("当前工作区后端不是 OpenSandbox")
         if self.sandbox_session_ref.current is None:
-            # 挂载当前用户全部有权访问的技能（public + 自己的 custom），而非仅本轮回显加载的，
+            # 挂载当前用户全部有权访问的技能（system + 自己的 user），而非仅本轮回显加载的，
             # 对齐 deer-flow：技能发现基于磁盘/数据库，沙箱内任意已授权技能路径均可读。
             await self._ensure_available_skill_mounts_async()
             self.sandbox_session_ref.current = await get_workspace_execution_session(
@@ -203,6 +201,16 @@ def _safe_segment(value: str) -> str:
         return normalize_conversation_id(value)
     except ValueError as exc:
         raise ValueError("非法会话 ID") from exc
+
+
+def _runtime_skill_category(metadata: dict[str, Any]) -> Literal["system", "user"]:
+    """校验技能来源并将其直接作为运行时可见目录类别。"""
+    source = str(metadata.get("source") or "").strip()
+    if source == "system":
+        return "system"
+    if source == "user":
+        return "user"
+    raise ValueError("技能来源无效")
 
 
 def ensure_conversation_workspace(conversation_id: str, user_id: str = "system") -> dict[str, str]:
@@ -277,7 +285,7 @@ class WorkspacePathMapping:
     虚拟前缀（白名单）：
       - 工作区：``/mnt/user-data/{workspace,outputs,uploads}`` 及其裸别名
         ``/workspace``、``/outputs``、``/uploads``
-      - 已登记技能：``/mnt/skills/{public,custom}/<name>/...``
+      - 已登记技能：``/mnt/skills/{system,user}/<name>/...``
 
     - ``translate``：正向，把文本里的虚拟路径翻成物理路径，交给本地 subprocess。
     - ``mask``：反向，把输出里的物理路径还原为虚拟路径，避免向模型泄漏宿主机路径。

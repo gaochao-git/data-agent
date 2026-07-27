@@ -61,7 +61,7 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend` 只决定工作区使用受限本地目录还是 OpenSandbox，只有 `bash_enabled` 决定是否注册 `sandbox_run`。
 
-ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`；文件工具可读三者、仅可写前两者。大查询结果位于会话 `outputs/.tool-results/query_result/`，前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/`；两者分别只读挂载为 `/mnt/skills/public/<技能名>/` 与 `/mnt/skills/custom/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
+ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`；文件工具可读三者、仅可写前两者。大查询结果位于会话 `outputs/.tool-results/query_result/`，前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/`；两者分别只读挂载为 `/mnt/skills/system/<技能名>/` 与 `/mnt/skills/user/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
 生产多实例将 `CHAT_DATA_HOME` 配置为所有应用实例与 OpenSandbox 宿主机均可访问的同一 POSIX 共享目录（GFS/NFS/CephFS/EFS/RWX PVC）。local 与 sandbox 使用相同会话目录；`OPENSANDBOX_HOST_CHAT_DATA_HOME` 仅在宿主机路径不同的时候做相对路径翻译。共享文件由挂载基础设施保证，不使用 MinIO，也不在应用代码中做多节点同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
 

@@ -179,7 +179,12 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     async def fake_resolve_skill_path_async(name, user_id=""):
         assert name == "demo-skill"
         assert user_id == "u1"
-        return {"path": str(skill_dir / "SKILL.md"), "title": "演示技能", "description": "演示说明"}
+        return {
+            "path": str(skill_dir / "SKILL.md"),
+            "title": "演示技能",
+            "description": "演示说明",
+            "source": "system",
+        }
 
     monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
     workspace_root = tmp_path / "workspace-root"
@@ -193,15 +198,15 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     assert result.startswith("[skill_load]\n")
     assert "skill_name=demo-skill" in result
     assert "title=演示技能" in result
-    assert "runtime_path=/mnt/skills/public/demo-skill" in result
-    assert 'references=["/mnt/skills/public/demo-skill/references/guide.md"]' in result
-    assert 'scripts=["/mnt/skills/public/demo-skill/scripts/run.py"]' in result
-    assert 'assets=["/mnt/skills/public/demo-skill/assets/demo.txt"]' in result
+    assert "runtime_path=/mnt/skills/system/demo-skill" in result
+    assert 'references=["/mnt/skills/system/demo-skill/references/guide.md"]' in result
+    assert 'scripts=["/mnt/skills/system/demo-skill/scripts/run.py"]' in result
+    assert 'assets=["/mnt/skills/system/demo-skill/assets/demo.txt"]' in result
     assert "# 演示技能" in result
 
 
 @pytest.mark.asyncio
-async def test_runtime_resolves_system_skill_file_under_public_path(monkeypatch, tmp_path):
+async def test_runtime_resolves_system_skill_file_under_system_path(monkeypatch, tmp_path):
     skill_dir = tmp_path / "skill-creator"
     script_path = skill_dir / "scripts" / "quick_validate.py"
     script_path.parent.mkdir(parents=True)
@@ -225,11 +230,16 @@ async def test_runtime_resolves_system_skill_file_under_public_path(monkeypatch,
     )
 
     target, visible_path = await runtime.resolve_readonly_skill_path_async(
-        "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
+        "/mnt/skills/system/skill-creator/scripts/quick_validate.py"
     )
 
     assert target == script_path
-    assert visible_path == "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
+    assert visible_path == "/mnt/skills/system/skill-creator/scripts/quick_validate.py"
+
+    with pytest.raises(ValueError, match="技能路径无效"):
+        await runtime.resolve_readonly_skill_path_async(
+            "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
+        )
 
 
 def test_normalize_dsl_payload_accepts_escaped_json_string():

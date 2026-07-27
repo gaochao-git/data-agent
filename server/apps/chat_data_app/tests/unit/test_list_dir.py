@@ -113,14 +113,14 @@ def test_list_dir_skill_path(tmp_path):
     skill_ref = tmp_path / "skills" / "demo" / "references"
     skill_ref.mkdir(parents=True)
     (skill_ref / "guide.md").write_text("# guide")
-    _, tools = _build_tools(paths, skills=[("public", "demo", str(skill_ref.parent))])
-    out = _call(tools["list_dir"], path="/mnt/skills/public/demo/references")
-    assert "type=file  path=/mnt/skills/public/demo/references/guide.md" in out
+    _, tools = _build_tools(paths, skills=[("system", "demo", str(skill_ref.parent))])
+    out = _call(tools["list_dir"], path="/mnt/skills/system/demo/references")
+    assert "type=file  path=/mnt/skills/system/demo/references/guide.md" in out
 
 
 def test_list_dir_unauthorized_skill_rejected(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)
-    out = _call(tools["list_dir"], path="/mnt/skills/public/unknown/references")
+    out = _call(tools["list_dir"], path="/mnt/skills/system/unknown/references")
     # 无注册门控：解析改为按 user_id 权限从磁盘/数据库校验，未知技能返回「不存在/无权限」
     assert "技能不存在" in out or "无权限" in out or "技能路径无效" in out

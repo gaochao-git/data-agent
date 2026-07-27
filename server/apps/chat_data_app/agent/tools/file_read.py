@@ -17,8 +17,8 @@ def create_file_read_tool(workspace_runtime: ConversationWorkspaceRuntime):
         """
         读取当前会话的 workspace、outputs、uploads 文本文件，或有权访问的技能只读 /mnt/skills 路径。
 
-        技能路径（/mnt/skills/{public,custom}/<技能名>/...）无需先经 skill_load 加载即可读取，
-        解析按当前用户权限做磁盘/数据库校验（public=系统内置，custom=该用户自己的技能）。
+        技能路径（/mnt/skills/{system,user}/<技能名>/...）无需先经 skill_load 加载即可读取，
+        解析按当前用户权限做磁盘/数据库校验（system=系统内置，user=该用户自己的技能）。
         skill_load 返回内容已包含 SKILL.md 正文，通常无需再用 file_read 读取 SKILL.md 本身；
         但读取技能的 references/scripts/assets 子文件时，直接用 skill_load 返回的 runtime_path 拼接即可。
         """

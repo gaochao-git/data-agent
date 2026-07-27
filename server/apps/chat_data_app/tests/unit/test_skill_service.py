@@ -1349,7 +1349,11 @@ def test_get_skill_async_and_system_metadata_async_branches(monkeypatch):
 
     calls["load"] = 0
     monkeypatch.setattr(service, "_get_db_skill_metadata_async", no_db_meta)
-    assert asyncio.run(service.resolve_skill_path_async("async-skill")) == {"name": "async-skill", "path": ""}
+    assert asyncio.run(service.resolve_skill_path_async("async-skill")) == {
+        "name": "async-skill",
+        "path": "",
+        "source": "system",
+    }
 
     monkeypatch.setattr(skill_service_module, "activate_skill", lambda name: None)
     monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {})
