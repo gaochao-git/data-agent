@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Request
 
 from utils.error_codes import ErrorCode
@@ -16,7 +14,7 @@ from ..services.conversation_workspace import (
     list_conversation_workspace_files as list_workspace_files_for_conversation,
     read_conversation_query_result,
     read_conversation_workspace_file as read_workspace_file_for_conversation,
-    resolve_workspace_path,
+    resolve_output_skill_directory,
 )
 from ..services.skill_service import skill_service
 from .dependencies import _get_current_user
@@ -129,13 +127,7 @@ async def import_conversation_workspace_skill(conversation_id: str, payload: Ski
         if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         workspace_paths = ensure_conversation_workspace(conversation_id, str(current_user.user_id))
-        skill_dir = resolve_workspace_path(workspace_paths["root"], payload.skill_dir_path)
-        allowed_roots = (
-            resolve_workspace_path(workspace_paths["root"], "workspace"),
-            resolve_workspace_path(workspace_paths["root"], "outputs"),
-        )
-        if not any(skill_dir == root or root in skill_dir.parents for root in allowed_roots):
-            return business_response(msg="只允许导入 workspace 或 outputs 下的技能目录", code=ErrorCode.CHATDATA_WORKSPACE_SKILL_IMPORT_INVALID, status="error")
+        skill_dir = resolve_output_skill_directory(workspace_paths["root"], payload.skill_dir_path)
         skill = await skill_service.import_user_skill_from_directory_async(
             skill_dir,
             str(current_user.user_id),

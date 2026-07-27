@@ -75,7 +75,7 @@ scripts/
 assets/
 ```
 
-如果当前系统提供技能管理接口，优先使用“新建”接口完成初始化；如果是在工作区生成草稿，也要先生成完整目录结构，再填充文件。
+在对话中生成待导入技能时，目录必须写到 `/mnt/user-data/outputs/<skill-name>/`，再调用 `present_artifacts(files=["/mnt/user-data/outputs/<skill-name>/SKILL.md"])` 显式呈现。只有该调用成功后，用户才能在聊天消息中点击“导入技能”；不要把文件写入成功当作已交付。
 
 ## SKILL.md frontmatter
 

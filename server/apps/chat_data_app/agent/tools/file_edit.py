@@ -17,7 +17,7 @@ from ...services.conversation_workspace import (
     workspace_artifact_payload,
     workspace_write_text_file,
 )
-from .artifact_payloads import load_chart_spec_artifact_payload, load_dashboard_spec_artifact_payload
+from .artifact_payloads import load_output_artifact_payload
 from .common import json_dumps
 
 logger = get_logger(__name__)
@@ -262,9 +262,7 @@ def _attach_dashboard_next_action(payload: dict[str, Any], *, operation: str, pa
 
 
 def _load_artifact_payload(workspace_root: str, paths: list[str]) -> dict[str, Any]:
-    return load_chart_spec_artifact_payload(workspace_root, paths) or load_dashboard_spec_artifact_payload(
-        workspace_root, paths
-    )
+    return load_output_artifact_payload(workspace_root, paths)
 
 
 def create_file_edit_tool(workspace_runtime: ConversationWorkspaceRuntime):

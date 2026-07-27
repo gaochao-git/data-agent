@@ -353,9 +353,71 @@ async def test_present_artifacts_returns_outputs_artifact_payload(monkeypatch):
     assert payload["artifacts"][0]["file_path"] == "/outputs/sales.chart.json"
     assert payload["artifacts"][0]["name"] == "sales"
     assert payload["artifacts"][0]["mime_type"] == "application/json"
-    assert "renderer" not in payload["artifacts"][0]
+    assert payload["artifacts"][0]["renderer"] == "chart"
     assert "artifact_payload" not in payload["artifacts"][0]
     assert "chart_spec" not in payload["artifacts"][0]
+
+
+@pytest.mark.asyncio
+async def test_present_artifacts_returns_valid_output_skill(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_present_skill_{uuid.uuid4().hex}")
+    skill_dir = Path(paths["outputs"]) / "sales-analysis"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: sales-analysis\n"
+        "title: 销售分析\n"
+        "description: 汇总并分析销售表现。\n"
+        "---\n\n"
+        "# 销售分析\n",
+        encoding="utf-8",
+    )
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["present_artifacts"].ainvoke({
+        "files": ["/mnt/user-data/outputs/sales-analysis/SKILL.md"],
+    })
+
+    payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
+    assert payload["errors"] == []
+    assert payload["artifacts"] == [{
+        "file_path": "/outputs/sales-analysis/SKILL.md",
+        "artifact_type": "skill",
+        "renderer": "skill",
+        "artifact_version": "v1",
+        "skill_title": "销售分析",
+        "description": "汇总并分析销售表现。",
+        "name": "sales-analysis",
+        "mime_type": "text/markdown",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_present_artifacts_rejects_invalid_output_skill(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_present_bad_skill_{uuid.uuid4().hex}")
+    bad_name_dir = Path(paths["outputs"]) / "sales-analysis"
+    nested_dir = Path(paths["outputs"]) / "nested" / "sales-analysis"
+    for skill_dir, name in ((bad_name_dir, "other-skill"), (nested_dir, "sales-analysis")):
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\n---\n# Skill\n",
+            encoding="utf-8",
+        )
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["present_artifacts"].ainvoke({
+        "files": [
+            "outputs/sales-analysis/SKILL.md",
+            "outputs/nested/sales-analysis/SKILL.md",
+        ],
+    })
+
+    payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
+    assert payload["artifact_count"] == 0
+    assert [item["error"] for item in payload["errors"]] == [
+        "文件不是可展示的 outputs 产物",
+        "文件不是可展示的 outputs 产物",
+    ]
 
 
 @pytest.mark.asyncio

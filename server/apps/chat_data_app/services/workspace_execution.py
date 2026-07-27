@@ -18,7 +18,7 @@ from urllib.parse import unquote
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
-from ..chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
+from .artifact_registry import parse_output_artifact
 
 logger = get_logger(__name__)
 
@@ -647,135 +647,8 @@ def _is_outputs_sandbox_path(path: str) -> bool:
     return path == sandbox_outputs_dir() or path.startswith(f"{sandbox_outputs_dir()}/")
 
 
-def _artifact_kind_from_path(path: str) -> str:
-    name = PurePosixPath(str(path or "")).name.lower()
-    if name.endswith(".chart.json"):
-        return "chart_spec"
-    if name.endswith(".dashboard.json"):
-        return "dashboard_spec"
-    if name.endswith(".table.json") or name.endswith(".table.csv"):
-        return "table"
-    if name.endswith(".docx"):
-        return "document"
-    if name.endswith(".xlsx"):
-        return "spreadsheet"
-    if name.endswith(".pdf"):
-        return "pdf"
-    if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-        return "image"
-    return ""
-
-
-def _parse_chart_spec_payload(payload: Any) -> dict[str, Any] | None:
-    if not isinstance(payload, dict):
-        return None
-    if not is_supported_chart_type_input(payload.get("chart_type")):
-        return None
-    chart_type = normalize_chart_type(payload.get("chart_type"))
-    payload["chart_type"] = chart_type
-    if str(payload.get("version") or "").strip() != "1.0":
-        return None
-    if chart_type == "graph":
-        graph_payload = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-        links = graph_payload.get("links") if isinstance(graph_payload.get("links"), list) else graph_payload.get("edges")
-        if isinstance(graph_payload.get("nodes"), list) and isinstance(links, list) and graph_payload.get("nodes") and links:
-            return payload
-    if not isinstance(payload.get("data"), list):
-        return None
-    data = payload.get("data")
-    if chart_type_requires_data(chart_type) and not data:
-        return None
-    encoding = payload.get("encoding")
-    if not isinstance(encoding, dict):
-        return None
-    y_fields = encoding.get("y")
-    if chart_type_requires_y(chart_type) and (not isinstance(y_fields, list) or not any(str(item).strip() for item in y_fields)):
-        return None
-    max_y_fields = chart_type_max_y_fields(chart_type)
-    if max_y_fields is not None and isinstance(y_fields, list):
-        if len([item for item in y_fields if str(item).strip()]) > max_y_fields:
-            return None
-    if chart_type_requires_x(chart_type) and not str(encoding.get("x") or "").strip():
-        return None
-    if data:
-        row_fields = set()
-        for row in data:
-            if isinstance(row, dict):
-                row_fields.update(str(key) for key in row.keys())
-        x_field = str(encoding.get("x") or "").strip()
-        if chart_type_requires_x(chart_type) and x_field and x_field not in row_fields:
-            return None
-        if isinstance(y_fields, list):
-            for item in y_fields:
-                y_field = str(item or "").strip()
-                if y_field and y_field not in row_fields:
-                    return None
-    return payload
-
-
 def _artifact_payload_from_bytes(*, visible_path: str, data: bytes) -> dict[str, Any]:
-    artifact_kind = _artifact_kind_from_path(visible_path)
-    payload: Any = None
-    if visible_path.lower().endswith(".json"):
-        try:
-            payload = json.loads(data.decode("utf-8", errors="replace"))
-        except Exception:
-            payload = None
-    if artifact_kind == "dashboard_spec" and isinstance(payload, dict):
-        return {
-            "file_path": visible_path,
-            "artifact_type": "dashboard_spec",
-            "renderer": "dashboard",
-            "artifact_version": "v1",
-            "artifact_payload": payload,
-            "dashboard_spec": payload,
-        }
-    if artifact_kind == "chart_spec" and isinstance(payload, dict):
-        chart_payload = _parse_chart_spec_payload(payload)
-        if chart_payload is not None:
-            return {
-                "file_path": visible_path,
-                "artifact_type": "chart_spec",
-                "renderer": "chart",
-                "artifact_version": "v1",
-                "artifact_payload": chart_payload,
-                "chart_spec": chart_payload,
-            }
-    if isinstance(payload, dict) and isinstance(payload.get("cards"), list):
-        return {
-            "file_path": visible_path,
-            "artifact_type": "dashboard_spec",
-            "renderer": "dashboard",
-            "artifact_version": "v1",
-            "artifact_payload": payload,
-            "dashboard_spec": payload,
-        }
-    if isinstance(payload, dict):
-        chart_payload = _parse_chart_spec_payload(payload)
-        if chart_payload is not None:
-            return {
-                "file_path": visible_path,
-                "artifact_type": "chart_spec",
-                "renderer": "chart",
-                "artifact_version": "v1",
-                "artifact_payload": chart_payload,
-                "chart_spec": chart_payload,
-            }
-    renderer_map = {
-        "table": "table",
-        "document": "document",
-        "spreadsheet": "spreadsheet",
-        "pdf": "pdf",
-        "image": "image",
-    }
-    if artifact_kind in renderer_map:
-        return {
-            "file_path": visible_path,
-            "artifact_type": artifact_kind,
-            "renderer": renderer_map[artifact_kind],
-            "artifact_version": "v1",
-        }
-    return {}
+    return parse_output_artifact(visible_path=visible_path, data=data)
 
 
 async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, file_path: str) -> dict[str, Any]:

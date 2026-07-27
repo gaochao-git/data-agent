@@ -446,13 +446,6 @@ const selectConsoleDirectoryAndToggle = (path: string) => {
   setConsoleDirectoryCollapsed(normalized, !isFileTreeNodeCollapsed(normalized))
 }
 
-const importWorkspaceSkillDir = async (path: string) => {
-  const normalized = normalizeVisiblePath(path)
-  selectConsoleDirectory(normalized)
-  await nextTick()
-  await handleImportWorkspaceSkill()
-}
-
 const selectConsoleFile = (path: string) => {
   selectedConsoleFilePath.value = normalizeVisiblePath(path)
   selectedConsoleDirectoryPath.value = null
@@ -857,33 +850,7 @@ const selectedWorkspaceFile = computed(() => {
   return workspaceFiles.value.find(file => normalizeVisiblePath(file.relative_path || file.path) === selectedPath) || null
 })
 
-const workspaceSkillDirectories = computed(() => {
-  const skillDirs = new Set<string>()
-  producedFiles.value.forEach((file) => {
-    const relativePath = normalizeVisiblePath(file.relativePath || file.path)
-    if (!relativePath.endsWith('/SKILL.md')) return
-    const dirPath = relativePath.slice(0, -'/SKILL.md'.length)
-    if (dirPath.startsWith('workspace/') || dirPath.startsWith('outputs/')) {
-      skillDirs.add(dirPath)
-    }
-  })
-  return skillDirs
-})
-
-const selectedWorkspaceSkillDir = computed(() => {
-  const selectedPath = normalizeVisiblePath(selectedConsoleDirectoryPath.value)
-  if (!selectedPath) return null
-  return workspaceSkillDirectories.value.has(selectedPath) ? selectedPath : null
-})
-
-const canImportSelectedWorkspaceSkill = computed(() => Boolean(selectedWorkspaceSkillDir.value && localConversationId.value))
-
-const canImportWorkspaceSkillDir = (path: string): boolean => {
-  const normalized = normalizeVisiblePath(path)
-  return Boolean(normalized && localConversationId.value && workspaceSkillDirectories.value.has(normalized))
-}
-
-const handleImportWorkspaceSkill = async (path = selectedWorkspaceSkillDir.value) => {
+const handleImportWorkspaceSkill = async (path: string) => {
   const conversationId = localConversationId.value
   const skillDirPath = normalizeVisiblePath(path)
   if (!conversationId || !skillDirPath) return
@@ -1177,27 +1144,32 @@ const isToolErrorResult = (content?: string) => {
   return text.includes('执行失败') || text.toLowerCase().startsWith('error:')
 }
 
-type WorkspaceSkillCandidate = {
+type PresentedSkillArtifact = {
   path: string
   name: string
+  title: string
+  description: string
 }
 
-const getMessageWorkspaceSkillCandidates = (message: Message): WorkspaceSkillCandidate[] => {
-  const candidates = new Map<string, WorkspaceSkillCandidate>()
-  for (const tool of message.toolCalls || []) {
-    if (tool.tool_name !== 'file_edit' || tool.status !== 'completed' || isToolErrorResult(tool.result)) continue
-    const path = normalizeVisiblePath(getFileEditResultPath(tool.result) || tool.args?.file_path)
-    if (!/^(workspace|outputs)\/.+\/SKILL\.md$/i.test(path)) continue
-    const skillPath = path.slice(0, -'/SKILL.md'.length)
-    candidates.set(skillPath, {
-      path: skillPath,
-      name: skillPath.split('/').pop() || skillPath,
+const getPresentedSkillArtifacts = (message: Message): PresentedSkillArtifact[] => {
+  const artifacts = new Map<string, PresentedSkillArtifact>()
+  for (const tool of getPresentedArtifactTools(message, 'skill')) {
+    const payload = parseToolResultPayload(tool.result)
+    const filePath = normalizeVisiblePath(payload?.file_path)
+    if (!/^outputs\/[^/]+\/SKILL\.md$/i.test(filePath)) continue
+    const name = String(payload?.name || filePath.split('/')[1] || '').trim()
+    if (!name) continue
+    artifacts.set(filePath, {
+      path: filePath.slice(0, -'/SKILL.md'.length),
+      name,
+      title: String(payload?.skill_title || name).trim() || name,
+      description: String(payload?.description || '').trim(),
     })
   }
-  return Array.from(candidates.values())
+  return Array.from(artifacts.values())
 }
 
-const openImportedWorkspaceSkill = (path: string) => {
+const openImportedSkill = (path: string) => {
   importedSkillIdForManager.value = importedWorkspaceSkillIds.value[path] || null
   isSkillManagerOpen.value = true
 }
@@ -1781,9 +1753,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
           @select-tool="selectToolCall"
         >
           <template #assistant-extra="{ message: msg }">
-            <div v-if="getMessageWorkspaceSkillCandidates(msg).length" class="mt-3 space-y-2">
+            <div v-if="getPresentedSkillArtifacts(msg).length && !msg.isStreaming" class="mt-3 space-y-2">
               <div
-                v-for="skill in getMessageWorkspaceSkillCandidates(msg)"
+                v-for="skill in getPresentedSkillArtifacts(msg)"
                 :key="skill.path"
                 class="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3.5 py-3"
               >
@@ -1792,8 +1764,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     <i class="fa-solid fa-wand-magic-sparkles text-xs"></i>
                   </span>
                   <div class="min-w-0">
-                    <div class="truncate text-sm font-semibold text-slate-800">{{ skill.name }}</div>
-                    <div class="mt-0.5 text-[11px] text-slate-500">技能已生成，可导入为个人草稿</div>
+                    <div class="truncate text-sm font-semibold text-slate-800">{{ skill.title }}</div>
+                    <div class="mt-0.5 truncate text-[11px] text-slate-500">{{ skill.description || `技能标识：${skill.name}` }}</div>
                   </div>
                 </div>
                 <button
@@ -1810,7 +1782,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   v-else
                   type="button"
                   class="shrink-0 h-8 rounded-md border border-emerald-200 bg-white px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                  @click="openImportedWorkspaceSkill(skill.path)"
+                  @click="openImportedSkill(skill.path)"
                 >
                   <i class="fa-solid fa-pen-to-square mr-1"></i>
                   编辑草稿
@@ -2016,16 +1988,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         <i class="w-3 text-[10px] text-slate-400" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
                         <i class="fa-regular w-4 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
                         <span class="truncate font-mono text-[13px] font-semibold">{{ item.node.name }}</span>
-                        <button
-                          v-if="canImportWorkspaceSkillDir(item.node.path)"
-                          type="button"
-                          :disabled="importingWorkspaceSkillPath === item.node.path"
-                          class="ml-auto shrink-0 rounded border-none bg-blue-50 px-2 py-0.5 text-[10px] leading-none text-blue-600 hover:bg-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
-                          @click.stop="importWorkspaceSkillDir(item.node.path)"
-                        >
-                          {{ importingWorkspaceSkillPath === item.node.path ? '导入中' : '导入技能' }}
-                        </button>
-                        <span v-else-if="getFileCount(item.node)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
+                        <span v-if="getFileCount(item.node)" class="ml-auto shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
                       </div>
                     </div>
                   </div>
@@ -2081,8 +2044,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               </div>
             </div>
             <div v-if="!selectedConsoleFile" class="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-slate-500">
-              <span v-if="canImportSelectedWorkspaceSkill">检测到技能目录，可导入到技能管理后继续编辑。</span>
-              <span v-else>请选择文件查看内容，或点击包含 SKILL.md 的技能根目录进行导入。</span>
+              请选择文件查看内容。
             </div>
             <ChartSpecRenderer
               v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
@@ -2118,7 +2080,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             <pre v-else class="m-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
           </div>
           <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
-            点击工作区文件查看内容，点击技能目录可导入技能。
+            点击工作区文件查看内容。
           </div>
         </template>
 

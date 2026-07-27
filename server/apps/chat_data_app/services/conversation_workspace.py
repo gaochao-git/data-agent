@@ -15,6 +15,7 @@ from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
 
 from ..daos.conversation_dao import ConversationDao
+from .artifact_registry import parse_output_artifact
 from .semantic_common import AGENT_ID
 from .skill_service import skill_service
 from .workspace_execution import (
@@ -276,6 +277,29 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
     except ValueError:
         return str(target)
     return f"/{relative}"
+
+
+def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
+    """Return a generated skill directory that is eligible for user import."""
+    skill_dir = resolve_workspace_path(workspace_root, path)
+    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    try:
+        relative = skill_dir.relative_to(outputs_root)
+    except ValueError as exc:
+        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录") from exc
+    if len(relative.parts) != 1 or relative.name.startswith("."):
+        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录")
+
+    skill_md_path = skill_dir / "SKILL.md"
+    if not skill_dir.is_dir() or skill_md_path.is_symlink() or not skill_md_path.is_file():
+        raise ValueError("技能目录必须包含有效的 SKILL.md")
+    artifact = parse_output_artifact(
+        visible_path=f"/outputs/{relative.name}/SKILL.md",
+        data=skill_md_path.read_bytes(),
+    )
+    if artifact.get("artifact_type") != "skill":
+        raise ValueError("SKILL.md 元数据无效或与技能目录名不一致")
+    return skill_dir
 
 
 @dataclass

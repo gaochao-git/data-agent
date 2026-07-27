@@ -364,6 +364,26 @@ def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
         ),
     )
     assert chart["artifact_type"] == "chart_spec"
+    skill = workspace_execution._artifact_payload_from_bytes(
+        visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
+        data=(
+            b"---\nname: sales-analysis\ntitle: Sales Analysis\n"
+            b"description: Analyze sales.\n---\n# Sales Analysis\n"
+        ),
+    )
+    assert skill == {
+        "file_path": "/mnt/user-data/outputs/sales-analysis/SKILL.md",
+        "artifact_type": "skill",
+        "renderer": "skill",
+        "artifact_version": "v1",
+        "name": "sales-analysis",
+        "skill_title": "Sales Analysis",
+        "description": "Analyze sales.",
+    }
+    assert workspace_execution._artifact_payload_from_bytes(
+        visible_path="/mnt/user-data/outputs/nested/sales-analysis/SKILL.md",
+        data=b"---\nname: sales-analysis\n---\n# Sales Analysis\n",
+    ) == {}
     assert workspace_execution.truncate_output("abcdef", limit=3) == ("abc\n...[truncated]", True)
 
 

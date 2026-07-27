@@ -166,11 +166,14 @@ def test_conversation_workspace_file_error_mapping(client, monkeypatch):
     assert crashed_read_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
 
 
-def test_conversation_workspace_imports_skill_from_shared_persisted_directory(client, monkeypatch, tmp_path):
+def test_conversation_workspace_imports_presented_output_skill(client, monkeypatch, tmp_path):
     _install_accessible_workspace(monkeypatch)
-    skill_dir = tmp_path / "workspace" / "generated-skill"
+    skill_dir = tmp_path / "outputs" / "generated-skill"
     skill_dir.mkdir(parents=True)
-    (tmp_path / "outputs").mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: generated-skill\n---\n# Generated Skill\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         workspace_routes,
         "ensure_conversation_workspace",
@@ -187,7 +190,7 @@ def test_conversation_workspace_imports_skill_from_shared_persisted_directory(cl
 
     success_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",
-        json={"skill_dir_path": "workspace/generated-skill"},
+        json={"skill_dir_path": "outputs/generated-skill"},
     )
     rejected_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",

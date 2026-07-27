@@ -91,13 +91,8 @@ def clear_metadata_cache() -> None:
 
 # ============ API ============
 
-def parse_metadata(skill_path: Path) -> SkillMetadata | None:
-    """解析单个技能的 frontmatter 元数据"""
-    try:
-        text = skill_path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-
+def parse_metadata_text(text: str, *, path: str = "") -> SkillMetadata | None:
+    """解析 SKILL.md 文本中的 frontmatter 元数据。"""
     frontmatter = _parse_frontmatter(text)
 
     name = frontmatter.get("name", "")
@@ -118,8 +113,17 @@ def parse_metadata(skill_path: Path) -> SkillMetadata | None:
         category=frontmatter.get("category") or metadata.get("category") or "",
         output_type=frontmatter.get("output_type") or metadata.get("output_type") or "text",
         input_schema=input_schema,
-        path=str(skill_path)
+        path=path,
     )
+
+
+def parse_metadata(skill_path: Path) -> SkillMetadata | None:
+    """解析单个技能的 frontmatter 元数据。"""
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    return parse_metadata_text(text, path=str(skill_path))
 
 
 def discover_skills(directories: list[Path]) -> list[Path]:

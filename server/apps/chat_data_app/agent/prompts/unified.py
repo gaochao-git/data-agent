@@ -370,8 +370,8 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` patch 失败后必须重新 `file_read`，基于最新内容重写 patch，不能凭记忆或上一次失败 patch 重试。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
 - `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/system/<技能名>` 或 `/mnt/skills/user/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/system/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
-- `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。中间文件放 `workspace`，校验后写入 outputs。
-- `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板或文件时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；只能展示 `/mnt/user-data/outputs/...` 下的最终产物，不要展示 workspace、uploads 或技能目录。
+- `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
+- `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
 
 ## 图表能力
 - 回答“支持哪些图表 / 有哪些图表 / 能画什么图”时，必须基于 `supported_chart_types` 清单，不要用通用 ECharts 知识扩展未注册类型。

@@ -20,6 +20,7 @@ from .loader import (
     Skill,
     SkillMetadata,
     # API
+    parse_metadata_text,
     parse_metadata,
     discover_skills,
     load_metadata,

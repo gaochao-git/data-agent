@@ -12,6 +12,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import artifact_payloads, dsl2sql
+from apps.chat_data_app.services.artifact_registry import parse_output_artifact
 
 
 def _write_json(path, payload):
@@ -22,6 +23,55 @@ def _write_json(path, payload):
 
 def _strip_tool_payload(text: str) -> dict:
     return json.loads(text.replace("[dsl2sql_tool]", "", 1).strip())
+
+
+def test_output_artifact_registry_preserves_suffix_specific_table_type():
+    table_payload = {
+        "version": "1.0",
+        "chart_type": "line",
+        "data": [{"month": "2026-01", "sales": 1}],
+        "encoding": {"x": "month", "y": ["sales"]},
+    }
+
+    artifact = parse_output_artifact(
+        visible_path="/outputs/monthly.table.json",
+        data=json.dumps(table_payload).encode("utf-8"),
+    )
+
+    assert artifact == {
+        "file_path": "/outputs/monthly.table.json",
+        "artifact_type": "table",
+        "renderer": "table",
+        "artifact_version": "v1",
+    }
+
+
+def test_output_artifact_registry_accepts_only_direct_output_skill():
+    skill_bytes = (
+        b"---\nname: sales-analysis\ntitle: Sales Analysis\n"
+        b"description: Analyze sales.\n---\n# Sales Analysis\n"
+    )
+
+    local_artifact = parse_output_artifact(
+        visible_path="/outputs/sales-analysis/SKILL.md",
+        data=skill_bytes,
+    )
+    sandbox_artifact = parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/sales-analysis/SKILL.md",
+        data=skill_bytes,
+    )
+
+    assert local_artifact["artifact_type"] == "skill"
+    assert sandbox_artifact["artifact_type"] == "skill"
+    assert {**local_artifact, "file_path": sandbox_artifact["file_path"]} == sandbox_artifact
+    assert parse_output_artifact(
+        visible_path="/outputs/nested/sales-analysis/SKILL.md",
+        data=skill_bytes,
+    ) == {}
+    assert parse_output_artifact(
+        visible_path="/outputs/sales-analysis/SKILL.md",
+        data=skill_bytes.replace(b"name: sales-analysis", b"name: another-skill"),
+    ) == {}
 
 
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
