@@ -23,6 +23,7 @@ interface Props {
   executionTargets?: ExecutionTargetOption[]
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
+  conversationId?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -629,6 +630,7 @@ function getSqlTokenClass(type: string): string {
             <QueryResultPanel
               class="max-h-[46vh]"
               :result-data="toolCall.renderId"
+              :conversation-id="conversationId"
               :sql="generatedSql"
               :semantic-params="toolCall.semanticParams"
               :on-view-analysis="onViewAnalysis"

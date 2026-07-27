@@ -18,6 +18,7 @@ interface Props {
   activeToolCallId?: string | null
   onViewAnalysis?: () => void
   isAnalysisActive?: boolean
+  conversationId?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -77,6 +78,7 @@ const toggleExpand = (id: string) => {
       :execution-targets="executionTargets"
       :on-view-analysis="tc.tool_name === 'semantic_query_tool' && tc.renderId && onViewAnalysis ? onViewAnalysis : undefined"
       :is-analysis-active="Boolean(tc.tool_name === 'semantic_query_tool' && tc.renderId && isAnalysisActive)"
+      :conversation-id="conversationId"
       @toggle-expand="toggleExpand(tc.tool_call_id)"
       @select="emit('selectTool', tc)"
     />

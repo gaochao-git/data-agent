@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -20,17 +19,20 @@ from apps.chat_data_app.agent.tools import common
 from utils import conversation
 
 
-def test_query_result_artifact_save_delegates_to_artifact_store(monkeypatch):
-    captured = {}
+@pytest.mark.asyncio
+async def test_query_result_save_uses_current_conversation_store(monkeypatch):
+    class FakeStore:
+        def save(self, **kwargs):
+            assert kwargs == {
+                "data": {"rows": []},
+                "conversation_id": "conv_a",
+                "user_id": "u1",
+            }
+            return type("Record", (), {"result_id": "result_1"})()
 
-    def fake_save_artifact(artifact_type, data, artifact_id=None, conversation_id=None):
-        captured["save"] = (artifact_type, data, artifact_id, conversation_id)
-        return "result_1"
+    monkeypatch.setattr(sql_tools, "QueryResultStore", FakeStore)
 
-    monkeypatch.setattr(sql_tools, "save_artifact", fake_save_artifact)
-
-    assert sql_tools.save_query_result({"rows": []}, conversation_id="conv_a") == "result_1"
-    assert captured["save"] == (sql_tools.ArtifactType.QUERY_RESULT, {"rows": []}, None, "conv_a")
+    assert await sql_tools.save_query_result({"rows": []}, conversation_id="conv_a", user_id="u1") == "result_1"
 
 
 def test_state_reducers_keep_first_conversation_datasource():

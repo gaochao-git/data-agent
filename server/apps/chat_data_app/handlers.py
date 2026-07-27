@@ -27,7 +27,7 @@ from .agent import (
     build_unified_system_prompt,
     get_checkpointer,
 )
-from .agent.skills import build_builtin_skills_prompt, format_skills_prompt
+from .agent.skills import build_system_skills_prompt, format_skills_prompt
 from .services.context_budget import sanitize_context_usage_for_response
 from .services.conversation_runtime import stream_agent_turn
 from .services.conversation_event_service import conversation_event_service
@@ -910,12 +910,14 @@ async def _generate_chat_data_stream(
         user_id=user_id or "system",
         backend=runtime_options.workspace_backend,
     )
+    available_skills: list = []
     try:
-        available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime", agent="all")
+        available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime")
         available_skills_xml = format_skills_prompt([dict(item) for item in available_skills])
     except Exception as err:
         logger.warning("技能列表加载失败，回退代码目录: %s", err)
-        available_skills_xml = build_builtin_skills_prompt()
+        available_skills_xml = build_system_skills_prompt()
+    workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
 
     config = {
         "configurable": {

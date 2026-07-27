@@ -136,21 +136,6 @@ class ConversationDao:
             )
             return True
 
-    async def soft_delete(self, *, conversation_id: str, user_id: Optional[str]) -> bool:
-        async with self._session_context() as session:
-            result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))
-            if not result.scalar_one_or_none():
-                return False
-            update_conditions = [UserThread.thread_id == conversation_id]
-            if user_id:
-                update_conditions.append(UserThread.user_id == user_id)
-            await session.execute(
-                sa_update(UserThread)
-                .where(*update_conditions)
-                .values(delete_flag=1, update_time=datetime.now(), update_by=user_id or "")
-            )
-            return True
-
     async def toggle_favorite(self, *, conversation_id: str, user_id: Optional[str]) -> Optional[bool]:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))

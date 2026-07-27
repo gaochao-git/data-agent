@@ -17,18 +17,15 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 @router.get("/skills")
-async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None, agent: Optional[str] = None):
+async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None):
     """获取可用专家技能列表。"""
     try:
         user = _optional_current_user(request)
         user_id = str(getattr(user, "user_id", "") or "").strip()
         normalized_scope = str(scope or "all").strip().lower()
-        if normalized_scope not in {"all", "favorites", "mine", "system"}:
+        if normalized_scope not in {"all", "favorites", "mine", "system", "runtime"}:
             normalized_scope = "all"
-        normalized_agent = str(agent or "").strip().lower()
-        if normalized_agent not in {"query", "analyze"}:
-            normalized_agent = ""
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user), agent=normalized_agent)
+        skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user))
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
     except Exception as e:
         logger.error("获取技能列表失败: %s", e, exc_info=True)
@@ -305,19 +302,6 @@ async def unfavorite_skill(skill_id: str, request: Request):
     except Exception as e:
         logger.error("取消收藏技能失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
         return business_response(msg="取消收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED, status="error")
-
-
-@router.post("/skills/sync-system")
-async def sync_system_skills(request: Request):
-    """同步系统内置技能到数据库。"""
-    try:
-        user = _optional_current_user(request)
-        operator = str(getattr(user, "user_id", "") or "system")
-        operator_name = str(getattr(user, "username", "") or "")
-        return business_response(data=await skill_service.sync_builtin_skills_async(operator=operator, operator_name=operator_name), msg="同步成功")
-    except Exception as e:
-        logger.error("同步系统技能失败: %s", e, exc_info=True)
-        return business_response(msg="同步系统技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_SYNC_FAILED, status="error")
 
 
 @router.post("/skills/reload")

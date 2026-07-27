@@ -11,7 +11,7 @@ SERVER_ROOT = Path(__file__).resolve().parents[4]
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
+os.environ.setdefault("CHAT_DATA_HOME", "/tmp/fxcjg_test_data/chat_data")
 os.environ["ENCRYPT_KEY"] = "00112233445566778899aabbccddeeff"
 os.environ["SERVICE_AUTH_TOKEN"] = "qP+o6uU+z1wAYeHWi7ODmQ==:CIvqkqQXRoZf69isR8yD2PKhVNUQwM9ahic5sA1UGW0="
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")

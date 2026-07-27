@@ -22,7 +22,7 @@ const emit = defineEmits<{
 <template>
   <div
     v-if="open"
-    class="absolute left-0 right-0 bottom-full z-20 mb-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+    class="absolute left-0 right-0 bottom-full z-20 mb-2 max-h-[360px] overflow-y-auto rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
   >
     <div v-if="loading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
     <div v-else-if="skills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>

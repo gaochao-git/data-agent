@@ -7,7 +7,6 @@ metadata:
   version: "2.0"
   domain: 数据分析
   category: chart_processing
-  skill_scope: analyze
   output_type: chart_spec
 ---
 

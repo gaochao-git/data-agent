@@ -266,7 +266,7 @@ const loadSkills = async () => {
   }
   isSkillLoading.value = true
   try {
-    const response = await getSkills({ agent: 'analyze' })
+    const response = await getSkills()
     skills.value = response.data?.skills || []
   } catch (err) {
     console.error('获取专家技能失败:', err)

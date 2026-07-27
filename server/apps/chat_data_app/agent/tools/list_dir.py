@@ -89,15 +89,16 @@ def create_list_dir_tool(workspace_runtime: ConversationWorkspaceRuntime):
     @tool("list_dir")
     async def list_dir(path: str = "workspace", max_depth: int = 2) -> str:
         """
-        列出当前会话 workspace / outputs / uploads 目录，或已加载技能的只读 /mnt/skills 目录内容。
+        列出当前会话 workspace / outputs / uploads 目录，或有权访问的技能只读 /mnt/skills 目录内容。
 
         参数：
         - path: 目标目录。支持 workspace / outputs / uploads 及其别名 /mnt/user-data/*、/workspace 等；
-          或已加载技能的 /mnt/skills/public/<技能名>/...、/mnt/skills/custom/<技能名>/...。默认 "workspace"。
+          或技能路径 /mnt/skills/public/<技能名>/...、/mnt/skills/custom/<技能名>/...。默认 "workspace"。
         - max_depth: 递归深度，默认 2；1 表示只列当前目录，最大 5。
 
         约束：
-        - 不能列出会话目录之外、或未加载技能的 /mnt/skills 目录（会被直接拒绝）。
+        - 不能列出会话目录之外、或无权限访问的 /mnt/skills 目录（会被直接拒绝）。
+        - 技能路径无需先经 skill_load 加载即可列出，按当前用户权限校验。
         - 浏览目录优先用本工具；仅当需要 find / grep / 递归脚本等高级能力时才使用 sandbox_run。
         """
         try:
@@ -107,7 +108,7 @@ def create_list_dir_tool(workspace_runtime: ConversationWorkspaceRuntime):
 
             if raw.startswith("/mnt/skills/"):
                 try:
-                    target, visible_top = workspace_runtime.resolve_readonly_skill_path(raw)  # noqa: E501
+                    target, visible_top = await workspace_runtime.resolve_readonly_skill_path_async(raw)
                 except ValueError as exc:
                     return str(exc)
                 mode = "skill"

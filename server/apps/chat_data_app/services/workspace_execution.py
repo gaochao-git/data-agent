@@ -17,19 +17,19 @@ from urllib.parse import unquote
 
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
-from utils.storage_paths import CHAT_DATA_HOME, DATA_ROOT
+from utils.storage_paths import CHAT_DATA_HOME
 from ..chart_types import chart_type_max_y_fields, chart_type_requires_data, chart_type_requires_x, chart_type_requires_y, is_supported_chart_type_input, normalize_chart_type
 
 logger = get_logger(__name__)
 
 OPENSANDBOX_BACKEND = "opensandbox"
-OPENSANDBOX_REMOTE_HOST_VOLUME_MODE = "remote-host-volume"
 MAX_OUTPUT_CHARS = 12000
 
 
 def _sandbox_root() -> str:
-    root = str(os.getenv("OPENSANDBOX_WORKSPACE_ROOT") or "/mnt").strip().rstrip("/")
-    return root or "/mnt"
+    # 沙箱 VM 内挂载根固定为 /mnt（sandbox_visible_path / sandbox_workspace_dir 等映射
+    # 硬编码 /mnt/user-data），不对外暴露为可配置项，避免与映射前缀不一致。
+    return "/mnt"
 
 
 def sandbox_thread_root() -> str:
@@ -85,31 +85,63 @@ def require_sandbox_session(session_ref: SandboxExecutionSessionRef | None) -> S
     return session
 
 
-def _resolve_host_root(name: str, default_path: Path) -> Path:
+def _resolve_host_root(name: str, *, application_root: Path | None = None) -> Path:
     configured = str(os.getenv(name) or "").strip()
-    path = Path(configured or default_path).expanduser()
-    if not path.is_absolute() or path == Path("/") or "\x00" in str(path):
-        raise ValueError(f"{name} 配置非法")
-    return path.resolve()
+    if not configured:
+        if application_root is None:
+            raise ValueError(
+                f"{name} 未设置：使用 OpenSandbox 后端时必须显式配置宿主工作区根目录"
+            )
+        path = application_root.expanduser()
+    else:
+        path = Path(configured).expanduser()
+    if (
+        not path.is_absolute()
+        or path == Path("/")
+        or ".." in path.parts
+        or "\x00" in str(path)
+    ):
+        raise ValueError(f"{name} 配置非法：必须为绝对路径且不能是根目录")
+    # 该路径由 OpenSandbox 宿主机解释，不能在应用节点解析符号链接。
+    return path
 
 
-def _translate_host_path(path: Path, *, application_root: Path, host_root_name: str) -> str:
+def _translate_host_path(
+    path: Path,
+    *,
+    application_root: Path,
+    host_root_name: str,
+    allow_application_root: bool = False,
+) -> str:
     resolved = path.expanduser().resolve()
     root = application_root.expanduser().resolve()
     try:
         relative = resolved.relative_to(root)
     except ValueError as exc:
         raise ValueError(f"路径不在允许的根目录内: {path}") from exc
-    host_root = _resolve_host_root(host_root_name, root)
+    host_root = _resolve_host_root(
+        host_root_name,
+        application_root=root if allow_application_root else None,
+    )
     return str(host_root / relative)
 
 
 def get_host_workspace_path(workspace_root: str) -> str:
-    """把应用可见的会话路径翻译为 OpenSandbox 宿主机同一共享卷路径。"""
+    """将应用侧会话目录翻译为 OpenSandbox 宿主机共享卷路径。
+
+    ``OPENSANDBOX_HOST_CHAT_DATA_HOME`` 为空时表示两端使用同一绝对路径；
+    非空时必须是 Sandbox 宿主机看到同一共享卷的根目录，路径按 ``CHAT_DATA_HOME``
+    的相对位置转换。容器内路径始终固定为 ``/mnt/user-data``。
+    """
+    resolved = Path(workspace_root).expanduser().resolve()
+    root = Path(CHAT_DATA_HOME).expanduser().resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
     return _translate_host_path(
-        Path(workspace_root),
-        application_root=Path(CHAT_DATA_HOME),
-        host_root_name="CHAT_DATA_HOST_HOME",
+        resolved,
+        application_root=root,
+        host_root_name="OPENSANDBOX_HOST_CHAT_DATA_HOME",
+        allow_application_root=True,
     )
 
 
@@ -125,16 +157,16 @@ def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
 
 
 def _get_host_skill_path(source_dir: Path, category: str) -> str:
-    if category == "custom":
-        return _translate_host_path(
-            source_dir,
-            application_root=Path(DATA_ROOT) / "chat_data_skills" / "user",
-            host_root_name="OPENSANDBOX_HOST_USER_SKILLS_ROOT",
-        )
+    resolved = source_dir.expanduser().resolve()
+    skill_root_name = "user" if category == "custom" else "system"
+    root = (Path(CHAT_DATA_HOME) / "skills" / skill_root_name).expanduser().resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"技能不在 CHAT_DATA_HOME/skills/{skill_root_name} 内: {source_dir}")
     return _translate_host_path(
-        source_dir,
-        application_root=Path(__file__).resolve().parents[1] / "agent" / "skills",
-        host_root_name="OPENSANDBOX_HOST_SYSTEM_SKILLS_ROOT",
+        resolved,
+        application_root=Path(CHAT_DATA_HOME),
+        host_root_name="OPENSANDBOX_HOST_CHAT_DATA_HOME",
+        allow_application_root=True,
     )
 
 
@@ -214,12 +246,21 @@ def _network_allow_targets() -> list[str]:
 
 
 def _validate_workspace_backend_config() -> None:
-    backend = str(os.getenv("WORKSPACE_EXECUTION_BACKEND") or OPENSANDBOX_BACKEND).strip().lower()
-    if backend != OPENSANDBOX_BACKEND:
-        raise ValueError("ChatData 当前仅支持 OpenSandbox 执行后端，不支持 WORKSPACE_EXECUTION_BACKEND=" + backend)
-    sync_mode = str(os.getenv("OPENSANDBOX_WORKSPACE_SYNC_MODE") or OPENSANDBOX_REMOTE_HOST_VOLUME_MODE).strip().lower()
-    if sync_mode != OPENSANDBOX_REMOTE_HOST_VOLUME_MODE:
-        raise ValueError("ChatData 当前仅支持 OpenSandbox remote-host-volume 工作区，不支持 OPENSANDBOX_WORKSPACE_SYNC_MODE=" + sync_mode)
+    # OpenSandbox 后端固定使用宿主机 volume。CHAT_DATA_HOME 必须显式指定为绝对路径，
+    # 且物理上位于沙箱服务端 allowed_host_paths 之内（见 sandbox.toml）。相对路径
+    # 会按进程 cwd 解析，几乎必然不在服务端白名单内，创建沙箱时才以 SandboxApiException
+    # 暴露，排查成本极高，这里 fail-fast 强制绝对路径。
+    raw_home = str(os.getenv("CHAT_DATA_HOME") or "").strip()
+    if not Path(raw_home).expanduser().is_absolute():
+        raise ValueError(
+            "sandbox 模式下 CHAT_DATA_HOME 必须为绝对路径，"
+            "且须位于 OpenSandbox 服务端 allowed_host_paths 之下"
+        )
+    _resolve_host_root(
+        "OPENSANDBOX_HOST_CHAT_DATA_HOME",
+        application_root=Path(CHAT_DATA_HOME),
+    )
+
 
 
 def _sandbox_python_bin() -> str:

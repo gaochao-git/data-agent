@@ -202,7 +202,7 @@ python /mnt/skills/public/skill-creator/scripts/quick_validate.py <skill-directo
 - 禁止生成不受平台管理的任意目录结构。
 - 禁止只生成 `SKILL.md` 而不初始化固定目录结构。
 - 禁止生成单段技能名，例如 `sales`；必须使用 `xxx-xxx` 格式。
-- 禁止绕过用户权限写系统内置技能目录。
+- 禁止绕过用户权限写系统技能目录。
 - 禁止把一次性分析结果伪装成技能。
 - 禁止在技能中硬编码真实密钥、账号、个人敏感信息或生产数据。
 - 禁止生成超长、泛泛而谈、没有触发场景的 `description`。

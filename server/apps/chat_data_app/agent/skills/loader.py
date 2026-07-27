@@ -5,7 +5,7 @@ API：
 - parse_metadata(skill_path): 解析单个技能元数据
 - discover_skills(directories): 扫描目录发现技能
 - load_metadata(): 启动时加载所有元数据
-- build_builtin_skills_prompt(): 构建内置技能 prompt
+- build_system_skills_prompt(): 构建系统技能 prompt
 - format_skills_prompt(): 格式化技能元数据为注入 system prompt 的技能描述
 - activate_skill(name): 激活技能，按需加载完整内容
 """
@@ -16,6 +16,7 @@ from typing import Any, TypedDict
 from xml.sax.saxutils import escape as xml_escape
 
 from utils.logger import get_logger
+from utils.storage_paths import CHAT_DATA_HOME
 
 try:
     import yaml
@@ -34,7 +35,6 @@ class SkillMetadata(TypedDict):
     description: str
     domain: str
     category: str
-    skill_scope: str
     output_type: str
     input_schema: dict[str, Any]
     path: str  # SKILL.md 文件路径
@@ -47,7 +47,6 @@ class Skill(TypedDict):
     description: str
     domain: str
     category: str
-    skill_scope: str
     output_type: str
     input_schema: dict[str, Any]
     content: str
@@ -56,6 +55,11 @@ class Skill(TypedDict):
 # ============ 内部状态 ============
 
 _metadata_cache: dict[str, SkillMetadata] | None = None
+
+
+def system_skills_root() -> Path:
+    """Return the deployment-managed system skill root."""
+    return Path(CHAT_DATA_HOME) / "skills" / "system"
 
 
 def _parse_frontmatter(text: str) -> dict[str, Any]:
@@ -112,7 +116,6 @@ def parse_metadata(skill_path: Path) -> SkillMetadata | None:
         description=frontmatter.get("description", ""),
         domain=frontmatter.get("domain") or metadata.get("domain") or "",
         category=frontmatter.get("category") or metadata.get("category") or "",
-        skill_scope=frontmatter.get("skill_scope") or metadata.get("skill_scope") or "analyze",
         output_type=frontmatter.get("output_type") or metadata.get("output_type") or "text",
         input_schema=input_schema,
         path=str(skill_path)
@@ -136,9 +139,8 @@ def load_metadata() -> dict[str, SkillMetadata]:
         logger.debug(f"[skills] 使用缓存，已加载 {len(_metadata_cache)} 个技能元数据")
         return _metadata_cache
 
-    # 扫描 skills 目录下的所有子目录
-    skills_root = Path(__file__).parent
-    skill_dirs = [d for d in skills_root.iterdir() if d.is_dir() and not d.name.startswith('_')]
+    skills_root = system_skills_root()
+    skill_dirs = [d for d in skills_root.iterdir() if d.is_dir() and not d.name.startswith("_")] if skills_root.is_dir() else []
     skill_files = discover_skills(skill_dirs)
 
     _metadata_cache = {}
@@ -171,9 +173,9 @@ def format_skills_prompt(skills: list[dict[str, Any]]) -> str:
     return summary
 
 
-def build_builtin_skills_prompt() -> str:
-    """构建只包含代码目录内置技能的提示词。"""
-    logger.debug("[skills] build_builtin_skills_prompt() -> 构建内置技能 prompt")
+def build_system_skills_prompt() -> str:
+    """构建部署管理的系统技能提示词。"""
+    logger.debug("[skills] build_system_skills_prompt() -> 构建系统技能 prompt")
     return format_skills_prompt([dict(item) for item in load_metadata().values()])
 
 
@@ -204,7 +206,6 @@ def activate_skill(name: str) -> Skill | None:
         description=meta["description"],
         domain=meta.get("domain") or "",
         category=meta.get("category") or "",
-        skill_scope=meta.get("skill_scope") or "analyze",
         output_type=meta.get("output_type") or "text",
         input_schema=meta.get("input_schema") or {},
         content=content

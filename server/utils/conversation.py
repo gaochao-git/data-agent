@@ -553,25 +553,6 @@ async def get_detail(
     }
 
 
-async def delete(db_path: str, conversation_id: str, user_id: Optional[str] = None) -> bool:
-    """
-    删除会话（逻辑删除，设置 delete_flag = 1）
-
-    Args:
-        db_path: 数据库路径（已废弃，保留兼容）
-        conversation_id: 会话ID
-
-    Returns:
-        是否成功
-    """
-    deleted = await conversation_dao.soft_delete(conversation_id=conversation_id, user_id=user_id)
-    if not deleted:
-        return False
-
-    logger.info(f"逻辑删除对话: {conversation_id}")
-    return True
-
-
 async def update_title(db_path: str, conversation_id: str, title: str, user_id: Optional[str] = None) -> bool:
     """
     更新会话标题

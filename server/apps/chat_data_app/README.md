@@ -61,7 +61,9 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend` 只决定工作区使用受限本地目录还是 OpenSandbox，只有 `bash_enabled` 决定是否注册 `sandbox_run`。
 
-本地 ChatData 会话文件型数据统一位于 `CHAT_DATA_HOME`：留空时为 `${DATA_ROOT}/chat_data`，会话工作区路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/` 三个子目录；文件工具可读三者、仅可写前两者。`artifacts/` 也是 `CHAT_DATA_HOME` 下的工具结果卸载存储。用户技能继续保存在既有 `${DATA_ROOT}/chat_data_skills/user/`，不迁移到会话目录；`skill_load` 成功后仅在运行时只读暴露为 `/mnt/skills/public/<技能名>/` 或 `/mnt/skills/custom/<技能名>/`。
+ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`；文件工具可读三者、仅可写前两者。大查询结果位于会话 `outputs/.tool-results/query_result/`，前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/`；两者分别只读挂载为 `/mnt/skills/public/<技能名>/` 与 `/mnt/skills/custom/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
+
+生产多实例将 `CHAT_DATA_HOME` 配置为所有应用实例与 OpenSandbox 宿主机均可访问的同一 POSIX 共享目录（GFS/NFS/CephFS/EFS/RWX PVC）。local 与 sandbox 使用相同会话目录；`OPENSANDBOX_HOST_CHAT_DATA_HOME` 仅在宿主机路径不同的时候做相对路径翻译。共享文件由挂载基础设施保证，不使用 MinIO，也不在应用代码中做多节点同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
 
 ```text
 index.vue
@@ -103,12 +105,12 @@ index.vue
   "meta": {
     "query_mode": "dsl2sql",
     "confidence": 0.9,
-    "artifact_id": null
+    "result_id": null
   }
 }
 ```
 
-前端先根据 SSE `tool` 事件的 `tool_name=semantic_query_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、artifact、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
+前端先根据 SSE `tool` 事件的 `tool_name=semantic_query_tool` 判断工具来源，再解析 `content.type=query_result` 判断内容类型。后续扩展图表、大结果卸载、分页和审计字段时，只扩展 `data` 或 `meta`，不要再增加字符串标签协议。
 
 ### 2. 可视化查询
 
@@ -424,7 +426,7 @@ chat_data_app/
 │   ├── tools/             # 工具包
 │   ├── config.py          # 模式配置
 │   ├── prompts/           # 提示词模板和 system prompt builder
-│   └── skills/            # 图表生成技能
+│   └── skills/            # 系统技能源目录；发布时复制到 CHAT_DATA_HOME/skills/system
 ├── services/
 │   ├── semantic_tools.py              # 语义工具处理器
 │   ├── datasource_manager.py          # 数据源管理
@@ -461,7 +463,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 
 | 工具 | 说明 |
 |-----|------|
-| `skill_load` | 智能问数只读加载业务知识技能；只返回 SKILL.md 和 references 文本，不支持脚本、资产或沙箱 |
+| `skill_load` | 按需加载系统或用户技能，并将已加载技能以只读目录暴露给当前会话 |
 | `dsl2sql_tool` | 根据语义参数生成 SQL |
 | `semantic_query_tool` | 执行语义查询；接收语义 DSL，内部生成 SQL 后执行 |
 
@@ -473,13 +475,12 @@ model → tools → model，直到模型不再发起工具调用后结束。
 |---|---|---|
 | 系统提示词 | 全局问数工作流、工具协议、安全边界、输出约束 | 具体业务口径、物理表细节 |
 | 指标集 | 可执行事实源：指标、维度、关系、枚举、日期格式、单位、口径 | 业务培训材料、跨领域常识 |
-| 用户自定义问数技能 | 用户显式引用时补充业务术语、口径说明、追问策略、典型问法 | 可执行 SQL/DSL 表达式、工具编排、脚本和 artifact |
-| Workflow 技能 | 看板、图表、智能分析等复杂产物任务的专用步骤 | 智能问数主链路和指标事实 |
+| 技能 | 用户显式引用时补充业务术语、口径、操作步骤和产物处理规则 | 当前指标集的事实定义与数据权限 |
 
 优先级固定为：
 
 ```text
-安全规则 > 系统工具协议 > 数据源组说明 > 当前指标集 > 用户明确补充 > 显式指定的问数技能 > 模型常识
+安全规则 > 系统工具协议 > 数据源组说明 > 当前指标集 > 用户明确补充 > 显式指定的技能 > 模型常识
 ```
 
 智能问数主链路由系统提示词和工具链固定为：
@@ -489,14 +490,14 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 未选指标集时，先搜索当前数据源组中的真实指标集
 -> 基于指标集名称和描述做轻量目录召回
 -> 在候选指标集中做完整指标/维度判断
--> 选中唯一指标集后，按需加载用户本轮显式引用的只读问数技能
+-> 选中唯一指标集后，按需加载用户本轮显式引用的技能
 -> 生成 DSL
 -> DSL2SQL
 -> 查询
 -> 回答
 ```
 
-`skill_load` 在智能问数中只允许加载用户显式引用的只读文本型问数技能；不加载 scripts、assets，不挂载沙箱，也不替代当前指标集。系统不再内置默认业务问数技能，业务背景优先通过数据源组智能问数说明和指标集配置维护。
+`skill_load` 可加载系统技能或当前用户可见的已发布用户技能。加载后仅向当前会话提供该技能目录的只读访问；脚本是否能执行只由 `bash_enabled` 决定。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
 
 指标集检索分两层：
 

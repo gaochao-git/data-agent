@@ -118,8 +118,9 @@ def test_list_dir_skill_path(tmp_path):
     assert "type=file  path=/mnt/skills/public/demo/references/guide.md" in out
 
 
-def test_list_dir_unloaded_skill_rejected(tmp_path):
+def test_list_dir_unauthorized_skill_rejected(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)
     out = _call(tools["list_dir"], path="/mnt/skills/public/unknown/references")
-    assert "技能尚未加载" in out or "只允许访问" in out
+    # 无注册门控：解析改为按 user_id 权限从磁盘/数据库校验，未知技能返回「不存在/无权限」
+    assert "技能不存在" in out or "无权限" in out or "技能路径无效" in out

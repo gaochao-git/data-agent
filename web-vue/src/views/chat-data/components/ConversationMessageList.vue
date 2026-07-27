@@ -18,6 +18,7 @@ interface Props {
   resolveToolCall?: (message: Message, toolCallId: string) => ToolCallInfo | null
   shouldInlineRenderResult?: (toolCall: ToolCallInfo) => boolean
   onSave?: (sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void
+  conversationId?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -186,6 +187,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
               :execution-targets="executionTargets"
               compact
               :active-tool-call-id="activeToolCallId"
+              :conversation-id="conversationId"
               @select-tool="emit('selectTool', $event)"
             />
           </div>
@@ -239,12 +241,14 @@ const handleCopyAssistantMessage = async (message: Message) => {
                     :execution-targets="executionTargets"
                     compact
                     :active-tool-call-id="activeToolCallId"
+                    :conversation-id="conversationId"
                     @select-tool="emit('selectTool', $event)"
                   />
                   <QueryResultPanel
                     v-if="getRenderableQueryResultToolCall(message, segment.toolCallId)"
                     class="mt-2 max-h-[46vh]"
                     :result-data="getRenderableQueryResultToolCall(message, segment.toolCallId)!.renderId!"
+                    :conversation-id="conversationId"
                     :sql="extractGeneratedSqlFromToolCall(getRenderableQueryResultToolCall(message, segment.toolCallId)!)"
                     :semantic-params="getRenderableQueryResultToolCall(message, segment.toolCallId)!.semanticParams"
                     :on-save="onSave"

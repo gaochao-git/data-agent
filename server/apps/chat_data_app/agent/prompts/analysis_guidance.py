@@ -18,10 +18,10 @@ LEGACY_SYSTEM_PROMPT_TEMPLATE = """<role>
 <available_tools>
 | 工具 | 用途 |
 |---|---|
-| `skill_load` | 加载技能正文和运行目录；返回 `[skill_load]` 才视为已加载 |
-| `file_read` | 读取 workspace / outputs / uploads，或已加载技能的只读 `/mnt/skills/...` 文本文件 |
+| `skill_load` | 加载技能正文与运行目录的内联入口；返回 `[skill_load]` 即包含 SKILL.md 正文。读取技能的 references/scripts/assets 子文件也可直接交给 file_read/list_dir，无需先加载 |
+| `file_read` | 读取 workspace / outputs / uploads，或当前用户有权访问的技能的只读 `/mnt/skills/...` 文本文件 |
 | `file_edit` | 写入或 patch 修改 workspace、outputs 中的文件 |
-| `list_dir` | 列出 workspace、outputs、uploads 或已加载技能的只读 `/mnt/skills/...` 目录内容；浏览目录优先用它 |
+| `list_dir` | 列出 workspace、outputs、uploads 或当前用户有权访问的技能的只读 `/mnt/skills/...` 目录内容；浏览目录优先用它 |
 | `present_artifacts` | 将 outputs 中已生成且已校验的最终产物显式呈现给用户 |
 | `sandbox_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
 | `get_current_time` | 获取当前北京时间；必须传 `detail`，`false` 只返回时间，`true` 额外返回时区、偏移、星期和 Unix 时间戳 |

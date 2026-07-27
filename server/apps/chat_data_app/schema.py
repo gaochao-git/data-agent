@@ -280,7 +280,6 @@ class SkillCreateRequest(BaseModel):
     skill_title: str = Field(..., min_length=1, max_length=200, description="技能标题")
     skill_desc: str = Field(default="", max_length=1000, description="技能描述")
     skill_category: str = Field(default="custom", max_length=100, description="技能分类")
-    skill_scope: Literal["query", "analyze", "all"] = Field(default="analyze", description="适用范围")
     visibility_type: Literal["private", "global"] = Field(default="private", description="可见范围")
     content: str = Field(default="", description="SKILL.md 正文或完整内容")
 
@@ -290,7 +289,6 @@ class SkillUpdateRequest(BaseModel):
     skill_title: str = Field(..., min_length=1, max_length=200, description="技能标题")
     skill_desc: str = Field(default="", max_length=1000, description="技能描述")
     skill_category: str = Field(default="custom", max_length=100, description="技能分类")
-    skill_scope: Optional[Literal["query", "analyze", "all"]] = Field(default=None, description="适用范围")
     visibility_type: Literal["private", "global"] = Field(default="private", description="可见范围")
     content: str = Field(default="", description="SKILL.md 正文或完整内容")
 

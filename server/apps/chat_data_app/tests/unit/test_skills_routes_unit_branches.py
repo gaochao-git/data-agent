@@ -151,12 +151,6 @@ class FakeSkillService:
             raise RuntimeError("favorite down")
         return {"skill_id": skill_id, "favorite": favorite}
 
-    async def sync_builtin_skills_async(self, operator="system", operator_name=""):
-        self._record("sync_builtin_skills_async", operator=operator, operator_name=operator_name)
-        if operator == "boom":
-            raise RuntimeError("sync down")
-        return {"synced": 2}
-
     async def reload_async(self):
         self._record("reload_async")
         return {"reloaded": True}
@@ -188,6 +182,10 @@ async def test_skill_list_routes_normalize_scope_and_handle_errors(skills_contex
     assert listed["data"]["total"] == 1
     assert service.calls[-1][2]["scope"] == "all"
     assert service.calls[-1][2]["user_names"] == {"u1": "用户一"}
+
+    runtime = payload(await skills_routes.list_skills(request, scope="runtime"))
+    assert runtime["data"]["total"] == 1
+    assert service.calls[-1][2]["scope"] == "runtime"
 
     mine = payload(await skills_routes.list_my_skills(request))
     assert mine["data"]["skills"][0]["name"] == "demo-skill"
@@ -285,12 +283,6 @@ async def test_skill_favorite_sync_reload_and_detail_routes(skills_context, monk
     assert payload(await skills_routes.unfavorite_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID
     assert payload(await skills_routes.unfavorite_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED
 
-    assert payload(await skills_routes.sync_system_skills(request))["data"]["synced"] == 2
-    service.calls[-1][2]["operator"] == "u1"
-    monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: SimpleNamespace(user_id="boom", username="boom"))
-    assert payload(await skills_routes.sync_system_skills(request))["code"] == ErrorCode.CHATDATA_SKILL_SYNC_FAILED
-
-    monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: user)
     assert payload(await skills_routes.reload_skills())["data"]["reloaded"] is True
 
     detail = payload(await skills_routes.get_skill("demo", request))

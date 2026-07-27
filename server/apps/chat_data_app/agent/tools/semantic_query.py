@@ -1,5 +1,6 @@
 """Semantic query agent tool."""
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any, Annotated
@@ -9,7 +10,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
-from utils.artifact_store import ArtifactType, save_artifact
+from utils.query_result_store import QueryResultStore
 from ...schema import SemanticQueryInput
 from ...services.semantic_tools import load_runtime_semantic_config
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
@@ -81,9 +82,19 @@ def _tool_error(message: str) -> str:
     return f"{TOOL_ERROR_PREFIX}: {message}"
 
 
-def save_query_result(data: dict, conversation_id: str | None = None) -> str:
-    """保存查询结果，返回结果ID。"""
-    return save_artifact(ArtifactType.QUERY_RESULT, data, conversation_id=conversation_id)
+async def save_query_result(
+    data: dict,
+    conversation_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
+    """将大查询结果写入当前会话目录，返回仅限该会话使用的结果 ID。"""
+    record = await asyncio.to_thread(
+        QueryResultStore().save,
+        data=data,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    return record.result_id
 
 
 def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
@@ -352,7 +363,7 @@ async def _build_tool_response(
             user_id=user_id,
         )
     if query_result_succeeded(query_result):
-        return _build_success_result_response(query_result, query, conversation_id)
+        return await _build_success_result_response(query_result, query, conversation_id, user_id=user_id)
     return _build_failed_result_response(query_result, query)
 
 
@@ -392,33 +403,38 @@ async def _build_saved_result_response(
     )
 
 
-def _build_success_result_response(query_result: dict, query: _CompiledToolQuery, conversation_id: str | None) -> str:
+async def _build_success_result_response(
+    query_result: dict,
+    query: _CompiledToolQuery,
+    conversation_id: str | None,
+    user_id: str | None = None,
+) -> str:
     result_json = json.dumps(query_result, ensure_ascii=False)
     if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
-        artifact_id = save_query_result(query_result, conversation_id=conversation_id)
+        result_id = await save_query_result(query_result, conversation_id=conversation_id, user_id=user_id)
         result_summary = {
             "status": query_result.get("status") or "succeeded",
-            "artifact_id": artifact_id,
+            "result_id": result_id,
             "total_count": query_result.get("total_count", 0),
             "execution_time_ms": query_result.get("execution_time_ms"),
             "result_size_chars": len(result_json),
             "llm_analysis_skipped": True,
             "query_mode": query.query_mode,
             "confidence": query.confidence,
-            "message": "查询结果已超过限制，完整结果已写入 artifact；模型仅接收摘要，前端可加载完整结果。",
+            "message": "查询结果已超过限制，完整结果已保存；模型仅接收摘要，前端可加载完整结果。",
         }
         if query_result.get("sql"):
             result_summary["sql"] = query_result.get("sql")
         logger.info(
-            "语义查询结果过大，已写入 artifact: artifact_id=%s size_chars=%s rows=%s",
-            artifact_id,
+            "语义查询结果过大，已卸载: result_id=%s size_chars=%s rows=%s",
+            result_id,
             len(result_json),
             query_result.get("total_count", 0),
         )
         return _query_result_tool_payload(
             status=str(result_summary.get("status") or "succeeded"),
             data=None,
-            meta={**result_summary, "artifact_id": artifact_id},
+            meta=result_summary,
             error=None,
         )
     return _query_result_tool_payload(

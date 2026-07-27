@@ -16,7 +16,7 @@ from .analysis_guidance import (
 from .security_prompt import SECURITY_PROMPT
 from .semantic_layer import build_semantic_prompt
 from ..runtime_options import AgentRuntimeOptions
-from ..skills import build_builtin_skills_prompt
+from ..skills import build_system_skills_prompt
 from ...chart_types import get_chart_type_prompt_text
 
 
@@ -31,7 +31,7 @@ UNIFIED_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "file_read",
-        "desc": "读取 workspace、outputs、uploads，或已加载技能的只读 /mnt/skills 路径中的文本文件。",
+        "desc": "读取 workspace、outputs、uploads，或当前用户有权访问的技能的只读 /mnt/skills 路径中的文本文件。",
     },
     {
         "name": "file_edit",
@@ -39,7 +39,7 @@ UNIFIED_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "list_dir",
-        "desc": "列出 workspace、outputs、uploads 或已加载技能的只读 /mnt/skills 目录内容；浏览目录优先用它，find/grep 等高级能力才用 sandbox_run。",
+        "desc": "列出 workspace、outputs、uploads 或当前用户有权访问的技能的只读 /mnt/skills 目录内容；浏览目录优先用它，find/grep 等高级能力才用 sandbox_run。",
     },
     {
         "name": "present_artifacts",
@@ -437,7 +437,7 @@ def build_unified_system_prompt(
     if available_skills_xml:
         sections.append(available_skills_xml)
     else:
-        sections.append(build_builtin_skills_prompt())
+        sections.append(build_system_skills_prompt())
 
     sections.extend([
         SKILLS_USAGE_BLOCK,

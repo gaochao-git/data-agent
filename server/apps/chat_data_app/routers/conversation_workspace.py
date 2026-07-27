@@ -14,6 +14,7 @@ from ..services.conversation_workspace import (
     can_access_conversation_workspace,
     ensure_conversation_workspace,
     list_conversation_workspace_files as list_workspace_files_for_conversation,
+    read_conversation_query_result,
     read_conversation_workspace_file as read_workspace_file_for_conversation,
     resolve_workspace_path,
 )
@@ -89,6 +90,35 @@ async def read_conversation_workspace_file(conversation_id: str, path: str, requ
     except Exception as e:
         logger.error("读取会话工作区文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
         return business_response(msg="读取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
+
+
+@router.get("/conversations/{conversation_id}/query-results/{result_id}")
+async def get_conversation_query_result(conversation_id: str, result_id: str, request: Request):
+    """读取当前用户会话内卸载的大查询结果。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        if not await can_access_conversation_workspace(conversation_id, user_id):
+            return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        result = await read_conversation_query_result(
+            conversation_id,
+            user_id=user_id,
+            result_id=result_id,
+        )
+        if result is None:
+            return business_response(msg="查询结果不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        return business_response(data=result, msg="获取成功")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error(
+            "读取会话查询结果失败: conversation_id=%s result_id=%s error=%s",
+            conversation_id,
+            result_id,
+            e,
+            exc_info=True,
+        )
+        return business_response(msg="读取查询结果失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
 
 
 @router.post("/conversations/{conversation_id}/workspace-skills/import")

@@ -259,9 +259,6 @@ async def test_conversation_crud_and_list_branches(conversation_db):
     assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is True
     assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is False
     assert await conversation_module.toggle_favorite("", "missing", user_id="u1") is None
-    assert await conversation_module.delete("", conv_id, user_id="u2") is False
-    assert await conversation_module.delete("", conv_id, user_id="u1") is True
-    assert await conversation_module.delete("", conv_id, user_id="u1") is False
 
 
 @pytest.mark.asyncio
@@ -287,7 +284,6 @@ async def test_conversation_additional_db_branches(conversation_db, monkeypatch)
     rows = await conversation_module.list_all({"bad_agent": {}, "agent_a": {}}, user_id=None, limit=10)
     assert any(item["id"] == "conv_existing" for item in rows)
 
-    assert await conversation_module.delete("", "conv_system", user_id=None) is True
     assert await conversation_module.update_title("", "conv_existing", "无用户过滤标题", user_id=None) is True
     assert await conversation_module.toggle_favorite("", "conv_existing", user_id=None) in {True, False}
     assert await conversation_module.get_agent_id("", "conv_existing", user_id=None) == "agent_a"

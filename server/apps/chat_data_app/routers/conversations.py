@@ -341,40 +341,6 @@ async def get_conversation_detail(conversation_id: str, req: Request):
         return business_response(msg=f"获取对话详情失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
 
 
-@router.delete("/{conversation_id}")
-async def delete_conversation(conversation_id: str, req: Request):
-    """
-    删除会话
-
-    DELETE /api/chatdata/conversations/{id}
-
-    返回：
-    {
-        "status": "success",
-        "data": {"id": "..."}
-    }
-    """
-    try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        user_id = _get_user_id(req)
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        success = await conversation.delete(config["db_path"], conversation_id, user_id)
-        if not success:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        return business_response(data={"id": conversation_id}, msg="删除成功")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except Exception as e:
-        logger.error(f"删除对话失败: {e}", exc_info=True)
-        return business_response(msg=f"删除对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DELETE_FAILED, status="error")
-
-
 @router.put("/{conversation_id}/title")
 async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest, req: Request):
     """
@@ -695,48 +661,3 @@ async def list_files(conversation_id: str, req: Request):
     except Exception as e:
         logger.error(f"获取文件列表失败: {e}", exc_info=True)
         return business_response(msg=f"获取文件列表失败: {str(e)}", code=ErrorCode.CHATDATA_FILE_LIST_FAILED, status="error")
-
-
-# ============ Artifact 接口 ============
-
-@router.get("/artifacts/{artifact_id}")
-async def get_artifact(artifact_id: str, req: Request):
-    """
-    获取 Artifact 数据
-
-    GET /api/chatdata/conversations/artifacts/{id}
-
-    artifact_id 是全局唯一的 UUID，会自动查找对应的类型和数据
-
-    返回：
-    {
-        "status": "success",
-        "data": { ... }  // Artifact 数据内容
-    }
-    """
-    from utils.artifact_store import load_artifact_meta_by_id
-
-    if not artifact_id:
-        return business_response(msg="artifact_id 不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-    try:
-        user_id = _get_user_id(req)
-        artifact = load_artifact_meta_by_id(artifact_id)
-        if artifact is None:
-            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        conversation_id = str(artifact.get("conversation_id") or "").strip()
-        if not conversation_id:
-            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        data = artifact.get("data")
-        if data is None:
-            return business_response(msg="Artifact 不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        return business_response(data=data, msg="获取成功")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except Exception as e:
-        logger.error(f"获取 Artifact 失败: {e}", exc_info=True)
-        return business_response(msg=f"获取 Artifact 失败: {str(e)}", code=ErrorCode.CHATDATA_ARTIFACT_GET_FAILED, status="error")

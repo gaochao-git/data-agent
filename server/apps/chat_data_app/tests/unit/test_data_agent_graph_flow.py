@@ -3,7 +3,6 @@ import sys
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -65,8 +64,8 @@ def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     assert "conversation_datasource_id" in annotations
 
 
-def test_unified_prompt_uses_builtin_skills_and_workspace(tmp_path, monkeypatch):
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_builtin_skills_prompt", lambda: "<skills>默认</skills>")
+def test_unified_prompt_uses_system_skills_and_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_system_skills_prompt", lambda: "<skills>默认</skills>")
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(bash_enabled=False),
         data_context={},
@@ -82,7 +81,7 @@ def test_unified_prompt_uses_builtin_skills_and_workspace(tmp_path, monkeypatch)
 
 def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
     assert _extract_source_type({"semantic_configs": ["bad", {}]}) == ""
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_builtin_skills_prompt", lambda: "<skills />")
+    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_system_skills_prompt", lambda: "<skills />")
 
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(workspace_backend="sandbox", bash_enabled=True),

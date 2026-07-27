@@ -277,16 +277,17 @@ def create_skill_load_tool(workspace_runtime: ConversationWorkspaceRuntime, user
     @tool("skill_load", args_schema=SkillLoadInput)
     async def skill_load(skill_name: str, reference_names: Optional[List[str]] = None) -> str:
         """
-        加载指定技能说明。
+        加载指定技能说明，直接返回完整 SKILL.md 正文、references/scripts/assets 清单与只读 `/mnt/skills/...` 路径。
 
-        返回完整 SKILL.md 正文、references/scripts/assets 清单与只读 `/mnt/skills/...` 路径。
-        技能目录保留在既有技能仓库，不复制到会话 workspace；`file_read` 可读取已加载技能的引用资源。
+        技能目录保留在既有技能仓库，不复制到会话 workspace。本工具是「获取 SKILL.md 内联文本」的便捷入口；
+        读取技能的 references/scripts/assets 子文件时，也可直接用返回的 runtime_path 拼接后交给 file_read/list_dir，
+        无需先调用本工具（任何当前用户有权访问的技能路径均可直接读取，按权限校验，对齐 deer-flow 的
+        discover + read_file 模型）。
 
-        读取参考文件时，严格使用本工具返回的 runtime_path 拼接 references/ 子路径，不要自行猜测或省略路径前缀。
+        读取参考文件时，严格使用本工具返回的 runtime_path 拼接子路径，不要自行猜测或省略路径前缀。
 
-        前端选中技能不等于已加载技能。只有本工具成功返回 [skill_load] 后，才算技能已加载。
-        返回内容已包含 SKILL.md 正文，不需要再用 file_read 读取 SKILL.md 本身。
-        仅当用户本轮显式指定技能时调用，不要因领域词相近或系统内置技能存在而自动调用。
+        前端选中技能不等于已自动加载。仅当用户本轮显式指定技能时调用本工具，不要因领域词相近或系统技能存在而自动调用。
+        返回内容已包含 SKILL.md 正文，通常不需要再用 file_read 读取 SKILL.md 本身。
         """
         try:
             payload, source_dir, category = await _build_skill_payload_async(

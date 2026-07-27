@@ -1284,8 +1284,7 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
             return root
 
     monkeypatch.setattr(loader, "_metadata_cache", None)
-    monkeypatch.setattr(loader.Path, "__file__", str(root / "loader.py"), raising=False)
-    monkeypatch.setattr(loader, "__file__", str(root / "loader.py"), raising=False)
+    monkeypatch.setattr(loader, "system_skills_root", lambda: root)
     metadata = loader.load_metadata()
     assert "good" in metadata
     assert "hidden" not in metadata

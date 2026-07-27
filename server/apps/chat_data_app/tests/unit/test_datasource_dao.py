@@ -8,7 +8,6 @@ from datetime import datetime
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")

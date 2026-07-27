@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -107,11 +106,12 @@ def test_skill_service_get_skill_metadata_does_not_return_content():
     assert skill is not None
     assert skill["name"] == "dashboard-generation"
     assert skill["title"] == "看板生成技能"
+    assert skill["source"] == "system"
     assert "content" not in skill
     assert "path" in skill
 
 
-def test_skill_service_reads_builtin_skill_file():
+def test_skill_service_reads_system_skill_file():
     clear_metadata_cache()
 
     file_data = asyncio.run(skill_service.read_skill_version_file_async(
@@ -127,7 +127,7 @@ def test_skill_service_reads_builtin_skill_file():
     assert "def " in file_data["content"]
 
 
-def test_skill_service_rejects_builtin_skill_file_write():
+def test_skill_service_rejects_system_skill_file_write():
     clear_metadata_cache()
 
     try:
@@ -235,7 +235,7 @@ def test_skill_service_helper_rejects_invalid_source_dir(tmp_path, monkeypatch):
         skill_service_module._copy_version_dir(tmp_path / "missing", existing)
 
 
-def test_skill_service_safe_db_reads_fallback_to_builtin(monkeypatch):
+def test_skill_service_safe_db_reads_fallback_to_system_skills(monkeypatch):
     service = SkillService()
 
     class BadStore:
@@ -245,9 +245,9 @@ def test_skill_service_safe_db_reads_fallback_to_builtin(monkeypatch):
     service._dao = BadStore()
     fake_skill_path = Path("/tmp/SKILL.md")
     monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "builtin-skill": {
-            "name": "builtin-skill",
-            "title": "内置技能",
+        "system-skill": {
+            "name": "system-skill",
+            "title": "系统技能",
             "description": "说明",
             "category": "demo",
             "path": str(fake_skill_path),
@@ -255,7 +255,7 @@ def test_skill_service_safe_db_reads_fallback_to_builtin(monkeypatch):
     })
 
     assert asyncio.run(service._safe_db_skills_async()) is None
-    assert asyncio.run(service.list_skills_async(category="demo"))[0]["name"] == "builtin-skill"
+    assert asyncio.run(service.list_skills_async(category="demo"))[0]["name"] == "system-skill"
 
 
 def test_skill_service_db_metadata_filters_and_detail(tmp_path):
@@ -391,21 +391,17 @@ def test_skill_service_remaining_private_helper_edges(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="没有可复制的技能版本"):
         asyncio.run(service._get_copy_source_version_async({"skill_id": "skill_1", "owner_user_id": "u2", "current_skill_version_no": 0}, "u1"))
 
-    class SystemStore:
-        async def get_version_async(self, *_args, **_kwargs):
-            return {"skill_version_dir": str(tmp_path / "system-missing")}
+    system_dir = tmp_path / "system-skill"
+    system_dir.mkdir()
+    (system_dir / "SKILL.md").write_text("---\nname: system-skill\n---\n# System", encoding="utf-8")
 
-    service._dao = SystemStore()
-    with pytest.raises(ValueError, match="技能版本目录无效"):
-        asyncio.run(service._get_system_version_dir_async({"skill_id": "system_1", "skill_root_dir": ""}, 1))
+    async def system_metadata(name):
+        return {"path": str(system_dir / "SKILL.md")} if name == "system-skill" else None
 
-    class ReadableStore:
-        async def get_skill_async(self, *_args, **_kwargs):
-            return {"skill_id": "system_1", "skill_source": "system"}
-
-    service._dao = ReadableStore()
-    monkeypatch.setattr(service, "_get_system_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path))
-    assert asyncio.run(service._get_readable_version_dir_async("system_1", 1, "u1")) == tmp_path
+    monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
+    assert asyncio.run(service._get_system_version_dir_async("system-skill", 1)) == system_dir
+    assert asyncio.run(service._get_system_version_dir_async("system-skill", 2)) is None
+    assert asyncio.run(service._get_readable_version_dir_async("system-skill", 1, "u1")) == system_dir
 
     service._resolve_file_under_version_dir(tmp_path, "references", "guide")
     with pytest.raises(ValueError, match="文件路径无效"):
@@ -752,7 +748,7 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
     }
     info = skill_service_module._skill_row_to_info(row, user_id="u1", user_names={"creator": "创建人"})
     version = skill_service_module._skill_version_to_info({"skill_id": "skill-1", "skill_version_no": "2", "version_publish_status": ""}, current_version_no=2)
-    builtin = skill_service_module._builtin_metadata_to_info({"name": "builtin-skill", "title": "", "description": None, "input_schema": {"type": "object"}})
+    system = skill_service_module._system_metadata_to_info({"name": "system-skill", "title": "", "description": None, "input_schema": {"type": "object"}})
 
     class FakeStore:
         def __init__(self):
@@ -776,8 +772,8 @@ def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypa
     assert info["enabled"] is False
     assert version["current"] is True
     assert version["version_publish_status"] == "draft"
-    assert builtin["title"] == "builtin-skill"
-    assert builtin["input_schema"]["type"] == "object"
+    assert system["title"] == "system-skill"
+    assert system["input_schema"]["type"] == "object"
     assert asyncio.run(service._next_copy_skill_name_async("sales-analysis", "u1")) == "sales-analysis-copy-a"
     assert dao.seen == ["sales-analysis-copy", "sales-analysis-copy-a"]
 
@@ -856,35 +852,7 @@ def test_skill_service_rejects_symlink_fixed_dirs(tmp_path, monkeypatch):
         skill_service_module._ensure_skill_dirs(version_dir)
 
 
-def test_sync_builtin_skills_async_updates_existing_and_creates_new(tmp_path, monkeypatch):
-    service = skill_service_module.SkillService()
-    updated = []
-    created = []
-
-    class FakeStore:
-        async def get_skill_async(self, name, user_id=""):
-            return {"skill_id": "sys_existing"} if name == "existing-skill" else None
-
-        async def update_skill_async(self, skill_id, values, update_by="", update_by_name=""):
-            updated.append((skill_id, values, update_by))
-
-        async def create_skill_with_version_async(self, skill, version):
-            created.append((skill, version))
-
-    monkeypatch.setattr(service, "_dao", FakeStore())
-    monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "existing-skill": {"name": "existing-skill", "title": "已有技能", "description": "旧", "category": "custom", "path": str(tmp_path / "existing" / "SKILL.md")},
-        "new-skill": {"name": "new-skill", "title": "新技能", "description": "新", "category": "custom", "path": str(tmp_path / "new" / "SKILL.md")},
-    })
-
-    result = asyncio.run(service.sync_builtin_skills_async(operator="tester"))
-
-    assert result == {"synced": 2, "total": 2}
-    assert updated[0][0] == "sys_existing"
-    assert created[0][0]["skill_name"] == "new-skill"
-
-
-def test_list_skills_async_filters_db_and_builtin_metadata(monkeypatch):
+def test_list_skills_async_filters_user_and_system_metadata(monkeypatch):
     service = skill_service_module.SkillService()
     rows = [
         {"skill_id": "u1-skill", "skill_name": "private-skill", "skill_title": "私有技能", "skill_desc": "描述", "skill_category": "custom", "skill_source": "user", "owner_user_id": "u1", "current_skill_version_no": 1, "favorite_flag": 1},
@@ -967,7 +935,7 @@ def test_db_skill_metadata_and_detail_resolve_draft_and_published_versions(tmp_p
     assert other_user_detail["content"] == "# 发布标题"
 
 
-def test_db_skill_metadata_async_and_system_path(tmp_path, monkeypatch):
+def test_db_skill_metadata_ignores_legacy_system_record(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     root_dir = tmp_path / "system-skill"
     root_dir.mkdir()
@@ -997,9 +965,8 @@ def test_db_skill_metadata_async_and_system_path(tmp_path, monkeypatch):
     metadata = asyncio.run(service._get_db_skill_metadata_async("system-skill", include_draft=False, user_id="u1"))
     detail = asyncio.run(service._get_db_skill_detail_async("system-skill", include_draft=False, user_id="u1"))
 
-    assert metadata["path"] == str(root_dir / "SKILL.md")
-    assert detail["content"] == "# 系统技能"
-    assert detail["source"] == "system"
+    assert metadata is None
+    assert detail is None
 
 
 def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(tmp_path, monkeypatch):
@@ -1240,7 +1207,7 @@ def test_read_list_delete_skill_files_async_and_error_branches(tmp_path, monkeyp
     asyncio.run(run_checks())
 
 
-def test_version_dir_resolution_async_system_builtin_and_permission_errors(tmp_path, monkeypatch):
+def test_version_dir_resolution_for_filesystem_system_skill_and_user_permissions(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
     system_dir = tmp_path / "system"
     system_dir.mkdir()
@@ -1250,27 +1217,16 @@ def test_version_dir_resolution_async_system_builtin_and_permission_errors(tmp_p
         async def get_skill_async(self, skill_id, user_id=""):
             raise RuntimeError("table missing")
 
-    class StoreSystem:
-        async def get_skill_async(self, skill_id, user_id=""):
-            return {"skill_id": "sys-1", "skill_source": "system", "skill_root_dir": str(system_dir)}
-
-        async def get_version_async(self, skill_id, version_no):
-            return None
-
-    async def builtin_meta(name):
+    async def system_metadata(name):
         return {"path": str(system_dir / "SKILL.md")} if name == "system-skill" else None
 
     async def run_checks():
         monkeypatch.setattr(service, "_dao", StoreRaises())
-        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", builtin_meta)
+        monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
         assert await service._get_readable_version_dir_async("system-skill", 1, "u1") == system_dir
         with pytest.raises(PermissionError, match="无权管理"):
             await service._get_editable_version_dir_async("system-skill", 1, "u1")
-
-        monkeypatch.setattr(service, "_dao", StoreSystem())
-        assert await service._get_readable_version_dir_async("sys-1", 1, "u1") == system_dir
-        with pytest.raises(ValueError, match="技能版本目录无效"):
-            await service._get_system_version_dir_async({"skill_id": "sys-1", "skill_root_dir": str(tmp_path / "missing")}, 1)
+        assert await service._get_system_version_dir_async("system-skill", 2) is None
 
     asyncio.run(run_checks())
 
@@ -1328,32 +1284,6 @@ def test_skill_service_additional_helper_branches(tmp_path, monkeypatch):
     asyncio.run(run_async_check())
 
 
-def test_sync_builtin_skills_async_logs_failed_item_and_skips_empty(monkeypatch, tmp_path):
-    service = skill_service_module.SkillService()
-    created = []
-
-    class FakeStore:
-        async def get_skill_async(self, name, user_id=""):
-            if name == "bad-skill":
-                raise RuntimeError("bad metadata")
-            return None
-
-        async def create_skill_with_version_async(self, skill, version):
-            created.append((skill, version))
-
-    monkeypatch.setattr(service, "_dao", FakeStore())
-    monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {
-        "empty": {"name": "", "path": ""},
-        "good-skill": {"name": "good-skill", "title": "好技能", "path": str(tmp_path / "good" / "SKILL.md")},
-        "bad-skill": {"name": "bad-skill", "title": "坏技能", "path": str(tmp_path / "bad" / "SKILL.md")},
-    })
-
-    result = asyncio.run(service.sync_builtin_skills_async(operator="tester"))
-
-    assert result == {"synced": 1, "total": 3}
-    assert created[0][0]["skill_name"] == "good-skill"
-
-
 def test_list_skills_async_filter_skip_branches(monkeypatch):
     service = skill_service_module.SkillService()
     rows = [
@@ -1376,7 +1306,7 @@ def test_list_skills_async_filter_skip_branches(monkeypatch):
     assert asyncio.run(service.list_skills_async(search="不存在", user_id="u1")) == []
 
 
-def test_get_skill_async_and_builtin_metadata_async_branches(monkeypatch):
+def test_get_skill_async_and_system_metadata_async_branches(monkeypatch):
     service = skill_service_module.SkillService()
 
     async def db_detail(*_args, **_kwargs):
@@ -1424,7 +1354,7 @@ def test_get_skill_async_and_builtin_metadata_async_branches(monkeypatch):
     monkeypatch.setattr(skill_service_module, "activate_skill", lambda name: None)
     monkeypatch.setattr(skill_service_module, "load_metadata", lambda: {})
     assert asyncio.run(service.get_skill_async("missing-skill")) is None
-    assert asyncio.run(service._get_builtin_skill_metadata_async("missing-skill")) is None
+    assert asyncio.run(service._get_system_skill_metadata_async("missing-skill")) is None
 
 
 def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path, monkeypatch):
@@ -1628,8 +1558,8 @@ def test_file_save_delete_async_permission_and_dao_exception_branches(monkeypatc
         async def get_skill_async(self, skill_id, user_id=""):
             return {"skill_id": "sys", "skill_source": "system", "owner_user_id": ""}
 
-    async def builtin_meta(skill_id):
-        return {"path": "/tmp/SKILL.md"} if skill_id == "builtin" else None
+    async def system_metadata(skill_id):
+        return {"path": "/tmp/SKILL.md"} if skill_id == "system" else None
 
     async def run_checks():
         monkeypatch.setattr(service, "_dao", SystemStore())
@@ -1643,11 +1573,11 @@ def test_file_save_delete_async_permission_and_dao_exception_branches(monkeypatc
                 raise RuntimeError("db down")
 
         monkeypatch.setattr(service, "_dao", RaisingStore())
-        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", builtin_meta)
+        monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.save_skill_version_file_async("builtin", 1, "scripts", "a.py", "", "u1")
+            await service.save_skill_version_file_async("system", 1, "scripts", "a.py", "", "u1")
         with pytest.raises(PermissionError, match="无权管理"):
-            await service.delete_skill_version_file_async("builtin", 1, "scripts", "a.py", "u1")
+            await service.delete_skill_version_file_async("system", 1, "scripts", "a.py", "u1")
         with pytest.raises(RuntimeError, match="db down"):
             await service.save_skill_version_file_async("user", 1, "scripts", "a.py", "", "u1")
         with pytest.raises(RuntimeError, match="db down"):
@@ -1684,12 +1614,6 @@ def test_db_skill_metadata_async_filter_and_missing_path_branches(tmp_path, monk
         monkeypatch.setattr(service, "_dao", Store({**no_current_row, "current_skill_version_no": 1}))
         assert await service._get_db_skill_metadata_async("demo-skill", include_draft=False) is None
         assert await service._get_db_skill_detail_async("demo-skill", include_draft=False) is None
-
-        system_dir = tmp_path / "system"
-        system_dir.mkdir()
-        (system_dir / "SKILL.md").write_text("---\nname: sys-skill\n---\n# 系统", encoding="utf-8")
-        assert await service._resolve_db_skill_md_path_async({"skill_source": "system", "skill_root_dir": str(system_dir)}) == system_dir / "SKILL.md"
-        assert await service._resolve_db_skill_md_path_async({"skill_source": "system", "skill_root_dir": str(tmp_path / "missing")}) is None
 
     asyncio.run(run_checks())
 
@@ -1786,28 +1710,13 @@ def test_skill_service_remaining_metadata_and_version_dir_branches(tmp_path, mon
         system_version_dir.mkdir()
         (system_version_dir / "SKILL.md").write_text("---\nname: sys\n---\n# Sys", encoding="utf-8")
 
-        class SystemStore:
-            async def get_version_async(self, skill_id, version_no):
-                return {"skill_version_dir": str(system_version_dir)}
+        async def system_metadata(name):
+            return {"path": str(system_version_dir / "SKILL.md")} if name == "sys" else None
 
-        monkeypatch.setattr(service, "_dao", SystemStore())
-        assert await service._get_system_version_dir_async({"skill_id": "sys", "skill_root_dir": str(tmp_path / "missing")}, 2) == system_version_dir
-
-        async def missing_builtin(_skill_id):
-            return None
-
-        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", missing_builtin)
-        with pytest.raises(ValueError, match="技能不存在"):
-            await service._get_builtin_version_dir_async("missing")
-
-        missing_md = tmp_path / "missing-builtin" / "SKILL.md"
-
-        async def missing_path_builtin(_skill_id):
-            return {"path": str(missing_md)}
-
-        monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", missing_path_builtin)
-        with pytest.raises(ValueError, match="技能版本目录无效"):
-            await service._get_builtin_version_dir_async("missing-path")
+        monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
+        assert await service._get_system_version_dir_async("sys", 1) == system_version_dir
+        assert await service._get_system_version_dir_async("sys", 2) is None
+        assert await service._get_system_version_dir_async("missing", 1) is None
 
     asyncio.run(run_checks())
 
@@ -1893,11 +1802,11 @@ def test_skill_service_extra_private_helper_branches(tmp_path, monkeypatch):
         async def get_skill_async(self, *_args, **_kwargs):
             raise RuntimeError("db down")
 
-    async def no_builtin(_skill_id):
+    async def no_system_skill(_skill_id):
         return None
 
     monkeypatch.setattr(service, "_dao", BuiltinStoreError())
-    monkeypatch.setattr(service, "_get_builtin_skill_metadata_async", no_builtin)
+    monkeypatch.setattr(service, "_get_system_skill_metadata_async", no_system_skill)
     with pytest.raises(RuntimeError, match="db down"):
         asyncio.run(service._get_editable_version_dir_async("skill-1", 1, "u1"))
 
@@ -1925,15 +1834,15 @@ def test_skill_service_extra_private_helper_branches(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_get_editable_version_dir_async", lambda *args, **kwargs: asyncio.sleep(0, result=tmp_path))
     assert asyncio.run(service._get_readable_version_dir_async("skill-1", 1, "u1")) == tmp_path
 
-    class SystemRootStore:
-        async def get_version_async(self, *_args, **_kwargs):
-            return None
-
     system_root = tmp_path / "system-root"
     system_root.mkdir()
     (system_root / "SKILL.md").write_text("---\nname: sys\n---\n# Sys", encoding="utf-8")
-    monkeypatch.setattr(service, "_dao", SystemRootStore())
-    assert asyncio.run(service._get_system_version_dir_async({"skill_id": "sys", "skill_root_dir": str(system_root)}, 0)) == system_root
+
+    async def system_metadata(skill_id):
+        return {"path": str(system_root / "SKILL.md")} if skill_id == "sys" else None
+
+    monkeypatch.setattr(service, "_get_system_skill_metadata_async", system_metadata)
+    assert asyncio.run(service._get_system_version_dir_async("sys", 1)) == system_root
 
     assert service._resolve_file_under_version_dir(tmp_path, "references", "guide").name == "guide.md"
     outside = tmp_path / "outside.md"

@@ -38,11 +38,12 @@ def _tool_result(payload: dict) -> str:
     return "[sandbox_run]\n" + json_dumps(payload)
 
 
-def _normalize_cwd(cwd: str | None, workspace_runtime: ConversationWorkspaceRuntime) -> str:
+async def _normalize_cwd(cwd: str | None, workspace_runtime: ConversationWorkspaceRuntime) -> str:
     raw = str(cwd or "").strip()
     if not raw:
         return sandbox_workspace_dir()
-    return sandbox_visible_path(raw, runtime_skill_mounts=tuple(workspace_runtime.runtime_skill_mounts()))
+    mounts = await workspace_runtime.resolve_available_skill_mounts_async()
+    return sandbox_visible_path(raw, runtime_skill_mounts=mounts)
 
 
 def _validate_command(command: str) -> str:
@@ -59,18 +60,21 @@ def _validate_command(command: str) -> str:
     return value
 
 
-def _local_visible_path(workspace_runtime: ConversationWorkspaceRuntime, path: str):
+async def _local_visible_path(workspace_runtime: ConversationWorkspaceRuntime, path: str):
     normalized = str(path or "").strip()
     if normalized.startswith("/mnt/skills/"):
-        return workspace_runtime.resolve_readonly_skill_path(normalized)[0]
+        return (await workspace_runtime.resolve_readonly_skill_path_async(normalized))[0]
     return resolve_workspace_path(workspace_runtime.workspace_root, normalized)
 
 
-def _validate_command_paths(command: str, workspace_runtime: ConversationWorkspaceRuntime) -> None:
+async def _validate_command_paths(command: str, workspace_runtime: ConversationWorkspaceRuntime) -> None:
     try:
         tokens = shlex.split(command)
     except ValueError as exc:
         raise ValueError(f"command 解析失败: {exc}") from exc
+    sandbox_mounts = None
+    if workspace_runtime.backend == "sandbox":
+        sandbox_mounts = await workspace_runtime.resolve_available_skill_mounts_async()
     disallowed: list[str] = []
     for token in tokens:
         normalized_token = token.lstrip("<>")
@@ -82,16 +86,13 @@ def _validate_command_paths(command: str, workspace_runtime: ConversationWorkspa
             continue
         try:
             if workspace_runtime.backend == "local":
-                _local_visible_path(workspace_runtime, normalized_token)
+                await _local_visible_path(workspace_runtime, normalized_token)
             else:
-                sandbox_visible_path(
-                    normalized_token,
-                    runtime_skill_mounts=tuple(workspace_runtime.runtime_skill_mounts()),
-                )
+                sandbox_visible_path(normalized_token, runtime_skill_mounts=sandbox_mounts)
         except ValueError:
             disallowed.append(token)
     if disallowed:
-        raise ValueError("sandbox_run 只允许访问当前会话目录或当前已加载技能路径: " + ", ".join(disallowed[:3]))
+        raise ValueError("sandbox_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(disallowed[:3]))
 
 
 async def run_sandbox_command(
@@ -103,13 +104,13 @@ async def run_sandbox_command(
 ) -> dict:
     """在当前工作区执行受限 Bash 命令。"""
     safe_command = _validate_command(command)
-    _validate_command_paths(safe_command, workspace_runtime)
+    await _validate_command_paths(safe_command, workspace_runtime)
     timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS))
     if workspace_runtime.backend == "local":
-        local_cwd = _local_visible_path(workspace_runtime, cwd or "workspace")
+        local_cwd = await _local_visible_path(workspace_runtime, cwd or "workspace")
         path_mapping = WorkspacePathMapping(
             workspace_root=workspace_runtime.workspace_root,
-            skill_mounts=tuple(workspace_runtime.runtime_skill_mounts()),
+            skill_mounts=await workspace_runtime.resolve_available_skill_mounts_async(),
         )
         inner = "cd {cwd} && {command}".format(
             cwd=shlex.quote(str(local_cwd)),
@@ -144,7 +145,7 @@ async def run_sandbox_command(
         session = session_ref.current
         if session is None:
             raise ValueError("OpenSandbox 执行环境未准备")
-        sandbox_cwd = _normalize_cwd(cwd, workspace_runtime)
+        sandbox_cwd = await _normalize_cwd(cwd, workspace_runtime)
         inner = "cd {cwd} && {command}".format(cwd=shlex.quote(sandbox_cwd), command=safe_command)
         exit_code, stdout_text, stderr_text = await run_command_in_sandbox(
             session=session,

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -36,23 +35,82 @@ def _workspace_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_get_host_workspace_path_translates_chat_data_home(tmp_path, monkeypatch):
+def test_get_host_workspace_path_uses_application_path_when_host_home_is_empty(tmp_path, monkeypatch):
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    host_home = Path("/srv/chat-data")
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
-    monkeypatch.setenv("CHAT_DATA_HOST_HOME", str(host_home))
 
     path = get_host_workspace_path(str(workspace_root))
 
-    assert path == "/srv/chat-data/users/user_a/threads/conv_a/user-data"
+    assert path == str(Path(workspace_root).resolve())
+
+
+def test_get_host_workspace_path_translates_to_sandbox_host_home(tmp_path, monkeypatch):
+    app_root = tmp_path / "application"
+    chat_data_home = app_root / "chat-data"
+    workspace_root = _workspace_root(app_root)
+    host_home = tmp_path / "sandbox-host" / "shared" / "chat-data"
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
+
+    assert get_host_workspace_path(str(workspace_root)) == str(
+        host_home / "users" / "user_a" / "threads" / "conv_a" / "user-data"
+    )
+
+
+def test_validate_backend_requires_absolute_chat_data_home(monkeypatch):
+    # sandbox 模式下 CHAT_DATA_HOME 必须是绝对路径，且须位于服务端 allowed_host_paths 之下
+    monkeypatch.setenv("CHAT_DATA_HOME", "uploads/chat_data")
+    with pytest.raises(ValueError, match="绝对路径"):
+        workspace_execution._validate_workspace_backend_config()
+
+    monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")
+    monkeypatch.delenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", raising=False)
+    workspace_execution._validate_workspace_backend_config()
+    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", "relative-host-path")
+    with pytest.raises(ValueError, match="OPENSANDBOX_HOST_CHAT_DATA_HOME"):
+        workspace_execution._validate_workspace_backend_config()
+    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", "/sandbox/../host/chat-data")
+    with pytest.raises(ValueError, match="OPENSANDBOX_HOST_CHAT_DATA_HOME"):
+        workspace_execution._validate_workspace_backend_config()
 
 
 def test_get_host_workspace_path_rejects_path_outside_chat_data_home(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
 
-    with pytest.raises(ValueError, match="允许的根目录"):
+    with pytest.raises(ValueError, match="CHAT_DATA_HOME"):
         get_host_workspace_path(str(tmp_path / "outside"))
+
+
+def test_get_host_skill_path_custom_uses_chat_data_home_translation(tmp_path, monkeypatch):
+    chat_data_home = tmp_path / "chat-data"
+    host_home = tmp_path / "sandbox-host" / "chat-data"
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
+    source_dir = chat_data_home / "skills" / "user" / "my-skill"
+    source_dir.mkdir(parents=True)
+
+    assert workspace_execution._get_host_skill_path(source_dir, "custom") == str(host_home / "skills" / "user" / "my-skill")
+
+
+def test_get_host_skill_path_custom_rejects_outside_chat_data_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+
+    with pytest.raises(ValueError, match="CHAT_DATA_HOME/skills/user"):
+        workspace_execution._get_host_skill_path(tmp_path / "outside" / "my-skill", "custom")
+
+
+def test_get_host_skill_path_system_uses_chat_data_home_translation(tmp_path, monkeypatch):
+    chat_data_home = tmp_path / "chat-data"
+    host_home = tmp_path / "sandbox-host" / "chat-data"
+    system_skill = chat_data_home / "skills" / "system" / "dashboard-generation"
+    system_skill.mkdir(parents=True)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
+
+    assert workspace_execution._get_host_skill_path(system_skill, "public") == str(
+        host_home / "skills" / "system" / "dashboard-generation"
+    )
 
 
 def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_path, monkeypatch):
@@ -66,17 +124,13 @@ def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_pa
 
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    custom_root = tmp_path / "data" / "chat_data_skills" / "user"
+    custom_root = tmp_path / "data" / "skills" / "user"
     custom_skill = custom_root / "my-skill" / "versions" / "v1"
     custom_skill.mkdir(parents=True)
     system_skill = tmp_path / "system-skills" / "dashboard-generation"
     system_skill.mkdir(parents=True)
 
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
-    monkeypatch.setattr(workspace_execution, "DATA_ROOT", str(tmp_path / "data"))
-    monkeypatch.setenv("CHAT_DATA_HOST_HOME", "/host/chat-data")
-    monkeypatch.setenv("OPENSANDBOX_HOST_USER_SKILLS_ROOT", "/host/user-skills")
-    monkeypatch.setenv("OPENSANDBOX_HOST_SYSTEM_SKILLS_ROOT", "/host/system-skills")
     monkeypatch.setattr(
         workspace_execution,
         "_import_opensandbox_sdk",
@@ -103,7 +157,7 @@ def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_pa
         "mountPath": "/mnt/user-data",
         "readOnly": False,
     }
-    assert volumes[0].kwargs["host"].path == "/host/chat-data/users/user_a/threads/conv_a/user-data"
+    assert volumes[0].kwargs["host"].path == str(workspace_root)
     assert [(item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[1:]] == [
         ("/mnt/skills/custom/my-skill", True),
         ("/mnt/skills/public/dashboard-generation", True),
@@ -272,9 +326,6 @@ def test_prepare_workspace_execution_session_uses_no_copy_or_seed_step(tmp_path,
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
-    monkeypatch.setenv("CHAT_DATA_HOST_HOME", "/host/chat-data")
-    monkeypatch.setenv("WORKSPACE_EXECUTION_BACKEND", "opensandbox")
-    monkeypatch.setenv("OPENSANDBOX_WORKSPACE_SYNC_MODE", "remote-host-volume")
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
     monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
     monkeypatch.setattr(
@@ -292,18 +343,16 @@ def test_prepare_workspace_execution_session_uses_no_copy_or_seed_step(tmp_path,
 
 
 def test_workspace_execution_config_and_output_helpers(monkeypatch):
-    monkeypatch.setenv("WORKSPACE_EXECUTION_BACKEND", "local")
-    with pytest.raises(ValueError, match="WORKSPACE_EXECUTION_BACKEND=local"):
-        workspace_execution._validate_workspace_backend_config()
-
-    monkeypatch.setenv("WORKSPACE_EXECUTION_BACKEND", "opensandbox")
-    monkeypatch.setenv("OPENSANDBOX_WORKSPACE_SYNC_MODE", "pvc-volume")
-    with pytest.raises(ValueError, match="remote-host-volume"):
-        workspace_execution._validate_workspace_backend_config()
-
+    # 沙箱后端与工作区同步模式已内部固定，这里校验其它配置项。
     monkeypatch.setenv("OPENSANDBOX_PYTHON_BIN", "python3; rm -rf /")
     with pytest.raises(ValueError, match="OPENSANDBOX_PYTHON_BIN"):
         workspace_execution._sandbox_python_bin()
+
+
+def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
+    # sandbox 模式下 CHAT_DATA_HOME 为绝对路径时应通过后端校验
+    monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")
+    workspace_execution._validate_workspace_backend_config()
 
     chart = workspace_execution._artifact_payload_from_bytes(
         visible_path="/mnt/user-data/outputs/sales.chart.json",

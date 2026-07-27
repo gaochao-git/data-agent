@@ -2,14 +2,11 @@ import { computed, ref, unref, watch, type ComputedRef, type Ref } from 'vue'
 import { getSkills } from '../api'
 import type { SkillInfo } from '../types'
 
-type SkillAgent = 'query' | 'analyze' | ''
 type ReactiveValue<T> = Ref<T> | ComputedRef<T>
 
 interface UseSkillCommandMenuOptions {
   input: Ref<string>
   enabled: ReactiveValue<boolean>
-  agent?: SkillAgent
-  maxItems?: number
   loadErrorText?: string
 }
 
@@ -39,7 +36,7 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
     const result = keyword
       ? commandSkills.value.filter(skill => normalizeSkillSearchText(skill).includes(keyword))
       : commandSkills.value
-    return result.slice(0, options.maxItems || 8)
+    return result
   })
 
   const showSkillCommand = computed(() => isSkillCommandOpen.value && skillCommandKeyword.value !== null)
@@ -49,7 +46,7 @@ export const useSkillCommandMenu = (options: UseSkillCommandMenuOptions) => {
     if (commandSkills.value.length > 0 || isCommandSkillLoading.value) return
     isCommandSkillLoading.value = true
     try {
-      const response = await getSkills(options.agent ? { agent: options.agent } : undefined)
+      const response = await getSkills({ scope: 'runtime' })
       commandSkills.value = response.data?.skills || []
     } catch (err) {
       commandSkills.value = []

@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageSegment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -177,7 +177,6 @@ const {
 } = useSkillCommandMenu({
   input,
   enabled: computed(() => true),
-  agent: '',
 })
 
 const findToolCallById = (id: string | null) => {
@@ -1146,20 +1145,10 @@ const syncHistoryToolCalls = () => {
   const nextMap = new Map<string, ToolCallInfo>()
   for (const message of messages.value) {
     if (message.role !== 'assistant' || !message.toolCalls?.length) continue
-    const segments = message.segments || []
-    const hasToolSegments = segments.some(segment => segment.type === 'toolCall')
-    if (!hasToolSegments) {
-      const rebuiltSegments: MessageSegment[] = message.content ? [{ type: 'text', content: message.content }] : []
-      for (const toolCall of message.toolCalls) {
-        rebuiltSegments.push({ type: 'toolCall', toolCallId: toolCall.tool_call_id })
-      }
-      message.segments = rebuiltSegments
-    }
     for (const toolCall of message.toolCalls) {
       const displayToolCall = normalizeToolCallForDisplay(toolCall)
       nextMap.set(displayToolCall.tool_call_id, displayToolCall)
     }
-    message.toolCalls = message.toolCalls.map(normalizeToolCallForDisplay)
   }
   toolCallsMap.value = nextMap
 }
@@ -1756,6 +1745,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :datasource-id="selectedDatasource"
           :execution-targets="props.executionTargets"
           :active-tool-call-id="activeToolCallId"
+          :conversation-id="localConversationId"
           :display-content="getConversationDisplayContent"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
@@ -2077,7 +2067,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
       <div class="h-[640px] overflow-hidden">
-        <SkillManager :initial-skill-id="importedSkillIdForManager" default-skill-scope="all" />
+        <SkillManager :initial-skill-id="importedSkillIdForManager" />
       </div>
     </el-dialog>
   </div>

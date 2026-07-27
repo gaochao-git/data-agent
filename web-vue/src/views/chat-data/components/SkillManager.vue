@@ -24,8 +24,6 @@ import type { SkillInfo, SkillVersionInfo } from '../types'
 import { getSkillCreatorLabel } from '../utils'
 
 type SkillFileDir = 'references' | 'assets' | 'scripts'
-type SkillScope = 'query' | 'analyze' | 'all'
-type SkillAgent = 'query' | 'analyze'
 type SkillFileForm = {
   dir_name: SkillFileDir
   file_path: string
@@ -42,8 +40,6 @@ type SkillFileTreeNode = {
 
 const props = defineProps<{
   initialSkillId?: string | null
-  defaultSkillScope?: SkillScope
-  agent?: SkillAgent
 }>()
 
 const md = new MarkdownIt({ breaks: true, html: false, linkify: true })
@@ -75,7 +71,6 @@ const form = reactive({
   skill_title: '',
   skill_desc: '',
   skill_category: 'custom',
-  skill_scope: 'analyze' as SkillScope,
   visibility_type: 'private' as 'private' | 'global',
   content: '',
 })
@@ -86,12 +81,6 @@ const scopeOptions = [
   { key: 'mine', label: '我的' },
   { key: 'system', label: '系统' },
 ] as const
-
-const skillScopeOptions: Array<{ value: SkillScope; label: string }> = [
-  { value: 'analyze', label: '智能分析' },
-  { value: 'query', label: '智能问数' },
-  { value: 'all', label: '两者' },
-]
 
 const displayedSkills = computed(() => {
   const text = keyword.value.trim().toLowerCase()
@@ -129,17 +118,9 @@ const skillDirDescriptions: Record<SkillFileDir, string> = {
   scripts: '可复用脚本和工具代码',
 }
 const getSkillDirDescription = (dirName?: SkillFileDir) => (dirName ? skillDirDescriptions[dirName] || '' : '')
-const canCreateFileInDir = (dirName?: SkillFileDir) => {
-  if (!dirName) return false
-  return !(props.agent === 'query' && dirName === 'scripts')
-}
-const canAccessFileDir = (dirName?: SkillFileDir) => {
-  if (!dirName) return false
-  return !(props.agent === 'query' && dirName === 'scripts')
-}
-const availableFileDirs = computed<SkillFileDir[]>(() => (
-  props.agent === 'query' ? ['references', 'assets'] : ['references', 'assets', 'scripts']
-))
+const canCreateFileInDir = (dirName?: SkillFileDir) => Boolean(dirName)
+const canAccessFileDir = (dirName?: SkillFileDir) => Boolean(dirName)
+const availableFileDirs: SkillFileDir[] = ['references', 'assets', 'scripts']
 const buildFixedDirNode = (dirName: SkillFileDir, files: string[]): SkillFileTreeNode => {
   const root: SkillFileTreeNode = {
     key: dirName,
@@ -190,7 +171,7 @@ const fileTree = computed<SkillFileTreeNode[]>(() => [{
     { key: 'skill-root:SKILL.md', label: 'SKILL.md', path: 'SKILL.md', type: 'skill', children: [] },
     buildFixedDirNode('references', skillFiles.value.references || selectedSkill.value?.references || []),
     buildFixedDirNode('assets', skillFiles.value.assets || selectedSkill.value?.assets || []),
-    ...(props.agent === 'query' ? [] : [buildFixedDirNode('scripts', skillFiles.value.scripts || selectedSkill.value?.scripts || [])]),
+    buildFixedDirNode('scripts', skillFiles.value.scripts || selectedSkill.value?.scripts || []),
   ],
 }])
 const getSkillStatusLabel = (skill?: SkillInfo | null) => {
@@ -208,10 +189,6 @@ const getSkillDraftLabel = (skill?: SkillInfo | null) => {
 
 const getVisibilityLabel = (visibility?: string) => {
   return visibility === 'global' ? '全局' : '私有'
-}
-
-const getSkillScopeLabel = (scope?: string) => {
-  return skillScopeOptions.find(item => item.value === scope)?.label || '智能分析'
 }
 
 const canActivateVersion = (version: SkillVersionInfo) => {
@@ -246,7 +223,6 @@ const resetForm = () => {
   form.skill_title = ''
   form.skill_desc = ''
   form.skill_category = 'custom'
-  form.skill_scope = props.defaultSkillScope || 'analyze'
   form.visibility_type = 'private'
   form.content = ''
 }
@@ -265,7 +241,6 @@ const openEditPanel = () => {
   form.skill_title = skill.title || skill.name || ''
   form.skill_desc = skill.description || ''
   form.skill_category = skill.category || 'custom'
-  form.skill_scope = (skill.skill_scope || 'analyze') as SkillScope
   form.visibility_type = skill.visibility_type === 'global' ? 'global' : 'private'
   form.content = ''
   showCreatePanel.value = true
@@ -274,7 +249,7 @@ const openEditPanel = () => {
 const loadSkills = async () => {
   loading.value = true
   try {
-    const response = await getSkills({ scope: activeScope.value, agent: props.agent })
+    const response = await getSkills({ scope: activeScope.value })
     skills.value = response.data?.skills || []
     if (selectedSkill.value && !skills.value.some(item => item.name === selectedSkill.value?.name || item.skill_id === selectedSkill.value?.skill_id)) {
       selectedSkill.value = null
@@ -435,10 +410,6 @@ const handleSaveFile = async () => {
     ElMessage.warning('系统技能文件仅支持查看')
     return
   }
-  if (selectedFileNode.value?.type === 'file' && !canAccessFileDir(fileForm.dir_name)) {
-    ElMessage.warning('智能问数技能不支持脚本文件')
-    return
-  }
   const skillId = selectedSkill.value?.skill_id || selectedSkill.value?.name
   const versionNo = currentVersionNo.value
   if (!skillId || !versionNo || !fileForm.file_path.trim()) {
@@ -452,7 +423,6 @@ const handleSaveFile = async () => {
         skill_title: selectedSkill.value?.title || selectedSkill.value?.name || '',
         skill_desc: selectedSkill.value?.description || '',
         skill_category: selectedSkill.value?.category || 'custom',
-        skill_scope: selectedSkill.value?.skill_scope || 'analyze',
         visibility_type: selectedSkill.value?.visibility_type === 'global' ? 'global' : 'private',
         content: fileForm.content,
       })
@@ -534,7 +504,6 @@ const handleCreate = async () => {
         skill_title: form.skill_title,
         skill_desc: form.skill_desc,
         skill_category: form.skill_category,
-        skill_scope: form.skill_scope,
         visibility_type: form.visibility_type,
       })
       : await createSkill({
@@ -542,7 +511,6 @@ const handleCreate = async () => {
         skill_title: form.skill_title,
         skill_desc: form.skill_desc,
         skill_category: form.skill_category,
-        skill_scope: form.skill_scope,
         visibility_type: form.visibility_type,
         content: form.content,
       })
@@ -747,7 +715,6 @@ watch(() => props.initialSkillId, (skillId) => {
               <div class="flex min-w-0 items-center gap-2">
                 <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
                 <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ getSkillCreatorLabel(skill) }}</span>
-                <span class="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">{{ getSkillScopeLabel(skill.skill_scope) }}</span>
               </div>
               <div class="mt-1 truncate text-xs text-slate-400">{{ skill.description || skill.name }}</div>
             </div>
@@ -770,7 +737,7 @@ watch(() => props.initialSkillId, (skillId) => {
               >
                 <i class="fa-regular fa-trash-can"></i>
               </button>
-              <button type="button" class="h-6 w-6 rounded border-none bg-transparent text-slate-300 hover:bg-amber-50 hover:text-amber-400" title="收藏" @click="toggleFavorite(skill, $event)">
+              <button v-if="skill.source !== 'system'" type="button" class="h-6 w-6 rounded border-none bg-transparent text-slate-300 hover:bg-amber-50 hover:text-amber-400" title="收藏" @click="toggleFavorite(skill, $event)">
                 <i :class="skill.favorite ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star'"></i>
               </button>
             </div>
@@ -797,12 +764,6 @@ watch(() => props.initialSkillId, (skillId) => {
             />
           </label>
           <label class="text-xs text-slate-500">标题<input v-model="form.skill_title" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none" /></label>
-          <label class="text-xs text-slate-500">
-            适用范围
-            <select v-model="form.skill_scope" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none">
-              <option v-for="item in skillScopeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
-          </label>
           <label class="text-xs text-slate-500">可见范围<select v-model="form.visibility_type" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none"><option value="private">私有</option><option value="global">全局</option></select></label>
         </div>
         <label class="mt-4 block text-xs text-slate-500">描述<input v-model="form.skill_desc" class="mt-1 h-9 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none" /></label>
@@ -834,8 +795,7 @@ watch(() => props.initialSkillId, (skillId) => {
             编辑元数据
           </button>
         </div>
-        <div class="mb-4 grid grid-cols-2 gap-3 text-xs">
-          <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">适用范围</div><div class="mt-1 truncate text-slate-700">{{ getSkillScopeLabel(selectedSkill.skill_scope) }}</div></div>
+        <div class="mb-4 grid grid-cols-1 gap-3 text-xs">
           <div class="rounded-lg bg-slate-50 p-3"><div class="text-slate-400">可见范围</div><div class="mt-1 truncate text-slate-700">{{ getVisibilityLabel(selectedSkill.visibility_type) }}</div></div>
         </div>
         <div v-if="canManageSkill(selectedSkill)" class="mb-4 rounded-lg border border-slate-200 bg-white p-3">

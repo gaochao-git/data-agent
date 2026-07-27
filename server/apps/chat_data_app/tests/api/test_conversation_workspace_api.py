@@ -84,6 +84,46 @@ def test_conversation_workspace_rejects_inaccessible_conversation(client, monkey
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
+def test_conversation_query_result_route_scopes_result_to_owned_conversation(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def read_result(conversation_id, *, user_id, result_id):
+        assert (conversation_id, user_id, result_id) == ("conv_a", "user_a", "result_a")
+        return {"columns": ["amount"], "data": [{"amount": 1}]}
+
+    monkeypatch.setattr(workspace_routes, "read_conversation_query_result", read_result)
+
+    response = client.get("/api/chatdata/conversations/conv_a/query-results/result_a")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["data"] == [{"amount": 1}]
+
+
+def test_conversation_query_result_route_handles_missing_invalid_and_inaccessible(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def missing_result(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(workspace_routes, "read_conversation_query_result", missing_result)
+    missing = client.get("/api/chatdata/conversations/conv_a/query-results/missing")
+    assert missing.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+    async def invalid_result(*_args, **_kwargs):
+        raise ValueError("result_id 非法")
+
+    monkeypatch.setattr(workspace_routes, "read_conversation_query_result", invalid_result)
+    invalid = client.get("/api/chatdata/conversations/conv_a/query-results/invalid")
+    assert invalid.json()["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
+    async def cannot_access(_conversation_id, _user_id):
+        return False
+
+    monkeypatch.setattr(workspace_routes, "can_access_conversation_workspace", cannot_access)
+    inaccessible = client.get("/api/chatdata/conversations/other/query-results/result_a")
+    assert inaccessible.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
 def test_conversation_workspace_file_error_mapping(client, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 

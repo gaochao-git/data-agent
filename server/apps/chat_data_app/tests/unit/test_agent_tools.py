@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -1165,7 +1164,10 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_blank_sql")
+    async def save_blank_sql(*_args, **_kwargs):
+        return "result_blank_sql"
+
+    monkeypatch.setattr(agent_tools, "save_query_result", save_blank_sql)
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -1179,7 +1181,7 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
     }))
     payload = _query_result_payload(result)
 
-    assert payload["meta"]["artifact_id"] == "artifact_blank_sql"
+    assert payload["meta"]["result_id"] == "result_blank_sql"
     assert payload["meta"]["sql"] == "select generated"
 
 
@@ -1199,7 +1201,7 @@ def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
     assert result == "semantic_query_tool 执行失败: 未找到可用指标集 cfg_missing"
 
 
-def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
+def test_semantic_query_tool_offloads_large_result_to_current_conversation(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     class FakeGenerator:
@@ -1224,10 +1226,11 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
 
     captured = {}
 
-    def fake_save_query_result(result, conversation_id=None):
+    async def fake_save_query_result(result, conversation_id=None, user_id=None):
         captured["result"] = result
         captured["conversation_id"] = conversation_id
-        return "artifact_large"
+        captured["user_id"] = user_id
+        return "result_large"
 
     state = _semantic_query_state(
         available_member_datasource_ids=["m1"],
@@ -1252,9 +1255,9 @@ def test_semantic_query_tool_stores_large_result_as_artifact(monkeypatch):
     }))
 
     payload = _query_result_payload(result)
-    assert payload["meta"]["artifact_id"] == "artifact_large"
+    assert payload["meta"]["result_id"] == "result_large"
     assert payload["meta"]["llm_analysis_skipped"] is True
-    assert "查询结果已超过限制，完整结果已写入 artifact" in result
+    assert "查询结果已超过限制，完整结果已保存" in result
     assert "x" * 120 not in result
     assert captured["result"]["data"][0]["content"] == "x" * 200
     assert captured["conversation_id"] == "conv_a"
@@ -1283,7 +1286,10 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(agent_tools, "save_query_result", lambda *_args, **_kwargs: "artifact_no_sql")
+    async def save_no_sql(*_args, **_kwargs):
+        return "result_no_sql"
+
+    monkeypatch.setattr(agent_tools, "save_query_result", save_no_sql)
     monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
 
     state = _semantic_query_state(
@@ -1299,7 +1305,7 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
     }))
 
     payload = _query_result_payload(result)
-    assert payload["meta"]["artifact_id"] == "artifact_no_sql"
+    assert payload["meta"]["result_id"] == "result_no_sql"
     assert payload["meta"]["sql"] == "select compiled from temp_config"
 
 

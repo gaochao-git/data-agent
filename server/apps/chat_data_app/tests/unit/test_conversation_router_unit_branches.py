@@ -148,18 +148,6 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.get_conversation_detail("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
-    async def delete_ok(*_args, **_kwargs):
-        return True
-
-    monkeypatch.setattr(conversation_router.conversation, "delete", delete_ok)
-    assert payload(await conversation_router.delete_conversation("conv", request))["data"]["id"] == "conv"
-
-    async def delete_missing(*_args, **_kwargs):
-        return False
-
-    monkeypatch.setattr(conversation_router.conversation, "delete", delete_missing)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
     async def update_title_ok(*_args, **_kwargs):
         return True
 
@@ -206,10 +194,6 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
 
     async def no_config(*_args, **_kwargs):
         return None
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", no_config)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
 
 @pytest.mark.asyncio
 async def test_completion_route_validates_ownership_and_injects_supported_kwargs(router_state, monkeypatch):
@@ -357,19 +341,6 @@ async def test_file_and_artifact_routes(router_state, monkeypatch):
     assert payload(await conversation_router.download_file("", "f1", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
     assert payload(await conversation_router.list_files("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
-    import utils.artifact_store as artifact_store
-
-    monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda artifact_id: {
-        "conversation_id": "conv",
-        "data": {"artifact_id": artifact_id},
-    })
-    assert payload(await conversation_router.get_artifact("artifact_a", request))["data"]["artifact_id"] == "artifact_a"
-
-    monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: None)
-    assert payload(await conversation_router.get_artifact("missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert payload(await conversation_router.get_artifact("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-
 @pytest.mark.asyncio
 async def test_routes_convert_authentication_and_unexpected_errors(router_state, monkeypatch):
     request = FakeRequest()
@@ -427,13 +398,6 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
         return conversation_router._agent_configs["agent_a"]
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-
-    async def delete_raises(*_args, **_kwargs):
-        raise RuntimeError("delete down")
-
-    monkeypatch.setattr(conversation_router.conversation, "delete", delete_raises)
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_CONVERSATION_DELETE_FAILED
-    assert payload(await conversation_router.delete_conversation("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def title_raises(*_args, **_kwargs):
         raise RuntimeError("title down")
@@ -500,21 +464,11 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
     monkeypatch.setattr(conversation_router.file_manager, "list_files", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("list files down")))
     assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_LIST_FAILED
 
-    import utils.artifact_store as artifact_store
-
-    monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "", "data": {"ok": True}})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "conv", "data": None})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
-    monkeypatch.setattr(artifact_store, "load_artifact_meta_by_id", lambda _artifact_id: {"conversation_id": "conv", "data": {"ok": True}})
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
     def auth_fails(_request):
         raise AuthenticationError("login required", status_code=401)
 
     monkeypatch.setattr(conversation_router, "authenticate_request", auth_fails)
-    assert payload(await conversation_router.get_artifact("a1", request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 @pytest.mark.asyncio
@@ -527,7 +481,6 @@ async def test_router_conversation_routes_return_not_found_when_config_missing(r
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
 
     assert payload(await conversation_router.get_conversation_detail("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert payload(await conversation_router.delete_conversation("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.update_conversation_title(
         "conv",
         conversation_router.UpdateTitleRequest(title="标题"),

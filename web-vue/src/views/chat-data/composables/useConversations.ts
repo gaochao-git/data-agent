@@ -1,12 +1,11 @@
 /**
  * 会话列表管理 composable
- * 获取、创建、删除会话
+ * 获取、创建和更新会话。
  */
 import { ref, computed } from 'vue'
 import {
   getConversations,
   createConversation as apiCreateConversation,
-  deleteConversation as apiDeleteConversation,
   updateConversation
 } from '../api'
 
@@ -97,20 +96,6 @@ export function useConversations(agentId: string = 'chat_data') {
     }
   }
 
-  // 删除会话
-  const deleteConversation = async (conversationId: string): Promise<boolean> => {
-    try {
-      await apiDeleteConversation(conversationId)
-      conversations.value = conversations.value.filter((c) => c.id !== conversationId)
-      if (currentConversationId.value === conversationId) {
-        currentConversationId.value = null
-      }
-      return true
-    } catch {
-      return false
-    }
-  }
-
   // 更新会话标题
   const updateConversationTitle = async (conversationId: string, title: string): Promise<boolean> => {
     try {
@@ -149,7 +134,6 @@ export function useConversations(agentId: string = 'chat_data') {
     hasConversations,
     loadConversations,
     createConversation,
-    deleteConversation,
     updateConversationTitle,
     selectConversation
   }

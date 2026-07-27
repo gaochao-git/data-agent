@@ -6,7 +6,6 @@ import importlib
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-os.environ.setdefault("DATA_ROOT", "/tmp/fxcjg_test_data")
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
@@ -25,6 +24,7 @@ from apps.chat_data_app.services.conversation_workspace import (
     resolve_workspace_path,
     to_visible_path,
 )
+from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
@@ -198,6 +198,38 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     assert 'scripts=["/mnt/skills/public/demo-skill/scripts/run.py"]' in result
     assert 'assets=["/mnt/skills/public/demo-skill/assets/demo.txt"]' in result
     assert "# 演示技能" in result
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolves_system_skill_file_under_public_path(monkeypatch, tmp_path):
+    skill_dir = tmp_path / "skill-creator"
+    script_path = skill_dir / "scripts" / "quick_validate.py"
+    script_path.parent.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: skill-creator\n---\n# Skill Creator", encoding="utf-8")
+    script_path.write_text("print('ok')\n", encoding="utf-8")
+
+    async def fake_resolve_skill_path_async(name, user_id=""):
+        assert name == "skill-creator"
+        assert user_id == "u1"
+        return {"path": str(skill_dir / "SKILL.md"), "source": "system"}
+
+    monkeypatch.setattr(
+        conversation_workspace_module.skill_service,
+        "resolve_skill_path_async",
+        fake_resolve_skill_path_async,
+    )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(tmp_path / "workspace"),
+        user_id="u1",
+        backend="local",
+    )
+
+    target, visible_path = await runtime.resolve_readonly_skill_path_async(
+        "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
+    )
+
+    assert target == script_path
+    assert visible_path == "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
 
 
 def test_normalize_dsl_payload_accepts_escaped_json_string():
@@ -948,10 +980,11 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
 
     captured = {}
 
-    def fake_save_query_result(result, conversation_id=None):
+    async def fake_save_query_result(result, conversation_id=None, user_id=None):
         captured["result"] = result
         captured["conversation_id"] = conversation_id
-        return "artifact_analyze_large"
+        captured["user_id"] = user_id
+        return "result_analyze_large"
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
@@ -976,7 +1009,7 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
     payload = json.loads(result)
     assert payload["type"] == "query_result"
     assert payload["data"] is None
-    assert payload["meta"]["artifact_id"] == "artifact_analyze_large"
+    assert payload["meta"]["result_id"] == "result_analyze_large"
     assert "x" * 120 not in result
     assert captured["result"]["results"][0]["data"][0]["content"] == "x" * 200
     assert captured["conversation_id"] == "conv_large"

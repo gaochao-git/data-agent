@@ -348,7 +348,7 @@ export function getAccuracyEvaluationRunDetail(runId: string, options?: AdminMod
 }
 
 /** 获取专家技能列表 */
-export function getSkills(params?: { search?: string; category?: string; scope?: 'all' | 'favorites' | 'mine' | 'system'; agent?: 'query' | 'analyze' }): Promise<ApiResponse<{ skills: SkillInfo[]; total: number }>> {
+export function getSkills(params?: { search?: string; category?: string; scope?: 'all' | 'favorites' | 'mine' | 'system' | 'runtime' }): Promise<ApiResponse<{ skills: SkillInfo[]; total: number }>> {
   return request({
     url: `/agents/api/chatdata/skills`,
     method: 'get',
@@ -361,7 +361,6 @@ export function createSkill(data: {
   skill_title: string
   skill_desc?: string
   skill_category?: string
-  skill_scope?: 'query' | 'analyze' | 'all'
   visibility_type?: 'private' | 'global'
   content?: string
 }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
@@ -383,7 +382,6 @@ export function updateSkill(skillId: string, data: {
   skill_title: string
   skill_desc?: string
   skill_category?: string
-  skill_scope?: 'query' | 'analyze' | 'all'
   visibility_type?: 'private' | 'global'
   content?: string
 }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
@@ -471,13 +469,6 @@ export function unfavoriteSkill(skillId: string): Promise<ApiResponse<{ skill_id
   return request({
     url: `/agents/api/chatdata/skills/${skillId}/favorite`,
     method: 'delete'
-  })
-}
-
-export function syncSystemSkills(): Promise<ApiResponse<{ synced: number; total: number }>> {
-  return request({
-    url: `/agents/api/chatdata/skills/sync-system`,
-    method: 'post'
   })
 }
 
@@ -822,14 +813,6 @@ export function importConversationWorkspaceSkill(conversationId: string, data: {
   })
 }
 
-/** 删除会话 */
-export function deleteConversation(conversationId: string): Promise<ApiResponse<null>> {
-  return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}`,
-    method: 'delete'
-  })
-}
-
 /** 更新会话 */
 export function updateConversation(conversationId: string, data: { title?: string }): Promise<ApiResponse<null>> {
   return request({
@@ -1081,9 +1064,9 @@ export function learnSemanticConfigFromHistory(
   })
 }
 
-export function getConversationArtifact<T = unknown>(artifactId: string): Promise<ApiResponse<T>> {
+export function getConversationQueryResult<T = unknown>(conversationId: string, resultId: string): Promise<ApiResponse<T>> {
   return request({
-    url: `/agents/api/chatdata/conversations/artifacts/${artifactId}`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/query-results/${resultId}`,
     method: 'get',
   })
 }
