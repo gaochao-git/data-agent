@@ -468,7 +468,8 @@ async def test_generate_chat_data_stream_missing_semantic_config_and_graph_error
     _override_semantic_context(monkeypatch)
     monkeypatch.setattr(handlers, "get_checkpointer", lambda: BadCheckpointer())
     chunks = await collect_stream(handlers._generate_chat_data_stream("conv", "hello"))
-    assert "checkpoint down" in "".join(chunks)
+    assert "智能问数执行失败，请稍后重试。" in "".join(chunks)
+    assert "checkpoint down" not in "".join(chunks)
 
 
 @pytest.mark.asyncio

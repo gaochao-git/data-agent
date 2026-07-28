@@ -67,17 +67,32 @@ const usagePercentage = computed(() => {
 })
 const usagePercentageText = computed(() => {
   if (!usageDisplay.value) return ''
-  const rounded = Math.round(usagePercentage.value)
-  return props.compact && rounded >= 100 ? '!' : `${rounded}`
+  return `${Math.round(usagePercentage.value)}`
+})
+const compressionTriggerPercentage = computed(() => {
+  const usage = props.usage
+  const contextWindow = usage?.context_window
+  const triggerTokens = usage?.compression_trigger_tokens
+  if (
+    typeof contextWindow !== 'number'
+    || typeof triggerTokens !== 'number'
+    || !Number.isFinite(contextWindow)
+    || !Number.isFinite(triggerTokens)
+    || contextWindow <= 0
+  ) {
+    return null
+  }
+  return Math.max(0, Math.min(100, (triggerTokens / contextWindow) * 100))
 })
 const ringStyle = computed(() => {
   const percentage = usageDisplay.value ? usagePercentage.value : 0
-  const color = percentage >= 90 ? '#ef4444' : percentage >= 70 ? '#f59e0b' : '#1677FF'
+  const trigger = compressionTriggerPercentage.value
+  const color = percentage >= 100 ? '#ef4444' : trigger !== null && percentage >= trigger ? '#f59e0b' : '#1677FF'
   return {
     background: `conic-gradient(${color} ${percentage}%, #d8dee8 0)`,
   }
 })
-const buttonTitle = computed(() => usageDisplay.value ? `输入预算占用：${usageDisplay.value}` : '上下文计算中')
+const buttonTitle = computed(() => usageDisplay.value ? `上下文占用：${usageDisplay.value}` : '上下文计算中')
 const panelStyle = computed(() => ({
   left: `${panelPosition.value.left}px`,
   bottom: `${panelPosition.value.bottom}px`,
@@ -127,18 +142,18 @@ const breakdownRows = computed(() => {
     }))
 })
 
-const detailRows = computed(() => {
+const contextSummary = computed(() => {
   const usage = props.usage
-  if (!usage) return []
-  const rows = [
-    { label: '当前输入', value: usage.current_input_tokens ?? usage.input_tokens ?? usage.used },
-    { label: '可用输入预算', value: usage.total },
-    { label: '模型上下文窗口', value: usage.context_window },
-    { label: '输出预留', value: usage.max_output_tokens },
+  if (!usage) return ''
+  const values = [
+    ['当前输入', usage.current_input_tokens ?? usage.input_tokens ?? usage.used],
+    ['压缩阈值', usage.compression_trigger_tokens],
+    ['上下文窗口', usage.context_window],
   ]
-  return rows.filter((row): row is { label: string; value: number } => (
-    typeof row.value === 'number' && Number.isFinite(row.value)
-  ))
+  return values
+    .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+    .map(([label, value]) => `${label} ${formatTokenCount(value as number)}`)
+    .join(' · ')
 })
 
 const formatTokenCount = (value: number) => formatTokenUsageDisplay({ used: value, total: 1 }).split(' / ')[0] || ''
@@ -343,24 +358,24 @@ defineExpose({
       :style="panelStyle"
     >
       <div class="flex items-center justify-between mb-2">
-        <div class="font-semibold text-gray-800">输入预算明细</div>
+        <div class="font-semibold text-gray-800">上下文占用明细</div>
         <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="closePanel">
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
-      <div class="grid grid-cols-2 gap-2 mb-2 sm:grid-cols-4">
-        <div v-for="row in detailRows" :key="row.label" class="rounded bg-gray-50 px-2 py-1">
-          <div class="text-[11px] text-gray-400">{{ row.label }}</div>
-          <div class="font-medium text-gray-700">{{ formatTokenUsageDisplay({ used: row.value, total: 1 }).split(' / ')[0] }}</div>
-        </div>
-      </div>
       <div class="mb-2">
-        <div class="mb-1 flex items-center justify-between text-[11px] text-gray-400">
-          <span>输入预算占用</span>
-          <span>{{ usageDisplay }} · {{ usagePercentageText }}%</span>
+        <div class="mb-1 flex items-center justify-between gap-3 text-[11px] text-gray-400">
+          <span class="min-w-0 truncate" :title="contextSummary">{{ contextSummary }}</span>
+          <span class="shrink-0">{{ usagePercentageText }}%</span>
         </div>
-        <div class="h-1.5 overflow-hidden rounded-full bg-gray-100">
+        <div class="relative h-1.5 overflow-hidden rounded-full bg-gray-100">
           <div class="h-full rounded-full bg-blue-400" :style="{ width: `${usagePercentage}%` }"></div>
+          <span
+            v-if="compressionTriggerPercentage !== null"
+            class="absolute top-0 h-full w-px bg-amber-500"
+            :style="{ left: `${compressionTriggerPercentage}%` }"
+            title="自动压缩阈值"
+          ></span>
         </div>
       </div>
       <div v-if="cacheUsageRows.length" class="mb-2 border-t border-gray-100 pt-2">

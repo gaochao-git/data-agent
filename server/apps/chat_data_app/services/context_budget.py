@@ -19,6 +19,10 @@ REQUEST_OVERHEAD_TOKENS = 3
 SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
 
 
+class ContextInputLimitExceededError(ValueError):
+    """当前请求无法压缩到模型可接受的输入容量。"""
+
+
 def estimate_tokens(text: str) -> int:
     """按项目统一规则估算文本 token 数。"""
     normalized = str(text or "")
@@ -87,44 +91,48 @@ def _message_tokens(message: BaseMessage) -> int:
 
 @dataclass(frozen=True)
 class ContextBudget:
-    """单次模型请求的统一输入预算。"""
+    """单次模型请求的硬容量与上下文压缩阈值。"""
 
     context_window: int
     max_output_tokens: int
-    trigger_ratio: float
-    input_budget_tokens: int
+    compression_trigger_ratio: float
+    hard_input_limit_tokens: int
+    compression_trigger_tokens: int
+    compression_keep_tokens: int
 
     def remaining_for_messages(self, static_input_tokens: int) -> int:
-        """扣除 system、工具定义和协议开销后，留给消息的预算。"""
-        return max(self.input_budget_tokens - max(int(static_input_tokens), 0), 1)
+        """扣除固定输入后，留给消息的硬容量。"""
+        return max(self.hard_input_limit_tokens - max(int(static_input_tokens), 0), 1)
 
     def remaining_for_tool_result(self, static_input_tokens: int, message_tokens: int) -> int:
-        """扣除下一次请求已知输入后，留给当前工具结果的预算。"""
+        """扣除下一次请求已知输入后，留给当前工具结果的硬容量。"""
         return max(
-            self.input_budget_tokens - max(int(static_input_tokens), 0) - max(int(message_tokens), 0),
+            self.hard_input_limit_tokens - max(int(static_input_tokens), 0) - max(int(message_tokens), 0),
             0,
         )
 
 
 def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | None = None) -> ContextBudget:
-    """按模型窗口、输出预留和全局触发比例构造唯一输入预算。"""
+    """按模型窗口、输出预留和质量阈值构造统一预算。"""
     context_window = max(int(get_context_window(model_id)), 1)
     requested_output = max(int(max_output_tokens or get_chat_data_max_tokens()), 1)
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
     trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
-    soft_input_limit = max(int(context_window * trigger_ratio), 1)
+    compression_trigger = min(max(int(context_window * trigger_ratio), 1), hard_input_limit)
     return ContextBudget(
         context_window=context_window,
         max_output_tokens=requested_output,
-        trigger_ratio=trigger_ratio,
-        input_budget_tokens=min(soft_input_limit, hard_input_limit),
+        compression_trigger_ratio=trigger_ratio,
+        hard_input_limit_tokens=hard_input_limit,
+        compression_trigger_tokens=compression_trigger,
+        compression_keep_tokens=max(int(compression_trigger * 0.30), 1),
     )
 
 
 def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, Any]:
-    """构造页面和 SSE 共用的输入预算占用数据。"""
-    total = max(int(budget.input_budget_tokens), 1)
+    """构造页面和 SSE 共用的完整上下文窗口占用数据。"""
+    total = max(int(budget.context_window), 1)
     safe_used = max(int(used), 0)
     return {
         "used": safe_used,
@@ -133,8 +141,10 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
         "remaining": max(total - safe_used, 0),
         "context_window": budget.context_window,
         "max_output_tokens": budget.max_output_tokens,
-        "input_budget_tokens": total,
-        "input_budget_trigger_ratio": budget.trigger_ratio,
+        "hard_input_limit_tokens": budget.hard_input_limit_tokens,
+        "compression_trigger_tokens": budget.compression_trigger_tokens,
+        "compression_trigger_ratio": budget.compression_trigger_ratio,
+        "compression_keep_tokens": budget.compression_keep_tokens,
     }
 
 

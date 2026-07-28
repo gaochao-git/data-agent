@@ -34,6 +34,7 @@ from apps.chat_data_app.handlers import (
     sql_completion_handler,
 )
 from apps.chat_data_app.agent.tools import semantic_query as agent_sql_tools
+from apps.chat_data_app.services.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.services.execution_target_context import append_selected_execution_targets_to_context
 from apps.chat_data_app.services.semantic_conversation_context import SemanticConversationContext
 
@@ -935,7 +936,32 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     )))
 
     joined = "".join(events)
-    assert 'event: error\ndata: {"error": "graph failed"}' in joined
+    assert 'event: error\ndata: {"error": "智能问数执行失败，请稍后重试。"}' in joined
+    assert "graph failed" not in joined
+    assert events[-1] == "event: done\ndata: [DONE]\n\n"
+
+
+def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypatch):
+    import asyncio
+
+    class ContextLimitGraph(_FakeGraph):
+        async def astream(self, initial_state, config=None, stream_mode=None):
+            _ = initial_state, config, stream_mode
+            raise ContextInputLimitExceededError("当前输入内容过长，请拆分问题后重试。")
+            yield  # pragma: no cover - keeps this an async generator for the stream adapter
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph())
+
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_context_limit",
+        user_query="查订单数",
+        datasource_id="ds_a",
+    )))
+
+    joined = "".join(events)
+    assert "当前输入内容过长，请拆分问题后重试。" in joined
+    assert "智能问数执行失败，请稍后重试。" not in joined
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
 
 

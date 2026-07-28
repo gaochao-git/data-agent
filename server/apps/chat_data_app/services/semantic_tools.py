@@ -426,11 +426,11 @@ def create_semantic_config_selection_tools(
                 content = _serialize_selection_tool_payload(payload)
             if remaining_tokens is not None:
                 logger.info(
-                    "指标集运行时配置上下文预算: model=%s input_budget=%s static_tokens=%s message_tokens=%s available_tokens=%s candidates=%s kept=%s omitted=%s",
+                    "指标集运行时配置上下文预算: model=%s hard_input_limit=%s static_tokens=%s message_tokens=%s available_tokens=%s candidates=%s kept=%s omitted=%s",
                     model_id or "-",
-                    tool_result_budget.budget.input_budget_tokens,
+                    tool_result_budget.budget.hard_input_limit_tokens,
                     tool_result_budget.static_input_tokens,
-                    tool_result_budget.budget.input_budget_tokens - tool_result_budget.static_input_tokens - remaining_tokens,
+                    tool_result_budget.budget.hard_input_limit_tokens - tool_result_budget.static_input_tokens - remaining_tokens,
                     remaining_tokens,
                     len(selected_config_ids),
                     len(semantic_configs),

@@ -28,7 +28,7 @@ from .agent import (
     get_checkpointer,
 )
 from .agent.skills import build_system_skills_prompt, format_skills_prompt
-from .services.context_budget import sanitize_context_usage_for_response
+from .services.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .services.conversation_runtime import stream_agent_turn
 from .services.conversation_event_service import conversation_event_service
 from .services.conversation_context import build_conversation_prompt_context
@@ -1058,9 +1058,13 @@ async def _generate_chat_data_stream(
             ):
                 yield sse_event
 
-    except Exception as e:
-        logger.error(f"执行失败: {e}", exc_info=True)
-        yield _format_sse("error", {"error": str(e)})
+    except ContextInputLimitExceededError as exc:
+        logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
+        yield _format_sse("error", {"error": str(exc)})
+        yield _format_sse("done", "[DONE]")
+    except Exception as exc:
+        logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
+        yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
         yield _format_sse("done", "[DONE]")
 
 

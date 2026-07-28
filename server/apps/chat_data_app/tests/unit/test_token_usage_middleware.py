@@ -50,7 +50,14 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert get_context_window("QWEN-Plus") == 128000
 
     payload = build_context_usage_payload(
-        ContextBudget(context_window=1, max_output_tokens=0, trigger_ratio=1.0, input_budget_tokens=1),
+        ContextBudget(
+            context_window=1,
+            max_output_tokens=0,
+            compression_trigger_ratio=1.0,
+            hard_input_limit_tokens=1,
+            compression_trigger_tokens=1,
+            compression_keep_tokens=1,
+        ),
         used=-10,
     )
     assert payload["used"] == 0
@@ -136,20 +143,37 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
     assert usage["used"] > 0
     assert usage["input_tokens"] == usage["used"]
     budget = get_model_context_budget("qwen3.5-35b-a3b")
-    assert usage["total"] == budget.input_budget_tokens
+    assert usage["total"] == budget.context_window
     assert usage["context_window"] == budget.context_window
     assert usage["max_output_tokens"] == budget.max_output_tokens
-    assert usage["input_budget_tokens"] == budget.input_budget_tokens
+    assert usage["hard_input_limit_tokens"] == budget.hard_input_limit_tokens
+    assert usage["compression_trigger_tokens"] == budget.compression_trigger_tokens
     assert usage["estimated"] is True
 
 
-def test_model_context_budget_uses_shared_input_limit(monkeypatch):
-    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;64000")
+def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
     monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "20000")
 
     budget = get_model_context_budget("budget-model")
 
-    assert budget.input_budget_tokens == min(int(64000 * 0.70), 64000 - 20000)
+    assert budget.hard_input_limit_tokens == 80000
+    assert budget.compression_trigger_tokens == 70000
+    assert budget.compression_keep_tokens == 21000
+
+
+def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
+    monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "30000")
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_context_compression_config",
+        lambda: {"enabled": True, "trigger_ratio": 0.80},
+    )
+
+    budget = get_model_context_budget("budget-model")
+
+    assert budget.hard_input_limit_tokens == 70000
+    assert budget.compression_trigger_tokens == 70000
 
 
 def test_build_message_breakdown_includes_message_metadata_and_content():
@@ -556,8 +580,10 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
             lambda self, system_prompt, tools, model_id=None: ContextBudget(
                 context_window=10000,
                 max_output_tokens=2000,
-                trigger_ratio=0.70,
-                input_budget_tokens=7000,
+                compression_trigger_ratio=0.70,
+                hard_input_limit_tokens=8000,
+                compression_trigger_tokens=7000,
+                compression_keep_tokens=2100,
             ),
         )
         monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)

@@ -43,6 +43,31 @@ describe('ConversationTokenUsage', () => {
     wrapper.unmount()
   })
 
+  it('keeps the summary focused on current input, compression threshold, and context window', async () => {
+    const wrapper = mount(ConversationTokenUsage, {
+      props: {
+        usage: {
+          used: 13400,
+          total: 48000,
+          current_input_tokens: 13400,
+          compression_trigger_tokens: 28000,
+          hard_input_limit_tokens: 28000,
+          max_output_tokens: 20000,
+          context_window: 48000,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.text()).toContain('当前输入')
+    expect(wrapper.text()).toContain('压缩阈值')
+    expect(wrapper.text()).toContain('上下文窗口')
+    expect(wrapper.text()).not.toContain('最大输入容量')
+    expect(wrapper.text()).not.toContain('输出预留')
+    wrapper.unmount()
+  })
+
   it('shows each input item in one compact row with content, ratio, round, type, and tokens', async () => {
     const wrapper = mount(ConversationTokenUsage, {
       props: {

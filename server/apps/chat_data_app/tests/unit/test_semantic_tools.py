@@ -391,7 +391,7 @@ def test_select_semantic_config_tool_keeps_loaded_configs_when_a_retrieved_confi
 def test_select_semantic_config_tool_keeps_only_complete_configs_within_context_budget(monkeypatch):
     class FixedToolResultBudget:
         static_input_tokens = 10
-        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
 
         def remaining_for_tool_result(self, _messages):
             return 200
@@ -425,7 +425,7 @@ def test_select_semantic_config_tool_keeps_only_complete_configs_within_context_
 def test_select_semantic_config_tool_returns_controlled_error_when_first_config_exceeds_budget(monkeypatch):
     class FixedToolResultBudget:
         static_input_tokens = 10
-        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
 
         def remaining_for_tool_result(self, _messages):
             return 1
@@ -455,7 +455,7 @@ def test_select_semantic_config_tool_returns_controlled_error_when_first_config_
 def test_select_semantic_config_tool_does_not_skip_an_oversized_top_ranked_config(monkeypatch):
     class FixedToolResultBudget:
         static_input_tokens = 10
-        budget = type("Budget", (), {"input_budget_tokens": 1000})()
+        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
 
         def remaining_for_tool_result(self, _messages):
             return 180

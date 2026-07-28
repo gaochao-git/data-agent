@@ -13,6 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from ...services.context_budget import (
+    ContextInputLimitExceededError,
     ToolResultBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,
@@ -23,6 +24,7 @@ from ...services.runtime_config import get_context_compression_config
 logger = get_logger(__name__)
 
 SUMMARY_MAX_TOKENS = 2000
+RECENT_COMPLETED_ROUNDS_TO_KEEP = 2
 
 
 @dataclass(frozen=True)
@@ -34,8 +36,10 @@ class ContextCompressionConfig:
 async def compress_messages_for_state(
     messages: list[BaseMessage],
     *,
-    context_window: int,
-    message_budget_tokens: int,
+    static_input_tokens: int,
+    compression_trigger_tokens: int,
+    hard_input_limit_tokens: int,
+    compression_keep_tokens: int,
     config: dict[str, Any] | None = None,
     previous_summary: str | None = None,
     summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None = None,
@@ -44,16 +48,20 @@ async def compress_messages_for_state(
     cfg = _config_from_mapping(config)
     original_messages, legacy_summary = _extract_legacy_context_summary(messages)
     effective_previous_summary = _merge_context_summaries(previous_summary, legacy_summary)
-    before_tokens = count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
-    threshold_tokens = max(int(message_budget_tokens or int(max(context_window, 1) * cfg.trigger_ratio)), 1)
+    static_tokens = max(int(static_input_tokens), 0)
+    before_tokens = static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
+    threshold_tokens = max(int(compression_trigger_tokens), 1)
     report = _build_report(
         cfg,
         before_tokens=before_tokens,
         after_tokens=before_tokens,
         threshold_tokens=threshold_tokens,
+        hard_input_limit_tokens=hard_input_limit_tokens,
+        compression_keep_tokens=compression_keep_tokens,
+        static_input_tokens=static_tokens,
     )
     report["legacy_summary_migrated"] = bool(legacy_summary)
-    if not cfg.enabled or before_tokens <= threshold_tokens:
+    if not cfg.enabled or before_tokens < threshold_tokens:
         return original_messages, effective_previous_summary, report
 
     compressible_end = _compressible_end_index(original_messages)
@@ -61,8 +69,17 @@ async def compress_messages_for_state(
         report["compression_skipped_reason"] = "no_completed_old_rounds"
         return original_messages, effective_previous_summary, report
 
+    retain_start = _recent_completed_round_start(
+        original_messages,
+        compressible_end,
+        static_input_tokens=static_tokens,
+        compression_keep_tokens=compression_keep_tokens,
+    )
     # 压缩范围内的原始内容必须完整交给摘要模型，不能先按字符截断再删除运行态消息。
-    messages_to_summarize = original_messages[:compressible_end]
+    messages_to_summarize = original_messages[:retain_start]
+    if not messages_to_summarize:
+        report["compression_skipped_reason"] = "recent_rounds_exceed_keep_target"
+        return original_messages, effective_previous_summary, report
     if summarizer:
         summary_text = await summarizer(messages_to_summarize)
     else:
@@ -74,13 +91,13 @@ async def compress_messages_for_state(
         report["compression_skipped_reason"] = "empty_summary"
         return original_messages, effective_previous_summary, report
 
-    compressed_messages = original_messages[compressible_end:]
-    after_tokens = count_messages_tokens(compressed_messages) + _summary_tokens(summary_text)
+    compressed_messages = original_messages[retain_start:]
+    after_tokens = static_tokens + count_messages_tokens(compressed_messages) + _summary_tokens(summary_text)
     report.update({
         "triggered": True,
         "estimated_tokens_after": after_tokens,
         "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
-        "compressed_messages": compressible_end,
+        "compressed_messages": retain_start,
         "summary_chars": len(summary_text),
     })
     logger.info(
@@ -96,8 +113,10 @@ async def compress_messages_for_state(
 async def build_context_compression_update(
     messages: list[BaseMessage],
     *,
-    context_window: int,
-    message_budget_tokens: int,
+    static_input_tokens: int,
+    compression_trigger_tokens: int,
+    hard_input_limit_tokens: int,
+    compression_keep_tokens: int,
     config: dict[str, Any] | None = None,
     previous_summary: str | None = None,
     summarizer: Callable[[list[BaseMessage]], Awaitable[str]] | None = None,
@@ -105,8 +124,10 @@ async def build_context_compression_update(
     """构造可写入 LangGraph state 的压缩消息更新。"""
     compressed_messages, summary_text, report = await compress_messages_for_state(
         messages,
-        context_window=context_window,
-        message_budget_tokens=message_budget_tokens,
+        static_input_tokens=static_input_tokens,
+        compression_trigger_tokens=compression_trigger_tokens,
+        hard_input_limit_tokens=hard_input_limit_tokens,
+        compression_keep_tokens=compression_keep_tokens,
         config=config,
         previous_summary=previous_summary,
         summarizer=summarizer,
@@ -137,11 +158,12 @@ def create_context_compression_middleware(
             legacy_summary,
         )
         budget = compression_budget.configure(system_prompt, request_tools, model_id=model_id)
-        message_budget_tokens = compression_budget.remaining_for_messages()
         message_updates, summary_text, report = await build_context_compression_update(
             messages,
-            context_window=budget.context_window,
-            message_budget_tokens=message_budget_tokens,
+            static_input_tokens=compression_budget.static_input_tokens,
+            compression_trigger_tokens=budget.compression_trigger_tokens,
+            hard_input_limit_tokens=budget.hard_input_limit_tokens,
+            compression_keep_tokens=budget.compression_keep_tokens,
             config=get_context_compression_config(),
             previous_summary=previous_summary,
             summarizer=lambda compressible_messages: _summarize_messages_with_llm(
@@ -150,6 +172,10 @@ def create_context_compression_middleware(
                 previous_summary=previous_summary,
             ),
         )
+        if report["estimated_tokens_after"] > budget.hard_input_limit_tokens:
+            raise ContextInputLimitExceededError(
+                "当前输入内容过长，无法在模型上下文窗口内处理。请拆分问题、缩小上传内容或减少引用的技能后重试。"
+            )
         if not message_updates:
             return {"context_compression": report}
         return {
@@ -175,6 +201,9 @@ def _build_report(
     before_tokens: int,
     after_tokens: int,
     threshold_tokens: int,
+    hard_input_limit_tokens: int,
+    compression_keep_tokens: int,
+    static_input_tokens: int,
 ) -> dict[str, Any]:
     return {
         "enabled": cfg.enabled,
@@ -184,6 +213,9 @@ def _build_report(
         "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
         "threshold_tokens": threshold_tokens,
         "trigger_ratio": cfg.trigger_ratio,
+        "hard_input_limit_tokens": max(int(hard_input_limit_tokens), 1),
+        "compression_keep_tokens": max(int(compression_keep_tokens), 1),
+        "static_input_tokens": max(int(static_input_tokens), 0),
         "compressed_messages": 0,
         "summary_chars": 0,
         "compression_skipped_reason": "",
@@ -229,6 +261,26 @@ def _compressible_end_index(messages: list[BaseMessage]) -> int:
     if search_end <= 0:
         return 0
     return _last_complete_boundary(messages[:search_end])
+
+
+def _recent_completed_round_start(
+    messages: list[BaseMessage],
+    completed_end: int,
+    *,
+    static_input_tokens: int,
+    compression_keep_tokens: int,
+) -> int:
+    """保留不超过目标容量的最近完整轮次；工具调用与结果不会被拆开。"""
+    message_keep_limit = max(int(compression_keep_tokens) - max(int(static_input_tokens), 0), 0)
+    completed_round_starts = [
+        index
+        for index, message in enumerate(messages[:completed_end])
+        if isinstance(message, HumanMessage)
+    ]
+    for start in completed_round_starts[-RECENT_COMPLETED_ROUNDS_TO_KEEP:]:
+        if count_messages_tokens(messages[start:]) <= message_keep_limit:
+            return start
+    return completed_end
 
 
 def _last_human_index(messages: list[BaseMessage]) -> int:

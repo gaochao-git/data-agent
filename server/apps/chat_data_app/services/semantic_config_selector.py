@@ -332,7 +332,7 @@ def _chunk_semantic_config_summaries(
         single_tokens = _estimate_selector_prompt_tokens(user_query, [summary], datasource_group_context)
         if single_tokens > safe_budget:
             logger.warning(
-                "单个指标集选择上下文超过统一输入预算但不会拆分: config_id=%s tokens=%s input_budget=%s",
+                "单个指标集选择上下文超过统一输入容量但不会拆分: config_id=%s tokens=%s hard_input_limit=%s",
                 summary.get("id") or "",
                 single_tokens,
                 safe_budget,
@@ -473,7 +473,7 @@ async def select_semantic_config_for_query(
     chunks = _chunk_semantic_config_summaries(
         summaries,
         normalized_query,
-        token_budget=selector_budget.input_budget_tokens,
+        token_budget=selector_budget.hard_input_limit_tokens,
         datasource_group_context=normalized_group_context,
     )
     chunk_tokens = [
@@ -481,12 +481,12 @@ async def select_semantic_config_for_query(
         for chunk in chunks
     ]
     logger.info(
-        "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s input_budget_tokens=%s",
+        "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s hard_input_limit_tokens=%s",
         normalized_datasource_id,
         len(candidate_configs),
         len(chunks),
         chunk_tokens,
-        selector_budget.input_budget_tokens,
+        selector_budget.hard_input_limit_tokens,
     )
     llm = get_chat_data_llm(model=model_id, streaming=False, max_tokens=1200)
     if len(chunks) == 1:

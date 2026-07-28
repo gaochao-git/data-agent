@@ -40,6 +40,17 @@ def test_read_bool_env_handles_common_truthy_and_default(monkeypatch):
         assert runtime_config.read_bool_env("CHATDATA_TEST_BOOL", True) is False
 
 
+def test_read_bounded_float_env_clamps_compression_ratio(monkeypatch):
+    monkeypatch.setenv("CHATDATA_TEST_RATIO", "0.75")
+    assert runtime_config.read_bounded_float_env("CHATDATA_TEST_RATIO", 0.70, minimum=0.01, maximum=0.80) == 0.75
+
+    monkeypatch.setenv("CHATDATA_TEST_RATIO", "0.95")
+    assert runtime_config.read_bounded_float_env("CHATDATA_TEST_RATIO", 0.70, minimum=0.01, maximum=0.80) == 0.80
+
+    monkeypatch.setenv("CHATDATA_TEST_RATIO", "bad")
+    assert runtime_config.read_bounded_float_env("CHATDATA_TEST_RATIO", 0.70, minimum=0.01, maximum=0.80) == 0.70
+
+
 def test_context_window_reads_chat_data_model_config(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1;0.2;128000,kimi-k2.5;0.1;256000")
     assert runtime_config.get_context_window("") == 128000

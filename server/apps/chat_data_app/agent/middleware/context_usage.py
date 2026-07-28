@@ -235,7 +235,7 @@ def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int,
             "tokens": max(int(overhead_tokens), 0),
             "estimated_tokens": max(int(overhead_tokens), 0),
             "estimated": True,
-            "description": "模型协议固定开销，已计入本次输入预算。",
+            "description": "模型协议固定开销，已计入本次模型输入。",
         })
     return items
 
@@ -296,7 +296,7 @@ def build_prompt_breakdown(*, system_tokens: int, messages: list[BaseMessage], m
             "tokens": overhead_tokens,
             "estimated_tokens": overhead_tokens,
             "estimated": True,
-            "description": "模型协议固定开销，已计入本次输入预算。",
+            "description": "模型协议固定开销，已计入本次模型输入。",
         })
     return items
 
@@ -352,8 +352,10 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
     context_budget = budget if isinstance(budget, ContextBudget) else ContextBudget(
         context_window=max(int(budget), 1),
         max_output_tokens=0,
-        trigger_ratio=1.0,
-        input_budget_tokens=max(int(budget), 1),
+        compression_trigger_ratio=1.0,
+        hard_input_limit_tokens=max(int(budget), 1),
+        compression_trigger_tokens=max(int(budget), 1),
+        compression_keep_tokens=max(int(budget), 1),
     )
     payload = build_context_usage_payload(context_budget, current_input_tokens)
     payload.update({
@@ -418,8 +420,8 @@ def _build_agent_context_usage(
         "total_tokens": input_tokens,
         "estimated": True,
         "context_compression": context_compression or _empty_context_compression_report(
-            context_window=budget.context_window,
-            message_budget_tokens=request_budget.remaining_for_messages(),
+            budget=budget,
+            static_input_tokens=request_budget.static_input_tokens,
         ),
         "breakdown": build_request_breakdown(
             messages=llm_messages,
@@ -432,17 +434,19 @@ def _build_agent_context_usage(
     return effective_system_prompt, request_messages, token_usage
 
 
-def _empty_context_compression_report(*, context_window: int, message_budget_tokens: int) -> dict[str, Any]:
+def _empty_context_compression_report(*, budget: ContextBudget, static_input_tokens: int) -> dict[str, Any]:
     config = get_context_compression_config()
-    trigger_ratio = float(config.get("trigger_ratio", 0.70))
     return {
         "enabled": bool(config.get("enabled", True)),
         "triggered": False,
         "estimated_tokens_before": 0,
         "estimated_tokens_after": 0,
         "estimated_cleared_tokens": 0,
-        "threshold_tokens": max(int(message_budget_tokens or int(max(context_window, 1) * trigger_ratio)), 1),
-        "trigger_ratio": trigger_ratio,
+        "threshold_tokens": budget.compression_trigger_tokens,
+        "trigger_ratio": budget.compression_trigger_ratio,
+        "hard_input_limit_tokens": budget.hard_input_limit_tokens,
+        "compression_keep_tokens": budget.compression_keep_tokens,
+        "static_input_tokens": max(int(static_input_tokens), 0),
         "compressed_messages": 0,
         "summary_chars": 0,
         "compression_skipped_reason": "",

@@ -189,8 +189,10 @@ export interface ChatDataTokenUsage {
   total_tokens?: number
   context_window?: number
   max_output_tokens?: number
-  input_budget_tokens?: number
-  input_budget_trigger_ratio?: number
+  hard_input_limit_tokens?: number
+  compression_trigger_tokens?: number
+  compression_trigger_ratio?: number
+  compression_keep_tokens?: number
   estimated?: boolean
   context_compression?: ChatDataContextCompressionInfo | null
   llm_calls?: Array<{
@@ -221,6 +223,9 @@ export interface ChatDataContextCompressionInfo {
   estimated_cleared_tokens?: number
   threshold_tokens?: number
   trigger_ratio?: number
+  hard_input_limit_tokens?: number
+  compression_keep_tokens?: number
+  static_input_tokens?: number
   compressed_messages?: number
   summary_chars?: number
   compression_skipped_reason?: string

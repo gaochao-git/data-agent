@@ -63,7 +63,28 @@ CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED",
 # 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHATDATA_CONTEXT_COMPRESSION_ENABLED", True)
-CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.70
+CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
+CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.80
+
+
+def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    """读取并限制浮点环境变量，避免压缩阈值侵占输出预留。"""
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return min(max(value, minimum), maximum)
+
+
+CONTEXT_COMPRESSION_TRIGGER_RATIO = read_bounded_float_env(
+    "CHATDATA_CONTEXT_COMPRESSION_TRIGGER_RATIO",
+    CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO,
+    minimum=0.01,
+    maximum=CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO,
+)
 CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHATDATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
 LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHATDATA_LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
 
