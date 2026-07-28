@@ -12,6 +12,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
 from utils.logger import get_logger
+from utils.skill_paths import is_valid_skill_category, skill_virtual_root
 from ...services.skill_service import resolve_skill_name, skill_service
 from ...services.conversation_workspace import ConversationWorkspaceRuntime
 
@@ -116,14 +117,14 @@ async def _build_skill_payload_async(skill_name: str, user_id: str = "") -> tupl
     )
     skill_md = await asyncio.to_thread(source_skill_md.read_text, encoding="utf-8", errors="replace")
     category = str(metadata.get("source") or "").strip()
-    if category not in {"system", "user"}:
+    if not is_valid_skill_category(category):
         raise ValueError("技能来源无效")
     return {
         "name": resolved_name,
         "title": metadata.get("title") or resolved_name,
         "description": metadata.get("description") or "",
-        "runtime_path": f"/mnt/skills/{category}/{resolved_name}",
-        "visible_path": f"/mnt/skills/{category}/{resolved_name}",
+        "runtime_path": skill_virtual_root(category, resolved_name),
+        "visible_path": skill_virtual_root(category, resolved_name),
         "skill_md": skill_md,
         "references": references,
         "scripts": scripts,

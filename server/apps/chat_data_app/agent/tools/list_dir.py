@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from ...services.conversation_workspace import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
@@ -99,14 +100,14 @@ def create_list_dir_tool(workspace_runtime: ConversationWorkspaceRuntime):
         约束：
         - 不能列出会话目录之外、或无权限访问的 /mnt/skills 目录（会被直接拒绝）。
         - 技能路径无需先经 skill_load 加载即可列出，按当前用户权限校验。
-        - 浏览目录优先用本工具；仅当需要 find / grep / 递归脚本等高级能力时才使用 sandbox_run。
+        - 浏览目录优先用本工具；仅当需要 find / grep / 递归脚本等高级能力时才使用 bash_run。
         """
         try:
             raw = str(path or "workspace").strip().replace("\\", "/")
             if max_depth < 1 or max_depth > 5:
                 return "max_depth 必须在 1-5 之间"
 
-            if raw.startswith("/mnt/skills/"):
+            if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
                 try:
                     target, visible_top = await workspace_runtime.resolve_readonly_skill_path_async(raw)
                 except ValueError as exc:

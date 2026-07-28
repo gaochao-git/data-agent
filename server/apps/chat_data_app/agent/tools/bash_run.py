@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from ...services.conversation_workspace import (
     ConversationWorkspaceRuntime,
     WorkspacePathMapping,
@@ -35,7 +36,7 @@ MAX_TIMEOUT_SECONDS = 120
 
 
 def _tool_result(payload: dict) -> str:
-    return "[sandbox_run]\n" + json_dumps(payload)
+    return "[bash_run]\n" + json_dumps(payload)
 
 
 async def _normalize_cwd(cwd: str | None, workspace_runtime: ConversationWorkspaceRuntime) -> str:
@@ -56,13 +57,13 @@ def _validate_command(command: str) -> str:
     blocked_tokens = (" nohup ", " setsid ", " disown", " systemctl ", " service ", " sudo ", " su ")
     padded = f" {lowered} "
     if any(token in padded for token in blocked_tokens) or lowered.endswith("&"):
-        raise ValueError("sandbox_run 不支持后台进程、提权命令或服务管理命令")
+        raise ValueError("bash_run 不支持后台进程、提权命令或服务管理命令")
     return value
 
 
 async def _local_visible_path(workspace_runtime: ConversationWorkspaceRuntime, path: str):
     normalized = str(path or "").strip()
-    if normalized.startswith("/mnt/skills/"):
+    if normalized.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
         return (await workspace_runtime.resolve_readonly_skill_path_async(normalized))[0]
     return resolve_workspace_path(workspace_runtime.workspace_root, normalized)
 
@@ -92,10 +93,10 @@ async def _validate_command_paths(command: str, workspace_runtime: ConversationW
         except ValueError:
             disallowed.append(token)
     if disallowed:
-        raise ValueError("sandbox_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(disallowed[:3]))
+        raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(disallowed[:3]))
 
 
-async def run_sandbox_command(
+async def run_bash_command(
     *,
     command: str,
     cwd: str | None = None,
@@ -179,9 +180,9 @@ async def run_sandbox_command(
     }
 
 
-def create_sandbox_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
-    @tool("sandbox_run")
-    async def sandbox_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> str:
+def create_bash_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
+    @tool("bash_run")
+    async def bash_run(command: str, cwd: str = "/mnt/user-data/workspace", timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> str:
         """
         在当前会话工作区执行非交互命令，可用于 ls/find/python3/node/bash 等。
 
@@ -190,7 +191,7 @@ def create_sandbox_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
         - 生成最终产物前，先把脚本输出写到 workspace/，校验后复制或写入 outputs/。
         """
         try:
-            payload = await run_sandbox_command(
+            payload = await run_bash_command(
                 command=command,
                 cwd=cwd,
                 timeout_seconds=timeout_seconds,
@@ -198,7 +199,7 @@ def create_sandbox_run_tool(workspace_runtime: ConversationWorkspaceRuntime):
             )
             return _tool_result(payload)
         except Exception as exc:
-            logger.error("sandbox_run 执行失败: %s", exc, exc_info=True)
-            return f"sandbox_run 执行失败: {exc}"
+            logger.error("bash_run 执行失败: %s", exc, exc_info=True)
+            return f"bash_run 执行失败: {exc}"
 
-    return sandbox_run
+    return bash_run

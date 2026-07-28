@@ -681,9 +681,9 @@ def test_unified_prompt_injects_skill_metadata_not_skill_body():
     assert "## 方言上下文" in prompt
     assert "## 优先级" in prompt
     assert "## 执行连续性" in prompt
-    # 工作空间态应暴露文件工具与 sandbox_run
+    # 工作空间态应暴露文件工具与 bash_run
     assert "`file_read`" in prompt
-    assert "`sandbox_run`" in prompt
+    assert "`bash_run`" in prompt
     assert "数据上下文文件" not in prompt
     assert "禁止调用：" not in prompt
     assert "analysis_plan" not in prompt
@@ -692,7 +692,7 @@ def test_unified_prompt_injects_skill_metadata_not_skill_body():
     assert "schema_search" not in prompt
     assert "<name>dashboard-generation</name>" in prompt
     assert "<title>看板生成技能</title>" in prompt
-    assert "`sandbox_run`" in prompt
+    assert "`bash_run`" in prompt
     assert "`file_move`" not in prompt
     assert '调用 `skill_load("<name>")`' in prompt
     assert "不能使用 title、skill_id 或自造名称" in prompt

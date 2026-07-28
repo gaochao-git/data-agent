@@ -3,7 +3,7 @@
 工作区始终存在，差别只在其后端及 Bash 是否注册：
 
 - ``workspace_backend``: ``local`` 使用受限的本地会话目录；``sandbox`` 使用 OpenSandbox。
-- ``bash_enabled``: 唯一影响工具注册的开关，控制 ``sandbox_run``。
+- ``bash_enabled``: 唯一影响工具注册的开关，控制 ``bash_run``。
 
 本地 Bash 不提供隔离，只能在受信任的开发或测试部署显式开启。
 """

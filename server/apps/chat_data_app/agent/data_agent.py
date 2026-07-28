@@ -25,7 +25,7 @@ from .tools.file_edit import create_file_edit_tool
 from .tools.file_read import create_file_read_tool
 from .tools.list_dir import create_list_dir_tool
 from .tools.present_artifacts import create_present_artifacts_tool
-from .tools.sandbox_run import create_sandbox_run_tool
+from .tools.bash_run import create_bash_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.skill_load import create_skill_load_tool
 
@@ -71,7 +71,7 @@ def assemble_tools(
         calculator_tool,
     ]
     if runtime_options.bash_enabled:
-        tools.append(create_sandbox_run_tool(workspace_runtime))
+        tools.append(create_bash_run_tool(workspace_runtime))
     return tools
 
 

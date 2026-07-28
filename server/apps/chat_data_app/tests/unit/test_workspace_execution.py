@@ -12,7 +12,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.tools import sandbox_run
+from apps.chat_data_app.agent.tools import bash_run
 from apps.chat_data_app.services import workspace_execution
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
@@ -246,7 +246,7 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
     )
 
     result = asyncio.run(
-        sandbox_run.run_sandbox_command(
+        bash_run.run_bash_command(
             command="cat /mnt/skills/system/dashboard-generation/references/guide.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,
@@ -257,7 +257,7 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
     assert result["stdout"] == "guide text\n"
     with pytest.raises(ValueError, match="当前会话目录"):
         asyncio.run(
-            sandbox_run.run_sandbox_command(
+            bash_run.run_bash_command(
                 command="cat /mnt/skills/system/other-skill/SKILL.md",
                 workspace_runtime=runtime,
             )
@@ -287,10 +287,10 @@ def test_sandbox_bash_uses_current_runtime_skill_mount(monkeypatch, tmp_path):
         host_workspace_path="/host/workspace",
         runtime_skill_mounts=mounts,
     )
-    monkeypatch.setattr(sandbox_run, "run_command_in_sandbox", fake_run_command_in_sandbox)
+    monkeypatch.setattr(bash_run, "run_command_in_sandbox", fake_run_command_in_sandbox)
 
     result = asyncio.run(
-        sandbox_run.run_sandbox_command(
+        bash_run.run_bash_command(
             command="cat /mnt/skills/system/dashboard-generation/SKILL.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,

@@ -17,6 +17,7 @@ from urllib.parse import unquote
 
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, is_valid_skill_category, physical_skill_category_root
 from utils.storage_paths import CHAT_DATA_HOME
 from .artifact_registry import parse_output_artifact
 
@@ -49,7 +50,8 @@ def sandbox_uploads_dir() -> str:
 
 
 def sandbox_skills_root() -> str:
-    return f"{_sandbox_root()}/skills"
+    # 沙箱内技能挂载根与 Agent 视角的虚拟根一致（容器 /mnt 即虚拟根）。
+    return SKILLS_VIRTUAL_ROOT
 
 
 @dataclass
@@ -149,7 +151,7 @@ def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
     name = str(getattr(mount, "name", "")).strip()
     category = str(getattr(mount, "category", "")).strip()
     source_dir = Path(getattr(mount, "source_dir", "")).expanduser().resolve()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or category not in {"system", "user"}:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or not is_valid_skill_category(category):
         raise ValueError("运行时技能挂载配置非法")
     if not source_dir.is_dir():
         raise ValueError(f"技能目录不存在: {source_dir}")
@@ -159,7 +161,7 @@ def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
 def _get_host_skill_path(source_dir: Path, category: str) -> str:
     resolved = source_dir.expanduser().resolve()
     skill_root_name = category
-    root = (Path(CHAT_DATA_HOME) / "skills" / skill_root_name).expanduser().resolve()
+    root = physical_skill_category_root(skill_root_name, chat_data_home=CHAT_DATA_HOME).expanduser().resolve()
     if resolved != root and root not in resolved.parents:
         raise ValueError(f"技能不在 CHAT_DATA_HOME/skills/{skill_root_name} 内: {source_dir}")
     return _translate_host_path(

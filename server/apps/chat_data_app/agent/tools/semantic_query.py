@@ -398,7 +398,7 @@ async def _build_saved_result_response(
             "sql": query_result.get("sql") or query.sql,
             "query_mode": query.query_mode,
             "confidence": query.confidence,
-            "next_required_action": "使用 file_read 抽查文件，或用 sandbox_run 读取 result_path 生成后续产物。",
+            "next_required_action": "使用 file_read 抽查文件，或用 bash_run 读取 result_path 生成后续产物。",
         },
     )
 

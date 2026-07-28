@@ -10,7 +10,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   file_glob: '查找文件',
   file_grep: '搜索文件',
   file_edit: '写入文件',
-  sandbox_run: '运行脚本',
+  bash_run: '运行脚本',
   present_artifacts: '展示文件',
   output_artifact: '生成文件',
   semantic_dsl_to_sql: 'DSL 转 SQL',

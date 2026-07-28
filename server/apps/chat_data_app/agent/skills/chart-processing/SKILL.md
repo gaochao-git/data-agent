@@ -149,7 +149,7 @@ metadata:
 6. 使用 `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/current.json")` 获取真实数据并保存中间文件；多 SQL 场景分别保存为 `/mnt/user-data/workspace/current.json`、`/mnt/user-data/workspace/previous.json` 等
 7. 简单单 SQL 场景：按主指南生成 `/mnt/user-data/workspace/chart_spec_draft.json`；多图使用带业务后缀的草稿名
 8. 复杂场景：参考 `scripts/` 写入 `/mnt/user-data/workspace/build_chart_spec.py`
-9. 使用 `sandbox_run(command="python3 /mnt/user-data/workspace/build_chart_spec.py ...")` 执行脚本，生成 `/mnt/user-data/workspace/chart_spec_draft.json` 或带业务后缀的草稿文件
+9. 使用 `bash_run(command="python3 /mnt/user-data/workspace/build_chart_spec.py ...")` 执行脚本，生成 `/mnt/user-data/workspace/chart_spec_draft.json` 或带业务后缀的草稿文件
 10. 将草稿复制或写入 `/mnt/user-data/outputs/<业务名>.chart.json`；多图用业务命名区分，不使用版本号
 11. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])` 展示最终图表预览；多图一次传入多个 outputs 文件
 12. 简短总结图表预览状态

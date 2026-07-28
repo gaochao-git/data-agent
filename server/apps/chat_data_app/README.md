@@ -59,7 +59,7 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 ### 1. 数据智能体
 
-数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）与 `bash_enabled`（安全策略）是两个独立维度：前者只决定工作区跑在受限本地目录还是 OpenSandbox，后者决定 `sandbox_run` 是否注册。两者职责不同且必须耦合选型，详见下文「运行环境后端与 Bash 安全模型」。
+数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）与 `bash_enabled`（安全策略）是两个独立维度：前者只决定工作区跑在受限本地目录还是 OpenSandbox，后者决定 `bash_run` 是否注册。两者职责不同且必须耦合选型，详见下文「运行环境后端与 Bash 安全模型」。
 
 ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `users/{user_id}/threads/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`；文件工具可读三者、仅可写前两者。大查询结果位于会话 `outputs/.tool-results/query_result/`，前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/`；两者分别只读挂载为 `/mnt/skills/system/<技能名>/` 与 `/mnt/skills/user/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
@@ -70,7 +70,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 运行环境后端（`workspace_backend`）与 Bash 开关（`bash_enabled`）职责不同，选型必须耦合，不能分开理解：
 
 - **`workspace_backend` 是「运行环境标准化」，不是安全设备。** 选 `sandbox`（OpenSandbox）的目的只是把代码执行场所钉死为统一的 Python 版本、预装依赖、可复现环境，且不让 `pip install` / 临时进程 / 环境变量污染宿主生产服务。它的容器隔离（FS/网络/进程边界）只是顺带能力，本职是给代码一个一致的运行场所。
-- **`bash_enabled` 是真正的「安全策略控制」。** 它决定 Bash 工具是否注册；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/sandbox_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
+- **`bash_enabled` 是真正的「安全策略控制」。** 它决定 Bash 工具是否注册；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/bash_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
 
 **但 Bash 工具的校验是「策略轨道」而非「执行之墙」：** agent 可先用 `file_edit` 把任意脚本写到 `workspace/`，再 `bash evil.sh` 执行——脚本内容完全不被检查；local 模式下子进程以宿主权限运行，校验是唯一闸门且可被引号/进程替换绕过。因此 Bash 工具的开关是 policy（是否允许代码执行），**enforcement（真正把越界代码关住）要由沙箱容器兜底**。
 

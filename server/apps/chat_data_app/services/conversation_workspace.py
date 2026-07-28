@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from utils.database import get_session
 from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, is_valid_skill_category, skill_virtual_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
 
 from ..daos.conversation_dao import ConversationDao
@@ -45,7 +46,7 @@ class RuntimeSkillMount:
 
     @property
     def visible_root(self) -> str:
-        return f"/mnt/skills/{self.category}/{self.name}"
+        return skill_virtual_root(self.category, self.name)
 
 
 @dataclass
@@ -107,14 +108,14 @@ class ConversationWorkspaceRuntime:
         结果缓存在 ``runtime_skills`` 以便同请求内复用，但缓存不作为访问前提。
         """
         raw = str(path or "").strip().replace("\\", "/")
-        prefix = "/mnt/skills/"
+        prefix = f"{SKILLS_VIRTUAL_ROOT}/"
         if not raw.startswith(prefix):
             raise ValueError(f"只允许访问技能路径: {path}")
         parts = PurePosixPath(raw).parts
         if len(parts) < 5 or parts[1:3] != ("mnt", "skills"):
             raise ValueError(f"技能路径无效: {path}")
         category, name = parts[3], parts[4]
-        if category not in {"system", "user"}:
+        if not is_valid_skill_category(category):
             raise ValueError(f"技能路径无效: {path}")
         mount = await self._resolve_skill_mount_async(category, name)
         relative_parts = parts[5:]
@@ -123,7 +124,7 @@ class ConversationWorkspaceRuntime:
         target = (mount.source_dir.joinpath(*relative_parts)).resolve()
         if target != mount.source_dir and mount.source_dir not in target.parents:
             raise ValueError(f"技能路径越界: {path}")
-        visible = f"/mnt/skills/{category}/{name}"
+        visible = skill_virtual_root(category, name)
         if relative_parts:
             visible += "/" + "/".join(relative_parts)
         return target, visible
@@ -557,7 +558,7 @@ async def workspace_read_text_file(
     limit: int,
 ) -> dict[str, Any]:
     if runtime.backend == "local":
-        if str(file_path or "").strip().startswith("/mnt/skills/"):
+        if str(file_path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
             return await asyncio.to_thread(
                 _read_local_runtime_skill_file,

@@ -23,7 +23,7 @@ LEGACY_SYSTEM_PROMPT_TEMPLATE = """<role>
 | `file_edit` | 写入或 patch 修改 workspace、outputs 中的文件 |
 | `list_dir` | 列出 workspace、outputs、uploads 或当前用户有权访问的技能的只读 `/mnt/skills/...` 目录内容；浏览目录优先用它 |
 | `present_artifacts` | 将 outputs 中已生成且已校验的最终产物显式呈现给用户 |
-| `sandbox_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
+| `bash_run` | 在当前会话沙箱中执行 `ls` / `find` / `python3` / `node` / `bash` 等非交互命令 |
 | `get_current_time` | 获取当前北京时间；必须传 `detail`，`false` 只返回时间，`true` 额外返回时区、偏移、星期和 Unix 时间戳 |
 | `select_semantic_config_tool` | 当前没有手动选择指标集时，从数据源组检索相关指标集，并返回指标集配置；维度提供可用原始表列，指标提供聚合口径，关联关系来自 relationships |
 | `dsl2sql_tool` | 校验语义 DSL 并转换 SQL；禁止手写语义层 SQL |
@@ -84,7 +84,7 @@ LEGACY_SYSTEM_PROMPT_TEMPLATE = """<role>
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` patch 失败后必须重新 `file_read`，基于最新内容重写 patch，不能凭记忆或上一次失败 patch 重试。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。`skill_load` 成功后，技能参考文件位于只读 `/mnt/skills/system/<技能名>/...` 或 `/mnt/skills/user/<技能名>/...`，不要写入或展示为会话产物。
-- 浏览目录统一使用 `list_dir(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级能力时才使用 `sandbox_run`。不要臆测文件是否存在。
+- 浏览目录统一使用 `list_dir(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级能力时才使用 `bash_run`。不要臆测文件是否存在。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
 - `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
 

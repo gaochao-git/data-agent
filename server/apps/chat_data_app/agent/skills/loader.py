@@ -16,7 +16,7 @@ from typing import Any, TypedDict
 from xml.sax.saxutils import escape as xml_escape
 
 from utils.logger import get_logger
-from utils.storage_paths import CHAT_DATA_HOME
+from utils.skill_paths import SYSTEM_SKILL_CATEGORY, physical_skill_category_root
 
 try:
     import yaml
@@ -59,7 +59,7 @@ _metadata_cache: dict[str, SkillMetadata] | None = None
 
 def system_skills_root() -> Path:
     """Return the deployment-managed system skill root."""
-    return Path(CHAT_DATA_HOME) / "skills" / "system"
+    return physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
 
 
 def _parse_frontmatter(text: str) -> dict[str, Any]:

@@ -93,7 +93,7 @@ def test_build_unified_system_prompt_uses_shared_prompt_context(monkeypatch):
     assert "未选指标集时，可以推荐的问题应是下一步引导类" in system_prompt
     assert "最终回答不要提及技能加载过程" in system_prompt
     # Bash 关闭时，提示词不应暴露该工具。
-    assert "`sandbox_run`" not in system_prompt
+    assert "`bash_run`" not in system_prompt
 
 
 def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():

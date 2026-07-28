@@ -43,9 +43,9 @@ def test_agent_tool_metadata_and_dialect_sections():
         "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
     ]
     names = [item["name"] for item in get_agent_tool_chain(with_bash)]
-    assert names.index("list_dir") < names.index("sandbox_run")
+    assert names.index("list_dir") < names.index("bash_run")
     assert "`skill_load`" in get_agent_allowed_tool_names_text(without_bash)
-    assert "`sandbox_run`" not in get_agent_allowed_tool_names_text(without_bash)
+    assert "`bash_run`" not in get_agent_allowed_tool_names_text(without_bash)
     assert "Hive" in build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
     assert "MySQL" in build_dialect_prompt_sections({"semantic_configs": [{"source_type": "mysql"}]})[0]
     assert "Hive" in build_dialect_prompt_sections({"semantic_configs": ["bad", {"source_type": "hive"}]})[0]
@@ -76,7 +76,7 @@ def test_unified_prompt_uses_system_skills_and_workspace(tmp_path, monkeypatch):
     assert "<skills>默认</skills>" in prompt
     assert "/mnt/user-data/workspace" in prompt
     assert str(tmp_path) not in prompt  # 物理路径不得泄漏到提示词
-    assert "`sandbox_run`" not in prompt
+    assert "`bash_run`" not in prompt
 
 
 def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
@@ -91,7 +91,7 @@ def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
     )
 
     assert "<skills />" in prompt
-    assert "`sandbox_run`" in prompt
+    assert "`bash_run`" in prompt
 
 
 def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
@@ -109,7 +109,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
         "skill_load", "file_read", "file_edit", "list_dir", "present_artifacts", "get_current_time",
         "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
     ]
-    assert bash_tool_names[-1] == "sandbox_run"
+    assert bash_tool_names[-1] == "bash_run"
     assert bash_tool_names[:-1] == tool_names
 
 

@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
-from utils.storage_paths import CHAT_DATA_HOME
+from utils.skill_paths import USER_SKILL_CATEGORY, physical_skill_category_root
 from ..agent.skills import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 from ..daos.skill_dao import SkillDao
 
 logger = get_logger(__name__)
-USER_SKILL_ROOT = Path(CHAT_DATA_HOME) / "skills" / "user"
+USER_SKILL_ROOT = physical_skill_category_root(USER_SKILL_CATEGORY)
 SKILL_NAME_PATTERN = re.compile(r"^[a-z]+(?:-[a-z]+)+$")
 SKILL_FIXED_DIRS = ("references", "assets", "scripts")
 

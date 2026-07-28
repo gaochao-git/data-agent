@@ -56,8 +56,8 @@ def test_unified_prompt_only_exposes_bash_when_enabled():
     without_bash = _prompt({"datasource": {"source_type": "mysql"}, "semantic_configs": []})
     with_bash = _prompt({"datasource": {"source_type": "mysql"}, "semantic_configs": []}, bash_enabled=True)
 
-    assert "`sandbox_run`" not in without_bash
-    assert "`sandbox_run`" in with_bash
+    assert "`bash_run`" not in without_bash
+    assert "`bash_run`" in with_bash
     assert "`semantic_query_tool`" in without_bash
     assert "`calculator_tool`" in without_bash
     assert "analysis_plan" not in without_bash
