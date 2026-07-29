@@ -676,14 +676,12 @@ def test_unified_prompt_injects_skill_metadata_not_skill_body():
     assert "# 角色" in prompt
     assert "## 环境" in prompt
     assert "# 数据上下文" in prompt
-    assert "## 可用工具" in prompt
     assert "## 支持图表类型" in prompt
     assert "## 方言上下文" in prompt
+    assert "当前数据库方言：Hive" in prompt
     assert "## 优先级" in prompt
     assert "## 执行连续性" in prompt
-    # 工作空间态应暴露文件工具与 bash_run
-    assert "`file_read`" in prompt
-    assert "`bash_run`" in prompt
+    assert "## Bash 使用" in prompt
     assert "数据上下文文件" not in prompt
     assert "禁止调用：" not in prompt
     assert "analysis_plan" not in prompt

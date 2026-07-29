@@ -17,10 +17,8 @@ from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.prompts.unified import (
     _extract_source_type,
-    build_dialect_prompt_sections,
+    build_dialect_prompt_context,
     build_unified_system_prompt,
-    get_agent_allowed_tool_names_text,
-    get_agent_tool_chain,
 )
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
@@ -34,22 +32,11 @@ def _runtime(tmp_path, *, bash_enabled=False):
     ), AgentRuntimeOptions(workspace_backend="local", bash_enabled=bash_enabled)
 
 
-def test_agent_tool_metadata_and_dialect_sections():
-    without_bash = AgentRuntimeOptions(bash_enabled=False)
-    with_bash = AgentRuntimeOptions(bash_enabled=True)
-
-    assert [item["name"] for item in get_agent_tool_chain(without_bash)] == [
-        "skill_load", "file_read", "file_edit", "list_dir", "present_artifacts", "get_current_time",
-        "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
-    ]
-    names = [item["name"] for item in get_agent_tool_chain(with_bash)]
-    assert names.index("list_dir") < names.index("bash_run")
-    assert "`skill_load`" in get_agent_allowed_tool_names_text(without_bash)
-    assert "`bash_run`" not in get_agent_allowed_tool_names_text(without_bash)
-    assert "Hive" in build_dialect_prompt_sections({"datasource": {"source_type": "hive"}})[0]
-    assert "MySQL" in build_dialect_prompt_sections({"semantic_configs": [{"source_type": "mysql"}]})[0]
-    assert "Hive" in build_dialect_prompt_sections({"semantic_configs": ["bad", {"source_type": "hive"}]})[0]
-    assert "当前数据库方言未明确" in build_dialect_prompt_sections({})[0]
+def test_dialect_context_selection():
+    assert "Hive" in build_dialect_prompt_context({"datasource": {"source_type": "hive"}})
+    assert "MySQL" in build_dialect_prompt_context({"semantic_configs": [{"source_type": "mysql"}]})
+    assert "Hive" in build_dialect_prompt_context({"semantic_configs": ["bad", {"source_type": "hive"}]})
+    assert "Hive" in build_dialect_prompt_context({})
 
 
 def test_chat_data_agent_state_exposes_execution_and_workspace_context():
@@ -76,7 +63,7 @@ def test_unified_prompt_uses_system_skills_and_workspace(tmp_path, monkeypatch):
     assert "<skills>默认</skills>" in prompt
     assert "/mnt/user-data/workspace" in prompt
     assert str(tmp_path) not in prompt  # 物理路径不得泄漏到提示词
-    assert "`bash_run`" not in prompt
+    assert "## Bash 使用" not in prompt
 
 
 def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
@@ -91,7 +78,7 @@ def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
     )
 
     assert "<skills />" in prompt
-    assert "`bash_run`" in prompt
+    assert "## Bash 使用" in prompt
 
 
 def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):

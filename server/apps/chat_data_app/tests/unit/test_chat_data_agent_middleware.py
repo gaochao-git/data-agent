@@ -19,6 +19,7 @@ from apps.chat_data_app.agent.agent_runtime import format_current_time_for_promp
 from apps.chat_data_app.agent.middleware import context_compression, context_usage
 from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
+from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
 from apps.chat_data_app.agent.middleware import tool_error
 from apps.chat_data_app.agent.prompts import unified
 from apps.chat_data_app.services.context_budget import (
@@ -290,7 +291,7 @@ async def test_context_compression_counts_runtime_summary_wrapper_in_trigger_bud
 
 
 @pytest.mark.asyncio
-async def test_context_compression_summarizes_all_completed_content_without_truncation():
+async def test_context_compression_preserves_all_completed_content_when_summary_input_is_within_budget():
     tool_call = {
         "id": "call-1",
         "name": "semantic_query_tool",
@@ -308,7 +309,7 @@ async def test_context_compression_summarizes_all_completed_content_without_trun
 
     async def summarize(compressible_messages):
         captured["messages"] = compressible_messages
-        captured["prompt"] = context_compression._build_summary_prompt(compressible_messages)
+        captured["prompt"] = build_context_compression_summary_prompt(compressible_messages)
         return "完整历史摘要"
 
     compressed, summary, report = await compress_messages_for_state(
@@ -319,6 +320,7 @@ async def test_context_compression_summarizes_all_completed_content_without_trun
         compression_keep_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=summarize,
+        summary_input_limit_tokens=1_000_000,
     )
 
     assert report["triggered"] is True
@@ -328,6 +330,111 @@ async def test_context_compression_summarizes_all_completed_content_without_trun
     assert captured["messages"] == messages[:4]
     assert tool_call["args"]["dsl"]["filter"] in captured["prompt"]
     assert complete_tool_result.rstrip() in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_compacts_summary_input_without_mutating_runtime_history():
+    large_tool_result = "完整工具结果" * 5000
+    messages = [
+        HumanMessage(content="历史问题"),
+        AIMessage(content="", tool_calls=[{"id": "call-1", "name": "semantic_query_tool", "args": {}}]),
+        ToolMessage(content=large_tool_result, tool_call_id="call-1", name="semantic_query_tool"),
+        AIMessage(content="历史结论"),
+        HumanMessage(content="当前问题"),
+    ]
+    compacted_tool_result = context_compression._compact_tool_result_for_summary(messages[2])
+    summary_limit = context_compression._count_summary_input_tokens(
+        [messages[0], messages[1], compacted_tool_result, messages[3]],
+        previous_summary=None,
+    )
+    captured = {}
+
+    async def summarize(summary_messages):
+        captured["messages"] = summary_messages
+        return "历史摘要"
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        static_input_tokens=0,
+        compression_trigger_tokens=1,
+        hard_input_limit_tokens=100_000,
+        compression_keep_tokens=1,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=summarize,
+        summary_input_limit_tokens=summary_limit,
+    )
+
+    assert report["triggered"] is True
+    assert report["summary_tool_results_compacted"] == 1
+    assert report["summary_input_tokens_after"] <= summary_limit
+    assert summary == "历史摘要"
+    assert compressed == [messages[-1]]
+    assert messages[2].content == large_tool_result
+    assert captured["messages"][2].content != large_tool_result
+    assert captured["messages"][2].tool_call_id == "call-1"
+
+
+def test_summary_input_compacts_only_the_largest_tool_result_until_budget_is_met():
+    large_tool_result = "最大工具结果" * 5000
+    smaller_tool_result = "较小工具结果" * 800
+    messages = [
+        HumanMessage(content="第一轮问题"),
+        AIMessage(content="", tool_calls=[{"id": "call-large", "name": "semantic_query_tool", "args": {}}]),
+        ToolMessage(content=large_tool_result, tool_call_id="call-large", name="semantic_query_tool"),
+        AIMessage(content="第一轮结论"),
+        HumanMessage(content="第二轮问题"),
+        AIMessage(content="", tool_calls=[{"id": "call-small", "name": "file_read", "args": {}}]),
+        ToolMessage(content=smaller_tool_result, tool_call_id="call-small", name="file_read"),
+        AIMessage(content="第二轮结论"),
+    ]
+    compacted_large = context_compression._compact_tool_result_for_summary(messages[2])
+    limit = context_compression._count_summary_input_tokens(
+        [messages[0], messages[1], compacted_large, *messages[3:]],
+        previous_summary=None,
+    )
+
+    prepared, report = context_compression._prepare_summary_input(
+        messages,
+        previous_summary=None,
+        summary_input_limit_tokens=limit,
+    )
+
+    assert report["summary_tool_results_compacted"] == 1
+    assert report["summary_input_pruned_rounds"] == 0
+    assert report["summary_input_tokens_after"] <= limit
+    assert prepared[2].tool_call_id == "call-large"
+    assert "[工具结果已为历史摘要压缩]" in prepared[2].content
+    assert prepared[6].content == smaller_tool_result
+    assert prepared[6].tool_call_id == "call-small"
+
+
+def test_summary_input_prunes_oldest_complete_rounds_when_tool_compaction_is_insufficient():
+    messages = [
+        HumanMessage(content="第一轮问题" + "内容" * 3000),
+        AIMessage(content="第一轮回答" + "内容" * 3000),
+        HumanMessage(content="第二轮问题"),
+        AIMessage(content="第二轮回答"),
+        HumanMessage(content="第三轮问题"),
+        AIMessage(content="第三轮回答"),
+    ]
+    marker = context_compression._build_summary_omission_marker(2, 1)
+    limit = context_compression._count_summary_input_tokens(
+        [marker, *messages[2:]],
+        previous_summary=None,
+    )
+
+    prepared, report = context_compression._prepare_summary_input(
+        messages,
+        previous_summary=None,
+        summary_input_limit_tokens=limit,
+    )
+
+    assert report["summary_tool_results_compacted"] == 0
+    assert report["summary_input_pruned_rounds"] == 1
+    assert report["summary_input_pruned_messages"] == 2
+    assert report["summary_input_tokens_after"] <= limit
+    assert prepared[0].additional_kwargs["context_compression_summary_omission"] is True
+    assert prepared[1:] == messages[2:]
 
 
 @pytest.mark.asyncio

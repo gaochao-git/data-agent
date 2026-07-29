@@ -1256,6 +1256,7 @@ def test_semantic_query_tool_offloads_large_result_to_current_conversation(monke
 
     payload = _query_result_payload(result)
     assert payload["meta"]["result_id"] == "result_large"
+    assert payload["meta"]["result_path"] == "/mnt/user-data/outputs/.tool-results/query_result/result_large.json"
     assert payload["meta"]["llm_analysis_skipped"] is True
     assert "查询结果已超过限制，完整结果已保存" in result
     assert "x" * 120 not in result

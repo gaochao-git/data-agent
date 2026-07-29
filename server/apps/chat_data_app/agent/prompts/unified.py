@@ -1,15 +1,10 @@
 """ChatData 单一 Agent 的系统提示词。"""
 
 import json
-from typing import Any
 
 from .analysis_guidance import (
-    GENERIC_DIALECT_CONTEXT,
-    GENERIC_DIALECT_FEWSHOT_PROMPT,
     HIVE_DIALECT_CONTEXT,
-    HIVE_DIALECT_FEWSHOT_PROMPT,
     MYSQL_DIALECT_CONTEXT,
-    MYSQL_DIALECT_FEWSHOT_PROMPT,
     MULTI_STEP_FEWSHOT_PROMPT,
     SEMANTIC_FEWSHOT_PROMPT,
 )
@@ -18,83 +13,6 @@ from .semantic_layer import build_semantic_prompt
 from ..runtime_options import AgentRuntimeOptions
 from ..skills import build_system_skills_prompt
 from ...chart_types import get_chart_type_prompt_text
-
-
-# ---------------------------------------------------------------------------
-# 工具清单（只有 Bash 受运行选项控制）
-# ---------------------------------------------------------------------------
-
-UNIFIED_TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "name": "skill_load",
-        "desc": "加载技能说明，并返回只读 /mnt/skills 路径和 references/scripts/assets 清单；返回 `[skill_load]` 才视为已加载。",
-    },
-    {
-        "name": "file_read",
-        "desc": "读取 workspace、outputs、uploads，或当前用户有权访问的技能的只读 /mnt/skills 路径中的文本文件。",
-    },
-    {
-        "name": "file_edit",
-        "desc": "向 workspace 或 outputs 写入中间文件和最终产物。",
-    },
-    {
-        "name": "list_dir",
-        "desc": "列出 workspace、outputs、uploads 或当前用户有权访问的技能的只读 /mnt/skills 目录内容；浏览目录优先用它，find/grep 等高级能力才用 bash_run。",
-    },
-    {
-        "name": "present_artifacts",
-        "desc": "将 outputs 中已生成且已校验的最终产物显式呈现给用户。",
-    },
-    {
-        "name": "bash_run",
-        "bash": True,
-        "desc": "在当前会话工作区执行受限的非交互 Bash 命令。",
-    },
-    {
-        "name": "get_current_time",
-        "desc": "获取当前北京时间；必传 detail=false 仅返回时间，detail=true 额外返回时区、偏移、星期和 Unix 时间戳。",
-    },
-    {
-        "name": "select_semantic_config_tool",
-        "desc": "当前未提供完整指标集时，从数据源组指标集中选择可回答问题的指标集。",
-    },
-    {
-        "name": "dsl2sql_tool",
-        "desc": "按智能问数同一套语义层规则校验单个 DSL 或批量卡片 DSL，并生成 SQL。",
-    },
-    {
-        "name": "semantic_query_tool",
-        "desc": "接收语义 DSL，内部生成只读 SQL 并返回真实数据结果，用于数据分析、抽样验证和结论支撑。",
-    },
-    {
-        "name": "calculator_tool",
-        "desc": "对长数字、差值、比例、增长率或单位换算做确定性计算；只使用 `calculations` 数组。",
-    },
-]
-
-
-def _tool_visible(tool: dict[str, Any], runtime_options: AgentRuntimeOptions) -> bool:
-    return not tool.get("bash") or runtime_options.bash_enabled
-
-
-def build_unified_tool_table(runtime_options: AgentRuntimeOptions) -> str:
-    """按当前运行选项生成可用工具表。"""
-    rows = ["| 工具 | 用途 |", "|---|---|"]
-    for tool in UNIFIED_TOOL_DEFINITIONS:
-        if _tool_visible(tool, runtime_options):
-            rows.append(f"| `{tool['name']}` | {tool['desc']} |")
-    return "\n".join(rows)
-
-
-def get_agent_tool_chain(runtime_options: AgentRuntimeOptions) -> list[dict[str, str]]:
-    """返回当前运行选项下的工具元信息。"""
-    return [{"name": t["name"], "status": "available", "description": t["desc"]}
-            for t in UNIFIED_TOOL_DEFINITIONS if _tool_visible(t, runtime_options)]
-
-
-def get_agent_allowed_tool_names_text(runtime_options: AgentRuntimeOptions) -> str:
-    """返回提示词中使用的可调用工具名列表。"""
-    return "、".join(f"`{t['name']}`" for t in UNIFIED_TOOL_DEFINITIONS if _tool_visible(t, runtime_options))
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +112,12 @@ def _extract_source_type(data_context: dict) -> str:
     return ""
 
 
-def build_dialect_prompt_sections(data_context: dict) -> tuple[str, str]:
-    """按 source_type 返回方言上下文和方言 few-shot。"""
+def build_dialect_prompt_context(data_context: dict) -> str:
+    """按 source_type 返回方言上下文，缺失时默认 Hive。"""
     source_type = _extract_source_type(data_context)
-    if source_type == "hive":
-        return HIVE_DIALECT_CONTEXT, HIVE_DIALECT_FEWSHOT_PROMPT
     if source_type == "mysql":
-        return MYSQL_DIALECT_CONTEXT, MYSQL_DIALECT_FEWSHOT_PROMPT
-    return GENERIC_DIALECT_CONTEXT, GENERIC_DIALECT_FEWSHOT_PROMPT
+        return MYSQL_DIALECT_CONTEXT
+    return HIVE_DIALECT_CONTEXT
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +285,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` patch 失败后必须重新 `file_read`，基于最新内容重写 patch，不能凭记忆或上一次失败 patch 重试。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
+- `semantic_query_tool` 返回 `result_id` 和 `result_path` 时，表示结果已卸载，完整结果位于当前会话的受控 outputs 文件。后续需要核对明细时，只能用 `file_read(file_path=result_path, offset=..., limit=...)` 按行小段读取；不要一次读取全部内容，也不要猜测或拼接结果路径。需要重新筛选、聚合、排序或计算时，优先重新执行受控 DSL/SQL，不把整份明细读回上下文。
 - `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/system/<技能名>` 或 `/mnt/skills/user/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/system/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
 - `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
@@ -432,7 +349,6 @@ def build_unified_system_prompt(
     sections.append(ENVIRONMENT_BLOCK.format(workspace_root=workspace_root or "未初始化"))
 
     sections.append("# 数据上下文\n\n" + context_text)
-    sections.append("## 可用工具\n" + build_unified_tool_table(runtime_options))
 
     if available_skills_xml:
         sections.append(available_skills_xml)
@@ -452,14 +368,14 @@ def build_unified_system_prompt(
     ])
 
     sections.append(CHART_BLOCK.format(chart_types_text=get_chart_type_prompt_text()))
-    dialect_context_text, dialect_fewshot = build_dialect_prompt_sections(data_context or {})
-    sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
+    dialect_context_text = build_dialect_prompt_context(data_context or {})
+    if dialect_context_text:
+        sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
     sections.append(PRIORITY_BLOCK)
     sections.append(WORKSPACE_WORKFLOW_BLOCK)
     if runtime_options.bash_enabled:
         sections.append(BASH_WORKFLOW_BLOCK)
     sections.append("# 示例\n" + SEMANTIC_FEWSHOT_PROMPT)
-    sections.append("# 方言示例\n" + dialect_fewshot)
     sections.append("# 多步分析示例\n" + MULTI_STEP_FEWSHOT_PROMPT)
 
     sections.extend([FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])

@@ -26,6 +26,7 @@ from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)
 TOOL_ERROR_PREFIX = "semantic_query_tool 执行失败"
+_OFFLOADED_RESULT_VIRTUAL_DIR = "/mnt/user-data/outputs/.tool-results/query_result"
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,11 @@ async def save_query_result(
         user_id=user_id,
     )
     return record.result_id
+
+
+def _offloaded_result_virtual_path(result_id: str) -> str:
+    """Return the only model-visible path for an offloaded result snapshot."""
+    return f"{_OFFLOADED_RESULT_VIRTUAL_DIR}/{result_id}.json"
 
 
 def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
@@ -415,13 +421,14 @@ async def _build_success_result_response(
         result_summary = {
             "status": query_result.get("status") or "succeeded",
             "result_id": result_id,
+            "result_path": _offloaded_result_virtual_path(result_id),
             "total_count": query_result.get("total_count", 0),
             "execution_time_ms": query_result.get("execution_time_ms"),
             "result_size_chars": len(result_json),
             "llm_analysis_skipped": True,
             "query_mode": query.query_mode,
             "confidence": query.confidence,
-            "message": "查询结果已超过限制，完整结果已保存；模型仅接收摘要，前端可加载完整结果。",
+            "message": "查询结果已超过限制，完整结果已保存；模型仅接收摘要，前端可加载完整结果。需要继续查看时，请使用 file_read 按行分段读取 result_path。",
         }
         if query_result.get("sql"):
             result_summary["sql"] = query_result.get("sql")
