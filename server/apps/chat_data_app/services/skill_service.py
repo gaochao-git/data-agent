@@ -583,6 +583,8 @@ class SkillService:
             raise ValueError("技能不存在")
         if skill.get("skill_source") != "user" or skill.get("owner_user_id") != user_id:
             raise PermissionError("无权发布该技能")
+        if await self._get_system_skill_metadata_async(str(skill.get("skill_name") or "")):
+            raise ValueError(f"技能标识与系统技能冲突: {skill.get('skill_name')}，请复制技能换新名称后再发布")
         draft = await self.dao.get_latest_draft_version_async(str(skill.get("skill_id")))
         if not draft:
             raise ValueError("没有可发布的草稿版本")

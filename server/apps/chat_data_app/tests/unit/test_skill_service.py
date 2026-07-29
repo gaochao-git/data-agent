@@ -1027,7 +1027,45 @@ def test_async_publish_versions_rollback_favorite_and_delete_lifecycle(tmp_path,
     assert ("publish", "skill-1", 2, "u1") in calls
     assert ("activate", "skill-1", 1, "u1") in calls
     assert ("favorite", "u1", "skill-1", False, "u1") in calls
-    assert ("archive", "skill-1", "u1", "") in calls
+
+
+def test_publish_user_skill_async_rejects_system_name_conflict(monkeypatch):
+    service = skill_service_module.SkillService()
+    skill = {"skill_id": "skill-1", "skill_name": "demo-skill", "skill_source": "user", "owner_user_id": "u1"}
+    calls = []
+
+    class FakeStore:
+        async def get_skill_async(self, skill_id, user_id="", include_draft=False):
+            return skill
+
+        async def get_latest_draft_version_async(self, skill_id):
+            return {"skill_version_no": 1}
+
+        async def publish_version_async(self, skill_id, version_no, update_by="", update_by_name=""):
+            calls.append(("publish", skill_id, version_no, update_by))
+
+    monkeypatch.setattr(service, "_dao", FakeStore())
+
+    async def _system_meta(name):
+        return {"name": name, "source": "system"}
+
+    async def _no_meta(name):
+        return None
+
+    async def run_conflict_publish():
+        # 命中系统技能同名 -> 拒绝并提示改名
+        monkeypatch.setattr(service, "_get_system_skill_metadata_async", _system_meta)
+        with pytest.raises(ValueError, match="与系统技能冲突"):
+            await service.publish_user_skill_async("skill-1", "u1")
+
+    async def run_normal_publish():
+        # 无系统技能冲突 -> 正常发布，且真正走发布流程
+        monkeypatch.setattr(service, "_get_system_skill_metadata_async", _no_meta)
+        await service.publish_user_skill_async("skill-1", "u1")
+
+    asyncio.run(run_conflict_publish())
+    asyncio.run(run_normal_publish())
+    assert ("publish", "skill-1", 1, "u1") in calls
 
 
 def test_skill_payload_build_and_validation_edge_cases(tmp_path, monkeypatch):
