@@ -150,14 +150,17 @@ def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_pa
     )
     volumes = workspace_execution._build_volumes(str(workspace_root), mounts)
 
-    assert volumes[0].kwargs == {
-        "name": "thread-user-data",
-        "host": volumes[0].kwargs["host"],
-        "mountPath": "/mnt/user-data",
-        "readOnly": False,
-    }
-    assert volumes[0].kwargs["host"].path == str(workspace_root)
-    assert [(item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[1:]] == [
+    assert [(item.kwargs["name"], item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[:3]] == [
+        ("thread-workspace", "/mnt/user-data/workspace", False),
+        ("thread-outputs", "/mnt/user-data/outputs", False),
+        ("thread-uploads", "/mnt/user-data/uploads", False),
+    ]
+    assert [item.kwargs["host"].path for item in volumes[:3]] == [
+        str(workspace_root / "workspace"),
+        str(workspace_root / "outputs"),
+        str(workspace_root / "uploads"),
+    ]
+    assert [(item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[3:]] == [
         ("/mnt/skills/user/my-skill", True),
         ("/mnt/skills/system/dashboard-generation", True),
     ]
@@ -173,6 +176,9 @@ def test_sandbox_visible_path_allows_only_registered_skill_mounts(tmp_path):
         runtime_skill_mounts=mounts,
     ) == "/mnt/skills/system/dashboard-generation/references/guide.md"
     assert sandbox_visible_path("outputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
+    assert sandbox_visible_path("outputs/.tool-results/result_1.json") == "/mnt/user-data/outputs/.tool-results/result_1.json"
+    with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
+        sandbox_visible_path("outputs/.tool-results/result_1.json", writable=True)
     with pytest.raises(ValueError, match="当前已加载的技能路径"):
         sandbox_visible_path("/mnt/skills/system/other-skill/SKILL.md", runtime_skill_mounts=mounts)
     with pytest.raises(ValueError, match="路径越界"):
@@ -191,6 +197,23 @@ def test_sandbox_visible_path_allows_only_registered_skill_mounts(tmp_path):
     ) == "/mnt/skills/user/sssss/SKILL.md"
     with pytest.raises(ValueError, match="当前已加载的技能路径"):
         sandbox_visible_path("/mnt/skills/public/dashboard-generation/SKILL.md", runtime_skill_mounts=mounts)
+
+
+def test_sandbox_artifact_payload_rejects_hidden_tool_result():
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+
+    payload = asyncio.run(workspace_execution.sandbox_artifact_payload(
+        session_ref=session_ref,
+        file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
+    ))
+
+    assert payload == {}
 
 
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
@@ -229,6 +252,28 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
                 workspace_runtime=runtime,
             )
         )
+
+
+def test_local_bash_can_read_hidden_tool_result(tmp_path):
+    workspace_root = _workspace_root(tmp_path)
+    result_file = workspace_root / "outputs" / ".tool-results" / "result_1.json"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_text('{"rows":[1]}', encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root),
+        user_id="user_a",
+        backend="local",
+    )
+
+    result = asyncio.run(
+        bash_run.run_bash_command(
+            command="cat /mnt/user-data/outputs/.tool-results/result_1.json",
+            workspace_runtime=runtime,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["stdout"] == '{"rows":[1]}'
 
 
 def test_sandbox_bash_uses_current_runtime_skill_mount(monkeypatch, tmp_path):
@@ -307,8 +352,13 @@ def test_prepare_workspace_execution_session_uses_no_copy_or_seed_step(tmp_path,
 
     assert session.sandbox_id == "sbx_1"
     assert "network_policy" not in captured
-    assert len(captured["volumes"]) == 1
-    assert captured["volumes"][0].kwargs["host"].path.endswith("users/user_a/threads/conv_a/user-data")
+    assert len(captured["volumes"]) == 3
+    assert [item.kwargs["mountPath"] for item in captured["volumes"]] == [
+        "/mnt/user-data/workspace",
+        "/mnt/user-data/outputs",
+        "/mnt/user-data/uploads",
+    ]
+    assert all(".tool-results" not in item.kwargs["host"].path for item in captured["volumes"])
 
 
 def test_workspace_execution_config_and_output_helpers(monkeypatch):

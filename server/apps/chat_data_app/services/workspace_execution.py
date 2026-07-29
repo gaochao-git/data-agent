@@ -307,15 +307,18 @@ def _build_network_policy() -> Any | None:
 def _build_volumes(workspace_root: str, runtime_skill_mounts: tuple[object, ...] = ()) -> list[Any]:
     _, _, _, models = _import_opensandbox_sdk()
     Host, _, _, Volume = models
+    # outputs includes the hidden .tool-results cache, matching the virtual
+    # workspace contract used by file_read and Bash inside the sandbox.
     volumes = [
         _build_host_volume(
             Host=Host,
             Volume=Volume,
-            name="thread-user-data",
-            host_path=get_host_workspace_path(workspace_root),
-            mount_path=sandbox_thread_root(),
+            name=f"thread-{name}",
+            host_path=get_host_workspace_path(str(Path(workspace_root) / name)),
+            mount_path=f"{sandbox_thread_root()}/{name}",
             read_only=False,
         )
+        for name in ("workspace", "outputs", "uploads")
     ]
     for name, category, source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts):
         volumes.append(
@@ -598,6 +601,8 @@ def sandbox_visible_path(
         writable_roots = (sandbox_workspace_dir(), sandbox_outputs_dir())
         if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in writable_roots):
             raise ValueError("只允许写入 workspace/ 或 outputs/")
+        if _is_tool_results_sandbox_path(sandbox_path):
+            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-results/")
     return sandbox_path
 
 
@@ -621,6 +626,11 @@ def _is_outputs_sandbox_path(path: str) -> bool:
     return path == sandbox_outputs_dir() or path.startswith(f"{sandbox_outputs_dir()}/")
 
 
+def _is_tool_results_sandbox_path(path: str) -> bool:
+    root = f"{sandbox_outputs_dir()}/.tool-results"
+    return path == root or path.startswith(f"{root}/")
+
+
 def _artifact_payload_from_bytes(*, visible_path: str, data: bytes) -> dict[str, Any]:
     return parse_output_artifact(visible_path=visible_path, data=data)
 
@@ -628,7 +638,7 @@ def _artifact_payload_from_bytes(*, visible_path: str, data: bytes) -> dict[str,
 async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, file_path: str) -> dict[str, Any]:
     session = require_sandbox_session(session_ref)
     target = sandbox_visible_path(file_path)
-    if not _is_outputs_sandbox_path(target):
+    if not _is_outputs_sandbox_path(target) or _is_tool_results_sandbox_path(target):
         return {}
     try:
         data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)

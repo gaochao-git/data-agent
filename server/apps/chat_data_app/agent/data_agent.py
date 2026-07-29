@@ -17,6 +17,7 @@ from .middleware.context_usage import (
     bind_context_usage_middleware,
     create_request_context_usage_middleware,
 )
+from .middleware.tool_result import create_tool_result_middleware
 from .prompts.unified import build_unified_system_prompt
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
@@ -131,10 +132,12 @@ def create_data_agent(
         tool_result_budget=tool_result_budget,
         state_schema=ChatDataAgentState,
     )
+    tool_result_middleware = create_tool_result_middleware(tool_result_budget)
     middleware = build_standard_agent_middleware(
         tools,
         context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
+        tool_result_middleware=tool_result_middleware,
         include_response_timestamp=True,
         include_tool_call_normalizer=True,
     )

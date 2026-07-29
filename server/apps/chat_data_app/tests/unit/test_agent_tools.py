@@ -51,9 +51,15 @@ def test_current_time_tool_returns_detail_only_when_requested():
 
 def _query_result_payload(result: str) -> dict:
     payload = json.loads(result)
-    assert payload["type"] == "query_result"
+    assert payload["type"] == "chatdata_internal_tool_result"
     assert payload["version"] == 1
     return payload
+
+
+def _internal_query_payload(result: str) -> dict:
+    payload = _query_result_payload(result)
+    assert payload["kind"] == "query_result"
+    return payload["payload"]
 
 
 def _semantic_query_state(
@@ -619,16 +625,15 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
         "state": state,
     }))
 
-    success_payload = _query_result_payload(success)
-    json_string_success_payload = _query_result_payload(json_string_success)
-    assert success_payload["status"] == "succeeded"
-    assert success_payload["data"]["data"] == [{"id": 1}]
-    assert success_payload["data"]["sql"] == "select 1"
-    assert success_payload["meta"]["query_mode"] == "dsl2sql"
-    assert success_payload["meta"]["confidence"] == 0.9
-    assert json_string_success_payload["status"] == "succeeded"
-    failed_payload = _query_result_payload(failed)
-    assert failed_payload["status"] == "failed"
+    success_payload = _internal_query_payload(success)
+    json_string_success_payload = _internal_query_payload(json_string_success)
+    assert success_payload["success"] is True
+    assert success_payload["data"] == [{"id": 1}]
+    assert success_payload["sql"] == "select 1"
+    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9, "save_as": ""}
+    assert json_string_success_payload["success"] is True
+    failed_payload = _internal_query_payload(failed)
+    assert failed_payload["success"] is False
     assert failed_payload["error"] == "表不存在"
 
 
@@ -687,7 +692,7 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
         "state": state,
     }))
 
-    assert _query_result_payload(result)["status"] == "succeeded"
+    assert _internal_query_payload(result)["success"] is True
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
 
 
@@ -727,7 +732,7 @@ def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch)
         "state": state,
     }))
 
-    assert _query_result_payload(result)["status"] == "succeeded"
+    assert _internal_query_payload(result)["success"] is True
     assert captured["member_datasource_ids"] == ["org_b"]
 
 
@@ -1045,7 +1050,7 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "member_datasource_ids": ["org_a"],
         "state": state,
     }))
-    payload = _query_result_payload(result)
+    payload = _internal_query_payload(result)
 
     assert captured == {
         "sql": "with t as (select 1 as v) select * from t",
@@ -1057,9 +1062,9 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "conversation_id": "conv_a",
         "operator_name": "测试用户",
     }
-    assert payload["meta"]["query_mode"] == "nl2sql"
-    assert payload["meta"]["confidence"] == 0.6
-    assert payload["data"]["sql"] == "with t as (select 1 as v) select * from t"
+    assert _query_result_payload(result)["meta"]["query_mode"] == "nl2sql"
+    assert _query_result_payload(result)["meta"]["confidence"] == 0.6
+    assert payload["sql"] == "with t as (select 1 as v) select * from t"
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
@@ -1141,7 +1146,7 @@ def test_resolve_semantic_query_config_injects_missing_state_config_id(monkeypat
     assert config["id"] == "cfg_a"
 
 
-def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
+def test_semantic_query_tool_leaves_large_result_for_result_middleware(monkeypatch):
     class FakeGenerator:
         def __init__(self, _config):
             pass
@@ -1164,12 +1169,6 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    async def save_blank_sql(*_args, **_kwargs):
-        return "result_blank_sql"
-
-    monkeypatch.setattr(agent_tools, "save_query_result", save_blank_sql)
-    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["内容"]},
         "semantic_config_id": "cfg_a",
@@ -1179,10 +1178,10 @@ def test_semantic_query_large_result_summary_omits_blank_sql(monkeypatch):
             semantic_config_id="cfg_a",
         ),
     }))
-    payload = _query_result_payload(result)
+    payload = _internal_query_payload(result)
 
-    assert payload["meta"]["result_id"] == "result_blank_sql"
-    assert payload["meta"]["sql"] == "select generated"
+    assert payload["sql"] == "select generated"
+    assert payload["data"][0]["content"] == "x" * 200
 
 
 def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
@@ -1201,7 +1200,7 @@ def test_semantic_query_tool_reports_missing_runtime_config(monkeypatch):
     assert result == "semantic_query_tool 执行失败: 未找到可用指标集 cfg_missing"
 
 
-def test_semantic_query_tool_offloads_large_result_to_current_conversation(monkeypatch):
+def test_semantic_query_tool_returns_large_internal_result_for_middleware(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     class FakeGenerator:
@@ -1224,14 +1223,6 @@ def test_semantic_query_tool_offloads_large_result_to_current_conversation(monke
             "sql": "select content from big_table",
         }
 
-    captured = {}
-
-    async def fake_save_query_result(result, conversation_id=None, user_id=None):
-        captured["result"] = result
-        captured["conversation_id"] = conversation_id
-        captured["user_id"] = user_id
-        return "result_large"
-
     state = _semantic_query_state(
         available_member_datasource_ids=["m1"],
         user_id="user_a",
@@ -1244,9 +1235,6 @@ def test_semantic_query_tool_offloads_large_result_to_current_conversation(monke
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(agent_tools, "save_query_result", fake_save_query_result)
-    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["内容"]},
         "semantic_config_id": "cfg_a",
@@ -1254,17 +1242,12 @@ def test_semantic_query_tool_offloads_large_result_to_current_conversation(monke
         "state": state,
     }))
 
-    payload = _query_result_payload(result)
-    assert payload["meta"]["result_id"] == "result_large"
-    assert payload["meta"]["result_path"] == "/mnt/user-data/outputs/.tool-results/query_result/result_large.json"
-    assert payload["meta"]["llm_analysis_skipped"] is True
-    assert "查询结果已超过限制，完整结果已保存" in result
-    assert "x" * 120 not in result
-    assert captured["result"]["data"][0]["content"] == "x" * 200
-    assert captured["conversation_id"] == "conv_a"
+    payload = _internal_query_payload(result)
+    assert payload["sql"] == "select content from big_table"
+    assert payload["data"][0]["content"] == "x" * 200
 
 
-def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sql_in_large_summary(monkeypatch):
+def test_semantic_query_tool_uses_state_semantic_config_for_internal_result(monkeypatch):
     class FakeGenerator:
         def __init__(self, config):
             assert config["id"] == "cfg_temp"
@@ -1287,12 +1270,6 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
     monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    async def save_no_sql(*_args, **_kwargs):
-        return "result_no_sql"
-
-    monkeypatch.setattr(agent_tools, "save_query_result", save_no_sql)
-    monkeypatch.setattr(agent_tools, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-
     state = _semantic_query_state(
         available_member_datasource_ids=["m1"],
         semantic_config_id="cfg_temp",
@@ -1305,9 +1282,8 @@ def test_semantic_query_tool_uses_state_semantic_config_and_includes_compiled_sq
         "state": state,
     }))
 
-    payload = _query_result_payload(result)
-    assert payload["meta"]["result_id"] == "result_no_sql"
-    assert payload["meta"]["sql"] == "select compiled from temp_config"
+    payload = _internal_query_payload(result)
+    assert payload["sql"] == "select compiled from temp_config"
 
 
 def test_semantic_query_tool_injects_explicit_id_into_temp_semantic_config(monkeypatch):

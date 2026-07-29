@@ -23,8 +23,10 @@ from apps.chat_data_app.services.conversation_workspace import (
     read_workspace_text_file,
     resolve_workspace_path,
     to_visible_path,
+    workspace_read_text_file,
 )
 from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
+from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
@@ -80,6 +82,7 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
+    assert (Path(paths["outputs"]) / ".tool-results").exists()
     assert "runtime_skills" not in paths
 
 
@@ -112,6 +115,34 @@ def test_resolve_workspace_path_restricts_writes():
     assert writable.name == "plan.md"
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "other-files/demo/SKILL.md", writable=True)
+    with pytest.raises(ValueError):
+        resolve_workspace_path(paths["root"], "outputs/.tool-results/private.json", writable=True)
+
+
+@pytest.mark.asyncio
+async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
+    paths = ensure_conversation_workspace("conv_private", "user_a")
+    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file.write_text('{"rows":[1]}', encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
+    with pytest.raises(ValueError):
+        read_workspace_text_file("conv_private", "outputs/.tool-results/result_1.json", user_id="user_a")
+    result = await workspace_read_text_file(
+        runtime,
+        file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
+        offset=0,
+        limit=10,
+        char_offset=0,
+        max_chars=100,
+    )
+    assert result["lines"] == ['{"rows":[1]}']
+    with pytest.raises(ValueError):
+        resolve_workspace_path(paths["root"], "outputs/.tool-results/result_1.json", writable=True)
 
 
 def test_resolve_workspace_path_accepts_short_absolute_aliases():
@@ -135,6 +166,7 @@ def test_workspace_json_list_read_and_visible_paths():
     assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "")
+    (Path(paths["outputs"]) / ".tool-results").rmdir()
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
     files = list_workspace_files(conversation_id)
@@ -431,6 +463,26 @@ async def test_present_artifacts_rejects_non_artifact(monkeypatch):
     assert payload["artifact_count"] == 0
     assert payload["artifacts"] == []
     assert payload["errors"][0]["file_path"] == "workspace/draft.json"
+
+
+@pytest.mark.asyncio
+async def test_present_artifacts_rejects_hidden_tool_result(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_present_private_{uuid.uuid4().hex}")
+    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file.write_text('{"rows":[1]}', encoding="utf-8")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["present_artifacts"].ainvoke({
+        "files": ["outputs/.tool-results/result_1.json"],
+    })
+
+    payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
+    assert payload["artifact_count"] == 0
+    assert payload["artifacts"] == []
+    assert payload["errors"] == [{
+        "file_path": "outputs/.tool-results/result_1.json",
+        "error": "文件不是可展示的 outputs 产物",
+    }]
 
 
 @pytest.mark.asyncio
@@ -1086,16 +1138,15 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     })
 
     payload = json.loads(result)
-    assert payload["type"] == "query_result"
-    assert payload["status"] == "succeeded"
-    assert payload["data"] is None
-    assert payload["meta"]["result_path"] == "/workspace/current.json"
-    assert payload["meta"]["sql"] == "select month, sales from t"
-    assert "dsl" not in payload["meta"]
-    assert "datasource_id" not in payload["meta"]
-    assert "member_datasource_ids" not in payload["meta"]
-    saved = json.loads((Path(paths["workspace"]) / "current.json").read_text(encoding="utf-8"))
-    assert saved["results"][0]["data"][0]["sales"] == 120
+    assert payload["type"] == "chatdata_internal_tool_result"
+    assert payload["kind"] == "query_result"
+    assert payload["payload"]["results"][0]["data"][0]["sales"] == 120
+    assert payload["meta"] == {
+        "query_mode": "dsl2sql",
+        "confidence": 0.9,
+        "save_as": "workspace/current.json",
+    }
+    assert not (Path(paths["workspace"]) / "current.json").exists()
 
 
 @pytest.mark.asyncio
@@ -1149,11 +1200,10 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
     })
 
     payload = json.loads(result)
-    assert payload["type"] == "query_result"
-    assert "result_path" not in payload["meta"]
-    assert payload["data"]["results"][0]["data"] == [{"cnt": 3}]
-    assert payload["data"]["sql"] == "select count(*) cnt from t"
-    assert "dsl" not in payload["data"]
+    assert payload["type"] == "chatdata_internal_tool_result"
+    assert payload["meta"]["save_as"] == ""
+    assert payload["payload"]["results"][0]["data"] == [{"cnt": 3}]
+    assert payload["payload"]["sql"] == "select count(*) cnt from t"
 
     blank_save_result = await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
@@ -1163,12 +1213,12 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         "state": state,
     })
     blank_save_payload = json.loads(blank_save_result)
-    assert "result_path" not in blank_save_payload["meta"]
-    assert blank_save_payload["data"]["results"][0]["data"] == [{"cnt": 3}]
+    assert blank_save_payload["meta"]["save_as"] == ""
+    assert blank_save_payload["payload"]["results"][0]["data"] == [{"cnt": 3}]
 
 
 @pytest.mark.asyncio
-async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeypatch):
+async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middleware(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_offload_{uuid.uuid4().hex}")
 
     async def fake_get_config(*_args, **_kwargs):
@@ -1196,19 +1246,9 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
             "total_count": 1,
         }
 
-    captured = {}
-
-    async def fake_save_query_result(result, conversation_id=None, user_id=None):
-        captured["result"] = result
-        captured["conversation_id"] = conversation_id
-        captured["user_id"] = user_id
-        return "result_analyze_large"
-
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
     monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    monkeypatch.setattr(sql_tool_module, "save_query_result", fake_save_query_result)
-    monkeypatch.setattr(sql_tool_module, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
@@ -1225,12 +1265,8 @@ async def test_semantic_query_tool_without_save_as_offloads_large_result(monkeyp
     })
 
     payload = json.loads(result)
-    assert payload["type"] == "query_result"
-    assert payload["data"] is None
-    assert payload["meta"]["result_id"] == "result_analyze_large"
-    assert "x" * 120 not in result
-    assert captured["result"]["results"][0]["data"][0]["content"] == "x" * 200
-    assert captured["conversation_id"] == "conv_large"
+    assert payload["type"] == "chatdata_internal_tool_result"
+    assert payload["payload"]["results"][0]["data"][0]["content"] == "x" * 200
 
 
 @pytest.mark.asyncio

@@ -6,8 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from utils import crypto, file_manager, storage_paths
-from utils import query_result_store
+from utils import crypto, file_manager, storage_paths, tool_result_store
 
 
 def test_normalize_user_id(monkeypatch):
@@ -97,55 +96,38 @@ async def test_file_manager_validation_branches(tmp_path):
     assert await file_manager.delete_file(str(tmp_path), "../bad", "a.txt") is False
 
 
-def test_query_result_store_writes_and_loads_current_conversation_only(tmp_path):
-    store = query_result_store.QueryResultStore(tmp_path)
-    record = store.save({"rows": [1]}, conversation_id="conv_a", user_id="u1")
+def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
+    store = tool_result_store.ToolResultStore(tmp_path)
+    record = store.save_query_result({"rows": [1]}, conversation_id="conv_a", user_id="u1")
 
-    assert store.storage_path_for(
-        result_id=record.result_id,
-        conversation_id="conv_a",
-        user_id="u1",
-    ) == "users/u1/threads/conv_a/user-data/outputs/.tool-results/query_result/" + record.result_id + ".json"
-    assert store.load_for_conversation(
+    assert record.virtual_path == f"/mnt/user-data/outputs/.tool-results/{record.result_id}.json"
+    assert (
+        tmp_path / "users" / "u1" / "threads" / "conv_a" / "user-data" / "outputs" / ".tool-results" / f"{record.result_id}.json"
+    ).is_file()
+    assert store.load_query_result_for_conversation(
         result_id=record.result_id,
         conversation_id="conv_a",
         user_id="u1",
     ) == {"rows": [1]}
-    assert store.load_for_conversation(
+    assert store.load_query_result_for_conversation(
         result_id=record.result_id,
         conversation_id="conv_a",
         user_id="u2",
     ) is None
     with pytest.raises(ValueError, match="result_id"):
-        store.load_for_conversation(
+        store.load_query_result_for_conversation(
             result_id="../outside",
             conversation_id="conv_a",
             user_id="u1",
         )
 
 
-def test_query_result_store_rejects_tampered_metadata(tmp_path):
-    store = query_result_store.QueryResultStore(tmp_path)
-    record = store.save({"rows": [1]}, conversation_id="conv_a", user_id="u1")
-    file_path = tmp_path / store.storage_path_for(
-        result_id=record.result_id,
-        conversation_id="conv_a",
-        user_id="u1",
-    )
-    file_path.write_text('{"result_id":"bad","conversation_id":"conv_a","user_id":"u1","data":{}}', encoding="utf-8")
-    assert store.load_for_conversation(
-        result_id=record.result_id,
-        conversation_id="conv_a",
-        user_id="u1",
-    ) is None
-
-
-def test_query_result_store_handles_corrupt_json(tmp_path):
-    store = query_result_store.QueryResultStore(tmp_path)
-    bad_path = tmp_path / "users" / "u1" / "threads" / "conv" / "user-data" / "outputs" / ".tool-results" / "query_result" / "bad.json"
+def test_tool_result_store_handles_corrupt_json(tmp_path):
+    store = tool_result_store.ToolResultStore(tmp_path)
+    bad_path = tmp_path / "users" / "u1" / "threads" / "conv" / "user-data" / "outputs" / ".tool-results" / "bad.json"
     bad_path.parent.mkdir(parents=True)
     bad_path.write_text("{bad", encoding="utf-8")
-    assert store.load_for_conversation(
+    assert store.load_query_result_for_conversation(
         result_id="bad",
         conversation_id="conv",
         user_id="u1",

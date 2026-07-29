@@ -12,6 +12,7 @@ from ..services.context_budget import ToolResultBudget
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_tools import create_semantic_config_selection_tools
 from .middleware.tool_error import create_tool_error_middleware
+from .middleware.tool_result import create_tool_result_middleware
 
 logger = get_logger(__name__)
 
@@ -75,6 +76,7 @@ def build_standard_agent_middleware(
     *,
     context_compression_middleware: Any | None = None,
     context_usage_middleware: Any | None = None,
+    tool_result_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
@@ -89,6 +91,8 @@ def build_standard_agent_middleware(
     if include_tool_call_normalizer:
         from .middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
         middleware.append(create_tool_call_name_normalizer_middleware(tools))
+    if tool_result_middleware is not None:
+        middleware.append(tool_result_middleware)
     middleware.append(create_tool_error_middleware())
     return middleware
 

@@ -1,7 +1,5 @@
 """Semantic query agent tool."""
 
-import asyncio
-import json
 from dataclasses import dataclass
 from typing import Any, Annotated
 
@@ -10,23 +8,19 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
-from utils.query_result_store import QueryResultStore
 from ...schema import SemanticQueryInput
 from ...services.semantic_tools import load_runtime_semantic_config
-from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
-from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.semantic_query_service import (
     compile_semantic_query_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
 )
 from ...services.semantic_sql_generator import SemanticSQLGenerator
-from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_write_text_file
-from .common import json_dumps, normalize_json_like_payload
+from ..tool_results import build_internal_query_result
+from .common import normalize_json_like_payload
 
 logger = get_logger(__name__)
 TOOL_ERROR_PREFIX = "semantic_query_tool 执行失败"
-_OFFLOADED_RESULT_VIRTUAL_DIR = "/mnt/user-data/outputs/.tool-results/query_result"
 
 
 @dataclass(frozen=True)
@@ -58,49 +52,8 @@ class _CompiledToolQuery:
     confidence: float
 
 
-def _query_result_tool_payload(
-    *,
-    status: str,
-    data: dict | None = None,
-    error: str | None = None,
-    meta: dict | None = None,
-) -> str:
-    """构造 semantic_query_tool 的结构化返回协议。"""
-    return json.dumps(
-        {
-            "type": "query_result",
-            "version": 1,
-            "status": status,
-            "data": data,
-            "error": error,
-            "meta": meta or {},
-        },
-        ensure_ascii=False,
-    )
-
-
 def _tool_error(message: str) -> str:
     return f"{TOOL_ERROR_PREFIX}: {message}"
-
-
-async def save_query_result(
-    data: dict,
-    conversation_id: str | None = None,
-    user_id: str | None = None,
-) -> str:
-    """将大查询结果写入当前会话目录，返回仅限该会话使用的结果 ID。"""
-    record = await asyncio.to_thread(
-        QueryResultStore().save,
-        data=data,
-        conversation_id=conversation_id,
-        user_id=user_id,
-    )
-    return record.result_id
-
-
-def _offloaded_result_virtual_path(result_id: str) -> str:
-    """Return the only model-visible path for an offloaded result snapshot."""
-    return f"{_OFFLOADED_RESULT_VIRTUAL_DIR}/{result_id}.json"
 
 
 def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
@@ -349,124 +302,6 @@ async def _execute_tool_query(context: _ResolvedToolContext, query: _CompiledToo
     return query_result
 
 
-async def _build_tool_response(
-    *,
-    query_result: dict,
-    query: _CompiledToolQuery,
-    save_path: str,
-    workspace_root: str | None,
-    workspace_backend: str | None,
-    user_id: str | None,
-    conversation_id: str | None,
-) -> str:
-    if save_path:
-        return await _build_saved_result_response(
-            query_result=query_result,
-            query=query,
-            save_path=save_path,
-            workspace_root=workspace_root,
-            workspace_backend=workspace_backend,
-            user_id=user_id,
-        )
-    if query_result_succeeded(query_result):
-        return await _build_success_result_response(query_result, query, conversation_id, user_id=user_id)
-    return _build_failed_result_response(query_result, query)
-
-
-async def _build_saved_result_response(
-    *,
-    query_result: dict,
-    query: _CompiledToolQuery,
-    save_path: str,
-    workspace_root: str,
-    workspace_backend: str,
-    user_id: str | None,
-) -> str:
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=workspace_root,
-        user_id=user_id or "system",
-        backend="sandbox" if workspace_backend == "sandbox" else "local",
-    )
-    write_result = await workspace_write_text_file(
-        runtime,
-        file_path=save_path,
-        content=json_dumps(query_result),
-        mode="overwrite",
-    )
-    return _query_result_tool_payload(
-        status=query_result_status(query_result),
-        data=None,
-        error=query_result.get("error"),
-        meta={
-            "result_path": write_result.get("file_path") or save_path,
-            "total_count": query_result.get("total_count"),
-            "execution_time_ms": query_result.get("execution_time_ms"),
-            "sql": query_result.get("sql") or query.sql,
-            "query_mode": query.query_mode,
-            "confidence": query.confidence,
-            "next_required_action": "使用 file_read 抽查文件，或用 bash_run 读取 result_path 生成后续产物。",
-        },
-    )
-
-
-async def _build_success_result_response(
-    query_result: dict,
-    query: _CompiledToolQuery,
-    conversation_id: str | None,
-    user_id: str | None = None,
-) -> str:
-    result_json = json.dumps(query_result, ensure_ascii=False)
-    if len(result_json) > TOOL_RESULT_OFFLOAD_SIZE:
-        result_id = await save_query_result(query_result, conversation_id=conversation_id, user_id=user_id)
-        result_summary = {
-            "status": query_result.get("status") or "succeeded",
-            "result_id": result_id,
-            "result_path": _offloaded_result_virtual_path(result_id),
-            "total_count": query_result.get("total_count", 0),
-            "execution_time_ms": query_result.get("execution_time_ms"),
-            "result_size_chars": len(result_json),
-            "llm_analysis_skipped": True,
-            "query_mode": query.query_mode,
-            "confidence": query.confidence,
-            "message": "查询结果已超过限制，完整结果已保存；模型仅接收摘要，前端可加载完整结果。需要继续查看时，请使用 file_read 按行分段读取 result_path。",
-        }
-        if query_result.get("sql"):
-            result_summary["sql"] = query_result.get("sql")
-        logger.info(
-            "语义查询结果过大，已卸载: result_id=%s size_chars=%s rows=%s",
-            result_id,
-            len(result_json),
-            query_result.get("total_count", 0),
-        )
-        return _query_result_tool_payload(
-            status=str(result_summary.get("status") or "succeeded"),
-            data=None,
-            meta=result_summary,
-            error=None,
-        )
-    return _query_result_tool_payload(
-        status=str(query_result.get("status") or "succeeded"),
-        data=query_result,
-        meta={
-            "query_mode": query.query_mode,
-            "confidence": query.confidence,
-        },
-    )
-
-
-def _build_failed_result_response(query_result: dict, query: _CompiledToolQuery) -> str:
-    return _query_result_tool_payload(
-        status=str(query_result.get("status") or "failed"),
-        data=None,
-        error=str(query_result.get("error") or "未知错误"),
-        meta={
-            "sql": query_result.get("sql") or query.sql,
-            "query_mode": query.query_mode,
-            "confidence": query.confidence,
-        },
-    )
-
-
 @tool(args_schema=SemanticQueryInput)
 async def semantic_query_tool(
     dsl: dict | None = None,
@@ -503,7 +338,6 @@ async def _run_semantic_query_tool(
     workspace_root = _get_workspace_root_from_state(state)
     workspace_context = (state or {}).get("workspace")
     has_workspace = isinstance(workspace_context, dict)
-    workspace_backend = str((workspace_context or {}).get("workspace_backend") or "local")
     prepared_request = _prepare_tool_request(
         dsl=dsl,
         sql=sql,
@@ -538,14 +372,11 @@ async def _run_semantic_query_tool(
     if isinstance(query_result, str):
         return query_result
 
-    return await _build_tool_response(
-        query_result=query_result,
-        query=query,
-        save_path=prepared_request.save_path,
-        workspace_root=workspace_root,
-        workspace_backend=workspace_backend,
-        user_id=context.user_id,
-        conversation_id=context.conversation_id,
+    return build_internal_query_result(
+        query_result,
+        query_mode=query.query_mode,
+        confidence=query.confidence,
+        save_as=prepared_request.save_path,
     )
 
 

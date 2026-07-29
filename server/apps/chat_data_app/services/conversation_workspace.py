@@ -14,6 +14,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, is_valid_skill_category, skill_virtual_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
+from utils.tool_result_store import TOOL_RESULTS_DIR_NAME, ToolResultStore
 
 from ..daos.conversation_dao import ConversationDao
 from .artifact_registry import parse_output_artifact
@@ -225,6 +226,7 @@ def ensure_conversation_workspace(conversation_id: str, user_id: str = "system")
         path = root / name
         path.mkdir(parents=True, exist_ok=True)
         paths[name.replace("-", "_")] = str(path)
+    (root / "outputs" / TOOL_RESULTS_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -265,7 +267,16 @@ def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = F
         writable_roots = [(root / "workspace").resolve(), (root / "outputs").resolve()]
         if not any(target == item or item in target.parents for item in writable_roots):
             raise ValueError("只允许写入 workspace/ 或 outputs/")
+        if is_tool_result_workspace_path(str(root), target):
+            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-results/")
     return target
+
+
+def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a resolved path belongs to hidden tool-result storage."""
+    results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_RESULTS_DIR_NAME).resolve()
+    target = path.resolve()
+    return target == results_root or results_root in target.parents
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
@@ -282,6 +293,8 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
 def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     """Return a generated skill directory that is eligible for user import."""
     skill_dir = resolve_workspace_path(workspace_root, path)
+    if is_tool_result_workspace_path(workspace_root, skill_dir):
+        raise ValueError("不允许导入 outputs/.tool-results/ 下的内容")
     outputs_root = resolve_workspace_path(workspace_root, "outputs")
     try:
         relative = skill_dir.relative_to(outputs_root)
@@ -392,6 +405,8 @@ def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[
             try:
                 relative_path = item.relative_to(root).as_posix()
                 resolved_item = resolve_workspace_path(str(root), relative_path)
+                if is_tool_result_workspace_path(str(root), resolved_item):
+                    continue
                 stat = item.stat()
             except (OSError, ValueError):
                 continue
@@ -417,6 +432,8 @@ def read_workspace_text_file(
     paths = ensure_conversation_workspace(conversation_id, user_id)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
+    if is_tool_result_workspace_path(root, target):
+        raise ValueError("工具结果缓存不在工作区文件预览范围内")
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size
@@ -469,10 +486,8 @@ async def read_conversation_query_result(
     result_id: str,
 ) -> dict[str, Any] | None:
     """读取当前用户当前会话内被卸载的大查询结果。"""
-    from utils.query_result_store import QueryResultStore
-
     return await asyncio.to_thread(
-        QueryResultStore().load_for_conversation,
+        ToolResultStore().load_query_result_for_conversation,
         result_id=result_id,
         conversation_id=conversation_id,
         user_id=user_id,
@@ -728,7 +743,8 @@ async def workspace_read_text_file(
     char_offset: int,
     max_chars: int,
 ) -> dict[str, Any]:
-    if str(file_path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+    raw_path = str(file_path or "").strip()
+    if raw_path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
         target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
         return await asyncio.to_thread(
             _read_local_runtime_skill_file,
@@ -801,6 +817,12 @@ async def workspace_artifact_payload(
     file_path: str,
     local_loader: Any,
 ) -> dict[str, Any]:
+    try:
+        target = resolve_workspace_path(runtime.workspace_root, file_path)
+    except ValueError:
+        return {}
+    if is_tool_result_workspace_path(runtime.workspace_root, target):
+        return {}
     if runtime.backend == "local":
         return await asyncio.to_thread(local_loader, runtime.workspace_root, [file_path])
     return await sandbox_artifact_payload(

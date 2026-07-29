@@ -498,7 +498,13 @@ const getToolProducedPaths = (tool: ToolCallInfo): string[] => {
   const argSaveAs = typeof tool.args?.save_as === 'string' ? tool.args.save_as : ''
   const resultPath = getFileEditResultPath(tool.result)
   const path = resultPath || argPath || argSaveAs
-  return path ? [path] : []
+  return isWorkspaceVisiblePath(path) ? [path] : []
+}
+
+const isWorkspaceVisiblePath = (path: unknown): boolean => {
+  const normalized = normalizeVisiblePath(path)
+  if (normalized === 'outputs/.tool-results' || normalized.startsWith('outputs/.tool-results/')) return false
+  return ['workspace/', 'outputs/', 'uploads/'].some(prefix => normalized.startsWith(prefix))
 }
 
 const getPresentedArtifacts = (tool?: ToolCallInfo | null): Array<Record<string, unknown>> => {

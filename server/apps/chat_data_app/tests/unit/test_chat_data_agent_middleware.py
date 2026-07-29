@@ -856,12 +856,13 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "semantic_query_tool",
         "calculator_tool",
     ]
-    assert len(captured["middleware"]) == 5
+    assert len(captured["middleware"]) == 6
     assert captured["middleware"][0].name == "ContextCompressionMiddleware"
     assert captured["middleware"][1].name == "ContextUsageMiddleware"
     assert captured["middleware"][2].name == "ResponseTimestampMiddleware"
     assert captured["middleware"][3].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][4].name == "ToolErrorMiddleware"
+    assert captured["middleware"][4].name == "ToolResultMiddleware"
+    assert captured["middleware"][5].name == "ToolErrorMiddleware"
     assert data_agent.create_data_agent(AgentRuntimeOptions(), model_id="m1").name == "agent"
     assert "智能问数与数据分析助手" in captured["system_prompt"]
 

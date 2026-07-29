@@ -13,6 +13,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from ...services.conversation_workspace import (
     ConversationWorkspaceRuntime,
+    is_tool_result_workspace_path,
     resolve_workspace_path,
 )
 
@@ -56,6 +57,8 @@ def _iter_dir(
         child = Path(entry.path).resolve()
         is_dir = entry.is_dir(follow_symlinks=False)
         if mode == "workspace":
+            if is_tool_result_workspace_path(workspace_root, child):
+                continue
             try:
                 rel = child.relative_to(root).as_posix()
                 vis_child = "/mnt/user-data/" + rel
@@ -120,6 +123,8 @@ def create_list_dir_tool(workspace_runtime: ConversationWorkspaceRuntime):
                     )
                 except ValueError as exc:
                     return str(exc)
+                if is_tool_result_workspace_path(workspace_runtime.workspace_root, target):
+                    return "outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出"
                 visible_top = ""
                 mode = "workspace"
 

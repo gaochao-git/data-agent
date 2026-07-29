@@ -36,7 +36,7 @@ def test_context_compression_prompt_keeps_query_continuation_facts():
                 }],
             ),
             ToolMessage(
-                content='{"status":"succeeded","total_count":1,"meta":{"result_id":"result_a","result_path":"/mnt/user-data/outputs/.tool-results/query_result/result_a.json"}}',
+                content='{"status":"succeeded","total_count":1,"meta":{"result_id":"result_a","result_path":"/mnt/user-data/outputs/.tool-results/result_a.json"}}',
                 tool_call_id="call-1",
                 name="semantic_query_tool",
             ),

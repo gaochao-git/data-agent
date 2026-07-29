@@ -14,25 +14,25 @@ from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.agent import agent_runtime
 from apps.chat_data_app.agent import agent_state
-from apps.chat_data_app.agent.tools import semantic_query as sql_tools
+from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.tools import common
 from utils import conversation
 
 
-@pytest.mark.asyncio
-async def test_query_result_save_uses_current_conversation_store(monkeypatch):
-    class FakeStore:
-        def save(self, **kwargs):
-            assert kwargs == {
-                "data": {"rows": []},
-                "conversation_id": "conv_a",
-                "user_id": "u1",
-            }
-            return type("Record", (), {"result_id": "result_1"})()
+def test_internal_query_result_protocol_is_not_public_envelope():
+    content = tool_results.build_internal_query_result(
+        {"status": "succeeded", "rows": []},
+        query_mode="dsl2sql",
+        confidence=0.9,
+    )
 
-    monkeypatch.setattr(sql_tools, "QueryResultStore", FakeStore)
+    payload = tool_results.parse_internal_tool_result(content)
 
-    assert await sql_tools.save_query_result({"rows": []}, conversation_id="conv_a", user_id="u1") == "result_1"
+    assert payload is not None
+    assert payload["type"] == tool_results.INTERNAL_TOOL_RESULT_TYPE
+    assert payload["kind"] == tool_results.QUERY_RESULT_TYPE
+    assert payload["payload"] == {"status": "succeeded", "rows": []}
+    assert payload["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9, "save_as": ""}
 
 
 def test_state_reducers_keep_first_conversation_datasource():

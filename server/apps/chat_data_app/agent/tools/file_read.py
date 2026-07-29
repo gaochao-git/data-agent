@@ -31,6 +31,8 @@ def create_file_read_tool(workspace_runtime: ConversationWorkspaceRuntime):
         解析按当前用户权限做磁盘/数据库校验（system=系统内置，user=该用户自己的技能）。
         skill_load 返回内容已包含 SKILL.md 正文，通常无需再用 file_read 读取 SKILL.md 本身；
         但读取技能的 references/scripts/assets 子文件时，直接用 skill_load 返回的 runtime_path 拼接即可。
+
+        outputs/.tool-results/<id>.json 或 .txt 是当前会话已卸载的工具结果缓存；它不会出现在工作区文件列表中，也不可通过 file_edit 或 present_artifacts 修改、呈现。
         """
         try:
             if offset < 0:

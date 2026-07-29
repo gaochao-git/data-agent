@@ -63,6 +63,20 @@ def test_list_dir_outputs_and_uploads(tmp_path):
     assert "type=file  path=/mnt/user-data/uploads/in.csv" in out2
 
 
+def test_list_dir_hides_tool_results(tmp_path):
+    paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
+    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file.write_text('{"rows":[1]}')
+    _, tools = _build_tools(paths)
+
+    output = _call(tools["list_dir"], path="outputs", max_depth=3)
+    direct = _call(tools["list_dir"], path="outputs/.tool-results")
+
+    assert ".tool-results" not in output
+    assert "result_1.json" not in output
+    assert "隐藏的工具结果缓存，不能列出" in direct
+
+
 def test_list_dir_rejects_out_of_session(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)

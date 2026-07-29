@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from ...services.artifact_registry import parse_chart_spec_payload_value, parse_output_artifact
-from ...services.conversation_workspace import resolve_workspace_path, to_visible_path
+from ...services.conversation_workspace import (
+    is_tool_result_workspace_path,
+    resolve_workspace_path,
+    to_visible_path,
+)
 
 def _iter_targets(root: str, targets: list[str | Path]):
     for item in reversed(targets):
@@ -18,6 +22,8 @@ def _iter_targets(root: str, targets: list[str | Path]):
 
 
 def _is_outputs_target(root: str, target: Path) -> bool:
+    if is_tool_result_workspace_path(root, target):
+        return False
     outputs_root = resolve_workspace_path(root, "outputs")
     try:
         target.resolve().relative_to(outputs_root.resolve())
