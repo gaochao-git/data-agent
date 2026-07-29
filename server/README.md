@@ -95,6 +95,7 @@ kill -9 $(lsof -ti :5001)
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制
 - `CHATDATA_TOOL_RESULT_OFFLOAD_SIZE`：大结果卸载阈值，默认 32000 字符
+- `CHATDATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 16000 字符；按请求源行分页，超限时优先截断最长行并返回该行续读位置
 - `CHATDATA_CONTEXT_COMPRESSION_ENABLED`：智能问数上下文压缩总开关，仅影响发给大模型的上下文，不影响页面历史、checkpoint 和审计记录
 - `CHATDATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`、最大 `0.80`；实际触发点同时受 `CHAT_DATA_MAX_TOKENS` 输出预留约束
 

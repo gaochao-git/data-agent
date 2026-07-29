@@ -23,7 +23,6 @@ from apps.chat_data_app.services.workspace_execution import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
     get_host_workspace_path,
-    sandbox_read_text_file,
     sandbox_visible_path,
 )
 
@@ -192,38 +191,6 @@ def test_sandbox_visible_path_allows_only_registered_skill_mounts(tmp_path):
     ) == "/mnt/skills/user/sssss/SKILL.md"
     with pytest.raises(ValueError, match="当前已加载的技能路径"):
         sandbox_visible_path("/mnt/skills/public/dashboard-generation/SKILL.md", runtime_skill_mounts=mounts)
-
-
-def test_sandbox_read_loaded_skill_uses_readonly_mount(monkeypatch, tmp_path):
-    source_dir = tmp_path / "dashboard-generation"
-    source_dir.mkdir()
-    mounts = (SimpleNamespace(name="dashboard-generation", category="system", source_dir=source_dir),)
-
-    class FakeFiles:
-        async def read_bytes(self, path):
-            assert path == "/mnt/skills/system/dashboard-generation/references/guide.md"
-            return b"first\nsecond\n"
-
-    session_ref = SandboxExecutionSessionRef()
-    session_ref.current = SandboxExecutionSession(
-        sandbox=SimpleNamespace(files=FakeFiles()),
-        sandbox_id="sbx_1",
-        workspace_root="/tmp/workspace",
-        host_workspace_path="/host/workspace",
-        runtime_skill_mounts=mounts,
-    )
-
-    result = asyncio.run(
-        sandbox_read_text_file(
-            session_ref=session_ref,
-            file_path="/mnt/skills/system/dashboard-generation/references/guide.md",
-            offset=1,
-            limit=1,
-        )
-    )
-
-    assert result["lines"] == ["second"]
-    assert result["path"] == "/mnt/skills/system/dashboard-generation/references/guide.md"
 
 
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):

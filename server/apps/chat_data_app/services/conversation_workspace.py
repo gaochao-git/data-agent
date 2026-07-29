@@ -25,7 +25,6 @@ from .workspace_execution import (
     sandbox_apply_patch_ops,
     sandbox_artifact_payload,
     invalidate_workspace_execution_session,
-    sandbox_read_text_file,
     sandbox_write_text_file,
 )
 
@@ -53,8 +52,8 @@ class RuntimeSkillMount:
 class ConversationWorkspaceRuntime:
     """当前会话工作区的后端绑定。
 
-    本地后端始终直接访问 ``workspace_root``。OpenSandbox session 延迟到实际文件或
-    Bash 调用时创建，避免只做问数时要求 OpenSandbox 配置。
+    文件读取始终直接访问受控的共享 ``workspace_root``，确保 local 与 sandbox
+    使用同一套路径校验和分页语义。OpenSandbox session 仅在执行、写入或产物操作时创建。
     """
 
     workspace_root: str
@@ -480,31 +479,213 @@ async def read_conversation_query_result(
     )
 
 
-def _read_local_text_file(workspace_root: str, file_path: str, offset: int, limit: int) -> dict[str, Any]:
-    target = resolve_workspace_path(workspace_root, file_path)
-    visible_path = to_visible_path(workspace_root, target)
+_TEXT_READ_CHUNK_CHARS = 64 * 1024
+_TEXT_LINE_SEPARATOR_RE = re.compile(r"[\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+
+
+def _iter_text_line_fragments(file_obj: Any):
+    """逐块产出文本行片段，保持 ``str.splitlines()`` 的行分隔语义。
+
+    ``newline=None`` 已将 CR / CRLF 标准化为 LF；其余 Python 识别的行分隔符
+    仍需显式处理，避免大文件流式读取改变 ``offset`` 的按行语义。
+    """
+    while chunk := file_obj.read(_TEXT_READ_CHUNK_CHARS):
+        position = 0
+        for match in _TEXT_LINE_SEPARATOR_RE.finditer(chunk):
+            yield chunk[position:match.start()], True
+            position = match.end()
+        if position < len(chunk):
+            yield chunk[position:], False
+
+
+def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
+    """确保服务端直接读取的会话根仍属于 ChatData 共享数据目录。"""
+    root = Path(CHAT_DATA_HOME).expanduser().resolve()
+    target = Path(workspace_root).expanduser().resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
+
+
+def _allocate_longest_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
+    """在正文预算内保留同页短行，优先截断最长源行。"""
+    budgets = [max(0, int(length)) for length in line_lengths]
+    excess = max(0, sum(budgets) - max(0, int(max_chars)))
+    for index in sorted(range(len(budgets)), key=lambda item: (-budgets[item], item)):
+        removed = min(budgets[index], excess)
+        budgets[index] -= removed
+        excess -= removed
+        if not excess:
+            break
+    return budgets
+
+
+def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int, char_offset: int) -> dict[str, Any]:
+    selected_lines: list[dict[str, int]] = []
+    line_index = 0
+    pending_chars = 0
+
+    def finish_line() -> bool:
+        nonlocal line_index, pending_chars
+        if offset <= line_index < offset + limit:
+            line_char_offset = char_offset if line_index == offset else 0
+            selected_lines.append({
+                "line_number": line_index + 1,
+                "original_chars": pending_chars,
+                "char_offset": line_char_offset,
+                "available_chars": max(0, pending_chars - line_char_offset),
+            })
+        elif line_index >= offset + limit:
+            return True
+        line_index += 1
+        pending_chars = 0
+        return False
+
+    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+        for part, ends_line in _iter_text_line_fragments(file_obj):
+            pending_chars += len(part)
+            if ends_line and finish_line():
+                return {"selected_lines": selected_lines, "has_more_lines": True}
+            if len(selected_lines) == limit and pending_chars:
+                return {"selected_lines": selected_lines, "has_more_lines": True}
+    if pending_chars:
+        if finish_line():
+            return {"selected_lines": selected_lines, "has_more_lines": True}
+
+    return {"selected_lines": selected_lines, "has_more_lines": False, "observed_lines": line_index}
+
+
+def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], budgets: list[int]) -> list[str]:
+    selected_by_index = {
+        item["line_number"] - 1: (position, item)
+        for position, item in enumerate(selected_lines)
+    }
+    captured_parts = [[] for _ in selected_lines]
+    captured_chars = [0 for _ in selected_lines]
+    current_line_index = 0
+    current_line_char = 0
+    last_line_index = selected_lines[-1]["line_number"] - 1
+
+    def consume(part: str) -> None:
+        nonlocal current_line_char
+        selected = selected_by_index.get(current_line_index)
+        if selected is not None:
+            position, metadata = selected
+            available_start = metadata["char_offset"]
+            start = max(0, available_start - current_line_char)
+            remaining = budgets[position] - captured_chars[position]
+            if start < len(part) and remaining > 0:
+                piece = part[start:start + remaining]
+                captured_parts[position].append(piece)
+                captured_chars[position] += len(piece)
+        current_line_char += len(part)
+
+    def finish_line() -> bool:
+        nonlocal current_line_index, current_line_char
+        current_line_index += 1
+        current_line_char = 0
+        return current_line_index > last_line_index
+
+    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+        for part, ends_line in _iter_text_line_fragments(file_obj):
+            consume(part)
+            if ends_line and finish_line():
+                return ["".join(parts) for parts in captured_parts]
+    return ["".join(parts) for parts in captured_parts]
+
+
+def _read_text_page_from_path(
+    target: Path,
+    visible_path: str,
+    *,
+    offset: int,
+    limit: int,
+    char_offset: int,
+    max_chars: int,
+) -> dict[str, Any]:
     if not target.exists():
         return {"exists": False, "path": visible_path}
     if target.is_dir():
         return {"exists": True, "is_dir": True, "path": visible_path}
-    data = target.read_bytes()
-    if b"\x00" in data[:4096]:
+    with target.open("rb") as file_obj:
+        sample = file_obj.read(4096)
+    if b"\x00" in sample:
         return {"exists": True, "is_binary": True, "path": visible_path}
-    lines = data.decode("utf-8", errors="replace").splitlines()
-    start = max(0, int(offset or 0))
-    count = max(1, int(limit or 1))
-    selected = lines[start:start + count]
+
+    page = _scan_text_page_line_lengths(target, offset=offset, limit=limit, char_offset=char_offset)
+    selected_lines = list(page["selected_lines"])
+    if not selected_lines:
+        observed_lines = int(page.get("observed_lines") or 0)
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": visible_path,
+            "total_lines": observed_lines,
+            "empty": observed_lines == 0,
+            "offset_out_of_range": observed_lines > 0,
+        }
+    first_line = selected_lines[0]
+    if char_offset and char_offset >= first_line["original_chars"]:
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": visible_path,
+            "char_offset_out_of_range": True,
+            "line_number": first_line["line_number"],
+            "line_chars": first_line["original_chars"],
+        }
+
+    budgets = _allocate_longest_line_budgets(
+        [item["available_chars"] for item in selected_lines],
+        max(0, max_chars - max(0, len(selected_lines) - 1)),
+    )
+    lines = _read_text_page_prefixes(target, selected_lines, budgets)
+    truncated_lines = [
+        {
+            "line_number": item["line_number"],
+            "original_chars": item["original_chars"],
+            "returned_chars": budget,
+            "next_char_offset": item["char_offset"] + budget,
+        }
+        for item, budget in zip(selected_lines, budgets)
+        if budget < item["available_chars"]
+    ]
+    has_more_lines = bool(page["has_more_lines"])
     return {
         "exists": True,
         "is_dir": False,
         "is_binary": False,
         "path": visible_path,
-        "lines": selected,
-        "total_lines": len(lines),
-        "start_line": start + 1,
-        "end_line": start + len(selected),
-        "has_more": start + len(selected) < len(lines),
+        "lines": lines,
+        "total_lines": None,
+        "start_line": selected_lines[0]["line_number"],
+        "end_line": selected_lines[-1]["line_number"],
+        # 长行续读只补齐同一行，不能基于该请求推导后续页，避免回退到已读行。
+        "next_offset": offset + len(selected_lines) if has_more_lines and not char_offset else None,
+        "has_more_lines": has_more_lines,
+        "has_more": has_more_lines or bool(truncated_lines),
+        "truncated_lines": truncated_lines,
     }
+
+
+def _read_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    offset: int,
+    limit: int,
+    char_offset: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    target = resolve_workspace_path(workspace_root, file_path)
+    return _read_text_page_from_path(
+        target,
+        to_visible_path(workspace_root, target),
+        offset=offset,
+        limit=limit,
+        char_offset=char_offset,
+        max_chars=max_chars,
+    )
 
 
 def _read_local_runtime_skill_file(
@@ -512,29 +693,17 @@ def _read_local_runtime_skill_file(
     visible_path: str,
     offset: int,
     limit: int,
+    char_offset: int,
+    max_chars: int,
 ) -> dict[str, Any]:
-    if not target.exists():
-        return {"exists": False, "path": visible_path}
-    if target.is_dir():
-        return {"exists": True, "is_dir": True, "path": visible_path}
-    data = target.read_bytes()
-    if b"\x00" in data[:4096]:
-        return {"exists": True, "is_binary": True, "path": visible_path}
-    lines = data.decode("utf-8", errors="replace").splitlines()
-    start = max(0, int(offset or 0))
-    count = max(1, int(limit or 1))
-    selected = lines[start:start + count]
-    return {
-        "exists": True,
-        "is_dir": False,
-        "is_binary": False,
-        "path": visible_path,
-        "lines": selected,
-        "total_lines": len(lines),
-        "start_line": start + 1,
-        "end_line": start + len(selected),
-        "has_more": start + len(selected) < len(lines),
-    }
+    return _read_text_page_from_path(
+        target,
+        visible_path,
+        offset=offset,
+        limit=limit,
+        char_offset=char_offset,
+        max_chars=max_chars,
+    )
 
 
 def _write_local_text_file(workspace_root: str, file_path: str, content: str, mode: str) -> dict[str, Any]:
@@ -556,29 +725,29 @@ async def workspace_read_text_file(
     file_path: str,
     offset: int,
     limit: int,
+    char_offset: int,
+    max_chars: int,
 ) -> dict[str, Any]:
-    if runtime.backend == "local":
-        if str(file_path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-            target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
-            return await asyncio.to_thread(
-                _read_local_runtime_skill_file,
-                target,
-                visible_path,
-                offset,
-                limit,
-            )
+    if str(file_path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
         return await asyncio.to_thread(
-            _read_local_text_file,
-            runtime.workspace_root,
-            file_path,
+            _read_local_runtime_skill_file,
+            target,
+            visible_path,
             offset,
             limit,
+            char_offset,
+            max_chars,
         )
-    return await sandbox_read_text_file(
-        session_ref=await runtime.get_sandbox_session_ref(),
-        file_path=file_path,
-        offset=offset,
-        limit=limit,
+    _ensure_workspace_root_in_chat_data_home(runtime.workspace_root)
+    return await asyncio.to_thread(
+        _read_local_text_file,
+        runtime.workspace_root,
+        file_path,
+        offset,
+        limit,
+        char_offset,
+        max_chars,
     )
 
 

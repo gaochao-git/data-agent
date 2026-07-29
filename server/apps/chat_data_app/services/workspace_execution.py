@@ -617,34 +617,6 @@ def sandbox_path_to_visible(path: str) -> str:
     return value
 
 
-async def sandbox_read_text_file(*, session_ref: SandboxExecutionSessionRef, file_path: str, offset: int, limit: int) -> dict[str, Any]:
-    session = require_sandbox_session(session_ref)
-    target = sandbox_visible_path(file_path, runtime_skill_mounts=session.runtime_skill_mounts)
-    try:
-        data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
-    except FileNotFoundError:
-        return {"exists": False, "path": sandbox_path_to_visible(target)}
-    except IsADirectoryError:
-        return {"exists": True, "is_dir": True, "path": sandbox_path_to_visible(target)}
-    if b"\x00" in data[:4096]:
-        return {"exists": True, "is_binary": True, "path": sandbox_path_to_visible(target)}
-    lines = data.decode("utf-8", errors="replace").splitlines()
-    start = max(0, int(offset or 0))
-    count = max(1, int(limit or 1))
-    selected = lines[start:start + count]
-    return {
-        "exists": True,
-        "is_dir": False,
-        "is_binary": False,
-        "path": sandbox_path_to_visible(target),
-        "lines": selected,
-        "total_lines": len(lines),
-        "start_line": start + 1,
-        "end_line": start + len(selected),
-        "has_more": start + len(selected) < len(lines),
-    }
-
-
 def _is_outputs_sandbox_path(path: str) -> bool:
     return path == sandbox_outputs_dir() or path.startswith(f"{sandbox_outputs_dir()}/")
 

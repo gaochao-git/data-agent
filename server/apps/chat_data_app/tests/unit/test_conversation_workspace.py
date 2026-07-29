@@ -457,7 +457,7 @@ def test_present_artifacts_display_name_and_mime_helpers():
 
 
 @pytest.mark.asyncio
-async def test_file_read_default_limit_is_500(monkeypatch):
+async def test_file_read_default_limit_is_100(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["workspace"]) / "long.txt"
@@ -466,10 +466,11 @@ async def test_file_read_default_limit_is_500(monkeypatch):
     result = await tools["file_read"].ainvoke({"file_path": "workspace/long.txt"})
 
     assert "[file_read]" in result
-    assert "limit=500" in result
-    assert "end_line=500" in result
-    assert "total_lines=601" in result
+    assert "limit=100" in result
+    assert "end_line=100" in result
+    assert "total_lines=unknown" in result
     assert "has_more=true" in result
+    assert "next_offset=100" in result
 
 
 @pytest.mark.asyncio
@@ -498,8 +499,153 @@ async def test_file_read_rejects_invalid_offset_and_limit(monkeypatch):
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
     assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "offset": -1}) == "offset 必须大于等于 0"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 0}) == "limit 必须在 1-1000 之间"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 1001}) == "limit 必须在 1-1000 之间"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 0}) == "limit 必须在 1-200 之间"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 201}) == "limit 必须在 1-200 之间"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "char_offset": -1}) == "char_offset 必须大于等于 0"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 2, "char_offset": 1}) == "使用 char_offset 续读时 limit 必须为 1"
+
+
+@pytest.mark.asyncio
+async def test_file_read_truncates_longest_line_and_continues_from_char_offset(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_budget_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+    target = Path(paths["workspace"]) / "rows.jsonl"
+    target.write_text("ab\nabcdefghij\nxyz\nnext", encoding="utf-8")
+    monkeypatch.setattr(file_read_tool_module, "FILE_READ_MAX_CHARS", 14)
+
+    first_page = await tools["file_read"].ainvoke({
+        "file_path": "workspace/rows.jsonl",
+        "limit": 3,
+    })
+
+    assert "truncated=true" in first_page
+    assert "truncated_lines=2:7" in first_page
+    assert "     1 ab" in first_page
+    assert "     2 abcdefg" in first_page
+    assert "     3 xyz" in first_page
+    assert "next_offset=3" in first_page
+
+    continuation = await tools["file_read"].ainvoke({
+        "file_path": "workspace/rows.jsonl",
+        "offset": 1,
+        "limit": 1,
+        "char_offset": 7,
+    })
+
+    assert "     2 hij" in continuation
+    assert "truncated=true" not in continuation
+    assert "next_offset=" not in continuation
+
+
+@pytest.mark.asyncio
+async def test_file_read_uses_shared_reader_without_starting_sandbox(monkeypatch, tmp_path):
+    workspace_root = tmp_path / "user-data"
+    (workspace_root / "workspace").mkdir(parents=True)
+    (workspace_root / "outputs").mkdir()
+    (workspace_root / "uploads").mkdir()
+    (workspace_root / "workspace" / "report.txt").write_text("shared result\n", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="sandbox",
+    )
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+
+    async def fail_if_sandbox_starts():
+        raise AssertionError("file_read 不应创建 OpenSandbox 会话")
+
+    monkeypatch.setattr(runtime, "get_sandbox_session_ref", fail_if_sandbox_starts)
+    tool = file_read_tool_module.create_file_read_tool(runtime)
+
+    result = await tool.ainvoke({"file_path": "workspace/report.txt"})
+
+    assert "shared result" in result
+    assert runtime.sandbox_session_ref.current is None
+
+
+def test_text_page_content_body_respects_budget_and_preserves_source_order(tmp_path):
+    target = tmp_path / "rows.jsonl"
+    target.write_text("ab\nabcdefghij\nxyz\nnext", encoding="utf-8")
+
+    result = conversation_workspace_module._read_text_page_from_path(
+        target,
+        "/workspace/rows.jsonl",
+        offset=0,
+        limit=3,
+        char_offset=0,
+        max_chars=14,
+    )
+
+    assert result["lines"] == ["ab", "abcdefg", "xyz"]
+    assert len("\n".join(result["lines"])) == 14
+    assert result["truncated_lines"] == [{
+        "line_number": 2,
+        "original_chars": 10,
+        "returned_chars": 7,
+        "next_char_offset": 7,
+    }]
+    assert result["total_lines"] is None
+    assert result["has_more_lines"] is True
+
+
+def test_text_page_rejects_char_offset_at_or_beyond_line_end(tmp_path):
+    target = tmp_path / "rows.jsonl"
+    target.write_text("abcdef", encoding="utf-8")
+
+    result = conversation_workspace_module._read_text_page_from_path(
+        target,
+        "/workspace/rows.jsonl",
+        offset=0,
+        limit=1,
+        char_offset=6,
+        max_chars=20,
+    )
+
+    assert result["char_offset_out_of_range"] is True
+    assert result["line_number"] == 1
+    assert result["line_chars"] == 6
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
+def test_text_page_preserves_python_splitlines_semantics(tmp_path, separator):
+    target = tmp_path / "separators.txt"
+    content = separator.join(["first", "second", "third"])
+    target.write_text(content, encoding="utf-8", newline="")
+
+    result = conversation_workspace_module._read_text_page_from_path(
+        target,
+        "/workspace/separators.txt",
+        offset=1,
+        limit=1,
+        char_offset=0,
+        max_chars=100,
+    )
+
+    assert result["lines"] == content.splitlines()[1:2]
+    assert result["start_line"] == 2
+    assert result["end_line"] == 2
+    assert result["has_more_lines"] is True
+
+
+@pytest.mark.asyncio
+async def test_file_read_rejects_workspace_root_outside_chat_data_home(monkeypatch, tmp_path):
+    workspace_root = tmp_path / "outside" / "user-data"
+    (workspace_root / "workspace").mkdir(parents=True)
+    (workspace_root / "outputs").mkdir()
+    (workspace_root / "uploads").mkdir()
+    (workspace_root / "workspace" / "secret.txt").write_text("secret", encoding="utf-8")
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    tool = file_read_tool_module.create_file_read_tool(
+        ConversationWorkspaceRuntime(
+            workspace_root=str(workspace_root),
+            user_id="u1",
+            backend="sandbox",
+        )
+    )
+
+    result = await tool.ainvoke({"file_path": "workspace/secret.txt"})
+
+    assert result.startswith("file_read 执行失败: 会话工作区不在 CHAT_DATA_HOME 内")
 
 
 @pytest.mark.asyncio
