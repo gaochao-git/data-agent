@@ -39,7 +39,7 @@ const emit = defineEmits<{
       >
         <i class="fa-solid fa-wand-magic-sparkles shrink-0 text-xs text-blue-500"></i>
         <span class="flex min-w-0 flex-1 items-center gap-2">
-          <span class="shrink-0 truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
+          <span class="max-w-[42%] shrink-0 truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
           <span class="min-w-0 flex-1 truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
         </span>
         <span
