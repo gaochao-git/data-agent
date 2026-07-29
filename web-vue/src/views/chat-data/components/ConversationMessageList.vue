@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageSegment, ToolCallInfo } from '../types'
 import { extractGeneratedSqlFromToolCall } from '../utils/semanticTool'
 import { formatDateTimeValue } from '../utils'
@@ -122,6 +122,8 @@ const getRenderableQueryResultToolCall = (message: Message, toolCallId: string):
 
 const getDisplayContent = (content: string): string => props.displayContent(content)
 
+const formatCompressionTokens = (value?: number): string => new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0))
+
 const hasVisibleAssistantContent = (content: string): boolean => {
   const text = getDisplayContent(content)
   return Boolean(text && text !== '正在思考...')
@@ -167,7 +169,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
       v-for="message in messages"
       :key="message.id"
       class="flex"
-      :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
+      :class="message.role === 'user' ? 'justify-end' : message.role === 'context_compression' ? 'justify-center' : 'justify-start'"
       :data-conversation-turn-id="message.role === 'user' ? message.id : undefined"
     >
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
@@ -194,6 +196,23 @@ const handleCopyAssistantMessage = async (message: Message) => {
           <div v-if="formatDateTimeValue(message.timestamp)" class="px-1 text-right text-[10px] text-gray-400">
             {{ formatDateTimeValue(message.timestamp) }}
           </div>
+        </template>
+
+        <template v-else-if="message.role === 'context_compression'">
+          <el-tooltip placement="top" effect="light">
+            <template #content>
+              <div class="space-y-1 text-xs leading-5">
+                <div>压缩前 {{ formatCompressionTokens(message.contextCompression?.estimated_tokens_before) }} tokens</div>
+                <div>压缩后 {{ formatCompressionTokens(message.contextCompression?.estimated_tokens_after) }} tokens</div>
+                <div>释放 {{ formatCompressionTokens(message.contextCompression?.estimated_cleared_tokens) }} tokens，压缩 {{ formatCompressionTokens(message.contextCompression?.compressed_messages) }} 条消息</div>
+              </div>
+            </template>
+            <div class="flex cursor-default items-center gap-3 py-1 text-xs text-slate-400">
+              <span class="h-px flex-1 bg-slate-200"></span>
+              <span class="whitespace-nowrap">上下文已压缩</span>
+              <span class="h-px flex-1 bg-slate-200"></span>
+            </div>
+          </el-tooltip>
         </template>
 
         <template v-else>

@@ -11,6 +11,24 @@ def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None
     return list(existing or []) + list(new or [])
 
 
+def merge_context_compression_events(
+    existing: list[dict] | None,
+    new: list[dict] | None,
+) -> list[dict]:
+    """追加压缩分界事件，并按稳定 ID 去重以支持流重试。"""
+    merged: list[dict] = []
+    event_ids: set[str] = set()
+    for event in [*(existing or []), *(new or [])]:
+        if not isinstance(event, dict):
+            continue
+        event_id = str(event.get("id") or "").strip()
+        if not event_id or event_id in event_ids:
+            continue
+        event_ids.add(event_id)
+        merged.append(event)
+    return merged
+
+
 def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
     """数据源组首次绑定后不可被后续轮次覆盖。"""
     return existing or new
@@ -45,5 +63,6 @@ class ChatDataAgentState(AgentState, total=False):
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None
     context_summary: str | None
+    context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     workspace: ConversationWorkspaceContext

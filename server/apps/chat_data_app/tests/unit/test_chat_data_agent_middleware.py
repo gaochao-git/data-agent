@@ -207,6 +207,137 @@ async def test_context_compression_update_replaces_persisted_messages():
 
 
 @pytest.mark.asyncio
+async def test_context_compression_replaces_history_even_when_summary_does_not_reduce_tokens(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.middleware.context_compression.logger.info",
+        lambda *args, **kwargs: logs.append(args),
+    )
+    messages = [
+        HumanMessage(content="历史问题"),
+        AIMessage(content="历史回答"),
+        HumanMessage(content="当前问题"),
+    ]
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        static_input_tokens=0,
+        compression_trigger_tokens=1,
+        hard_input_limit_tokens=12_000,
+        compression_keep_tokens=1,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=lambda _messages: _fake_summary("历史问题 历史回答"),
+    )
+
+    assert compressed == [messages[-1]]
+    assert summary == "历史问题 历史回答"
+    assert report["triggered"] is True
+    assert report["estimated_cleared_tokens"] == 0
+    assert "上下文压缩已执行" in logs[0][0]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_uses_configured_summary_output_budget(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", "1536")
+    monkeypatch.setattr(
+        context_compression,
+        "get_model_context_budget",
+        lambda model_id, *, max_output_tokens: captured.update({
+            "budget_model_id": model_id,
+            "budget_max_output_tokens": max_output_tokens,
+        }) or SimpleNamespace(hard_input_limit_tokens=9_999),
+    )
+
+    class SummaryLLM:
+        async def ainvoke(self, _messages):
+            return AIMessage(content="压缩摘要")
+
+    def fake_get_chat_data_llm(**kwargs):
+        captured.update(kwargs)
+        return SummaryLLM()
+
+    monkeypatch.setattr(context_compression, "get_chat_data_llm", fake_get_chat_data_llm)
+
+    assert context_compression._get_summary_input_limit_tokens("summary-model") == 9_999
+    summary = await context_compression._summarize_messages_with_llm(
+        [HumanMessage(content="待摘要历史")],
+        model_id="summary-model",
+    )
+
+    assert summary == "压缩摘要"
+    assert captured["budget_model_id"] == "summary-model"
+    assert captured["budget_max_output_tokens"] == 1536
+    assert captured["max_tokens"] == 1536
+
+
+@pytest.mark.asyncio
+async def test_context_compression_middleware_persists_and_streams_visible_event(monkeypatch):
+    messages = []
+    for index in range(4):
+        messages.extend([
+            HumanMessage(content=f"历史问题{index}" + " 查询订单销售额 " * 300, id=f"user-{index}"),
+            AIMessage(content=f"历史回答{index}" + " 销售额同比环比维度指标口径 " * 300, id=f"assistant-{index}"),
+        ])
+    messages.append(HumanMessage(content="当前问题", id="turn-current"))
+    monkeypatch.setattr(
+        context_compression.ToolResultBudget,
+        "configure",
+        lambda self, system_prompt, tools, model_id=None: ContextBudget(
+            context_window=1000,
+            max_output_tokens=200,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=800,
+            compression_trigger_tokens=10,
+            compression_keep_tokens=1,
+        ),
+    )
+    monkeypatch.setattr(context_compression, "get_context_compression_config", lambda: {"enabled": True, "trigger_ratio": 0.10})
+    monkeypatch.setattr(context_compression, "_get_summary_input_limit_tokens", lambda _model_id: 800)
+
+    async def summarize(*_args, **_kwargs):
+        return "订单历史摘要"
+
+    monkeypatch.setattr(context_compression, "_summarize_messages_with_llm", summarize)
+    streamed_events = []
+    monkeypatch.setattr(context_compression, "get_stream_writer", lambda: streamed_events.append)
+
+    middleware = context_compression.create_context_compression_middleware(
+        system_prompt="智能问数系统提示词",
+        state_schema=dict,
+    )
+    update = await middleware.abefore_model({"messages": messages}, SimpleNamespace())
+
+    event = update["context_compression_events"][0]
+    assert update["context_compression"]["triggered"] is True
+    assert event["turn_id"] == "turn-current"
+    assert event["anchor_message_id"] == "turn-current"
+    assert streamed_events == [{"type": "context_compression", "event": event}]
+
+
+def test_context_compression_event_excludes_summary_and_anchors_current_message():
+    messages = [
+        HumanMessage(content="历史问题", id="turn-old"),
+        AIMessage(content="历史回答", id="assistant-old"),
+        HumanMessage(content="当前问题", id="turn-current"),
+    ]
+    event = context_compression._build_context_compression_event(messages, {
+        "triggered": True,
+        "estimated_tokens_before": 70_000,
+        "estimated_tokens_after": 21_000,
+        "estimated_cleared_tokens": 49_000,
+        "compressed_messages": 2,
+        "summary_chars": 999,
+    })
+
+    assert event is not None
+    assert event["turn_id"] == "turn-current"
+    assert event["anchor_message_id"] == "turn-current"
+    assert event["estimated_cleared_tokens"] == 49_000
+    assert "summary" not in event
+
+
+@pytest.mark.asyncio
 async def test_context_compression_merges_existing_summary_when_threshold_exceeded():
     messages = [
         SystemMessage(
@@ -440,8 +571,8 @@ def test_summary_input_prunes_oldest_complete_rounds_when_tool_compaction_is_ins
 @pytest.mark.asyncio
 async def test_context_compression_keeps_two_recent_completed_rounds_together():
     messages = [
-        HumanMessage(content="第一轮问题"),
-        AIMessage(content="第一轮回答"),
+        HumanMessage(content="第一轮问题" + " 历史查询条件" * 200),
+        AIMessage(content="第一轮回答" + " 历史指标口径" * 200),
         HumanMessage(content="第二轮问题"),
         AIMessage(content="第二轮回答"),
         HumanMessage(content="第三轮问题"),

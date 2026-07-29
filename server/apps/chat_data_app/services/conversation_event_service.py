@@ -18,6 +18,7 @@ EVENT_USER_MESSAGE = "user_message"
 EVENT_REASONING = "reasoning"
 EVENT_ASSISTANT_MESSAGE = "assistant_message"
 EVENT_TOOL_RESULT = "tool_result"
+EVENT_CONTEXT_COMPRESSION = "context_compression"
 
 _HIDDEN_TOOLS = {"load_skill_tool"}
 
@@ -61,11 +62,13 @@ class ConversationEventService:
         turn_id: str,
         messages: Iterable[BaseMessage],
         reasoning_segments: Iterable[dict[str, Any]],
+        context_compression_events: Iterable[dict[str, Any]] = (),
     ) -> None:
         events = _build_turn_events(
             turn_id=turn_id,
             messages=list(messages or []),
             reasoning_segments=list(reasoning_segments or []),
+            context_compression_events=list(context_compression_events or []),
         )
         if not events:
             return
@@ -84,6 +87,7 @@ class ConversationEventService:
         operator_name: str,
         messages: Iterable[BaseMessage],
         reasoning_segments: Iterable[dict[str, Any]],
+        context_compression_events: Iterable[dict[str, Any]] = (),
     ) -> None:
         """将旧 checkpoint 中仍可读取的原始消息幂等回填到事件表。"""
         raw_messages = list(messages or [])
@@ -109,6 +113,7 @@ class ConversationEventService:
                 turn_id=turn_id,
                 messages=raw_messages,
                 reasoning_segments=turn_segments,
+                context_compression_events=list(context_compression_events or []),
             ))
         if events:
             await self._append_best_effort(
@@ -174,6 +179,7 @@ def _build_turn_events(
     turn_id: str,
     messages: list[BaseMessage],
     reasoning_segments: list[dict[str, Any]],
+    context_compression_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     start_index = _turn_start_index(messages, turn_id)
     if start_index is None:
@@ -185,6 +191,15 @@ def _build_turn_events(
             break
     turn_messages = messages[start_index:turn_end]
     pending_reasoning = _normalize_reasoning_segments(reasoning_segments, turn_id)
+    compression_events = _normalize_context_compression_events(context_compression_events or [], turn_id)
+    compression_events_by_anchor: dict[str, list[dict[str, Any]]] = {}
+    unanchored_compression_events: list[dict[str, Any]] = []
+    for event in compression_events:
+        anchor_message_id = str(event.get("anchor_message_id") or "").strip()
+        if anchor_message_id:
+            compression_events_by_anchor.setdefault(anchor_message_id, []).append(event)
+        else:
+            unanchored_compression_events.append(event)
     events: list[dict[str, Any]] = []
     next_reasoning_index = 0
     visible_tool_count = 0
@@ -205,6 +220,16 @@ def _build_turn_events(
             ))
             next_reasoning_index += 1
 
+    def append_context_compression_events(anchor_message_id: str) -> None:
+        for event in compression_events_by_anchor.pop(anchor_message_id, []):
+            event_id = str(event["id"])
+            events.append(_event(
+                turn_id=turn_id,
+                event_key=f"context_compression:{event_id}",
+                event_type=EVENT_CONTEXT_COMPRESSION,
+                payload=event,
+            ))
+
     for message_index, message in enumerate(turn_messages):
         if isinstance(message, HumanMessage):
             message_id = _message_id(message)
@@ -215,6 +240,17 @@ def _build_turn_events(
                     event_type=EVENT_USER_MESSAGE,
                     payload=_serialize_human_message(message),
                 ))
+                append_context_compression_events(message_id)
+                if unanchored_compression_events:
+                    for event in unanchored_compression_events:
+                        event_id = str(event["id"])
+                        events.append(_event(
+                            turn_id=turn_id,
+                            event_key=f"context_compression:{event_id}",
+                            event_type=EVENT_CONTEXT_COMPRESSION,
+                            payload=event,
+                        ))
+                    unanchored_compression_events = []
             continue
         if isinstance(message, AIMessage):
             append_ready_reasoning()
@@ -229,6 +265,7 @@ def _build_turn_events(
                 1 for tool_call in getattr(message, "tool_calls", None) or []
                 if str((tool_call or {}).get("name") or "") not in _HIDDEN_TOOLS
             )
+            append_context_compression_events(message_id)
             continue
         if isinstance(message, ToolMessage):
             message_id = _message_id(message) or f"{turn_id}:tool:{message_index}"
@@ -238,8 +275,19 @@ def _build_turn_events(
                 event_type=EVENT_TOOL_RESULT,
                 payload=_serialize_tool_message(message),
             ))
+            append_context_compression_events(message_id)
 
     append_ready_reasoning()
+    for pending_events in compression_events_by_anchor.values():
+        unanchored_compression_events.extend(pending_events)
+    for event in unanchored_compression_events:
+        event_id = str(event["id"])
+        events.append(_event(
+            turn_id=turn_id,
+            event_key=f"context_compression:{event_id}",
+            event_type=EVENT_CONTEXT_COMPRESSION,
+            payload=event,
+        ))
     return events
 
 
@@ -266,6 +314,33 @@ def _normalize_reasoning_segments(segments: list[dict[str, Any]], turn_id: str) 
             "content": content,
             "tool_call_count": _normalize_tool_call_count(raw.get("tool_call_count")),
             "reasoning_turn_id": turn_id,
+        })
+    return normalized
+
+
+def _normalize_context_compression_events(
+    events: list[dict[str, Any]],
+    turn_id: str,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for raw_event in events:
+        if not isinstance(raw_event, dict):
+            continue
+        event_id = str(raw_event.get("id") or "").strip()
+        event_turn_id = str(raw_event.get("turn_id") or "").strip()
+        if not event_id or event_id in seen_ids or event_turn_id != turn_id:
+            continue
+        seen_ids.add(event_id)
+        normalized.append({
+            "id": event_id,
+            "turn_id": turn_id,
+            "anchor_message_id": str(raw_event.get("anchor_message_id") or "").strip(),
+            "timestamp": str(raw_event.get("timestamp") or "").strip(),
+            "estimated_tokens_before": _non_negative_int(raw_event.get("estimated_tokens_before")),
+            "estimated_tokens_after": _non_negative_int(raw_event.get("estimated_tokens_after")),
+            "estimated_cleared_tokens": _non_negative_int(raw_event.get("estimated_cleared_tokens")),
+            "compressed_messages": _non_negative_int(raw_event.get("compressed_messages")),
         })
     return normalized
 
@@ -301,6 +376,13 @@ def _event(*, turn_id: str, event_key: str, event_type: str, payload: dict[str, 
 
 
 def _normalize_tool_call_count(value: Any) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _non_negative_int(value: Any) -> int:
     try:
         return max(int(value or 0), 0)
     except (TypeError, ValueError):

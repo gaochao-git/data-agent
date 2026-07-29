@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
@@ -120,6 +122,23 @@ def test_chat_data_model_options_reads_model_configs(monkeypatch):
         "temperature": 0.1,
         "context_window": 256000,
     }
+
+
+def test_context_compression_summary_output_max_tokens_reads_own_environment_variable(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", "1536")
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "8192")
+
+    assert llm_config.get_context_compression_summary_output_max_tokens() == 1536
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "invalid"])
+def test_context_compression_summary_output_max_tokens_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS", value)
+
+    assert (
+        llm_config.get_context_compression_summary_output_max_tokens()
+        == llm_config.DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS
+    )
 
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch):

@@ -307,6 +307,7 @@ async def _persist_agent_turn_history(
         turn_id=turn_id,
         messages=messages,
         reasoning_segments=stream_adapter.reasoning_segments,
+        context_compression_events=values.get("context_compression_events") or [],
     )
 
 
@@ -363,6 +364,7 @@ async def _backfill_checkpoint_history(
         operator_name=username or user_id,
         messages=messages,
         reasoning_segments=values.get("reasoning_segments") or [],
+        context_compression_events=values.get("context_compression_events") or [],
     )
 
 
@@ -637,9 +639,8 @@ class _AgentSseStreamAdapter:
 
                 event_kind, payload = self._parse_stream_event(event)
                 if event_kind == "custom":
-                    token_usage_event = self._handle_custom_payload(payload)
-                    if token_usage_event:
-                        yield token_usage_event
+                    for sse_event in self._handle_custom_payload(payload):
+                        yield sse_event
                     continue
                 if event_kind != "messages":
                     continue
@@ -695,11 +696,15 @@ class _AgentSseStreamAdapter:
         self.disconnected = True
         return True
 
-    def _handle_custom_payload(self, payload: Any) -> str | None:
-        if not isinstance(payload, dict) or payload.get("type") != "token_usage" or not payload.get("usage"):
-            return None
-        self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
-        return _format_sse("token_usage", self.latest_token_usage)
+    def _handle_custom_payload(self, payload: Any) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        if payload.get("type") == "token_usage" and payload.get("usage"):
+            self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
+            return [_format_sse("token_usage", self.latest_token_usage)]
+        if payload.get("type") == "context_compression" and isinstance(payload.get("event"), dict):
+            return [_format_sse("context_compression", payload["event"])]
+        return []
 
     def _alarm_context(self) -> dict[str, Any]:
         configurable = self.config.get("configurable") if isinstance(self.config, dict) else {}

@@ -153,7 +153,7 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
 
 def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
-    monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "20000")
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "20000")
 
     budget = get_model_context_budget("budget-model")
 
@@ -164,7 +164,7 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
 
 def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_MODEL", "budget-model;0.2;100000")
-    monkeypatch.setenv("CHAT_DATA_MAX_TOKENS", "30000")
+    monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "30000")
     monkeypatch.setattr(
         "apps.chat_data_app.services.context_budget.get_context_compression_config",
         lambda: {"enabled": True, "trigger_ratio": 0.80},

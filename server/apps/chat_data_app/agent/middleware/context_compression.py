@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from langchain.agents.middleware import before_model
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langgraph.config import get_stream_writer
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
@@ -19,13 +22,15 @@ from ...services.context_budget import (
     count_messages_tokens,
     get_model_context_budget,
 )
-from ...services.llm_config import get_chat_data_llm
+from ...services.llm_config import (
+    get_chat_data_llm,
+    get_context_compression_summary_output_max_tokens,
+)
 from ...services.runtime_config import get_context_compression_config
 from ..prompts.context_compression import build_context_compression_summary_prompt
 
 logger = get_logger(__name__)
 
-SUMMARY_MAX_TOKENS = 2000
 SUMMARY_TOOL_RESULT_COMPACT_TOKENS = 512
 RECENT_COMPLETED_ROUNDS_TO_KEEP = 2
 
@@ -102,10 +107,11 @@ async def compress_messages_for_state(
 
     compressed_messages = original_messages[retain_start:]
     after_tokens = static_tokens + count_messages_tokens(compressed_messages) + _summary_tokens(summary_text)
+    cleared_tokens = max(before_tokens - after_tokens, 0)
     report.update({
         "triggered": True,
         "estimated_tokens_after": after_tokens,
-        "estimated_cleared_tokens": max(before_tokens - after_tokens, 0),
+        "estimated_cleared_tokens": cleared_tokens,
         "compressed_messages": retain_start,
         "summary_chars": len(summary_text),
     })
@@ -188,13 +194,19 @@ def create_context_compression_middleware(
             raise ContextInputLimitExceededError(
                 "当前输入内容过长，无法在模型上下文窗口内处理。请拆分问题、缩小上传内容或减少引用的技能后重试。"
             )
+        compression_event = _build_context_compression_event(messages, report)
+        if compression_event:
+            _emit_context_compression_event(compression_event)
         if not message_updates:
             return {"context_compression": report}
-        return {
+        update = {
             "messages": message_updates,
             "context_summary": summary_text,
             "context_compression": report,
         }
+        if compression_event:
+            update["context_compression_events"] = [compression_event]
+        return update
 
     return context_compression_middleware
 
@@ -239,6 +251,51 @@ def _build_report(
         "compression_skipped_reason": "",
         "legacy_summary_migrated": False,
     }
+
+
+def _build_context_compression_event(
+    messages: list[BaseMessage],
+    report: dict[str, Any],
+) -> dict[str, Any] | None:
+    """生成不含摘要正文的用户可见压缩分界事件。"""
+    if not report.get("triggered"):
+        return None
+    turn_id = ""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            turn_id = _message_id(message)
+            if turn_id:
+                break
+    anchor_message_id = _message_id(messages[-1]) if messages else ""
+    return {
+        "id": f"context-compression-{uuid4()}",
+        "turn_id": turn_id,
+        "anchor_message_id": anchor_message_id,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "estimated_tokens_before": _non_negative_int(report.get("estimated_tokens_before")),
+        "estimated_tokens_after": _non_negative_int(report.get("estimated_tokens_after")),
+        "estimated_cleared_tokens": _non_negative_int(report.get("estimated_cleared_tokens")),
+        "compressed_messages": _non_negative_int(report.get("compressed_messages")),
+    }
+
+
+def _emit_context_compression_event(event: dict[str, Any]) -> None:
+    """在 LangGraph 流可用时立即推送分界事件，不影响压缩主流程。"""
+    try:
+        get_stream_writer()({"type": "context_compression", "event": event})
+    except Exception:
+        logger.debug("当前执行上下文不支持推送 context_compression custom 事件", exc_info=True)
+
+
+def _message_id(message: BaseMessage) -> str:
+    return str(getattr(message, "id", "") or "").strip()
+
+
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _extract_legacy_context_summary(messages: list[BaseMessage] | None) -> tuple[list[BaseMessage], str | None]:
@@ -335,7 +392,7 @@ def _get_summary_input_limit_tokens(model_id: str | None) -> int:
     """摘要调用使用独立的输出预留，避免摘要请求本身超出模型窗口。"""
     return get_model_context_budget(
         model_id,
-        max_output_tokens=SUMMARY_MAX_TOKENS,
+        max_output_tokens=get_context_compression_summary_output_max_tokens(),
     ).hard_input_limit_tokens
 
 
@@ -536,7 +593,7 @@ async def _summarize_messages_with_llm(
     llm = get_chat_data_llm(
         model=model_id,
         streaming=False,
-        max_tokens=SUMMARY_MAX_TOKENS,
+        max_tokens=get_context_compression_summary_output_max_tokens(),
         enable_thinking=False,
     )
     try:

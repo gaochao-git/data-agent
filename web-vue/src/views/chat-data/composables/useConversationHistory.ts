@@ -4,7 +4,15 @@
  */
 import { ref, watch, type Ref } from 'vue'
 import { getConversationHistory } from '../api'
-import type { ChatDataTokenUsage, ToolCallInfo, Message, SemanticConfigSelectionInfo, SemanticParams, ThinkingSegment } from '../types'
+import type {
+  ChatDataContextCompressionEvent,
+  ChatDataTokenUsage,
+  ToolCallInfo,
+  Message,
+  SemanticConfigSelectionInfo,
+  SemanticParams,
+  ThinkingSegment,
+} from '../types'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 
 const HIDDEN_TOOLS = ['load_skill_tool']
@@ -115,6 +123,27 @@ interface HistoryEventPayload {
   payload?: unknown
 }
 
+const normalizeContextCompressionEvent = (value: unknown): ChatDataContextCompressionEvent | null => {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const id = String(raw.id || '').trim()
+  if (!id) return null
+  const toNonNegativeNumber = (item: unknown): number => {
+    const parsed = Number(item)
+    return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0
+  }
+  return {
+    id,
+    turn_id: typeof raw.turn_id === 'string' ? raw.turn_id : undefined,
+    anchor_message_id: typeof raw.anchor_message_id === 'string' ? raw.anchor_message_id : undefined,
+    timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : undefined,
+    estimated_tokens_before: toNonNegativeNumber(raw.estimated_tokens_before),
+    estimated_tokens_after: toNonNegativeNumber(raw.estimated_tokens_after),
+    estimated_cleared_tokens: toNonNegativeNumber(raw.estimated_cleared_tokens),
+    compressed_messages: toNonNegativeNumber(raw.compressed_messages),
+  }
+}
+
 const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   if (!value || typeof value !== 'object') return null
   const toolCall = value as { id?: unknown; name?: unknown; args?: unknown }
@@ -212,6 +241,20 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         role: 'user',
         content: String(messagePayload.content || '').trim(),
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
+      })
+      continue
+    }
+
+    if (eventType === 'context_compression') {
+      const contextCompression = normalizeContextCompressionEvent(payload)
+      if (!contextCompression || displayMessages.some(message => message.id === contextCompression.id)) continue
+      activeAssistant = null
+      displayMessages.push({
+        id: contextCompression.id,
+        role: 'context_compression',
+        content: '',
+        timestamp: parseHistoryTimestamp(contextCompression.timestamp) || undefined,
+        contextCompression,
       })
       continue
     }

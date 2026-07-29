@@ -9,22 +9,39 @@ from utils.crypto import decrypt_password
 from utils.llm import get_llm
 
 
-DEFAULT_CHAT_DATA_MAX_TOKENS = 20000
+DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS = 20000
+DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS = 2000
 DEFAULT_CHAT_DATA_MODEL = "gpt-4o-mini"
 DEFAULT_MODEL_TEMPERATURE = 0.2
 DEFAULT_CHAT_DATA_CONTEXT_WINDOW = 128000
 
 
-def get_chat_data_max_tokens() -> int:
-    """读取智能问数默认最大输出 token 数。"""
-    raw = str(os.getenv("CHAT_DATA_MAX_TOKENS") or "").strip()
+def _read_positive_int_env(name: str, default: int) -> int:
+    """读取正整数配置，非法值回退默认值。"""
+    raw = str(os.getenv(name) or "").strip()
     if not raw:
-        return DEFAULT_CHAT_DATA_MAX_TOKENS
+        return default
     try:
         value = int(raw)
     except ValueError:
-        return DEFAULT_CHAT_DATA_MAX_TOKENS
-    return value if value > 0 else DEFAULT_CHAT_DATA_MAX_TOKENS
+        return default
+    return value if value > 0 else default
+
+
+def get_chat_data_output_max_tokens() -> int:
+    """读取智能问数主模型调用的最大输出 token 数。"""
+    return _read_positive_int_env(
+        "CHAT_DATA_OUTPUT_MAX_TOKENS",
+        DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS,
+    )
+
+
+def get_context_compression_summary_output_max_tokens() -> int:
+    """读取上下文压缩摘要调用的最大输出 token 数。"""
+    return _read_positive_int_env(
+        "CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS",
+        DEFAULT_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS,
+    )
 
 
 def _parse_temperature(raw: str, *, model: str) -> float:
@@ -169,7 +186,7 @@ def get_chat_data_llm(
         streaming=streaming,
         stream_usage=stream_usage,
         temperature=selected_config["temperature"] if temperature is None else temperature,
-        max_tokens=max_tokens or get_chat_data_max_tokens(),
+        max_tokens=max_tokens or get_chat_data_output_max_tokens(),
         timeout=timeout,
         api_key=_get_chat_data_api_key(),
         base_url=os.getenv("CHAT_DATA_BASE_URL"),

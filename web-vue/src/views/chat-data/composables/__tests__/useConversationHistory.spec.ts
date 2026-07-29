@@ -120,4 +120,25 @@ describe('buildHistoryMessages', () => {
       'SELECT * FROM orders',
     ])
   })
+
+  it('replays context compression as a standalone timeline marker', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '继续分析' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'context_compression', payload: {
+        id: 'context-compression-1',
+        timestamp: '2026-07-29 10:00:00',
+        estimated_tokens_before: 70000,
+        estimated_tokens_after: 21000,
+        estimated_cleared_tokens: 49000,
+        compressed_messages: 12,
+      } },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已完成' } },
+    ])
+
+    expect(messages.map(message => message.role)).toEqual(['user', 'context_compression', 'assistant'])
+    expect(messages[1]!.contextCompression).toMatchObject({
+      id: 'context-compression-1',
+      estimated_cleared_tokens: 49000,
+    })
+  })
 })

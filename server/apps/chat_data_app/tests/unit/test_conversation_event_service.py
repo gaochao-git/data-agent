@@ -145,3 +145,61 @@ async def test_event_history_is_scoped_to_conversation_owner(conversation_event_
 
     assert (await service.load_history(conversation_id="conv-owner", user_id="user-1"))["messages"][0]["content"] == "只属于用户一"
     assert (await service.load_history(conversation_id="conv-owner", user_id="user-2"))["history_events"] == []
+
+
+@pytest.mark.asyncio
+async def test_context_compression_event_is_anchored_and_idempotent(conversation_event_service):
+    service, create_thread = conversation_event_service
+    await create_thread("conv-compression", "user-1")
+    user_message = HumanMessage(content="继续分析", id="turn-1")
+    tool_message = ToolMessage(
+        content="工具结果",
+        id="tool-1",
+        tool_call_id="call-1",
+        name="semantic_query_tool",
+    )
+    messages = [
+        user_message,
+        AIMessage(content="", id="assistant-1", tool_calls=[{"id": "call-1", "name": "semantic_query_tool", "args": {}}]),
+        tool_message,
+        AIMessage(content="已完成", id="assistant-2"),
+    ]
+    compression_event = {
+        "id": "context-compression-1",
+        "turn_id": "turn-1",
+        "anchor_message_id": "tool-1",
+        "timestamp": "2026-07-29 10:00:00",
+        "estimated_tokens_before": 70_000,
+        "estimated_tokens_after": 21_000,
+        "estimated_cleared_tokens": 49_000,
+        "compressed_messages": 12,
+    }
+
+    await service.persist_turn(
+        conversation_id="conv-compression",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-1",
+        messages=messages,
+        reasoning_segments=[],
+        context_compression_events=[compression_event],
+    )
+    await service.persist_turn(
+        conversation_id="conv-compression",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-1",
+        messages=messages,
+        reasoning_segments=[],
+        context_compression_events=[compression_event],
+    )
+
+    history = await service.load_history(conversation_id="conv-compression", user_id="user-1")
+    assert [event["event_type"] for event in history["history_events"]] == [
+        "user_message",
+        "assistant_message",
+        "tool_result",
+        "context_compression",
+        "assistant_message",
+    ]
+    assert history["history_events"][3]["payload"] == compression_event

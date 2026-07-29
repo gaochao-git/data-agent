@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
@@ -1333,7 +1333,12 @@ const ensureAssistantMessage = () => {
 const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
   const finishedAt = parseDateTimeValue(timestamp)
   if (!finishedAt) return
-  const message = messages.value.find(item => item.id === messageId)
+  const activeMessage = activeAssistantMessageId.value
+    ? messages.value.find(item => item.id === activeAssistantMessageId.value)
+    : null
+  const message = activeMessage?.role === 'assistant'
+    ? activeMessage
+    : messages.value.find(item => item.id === messageId)
   if (message?.role === 'assistant') {
     message.timestamp = finishedAt
   }
@@ -1347,6 +1352,23 @@ const removeEmptyActiveAssistant = () => {
   if (active && active.role === 'assistant' && !active.content && !active.error && !active.toolCalls?.length && !hasSegments) {
     messages.value = messages.value.filter(item => item.id !== activeId)
   }
+}
+
+const appendContextCompressionEvent = (event: ChatDataContextCompressionEvent) => {
+  if (!event.id || messages.value.some(message => message.id === event.id)) return
+  removeEmptyActiveAssistant()
+  const active = activeAssistantMessageId.value
+    ? messages.value.find(message => message.id === activeAssistantMessageId.value)
+    : null
+  if (active?.role === 'assistant') active.isStreaming = false
+  activeAssistantMessageId.value = null
+  messages.value.push({
+    id: event.id,
+    role: 'context_compression',
+    content: '',
+    timestamp: parseDateTimeValue(event.timestamp) || new Date(),
+    contextCompression: event,
+  })
 }
 
 const upsertToolMessage = (toolInfo: ToolCallInfo) => {
@@ -1625,7 +1647,8 @@ const submitAnalysisQuery = async (
       },
       effectiveSemanticConfigSelection,
       enableDeepThinking.value,
-      selectedRuntimeOptions.value
+      selectedRuntimeOptions.value,
+      (event) => appendContextCompressionEvent(event)
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'

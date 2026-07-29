@@ -11,6 +11,7 @@ import type {
   SSEEventType,
   DashboardSpecPayload,
   ChatDataTokenUsage,
+  ChatDataContextCompressionEvent,
   ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
 } from '../types'
@@ -88,7 +89,8 @@ export function useSqlGenerator() {
     onTokenUsage?: (payload: ChatDataTokenUsage) => void,
     semanticConfigSelection?: SemanticConfigSelectionInfo | null,
     enableThinking?: boolean,
-    runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
+    runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null,
+    onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -213,6 +215,18 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 token_usage 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'context_compression') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data === 'object' && typeof data.id === 'string') {
+                onContextCompression?.(data as ChatDataContextCompressionEvent)
+              }
+            } catch (err) {
+              console.error('解析 context_compression 数据失败:', err, dataStr)
             }
             continue
           }

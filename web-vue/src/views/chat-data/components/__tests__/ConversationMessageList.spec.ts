@@ -73,4 +73,30 @@ describe('ConversationMessageList', () => {
     expect(wrapper.text()).not.toContain(streamingAssistantMessage.thinkingSegments![0]!.content)
     expect(wrapper.text()).toContain(secondThinkingContent)
   })
+
+  it('renders context compression as an unframed timeline marker', () => {
+    const wrapper = shallowMount(ConversationMessageList, {
+      props: {
+        messages: [{
+          id: 'context-compression-1',
+          role: 'context_compression',
+          content: '',
+          contextCompression: {
+            id: 'context-compression-1',
+            estimated_tokens_before: 70000,
+            estimated_tokens_after: 21000,
+            estimated_cleared_tokens: 49000,
+            compressed_messages: 12,
+          },
+        }],
+      },
+      global: {
+        stubs: { ElTooltip: { template: '<div><slot /><slot name="content" /></div>' } },
+      },
+    })
+
+    expect(wrapper.text()).toContain('上下文已压缩')
+    expect(wrapper.text()).toContain('释放 49,000 tokens')
+    expect(wrapper.find('.rounded-2xl').exists()).toBe(false)
+  })
 })

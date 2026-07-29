@@ -232,6 +232,17 @@ export interface ChatDataContextCompressionInfo {
   legacy_summary_migrated?: boolean
 }
 
+export interface ChatDataContextCompressionEvent {
+  id: string
+  turn_id?: string
+  anchor_message_id?: string
+  timestamp?: string
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
+}
+
 export interface ChatDataMessageEndPayload {
   usage?: ChatDataTokenUsage | null
   timestamp?: string
@@ -300,7 +311,7 @@ export interface ConversationItem {
 // 消息
 export interface Message {
   id: string
-  role: 'user' | 'assistant' | 'tool'
+  role: 'user' | 'assistant' | 'tool' | 'context_compression'
   content: string
   timestamp?: Date
   result?: unknown
@@ -315,6 +326,7 @@ export interface Message {
   // tool 消息专用字段
   toolCallId?: string
   toolName?: string
+  contextCompression?: ChatDataContextCompressionEvent
 }
 
 export interface DashboardSpecPayload {
@@ -474,7 +486,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
 
 // 工具状态
 export type ToolStatus = 'running' | 'completed'

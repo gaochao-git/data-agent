@@ -39,10 +39,10 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 智能问数与智能分析将模型运行态和用户可见历史分开保存：
 
 - LangGraph checkpoint 的 `messages` 只保存当前模型需要的最近原始消息；`context_summary` 保存累计上下文摘要。
-- `chat_data_conversation_event` 只追加用户消息、思考分段、助手消息和工具结果，是会话历史回放的权威来源；压缩绝不修改该表。
+- `chat_data_conversation_event` 追加用户消息、思考分段、助手消息、工具结果和“上下文已压缩”分界事件，是会话历史回放的权威来源；压缩不改写已有事件，分界事件不保存内部摘要正文。
 - 历史接口优先读取事件表。旧会话尚未写入事件时，兼容读取 checkpoint。
 
-单次主模型请求同时遵守输出预留与质量阈值：硬输入容量为 `模型上下文窗口 - CHAT_DATA_MAX_TOKENS`；压缩在 `min(模型窗口 * CHATDATA_CONTEXT_COMPRESSION_TRIGGER_RATIO, 硬输入容量)` 时执行。压缩比例默认 `0.70`、最高 `0.80`，更小的值可用于更早压缩；压缩后优先保留最近完整对话轮次和工具调用/结果配对。摘要调用单独预留 `2000` 输出 Token；若待摘要内容仍超过摘要输入预算，先按体积从大到小确定性压缩旧工具结果，仍不足才按完整轮次省略最早历史。前端圆圈只表示 `当前输入 / 模型完整上下文窗口`，不把输出预留混入占比。
+单次主模型请求同时遵守输出预留与质量阈值：硬输入容量为 `模型上下文窗口 - CHAT_DATA_OUTPUT_MAX_TOKENS`；压缩在 `min(模型窗口 * CHATDATA_CONTEXT_COMPRESSION_TRIGGER_RATIO, 硬输入容量)` 时执行。压缩比例默认 `0.70`、最高 `0.80`，更小的值可用于更早压缩；压缩后优先保留最近完整对话轮次和工具调用/结果配对。摘要生成后即替换运行态消息并显示“上下文已压缩”；`estimated_cleared_tokens` 仅记录本次预算释放量，可能为 `0`。摘要调用单独预留 `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`（默认 `2000`）输出 Token；若待摘要内容仍超过摘要输入预算，先按体积从大到小确定性压缩旧工具结果，仍不足才按完整轮次省略最早历史。前端圆圈只表示 `当前输入 / 模型完整上下文窗口`，不把输出预留混入占比。
 
 部署前必须手工执行 `migrations/20260724_add_conversation_event.sql`。应用启动不会自动建业务表。
 

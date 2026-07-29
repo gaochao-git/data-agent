@@ -11,7 +11,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from .llm_config import get_chat_data_max_tokens
+from .llm_config import get_chat_data_output_max_tokens
 from .runtime_config import get_context_compression_config, get_context_window, is_context_usage_system_prompt_visible
 
 
@@ -115,7 +115,7 @@ class ContextBudget:
 def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | None = None) -> ContextBudget:
     """按模型窗口、输出预留和质量阈值构造统一预算。"""
     context_window = max(int(get_context_window(model_id)), 1)
-    requested_output = max(int(max_output_tokens or get_chat_data_max_tokens()), 1)
+    requested_output = max(int(max_output_tokens or get_chat_data_output_max_tokens()), 1)
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
     trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
