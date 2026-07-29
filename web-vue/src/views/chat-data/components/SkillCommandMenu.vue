@@ -22,7 +22,7 @@ const emit = defineEmits<{
 <template>
   <div
     v-if="open"
-    class="absolute left-0 right-0 bottom-full z-20 mb-2 max-h-[360px] overflow-y-auto rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
+    class="absolute left-0 right-0 bottom-full z-20 mb-2 max-h-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white text-left shadow-[0_12px_32px_rgba(15,23,42,0.16)]"
   >
     <div v-if="loading" class="px-3 py-3 text-xs text-slate-400">正在加载技能</div>
     <div v-else-if="skills.length === 0" class="px-3 py-3 text-xs text-slate-400">没有匹配的技能</div>
@@ -32,23 +32,23 @@ const emit = defineEmits<{
         :key="skill.skill_id || skill.name"
         type="button"
         :class="[
-          'flex w-full items-start gap-2 border-none px-3 py-2.5 text-left transition-colors',
+          'flex h-11 w-full items-center gap-2 border-none px-3 py-1.5 text-left transition-colors',
           index === highlightedIndex ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
         ]"
         @mousedown.prevent="emit('select', skill)"
       >
-        <i class="fa-solid fa-wand-magic-sparkles mt-0.5 text-xs text-blue-500"></i>
-        <span class="min-w-0 flex-1">
-          <span class="block truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
-          <span class="mt-0.5 block truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
+        <i class="fa-solid fa-wand-magic-sparkles shrink-0 text-xs text-blue-500"></i>
+        <span class="flex min-w-0 flex-1 items-center gap-2">
+          <span class="shrink-0 truncate text-sm font-medium text-slate-800">{{ skill.title || skill.name }}</span>
+          <span class="min-w-0 flex-1 truncate text-xs text-slate-400">{{ skill.description || skill.name }}</span>
         </span>
         <span
           :class="[
-            'shrink-0 rounded-md px-2 py-0.5 text-[11px] leading-5',
+            'max-w-20 shrink-0 truncate rounded-md px-2 py-0.5 text-[11px] leading-5',
             skill.source === 'system' ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'
           ]"
         >
-          {{ getSkillCreatorLabel(skill) }}
+          <span :title="getSkillCreatorLabel(skill)">{{ getSkillCreatorLabel(skill) }}</span>
         </span>
       </button>
     </template>

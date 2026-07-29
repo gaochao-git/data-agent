@@ -6,8 +6,8 @@
 
 当前模块范围：
 - 后端应用：`server/apps/chat_data_app/`
-- 对话与 LangGraph 通用能力：`server/utils/lang_util/`
-- 上传文件服务：`server/utils/file_service/`
+- 对话与 LLM/LangGraph 通用能力：`server/utils/`（`llm.py` 模型创建、`llm_json.py` 模型输出 JSON 解析、`conversation.py` 会话管理、`checkpoint.py` 检查点）
+- 上传文件服务：`server/utils/file_manager.py`
 - 前端页面：`web-vue/src/views/chat-data/`
 - 前端路由入口：`web-vue/src/router/index.ts`
 
