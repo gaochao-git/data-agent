@@ -14,12 +14,12 @@ from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.database import get_session
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 
 from ..agent import get_data_agent_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from .semantic_common import AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
-from .semantic_json_parser import parse_llm_json
 from .llm_config import get_chat_data_llm
 from .sql_parser import extract_physical_tables
 

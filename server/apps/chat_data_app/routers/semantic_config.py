@@ -15,6 +15,7 @@ from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from utils.response import business_response
 from ..agent import get_data_agent_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
@@ -28,7 +29,6 @@ from ..schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from ..services.semantic_json_parser import parse_llm_json
 from ..services.datasource_manager import get_datasource_manager
 from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm

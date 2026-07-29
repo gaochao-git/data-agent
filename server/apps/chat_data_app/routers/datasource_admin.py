@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from utils.response import business_response
 
 from ..schema import (
@@ -25,7 +26,6 @@ from ..schema import (
     DatasourceTableGroupsUpdateRequest,
     DatasourceUpdateRequest,
 )
-from ..services.semantic_json_parser import parse_llm_json
 from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user

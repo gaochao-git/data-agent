@@ -10,8 +10,8 @@ from langchain_core.messages import HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
+from utils.llm_json import parse_llm_json
 from .context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
-from .semantic_json_parser import parse_llm_json
 from .datasource_manager import get_datasource_manager
 from .llm_config import get_chat_data_llm
 

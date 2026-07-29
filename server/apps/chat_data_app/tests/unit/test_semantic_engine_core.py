@@ -22,13 +22,6 @@ from apps.chat_data_app.services.semantic_formatter import (
     format_params_for_display,
     format_sql_for_display,
 )
-from apps.chat_data_app.services.semantic_json_parser import (
-    JSONParseError,
-    parse_llm_json,
-    safe_get,
-    safe_get_dict,
-    safe_get_list,
-)
 from apps.chat_data_app.services.semantic_input_validator import InputValidator
 from apps.chat_data_app.services.sql_parser import (
     _is_query_sql,
@@ -40,30 +33,6 @@ from apps.chat_data_app.services.sql_parser import (
     prepare_sql_for_execution,
 )
 import apps.chat_data_app.services.sql_parser as sql_parser
-
-
-def test_json_parser_handles_llm_formats_and_safe_getters():
-    assert parse_llm_json('{"metrics":["订单数"]}') == {"metrics": ["订单数"]}
-    assert parse_llm_json('```json\n{"a": 1}\n```') == {"a": 1}
-    assert parse_llm_json("说明：{'a': 1,}") == {"a": 1}
-    assert parse_llm_json("不是 json") == {}
-    with pytest.raises(JSONParseError):
-        parse_llm_json("", strict=True)
-
-    data = {"items": [1], "obj": {"a": 1}, "name": "订单"}
-    assert safe_get(data, "name") == "订单"
-    assert safe_get("bad", "name", "默认") == "默认"
-    assert safe_get_list(data, "items") == [1]
-    assert safe_get_list(data, "obj") == []
-    assert safe_get_dict(data, "obj") == {"a": 1}
-    assert safe_get_dict(data, "items") == {}
-
-
-def test_json_parser_strict_and_fix_failure_branches():
-    assert parse_llm_json("```json\n{bad}\n```") == {}
-    assert parse_llm_json("说明 {a: 1, b: 2}") == {"a": 1, "b": 2}
-    with pytest.raises(JSONParseError):
-        parse_llm_json("not json", strict=True)
 
 
 def test_formatter_outputs_display_text_and_truncates_sql():
