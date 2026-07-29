@@ -140,6 +140,16 @@ class SkillDao:
             row, draft_no, favorite_id = item
             return self._skill_row_to_dict(row, draft_skill_version_no=draft_no, favorite_flag=1 if favorite_id else 0)
 
+    async def skill_name_exists_async(self, skill_name: str) -> bool:
+        """全局检查技能名称是否被占用（含已删除、他人私有记录），用于创建前友好报错。"""
+        value = str(skill_name or "").strip()
+        if not value:
+            return False
+        stmt = select(ChatDataSkill.id).where(ChatDataSkill.skill_name == value).limit(1)
+        async with get_session() as db:
+            result = await db.execute(stmt)
+            return result.first() is not None
+
     async def get_published_version_async(self, skill_id: str, skill_version_no: int) -> Optional[Dict[str, Any]]:
         stmt = (
             select(ChatDataSkillVersion)

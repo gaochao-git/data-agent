@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -454,6 +455,9 @@ def test_create_user_skill_async_uses_async_dao(tmp_path, monkeypatch):
             if name == "new-id":
                 return {"skill_id": "new-id", "skill_name": "demo-skill"}
             return None
+
+        async def skill_name_exists_async(self, skill_name):
+            return False
 
         async def create_skill_with_version_async(self, skill, version):
             created["skill"] = skill
@@ -1075,6 +1079,9 @@ def test_import_user_skill_from_directory_async_copies_fixed_dirs(tmp_path, monk
             created["skill"] = skill
             created["version"] = version
 
+        async def skill_name_exists_async(self, skill_name):
+            return False
+
         async def get_version_async(self, skill_id, version_no):
             return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(tmp_path / "user" / "async-skill" / "versions" / "v1")}
 
@@ -1151,6 +1158,9 @@ def test_copy_user_skill_async_uses_owner_draft_and_rejects_missing_versions(tmp
         async def create_skill_with_version_async(self, skill, version):
             created["skill"] = skill
             created["version"] = version
+
+        async def skill_name_exists_async(self, skill_name):
+            return False
 
         async def get_version_async(self, skill_id, version_no):
             return {"skill_id": skill_id, "skill_version_no": version_no, "skill_version_dir": str(user_skill_root / "source-skill-copy" / "versions" / "v1")}
@@ -1378,6 +1388,9 @@ def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path,
         async def get_skill_async(self, name, user_id=""):
             return None
 
+        async def skill_name_exists_async(self, skill_name):
+            return False
+
         async def create_skill_with_version_async(self, skill, version):
             created.update(skill)
 
@@ -1394,6 +1407,52 @@ def test_create_user_skill_async_conflict_and_visibility_normalization(tmp_path,
     asyncio.run(run_create())
 
     assert created["visibility_type"] == "private"
+
+
+def test_create_user_skill_async_rejects_globally_occupied_name(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+
+    class OccupiedStore:
+        async def get_skill_async(self, name, user_id=""):
+            # 他人私有或已删除技能对当前用户不可见
+            return None
+
+        async def skill_name_exists_async(self, skill_name):
+            return True
+
+    async def run_create():
+        monkeypatch.setattr(service, "_dao", OccupiedStore())
+        with pytest.raises(ValueError, match="技能标识已存在"):
+            await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1")
+
+    asyncio.run(run_create())
+
+
+def test_create_user_skill_async_converts_integrity_error(tmp_path, monkeypatch):
+    service = skill_service_module.SkillService()
+
+    class RaceStore:
+        async def get_skill_async(self, name, user_id=""):
+            return None
+
+        async def skill_name_exists_async(self, skill_name):
+            return False
+
+        async def create_skill_with_version_async(self, skill, version):
+            raise IntegrityError("INSERT INTO chat_data_skill ...", {}, Exception("Duplicate entry"))
+
+    async def fake_get_skill(*_args, **_kwargs):
+        return {"skill_id": "new-id", "name": "demo-skill"}
+
+    async def run_create():
+        monkeypatch.setattr(service, "_dao", RaceStore())
+        monkeypatch.setattr(skill_service_module.uuid, "uuid4", lambda: type("Uuid", (), {"hex": "new-id"})())
+        monkeypatch.setattr(skill_service_module, "USER_SKILL_ROOT", tmp_path)
+        monkeypatch.setattr(service, "get_skill_async", fake_get_skill)
+        with pytest.raises(ValueError, match="技能标识已存在"):
+            await service.create_user_skill_async({"skill_name": "demo-skill", "skill_title": "示例", "content": "# 示例"}, "u1")
+
+    asyncio.run(run_create())
 
 
 def test_copy_user_skill_async_missing_system_and_invalid_version(monkeypatch, tmp_path):

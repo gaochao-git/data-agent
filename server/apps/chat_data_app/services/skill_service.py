@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy.exc import IntegrityError
+
 from utils.logger import get_logger
 from utils.skill_paths import USER_SKILL_CATEGORY, physical_skill_category_root
 from ..agent.skills import activate_skill, clear_metadata_cache, load_metadata, parse_metadata
@@ -299,6 +301,14 @@ def _write_skill_md(version_dir: Path, payload: Dict[str, Any]) -> Path:
     return skill_md_path
 
 
+def _resolve_new_skill_text_fields(normalized_payload: Dict[str, Any], parsed: Dict[str, Any], skill_name: str) -> tuple:
+    """按 payload 别名、SKILL.md 元数据、默认值的优先级解析标题/描述/分类。"""
+    title = normalized_payload.get("skill_title") or normalized_payload.get("title") or parsed.get("title") or skill_name
+    desc = normalized_payload.get("skill_desc") or normalized_payload.get("description") or parsed.get("description") or ""
+    category = normalized_payload.get("skill_category") or normalized_payload.get("category") or parsed.get("category") or "custom"
+    return title, desc, category
+
+
 class SkillService:
     """提供技能发现、详情和缓存刷新能力。"""
 
@@ -424,6 +434,8 @@ class SkillService:
             await self._archive_user_skill_async(existing, user_id, operator_name=operator_name)
         elif existing:
             raise ValueError(f"技能标识已存在: {skill_name}")
+        if await self.dao.skill_name_exists_async(skill_name):
+            raise ValueError(f"技能标识已存在: {skill_name}")
         skill_id = uuid.uuid4().hex
         version_no = 1
         skill_root_dir = _resolve_user_skill_root_dir(skill_name)
@@ -433,33 +445,38 @@ class SkillService:
         visibility_type = str(normalized_payload.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
             visibility_type = "private"
-        await self.dao.create_skill_with_version_async({
-            "skill_id": skill_id,
-            "skill_name": skill_name,
-            "skill_title": normalized_payload.get("skill_title") or normalized_payload.get("title") or parsed.get("title") or skill_name,
-            "skill_desc": normalized_payload.get("skill_desc") or normalized_payload.get("description") or parsed.get("description") or "",
-            "skill_category": normalized_payload.get("skill_category") or normalized_payload.get("category") or parsed.get("category") or "custom",
-            "skill_source": "user",
-            "visibility_type": visibility_type,
-            "enabled_flag": 1,
-            "skill_publish_status": "draft",
-            "current_skill_version_no": 0,
-            "owner_user_id": user_id,
-            "skill_root_dir": str(skill_root_dir),
-            "create_by": user_id,
-            "create_by_name": operator_name,
-            "update_by": user_id,
-            "update_by_name": operator_name,
-        }, {
-            "skill_id": skill_id,
-            "skill_version_no": version_no,
-            "skill_version_dir": str(version_dir),
-            "version_publish_status": "draft",
-            "create_by": user_id,
-            "create_by_name": operator_name,
-            "update_by": user_id,
-            "update_by_name": operator_name,
-        })
+        skill_title, skill_desc, skill_category = _resolve_new_skill_text_fields(normalized_payload, parsed, skill_name)
+        try:
+            await self.dao.create_skill_with_version_async({
+                "skill_id": skill_id,
+                "skill_name": skill_name,
+                "skill_title": skill_title,
+                "skill_desc": skill_desc,
+                "skill_category": skill_category,
+                "skill_source": "user",
+                "visibility_type": visibility_type,
+                "enabled_flag": 1,
+                "skill_publish_status": "draft",
+                "current_skill_version_no": 0,
+                "owner_user_id": user_id,
+                "skill_root_dir": str(skill_root_dir),
+                "create_by": user_id,
+                "create_by_name": operator_name,
+                "update_by": user_id,
+                "update_by_name": operator_name,
+            }, {
+                "skill_id": skill_id,
+                "skill_version_no": version_no,
+                "skill_version_dir": str(version_dir),
+                "version_publish_status": "draft",
+                "create_by": user_id,
+                "create_by_name": operator_name,
+                "update_by": user_id,
+                "update_by_name": operator_name,
+            })
+        except IntegrityError as exc:
+            # 并发创建同名技能时唯一键兜底，转成用户可理解的业务错误
+            raise ValueError(f"技能标识已存在: {skill_name}") from exc
         return await self.get_skill_async(skill_id, include_draft=True, user_id=user_id) or {"skill_id": skill_id, "name": skill_name}
 
     async def import_user_skill_from_directory_async(self, source_dir: Path, user_id: str, operator_name: str = "") -> Dict[str, Any]:
