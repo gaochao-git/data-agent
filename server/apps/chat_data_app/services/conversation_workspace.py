@@ -39,18 +39,6 @@ WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
-@dataclass(frozen=True)
-class RuntimeSkillMount:
-    """一个经权限校验后可在当前运行中只读访问的技能目录（来自本会话快照）。"""
-
-    name: str
-    source_dir: Path
-
-    @property
-    def visible_root(self) -> str:
-        return runtime_skill_visible_root(self.name)
-
-
 @dataclass
 class ConversationWorkspaceRuntime:
     """当前会话工作区的后端绑定。
@@ -79,12 +67,12 @@ class ConversationWorkspaceRuntime:
         """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
 
         ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
-        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容（含 ``.snapshot-sig``）
+        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容（有任意技能子目录）
         的目录视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
         （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
         """
         snapshot_dir = self.runtime_skills_dir
-        # 目录非空（已有技能内容或 .snapshot-sig）则视为已就绪，直接复用。
+        # 目录非空（已有技能子目录）则视为已就绪，直接复用。
         if snapshot_dir.is_dir() and any(snapshot_dir.iterdir()):
             return
         base = Path(self.workspace_root).resolve().parent  # .../<cid>
