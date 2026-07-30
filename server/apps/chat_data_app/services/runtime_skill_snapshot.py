@@ -16,6 +16,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -24,6 +25,7 @@ from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, norma
 logger = get_logger(__name__)
 
 THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
+SNAPSHOT_READY_MARKER = ".snapshot-ready"
 
 
 def runtime_skills_snapshot_dir(user_id: str, conversation_id: str) -> Path:
@@ -48,6 +50,44 @@ def list_snapshot_skill_names(snapshot_dir: Path) -> list[str]:
         for item in root.iterdir()
         if item.is_dir() and not item.is_symlink() and not item.name.startswith(".")
     )
+
+
+def is_runtime_skill_snapshot_ready(snapshot_dir: Path) -> bool:
+    """判断会话快照是否已冻结，兼容早期无完成标记的非空快照。"""
+    root = Path(snapshot_dir)
+    marker = root / SNAPSHOT_READY_MARKER
+    return root.is_dir() and (
+        (marker.is_file() and not marker.is_symlink())
+        or bool(list_snapshot_skill_names(root))
+    )
+
+
+def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
+    """读取运行时快照元数据，作为 Agent 技能清单的唯一来源。
+
+    快照目录名就是模型实际可访问的 ``/mnt/skills/<name>`` 路径，因此即使
+    SKILL.md frontmatter 中的 ``name`` 异常，也必须以目录名为准，避免提示词
+    声明的名称与运行时路径不一致。缺失或损坏的 frontmatter 降级为空描述，
+    但仍保留可读取的快照技能。
+    """
+    # 延迟导入避免 conversation_workspace -> runtime_skill_snapshot -> agent
+    # 初始化期间形成循环依赖；运行时只复用 loader 的唯一 frontmatter 解析入口。
+    from ..agent.skills.loader import parse_metadata
+
+    entries: list[dict[str, Any]] = []
+    for name in list_snapshot_skill_names(snapshot_dir):
+        skill_md = Path(snapshot_dir) / name / "SKILL.md"
+        if not skill_md.is_file() or skill_md.is_symlink():
+            continue
+        metadata = parse_metadata(skill_md) or {}
+        entries.append({
+            "name": name,
+            "title": str(metadata.get("title") or name),
+            "description": str(metadata.get("description") or ""),
+            "domain": str(metadata.get("domain") or ""),
+            "category": str(metadata.get("category") or ""),
+        })
+    return entries
 
 
 def _ignore_symlinks(directory: str, names: list[str]) -> set[str]:
@@ -106,22 +146,17 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
     快照在会话创建/首次运行时构建，此后会话内保持不变：技能的编辑、发布、回滚
     不影响已运行会话，新会话才会获取新快照。
     注意：``ensure_conversation_workspace`` 会预先建出空的 runtime-skills 目录，
-    空目录视为未构建，必须填充；只有已含技能内容的目录才视为冻结快照。
+    空目录视为未构建，必须填充；无可见技能时通过隐藏完成标记冻结空快照，
+    防止后续工具调用重新从管理域纳入新发布的技能。
     """
     target = runtime_skills_snapshot_dir(user_id, conversation_id)
-    if target.is_dir() and any(target.iterdir()):
+    if is_runtime_skill_snapshot_ready(target):
         return target
 
     # 延迟 import 打破循环：skill_service 链路经 conversation_workspace 回引本模块。
     from .skill_service import skill_service
 
     sources = await skill_service.list_runtime_skill_sources_async(user_id)
-    if not sources:
-        # 空快照不落盘：避免系统技能尚未部署等暂时状态下构建出空快照并被会话内冻结，
-        # 下次调用会重试；沙箱仅在快照目录存在时挂载 /mnt/skills 卷，行为一致。
-        logger.warning("可见技能集合为空，跳过快照构建: user_id=%s conversation_id=%s", user_id, conversation_id)
-        return target
-
     _sweep_stale_siblings(target)
 
     tmp = target.with_name(f"{target.name}.building-{uuid4().hex}")
@@ -133,10 +168,12 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
         def _populate() -> None:
             for name, source_dir in sources:
                 _copy_skill_dir(source_dir, tmp / name)
+            # 即使技能集合为空，也必须明确冻结本会话的运行时视图。
+            (tmp / SNAPSHOT_READY_MARKER).touch()
 
         await asyncio.to_thread(_populate)
 
-        if target.is_dir() and any(target.iterdir()):
+        if is_runtime_skill_snapshot_ready(target):
             # 并发请求已先完成构建；快照会话内不变，丢弃本次临时目录并复用
             _remove_tree(tmp)
             return target
@@ -152,8 +189,11 @@ async def build_runtime_skill_snapshot_async(user_id: str, conversation_id: str)
 
 __all__ = [
     "THREADS_DIR",
+    "SNAPSHOT_READY_MARKER",
     "runtime_skills_snapshot_dir",
     "runtime_skills_snapshot_dir_from_workspace",
     "list_snapshot_skill_names",
+    "list_snapshot_skill_metadata",
+    "is_runtime_skill_snapshot_ready",
     "build_runtime_skill_snapshot_async",
 ]

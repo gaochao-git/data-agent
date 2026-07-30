@@ -27,15 +27,17 @@ from .agent import (
     build_unified_system_prompt,
     get_checkpointer,
 )
-from .agent.skills import build_system_skills_prompt, format_skills_prompt
+from .agent.skills import format_skills_prompt
 from .services.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .services.conversation_runtime import stream_agent_turn
 from .services.conversation_event_service import conversation_event_service
 from .services.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
-from .services.runtime_skill_snapshot import build_runtime_skill_snapshot_async
-from .services.skill_service import skill_service
+from .services.runtime_skill_snapshot import (
+    build_runtime_skill_snapshot_async,
+    list_snapshot_skill_metadata,
+)
 from .services.semantic_conversation_context import (
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
@@ -916,20 +918,17 @@ async def _generate_chat_data_stream(
         user_id=user_id or "system",
         backend=runtime_options.workspace_backend,
     )
-    available_skills: list = []
+    available_skills: list[dict[str, Any]] = []
+    available_skills_xml = format_skills_prompt([])
+    # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
+    # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
     try:
-        available_skills = await skill_service.list_skills_async(user_id=user_id, scope="runtime")
-        available_skills_xml = format_skills_prompt([dict(item) for item in available_skills])
+        snapshot_dir = await build_runtime_skill_snapshot_async(user_id or "system", thread_id)
+        available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
+        available_skills_xml = format_skills_prompt(available_skills)
     except Exception as err:
-        logger.warning("技能列表加载失败，回退代码目录: %s", err)
-        available_skills_xml = build_system_skills_prompt()
+        logger.warning("会话技能快照加载失败，本轮不提供技能: %s", err)
     workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
-    # 构建本会话 runtime-skills 快照（运行域只读技能根）：幂等、会话内稳定；
-    # 沙箱 /mnt/skills 卷与本地 file_read 均依赖该目录存在。
-    try:
-        await build_runtime_skill_snapshot_async(user_id or "system", thread_id)
-    except Exception as err:
-        logger.warning("技能快照构建失败，技能读取可能不可用: %s", err)
 
     config = {
         "configurable": {

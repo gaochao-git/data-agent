@@ -139,7 +139,6 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
         file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
         offset=0,
         limit=10,
-        char_offset=0,
         max_chars=100,
     )
     assert result["lines"] == ['{"rows":[1]}']
@@ -503,7 +502,7 @@ def test_present_artifacts_display_name_and_mime_helpers():
 
 
 @pytest.mark.asyncio
-async def test_file_read_default_limit_is_100(monkeypatch):
+async def test_file_read_default_limit_is_200(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["workspace"]) / "long.txt"
@@ -512,11 +511,11 @@ async def test_file_read_default_limit_is_100(monkeypatch):
     result = await tools["file_read"].ainvoke({"file_path": "workspace/long.txt"})
 
     assert "[file_read]" in result
-    assert "limit=100" in result
-    assert "end_line=100" in result
+    assert "limit=200" in result
+    assert "end_line=200" in result
     assert "total_lines=unknown" in result
     assert "has_more=true" in result
-    assert "next_offset=100" in result
+    assert "next_offset=200" in result
 
 
 @pytest.mark.asyncio
@@ -545,19 +544,17 @@ async def test_file_read_rejects_invalid_offset_and_limit(monkeypatch):
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
     assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "offset": -1}) == "offset 必须大于等于 0"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 0}) == "limit 必须在 1-200 之间"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 201}) == "limit 必须在 1-200 之间"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "char_offset": -1}) == "char_offset 必须大于等于 0"
-    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 2, "char_offset": 1}) == "使用 char_offset 续读时 limit 必须为 1"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 0}) == "limit 必须在 1-500 之间"
+    assert await tools["file_read"].ainvoke({"file_path": "workspace/demo.txt", "limit": 501}) == "limit 必须在 1-500 之间"
 
 
 @pytest.mark.asyncio
-async def test_file_read_truncates_longest_line_and_continues_from_char_offset(monkeypatch):
+async def test_file_read_truncates_long_lines_without_char_continuation(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_budget_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["workspace"]) / "rows.jsonl"
-    target.write_text("ab\nabcdefghij\nxyz\nnext", encoding="utf-8")
-    monkeypatch.setattr(file_read_tool_module, "FILE_READ_MAX_CHARS", 14)
+    target.write_text("a" * 600 + "\n" + "b" * 600 + "\nnext", encoding="utf-8")
+    monkeypatch.setattr(file_read_tool_module, "FILE_READ_MAX_CHARS", 1000)
 
     first_page = await tools["file_read"].ainvoke({
         "file_path": "workspace/rows.jsonl",
@@ -565,22 +562,19 @@ async def test_file_read_truncates_longest_line_and_continues_from_char_offset(m
     })
 
     assert "truncated=true" in first_page
-    assert "truncated_lines=2:7" in first_page
-    assert "     1 ab" in first_page
-    assert "     2 abcdefg" in first_page
-    assert "     3 xyz" in first_page
-    assert "next_offset=3" in first_page
+    assert "truncated_lines=1,2" in first_page
+    assert "char_offset" not in first_page
+    assert f"     1 {'a' * 500}" in first_page
+    assert f"     2 {'b' * 499}" in first_page
+    assert "next_offset=2" in first_page
 
-    continuation = await tools["file_read"].ainvoke({
+    next_page = await tools["file_read"].ainvoke({
         "file_path": "workspace/rows.jsonl",
-        "offset": 1,
-        "limit": 1,
-        "char_offset": 7,
+        "offset": 2,
     })
 
-    assert "     2 hij" in continuation
-    assert "truncated=true" not in continuation
-    assert "next_offset=" not in continuation
+    assert "     3 next" in next_page
+    assert "truncated=true" not in next_page
 
 
 @pytest.mark.asyncio
@@ -618,38 +612,35 @@ def test_text_page_content_body_respects_budget_and_preserves_source_order(tmp_p
         "/workspace/rows.jsonl",
         offset=0,
         limit=3,
-        char_offset=0,
-        max_chars=14,
+        max_chars=1000,
     )
 
-    assert result["lines"] == ["ab", "abcdefg", "xyz"]
-    assert len("\n".join(result["lines"])) == 14
-    assert result["truncated_lines"] == [{
-        "line_number": 2,
-        "original_chars": 10,
-        "returned_chars": 7,
-        "next_char_offset": 7,
-    }]
+    assert result["lines"] == ["ab", "abcdefghij", "xyz"]
+    assert len("\n".join(result["lines"])) == 17
+    assert result["truncated_lines"] == []
     assert result["total_lines"] is None
     assert result["has_more_lines"] is True
 
 
-def test_text_page_rejects_char_offset_at_or_beyond_line_end(tmp_path):
+def test_text_page_caps_each_line_and_total_body_chars(tmp_path):
     target = tmp_path / "rows.jsonl"
-    target.write_text("abcdef", encoding="utf-8")
+    target.write_text("a" * 600 + "\n" + "b" * 600 + "\nnext", encoding="utf-8")
 
     result = conversation_workspace_module._read_text_page_from_path(
         target,
         "/workspace/rows.jsonl",
         offset=0,
-        limit=1,
-        char_offset=6,
-        max_chars=20,
+        limit=3,
+        max_chars=1000,
     )
 
-    assert result["char_offset_out_of_range"] is True
-    assert result["line_number"] == 1
-    assert result["line_chars"] == 6
+    assert result["lines"] == ["a" * 500, "b" * 499]
+    assert len("\n".join(result["lines"])) == 1000
+    assert result["truncated_lines"] == [
+        {"line_number": 1, "original_chars": 600, "returned_chars": 500},
+        {"line_number": 2, "original_chars": 600, "returned_chars": 499},
+    ]
+    assert result["next_offset"] == 2
 
 
 @pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
@@ -663,7 +654,6 @@ def test_text_page_preserves_python_splitlines_semantics(tmp_path, separator):
         "/workspace/separators.txt",
         offset=1,
         limit=1,
-        char_offset=0,
         max_chars=100,
     )
 
@@ -1421,9 +1411,9 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_skill_load_prefers_session_snapshot(monkeypatch, tmp_path):
+async def test_skill_load_prefers_session_snapshot(tmp_path):
     # 回归：skill_load 只从本会话运行域快照读取，与管理域完全解耦——
-    # 即便管理域解析返回另一个 title/路径，工具也不回退管理域，读到的必是快照副本。
+    # 工具不回退管理域，读到的必是快照副本。
     workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
     workspace_root.mkdir(parents=True)
     snapshot_skill = workspace_root.parent / "runtime-skills" / "demo-skill"
@@ -1435,18 +1425,6 @@ async def test_skill_load_prefers_session_snapshot(monkeypatch, tmp_path):
     (snapshot_skill / "references" / "guide.md").parent.mkdir(parents=True)
     (snapshot_skill / "references" / "guide.md").write_text("# guide from snapshot\n", encoding="utf-8")
 
-    # 管理域返回不存在的路径与不同 title——用于证明 skill_load 绝不回退管理域
-    async def fake_resolve_skill_path_async(name, user_id=""):
-        assert name == "demo-skill"
-        return {
-            "path": str(tmp_path / "managed" / "SKILL.md"),
-            "title": "管理域版",
-            "description": "来自管理域",
-            "source": "user",
-            "enabled": True,
-        }
-
-    monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
     runtime = ConversationWorkspaceRuntime(
         workspace_root=str(workspace_root), user_id="u1", backend="local",
     )
@@ -1460,7 +1438,7 @@ async def test_skill_load_prefers_session_snapshot(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_skill_load_rejects_skill_not_in_snapshot(monkeypatch, tmp_path):
+async def test_skill_load_rejects_skill_not_in_snapshot(tmp_path):
     # 回归：草稿/禁用的技能本就不进入运行域快照。skill_load 只认快照，加载不到时统一报
     # “技能不存在或无权限访问”，无需回退管理域判断（与设计一致，杜绝运行域暴露但 references 404）。
     workspace_root = tmp_path / "threads" / "u1" / "conv_b" / "user-data"
@@ -1471,17 +1449,6 @@ async def test_skill_load_rejects_skill_not_in_snapshot(monkeypatch, tmp_path):
     other.mkdir(parents=True)
     (other / "SKILL.md").write_text("---\nname: other-skill\ntitle: 其他\n---\n# 其他\n", encoding="utf-8")
 
-    async def fake_resolve_skill_path_async(name, user_id=""):
-        assert name == "demo-skill"
-        return {
-            "path": str(tmp_path / "managed" / "SKILL.md"),
-            "title": "禁用技能",
-            "description": "x",
-            "source": "user",
-            "enabled": False,
-        }
-
-    monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
     runtime = ConversationWorkspaceRuntime(
         workspace_root=str(workspace_root), user_id="u1", backend="local",
     )
@@ -1489,3 +1456,25 @@ async def test_skill_load_rejects_skill_not_in_snapshot(monkeypatch, tmp_path):
     result = await tool.ainvoke({"skill_name": "demo-skill"})
 
     assert "技能不存在或无权限访问" in result
+
+
+@pytest.mark.asyncio
+async def test_skill_load_uses_file_read_budget_and_exposes_continuation_path(monkeypatch, tmp_path):
+    workspace_root = tmp_path / "threads" / "u1" / "conv_c" / "user-data"
+    workspace_root.mkdir(parents=True)
+    snapshot_skill = workspace_root.parent / "runtime-skills" / "large-skill"
+    snapshot_skill.mkdir(parents=True)
+    (snapshot_skill / "SKILL.md").write_text(
+        "---\nname: large-skill\ntitle: 大技能\n---\n" + "x" * 400,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skill_load_tool_module, "FILE_READ_MAX_CHARS", 200)
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+
+    result = await skill_load_tool_module.create_skill_load_tool(runtime).ainvoke({"skill_name": "large-skill"})
+
+    assert len(result) <= 200
+    assert "[skill_load 内容已截断" in result
+    assert "file_path=/mnt/skills/large-skill/SKILL.md" in result

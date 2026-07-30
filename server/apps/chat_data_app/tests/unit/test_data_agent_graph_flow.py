@@ -51,8 +51,7 @@ def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     assert "conversation_datasource_id" in annotations
 
 
-def test_unified_prompt_uses_system_skills_and_workspace(tmp_path, monkeypatch):
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_system_skills_prompt", lambda: "<skills>默认</skills>")
+def test_unified_prompt_uses_empty_skills_without_runtime_snapshot(tmp_path):
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(bash_enabled=False),
         data_context={},
@@ -60,15 +59,14 @@ def test_unified_prompt_uses_system_skills_and_workspace(tmp_path, monkeypatch):
         available_skills_xml=None,
     )
 
-    assert "<skills>默认</skills>" in prompt
+    assert "<available_skills>\n</available_skills>" in prompt
     assert "/mnt/user-data/workspace" in prompt
     assert str(tmp_path) not in prompt  # 物理路径不得泄漏到提示词
     assert "## Bash 使用" not in prompt
 
 
-def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
+def test_unified_prompt_includes_bash_only_when_enabled(tmp_path):
     assert _extract_source_type({"semantic_configs": ["bad", {}]}) == ""
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_system_skills_prompt", lambda: "<skills />")
 
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(workspace_backend="sandbox", bash_enabled=True),
@@ -77,7 +75,7 @@ def test_unified_prompt_includes_bash_only_when_enabled(tmp_path, monkeypatch):
         available_skills_xml=None,
     )
 
-    assert "<skills />" in prompt
+    assert "<available_skills>\n</available_skills>" in prompt
     assert "## Bash 使用" in prompt
 
 

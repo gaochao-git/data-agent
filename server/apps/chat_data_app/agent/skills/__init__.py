@@ -26,6 +26,5 @@ from .loader import (
     load_metadata,
     clear_metadata_cache,
     format_skills_prompt,
-    build_system_skills_prompt,
     activate_skill,
 )

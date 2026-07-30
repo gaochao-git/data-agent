@@ -20,6 +20,7 @@ from ..daos.conversation_dao import ConversationDao
 from .artifact_registry import parse_output_artifact
 from .runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
+    is_runtime_skill_snapshot_ready,
     runtime_skills_snapshot_dir_from_workspace,
 )
 from .semantic_common import AGENT_ID
@@ -67,13 +68,12 @@ class ConversationWorkspaceRuntime:
         """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
 
         ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
-        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容（有任意技能子目录）
-        的目录视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
+        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容或带完成标记的目录
+        视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
         （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
         """
         snapshot_dir = self.runtime_skills_dir
-        # 目录非空（已有技能子目录）则视为已就绪，直接复用。
-        if snapshot_dir.is_dir() and any(snapshot_dir.iterdir()):
+        if is_runtime_skill_snapshot_ready(snapshot_dir):
             return
         base = Path(self.workspace_root).resolve().parent  # .../<cid>
         uid, cid = base.parent.name, base.name
@@ -251,7 +251,7 @@ class WorkspacePathMapping:
     虚拟前缀（白名单）：
       - 工作区：``/mnt/user-data/{workspace,outputs,uploads}`` 及其裸别名
         ``/workspace``、``/outputs``、``/uploads``
-      - 已登记技能：``/mnt/skills/{system,user}/<name>/...``
+      - 会话技能快照：``/mnt/skills/<name>/...``
 
     - ``translate``：正向，把文本里的虚拟路径翻成物理路径，交给本地 subprocess。
     - ``mask``：反向，把输出里的物理路径还原为虚拟路径，避免向模型泄漏宿主机路径。
@@ -429,6 +429,7 @@ async def read_conversation_query_result(
 
 _TEXT_READ_CHUNK_CHARS = 64 * 1024
 _TEXT_LINE_SEPARATOR_RE = re.compile(r"[\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+MAX_FILE_READ_LINE_CHARS = 500
 
 
 def _iter_text_line_fragments(file_obj: Any):
@@ -454,20 +455,27 @@ def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
         raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
 
 
-def _allocate_longest_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
-    """在正文预算内保留同页短行，优先截断最长源行。"""
-    budgets = [max(0, int(length)) for length in line_lengths]
-    excess = max(0, sum(budgets) - max(0, int(max_chars)))
-    for index in sorted(range(len(budgets)), key=lambda item: (-budgets[item], item)):
-        removed = min(budgets[index], excess)
-        budgets[index] -= removed
-        excess -= removed
-        if not excess:
+def _allocate_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
+    """按源顺序分配正文预算，单行最多保留固定字符数。"""
+    budgets: list[int] = []
+    remaining = max(0, int(max_chars))
+    for original_length in line_lengths:
+        separator_chars = 1 if budgets else 0
+        if remaining < separator_chars:
             break
+        desired_chars = min(max(0, int(original_length)), MAX_FILE_READ_LINE_CHARS)
+        available_chars = remaining - separator_chars
+        if desired_chars > available_chars:
+            if available_chars <= 0 and desired_chars > 0:
+                break
+            budgets.append(max(0, available_chars))
+            break
+        budgets.append(desired_chars)
+        remaining -= desired_chars + separator_chars
     return budgets
 
 
-def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int, char_offset: int) -> dict[str, Any]:
+def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict[str, Any]:
     selected_lines: list[dict[str, int]] = []
     line_index = 0
     pending_chars = 0
@@ -475,12 +483,9 @@ def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int, char_of
     def finish_line() -> bool:
         nonlocal line_index, pending_chars
         if offset <= line_index < offset + limit:
-            line_char_offset = char_offset if line_index == offset else 0
             selected_lines.append({
                 "line_number": line_index + 1,
                 "original_chars": pending_chars,
-                "char_offset": line_char_offset,
-                "available_chars": max(0, pending_chars - line_char_offset),
             })
         elif line_index >= offset + limit:
             return True
@@ -517,12 +522,10 @@ def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], b
         nonlocal current_line_char
         selected = selected_by_index.get(current_line_index)
         if selected is not None:
-            position, metadata = selected
-            available_start = metadata["char_offset"]
-            start = max(0, available_start - current_line_char)
+            position, _metadata = selected
             remaining = budgets[position] - captured_chars[position]
-            if start < len(part) and remaining > 0:
-                piece = part[start:start + remaining]
+            if remaining > 0:
+                piece = part[:remaining]
                 captured_parts[position].append(piece)
                 captured_chars[position] += len(piece)
         current_line_char += len(part)
@@ -547,7 +550,6 @@ def _read_text_page_from_path(
     *,
     offset: int,
     limit: int,
-    char_offset: int,
     max_chars: int,
 ) -> dict[str, Any]:
     if not target.exists():
@@ -559,7 +561,7 @@ def _read_text_page_from_path(
     if b"\x00" in sample:
         return {"exists": True, "is_binary": True, "path": visible_path}
 
-    page = _scan_text_page_line_lengths(target, offset=offset, limit=limit, char_offset=char_offset)
+    page = _scan_text_page_line_lengths(target, offset=offset, limit=limit)
     selected_lines = list(page["selected_lines"])
     if not selected_lines:
         observed_lines = int(page.get("observed_lines") or 0)
@@ -572,34 +574,30 @@ def _read_text_page_from_path(
             "empty": observed_lines == 0,
             "offset_out_of_range": observed_lines > 0,
         }
-    first_line = selected_lines[0]
-    if char_offset and char_offset >= first_line["original_chars"]:
+    budgets = _allocate_line_budgets(
+        [item["original_chars"] for item in selected_lines],
+        max_chars,
+    )
+    selected_lines = selected_lines[:len(budgets)]
+    if not selected_lines:
         return {
             "exists": True,
             "is_dir": False,
             "is_binary": False,
             "path": visible_path,
-            "char_offset_out_of_range": True,
-            "line_number": first_line["line_number"],
-            "line_chars": first_line["original_chars"],
+            "empty": True,
         }
-
-    budgets = _allocate_longest_line_budgets(
-        [item["available_chars"] for item in selected_lines],
-        max(0, max_chars - max(0, len(selected_lines) - 1)),
-    )
     lines = _read_text_page_prefixes(target, selected_lines, budgets)
     truncated_lines = [
         {
             "line_number": item["line_number"],
             "original_chars": item["original_chars"],
             "returned_chars": budget,
-            "next_char_offset": item["char_offset"] + budget,
         }
         for item, budget in zip(selected_lines, budgets)
-        if budget < item["available_chars"]
+        if budget < item["original_chars"]
     ]
-    has_more_lines = bool(page["has_more_lines"])
+    has_more_lines = bool(page["has_more_lines"]) or len(budgets) < len(page["selected_lines"])
     return {
         "exists": True,
         "is_dir": False,
@@ -609,10 +607,9 @@ def _read_text_page_from_path(
         "total_lines": None,
         "start_line": selected_lines[0]["line_number"],
         "end_line": selected_lines[-1]["line_number"],
-        # 长行续读只补齐同一行，不能基于该请求推导后续页，避免回退到已读行。
-        "next_offset": offset + len(selected_lines) if has_more_lines and not char_offset else None,
+        "next_offset": offset + len(selected_lines) if has_more_lines else None,
         "has_more_lines": has_more_lines,
-        "has_more": has_more_lines or bool(truncated_lines),
+        "has_more": has_more_lines,
         "truncated_lines": truncated_lines,
     }
 
@@ -622,7 +619,6 @@ def _read_local_text_file(
     file_path: str,
     offset: int,
     limit: int,
-    char_offset: int,
     max_chars: int,
 ) -> dict[str, Any]:
     target = resolve_workspace_path(workspace_root, file_path)
@@ -631,7 +627,6 @@ def _read_local_text_file(
         to_visible_path(workspace_root, target),
         offset=offset,
         limit=limit,
-        char_offset=char_offset,
         max_chars=max_chars,
     )
 
@@ -641,7 +636,6 @@ def _read_local_runtime_skill_file(
     visible_path: str,
     offset: int,
     limit: int,
-    char_offset: int,
     max_chars: int,
 ) -> dict[str, Any]:
     return _read_text_page_from_path(
@@ -649,7 +643,6 @@ def _read_local_runtime_skill_file(
         visible_path,
         offset=offset,
         limit=limit,
-        char_offset=char_offset,
         max_chars=max_chars,
     )
 
@@ -673,7 +666,6 @@ async def workspace_read_text_file(
     file_path: str,
     offset: int,
     limit: int,
-    char_offset: int,
     max_chars: int,
 ) -> dict[str, Any]:
     raw_path = str(file_path or "").strip()
@@ -685,7 +677,6 @@ async def workspace_read_text_file(
             visible_path,
             offset,
             limit,
-            char_offset,
             max_chars,
         )
     _ensure_workspace_root_in_chat_data_home(runtime.workspace_root)
@@ -695,7 +686,6 @@ async def workspace_read_text_file(
         file_path,
         offset,
         limit,
-        char_offset,
         max_chars,
     )
 

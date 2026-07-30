@@ -1313,7 +1313,10 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     }
     assert "runtime_path=/runtime/skill-a" in skill_load.format_skill_load_result(payload)
 
-    skill_dir = tmp_path / "skill-a"
+    workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
+    workspace_root.mkdir(parents=True)
+    skill_dir = workspace_root.parent / "runtime-skills" / "skill-a"
+    skill_dir.parent.mkdir(parents=True)
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("# Skill A", encoding="utf-8")
     (skill_dir / "references").mkdir()
@@ -1323,23 +1326,20 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
     (skill_dir / "assets").mkdir()
     (skill_dir / "assets" / "a.png").write_bytes(b"png")
 
-    monkeypatch.setattr(skill_load, "resolve_skill_name", lambda name: name.strip())
-    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result={"path": str(skill_dir / "SKILL.md"), "title": "技能A", "description": "描述", "source": "system"}))
-    built = asyncio.run(skill_load._build_skill_payload_async(" skill-a ", user_id="u1"))
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="local",
+    )
+    built = asyncio.run(skill_load._build_skill_payload_async("skill-a", user_id="u1", workspace_runtime=runtime))
     assert built["references"] == ["guide"]
     assert built["scripts"] == ["run.py"]
     assert built["assets"] == ["a.png"]
     assert built["visible_path"] == "/mnt/skills/skill-a"
 
-    monkeypatch.setattr(skill_load.skill_service, "resolve_skill_path_async", lambda _name, user_id="": asyncio.sleep(0, result=None))
     with pytest.raises(ValueError, match="技能不存在"):
-        asyncio.run(skill_load._build_skill_payload_async("missing"))
+        asyncio.run(skill_load._build_skill_payload_async("missing", workspace_runtime=runtime))
 
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(tmp_path / "workspace-root"),
-        user_id="u1",
-        backend="local",
-    )
     tool = skill_load.create_skill_load_tool(runtime, user_id="u1")
     monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=dict(built)))
     result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))

@@ -388,6 +388,56 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
     assert "skill_names" not in human_message.additional_kwargs
 
 
+def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monkeypatch, tmp_path):
+    import asyncio
+
+    captured_agent_kwargs = {}
+    snapshot_dir = tmp_path / "runtime-skills"
+    runtime_skill = snapshot_dir / "runtime-skill"
+    runtime_skill.mkdir(parents=True)
+    (runtime_skill / "SKILL.md").write_text(
+        "---\nname: stale-management-name\ntitle: Runtime skill\ndescription: Only in this snapshot\n---\n# skill\n",
+        encoding="utf-8",
+    )
+    workspace_root = tmp_path / "threads" / "u1" / "conv_snapshot" / "user-data"
+
+    async def fake_prepare_workspace(*_args, **_kwargs):
+        workspace_root.mkdir(parents=True)
+        return {"root": str(workspace_root)}
+
+    async def fake_build_snapshot(user_id, conversation_id):
+        assert (user_id, conversation_id) == ("u1", "conv_snapshot")
+        return snapshot_dir
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="完成"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.handlers.prepare_conversation_workspace", fake_prepare_workspace)
+    monkeypatch.setattr("apps.chat_data_app.handlers.build_runtime_skill_snapshot_async", fake_build_snapshot)
+
+    def create_agent(_runtime_options, **kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", create_agent)
+
+    events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
+        thread_id="conv_snapshot",
+        user_query="查询订单",
+        datasource_id="ds_a",
+        user_id="u1",
+    )))
+
+    assert "完成" in "".join(events)
+    system_prompt = captured_agent_kwargs["system_prompt"]
+    assert "<name>runtime-skill</name>" in system_prompt
+    assert "<title>Runtime skill</title>" in system_prompt
+    assert "stale-management-name" not in system_prompt
+    assert captured_agent_kwargs["workspace_runtime"].available_skill_names == ["runtime-skill"]
+
+
 def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkeypatch):
     import asyncio
 

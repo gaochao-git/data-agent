@@ -65,8 +65,7 @@ def test_unified_prompt_requires_segmented_read_for_offloaded_query_results():
 
     assert "`result_id` 和 `result_path`" in prompt
     assert "`file_read(file_path=result_path, offset=..., limit=...)`" in prompt
-    assert "`truncated_lines=行号:next_char_offset`" in prompt
-    assert "limit=1, char_offset=next_char_offset" in prompt
+    assert "单行超过 500 个字符会直接截断" in prompt
     assert "不要一次读取全部内容" in prompt
 
 

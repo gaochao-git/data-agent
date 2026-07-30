@@ -5,7 +5,6 @@ API：
 - parse_metadata(skill_path): 解析单个技能元数据
 - discover_skills(directories): 扫描目录发现技能
 - load_metadata(): 启动时加载所有元数据
-- build_system_skills_prompt(): 构建系统技能 prompt
 - format_skills_prompt(): 格式化技能元数据为注入 system prompt 的技能描述
 - activate_skill(name): 激活技能，按需加载完整内容
 """
@@ -175,12 +174,6 @@ def format_skills_prompt(skills: list[dict[str, Any]]) -> str:
     summary = "\n".join(lines)
     logger.debug(f"[skills] summary 长度: {len(summary)} 字符")
     return summary
-
-
-def build_system_skills_prompt() -> str:
-    """构建部署管理的系统技能提示词。"""
-    logger.debug("[skills] build_system_skills_prompt() -> 构建系统技能 prompt")
-    return format_skills_prompt([dict(item) for item in load_metadata().values()])
 
 
 def activate_skill(name: str) -> Skill | None:

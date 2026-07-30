@@ -105,14 +105,46 @@ def test_build_snapshot_populates_precreated_empty_dir(tmp_path, monkeypatch):
     assert (target / "skill-a" / "SKILL.md").is_file()
 
 
-def test_build_snapshot_empty_sources_not_persisted(tmp_path, monkeypatch):
+def test_build_snapshot_empty_sources_are_frozen(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [])
 
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
-    # 空快照不落盘，下次构建可重试
-    assert not target.exists()
+    assert (target / snapshot_module.SNAPSHOT_READY_MARKER).is_file()
+    assert snapshot_module.list_snapshot_skill_names(target) == []
 
-    # 系统技能部署后重试可成功
+    # 后续发布系统技能也不能改变已冻结会话的空快照。
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
-    assert (target / "skill-a" / "SKILL.md").is_file()
+    assert not (target / "skill-a").exists()
+
+
+def test_list_snapshot_skill_metadata_uses_runtime_directory_name(tmp_path):
+    snapshot_dir = tmp_path / "runtime-skills"
+    skill_dir = snapshot_dir / "runtime-name"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: stale-management-name\ntitle: Runtime title\ndescription: Runtime description\n---\n# skill\n",
+        encoding="utf-8",
+    )
+    invalid_dir = snapshot_dir / "missing-frontmatter"
+    invalid_dir.mkdir()
+    (invalid_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+
+    skills = snapshot_module.list_snapshot_skill_metadata(snapshot_dir)
+
+    assert skills == [
+        {
+            "name": "missing-frontmatter",
+            "title": "missing-frontmatter",
+            "description": "",
+            "domain": "",
+            "category": "",
+        },
+        {
+            "name": "runtime-name",
+            "title": "Runtime title",
+            "description": "Runtime description",
+            "domain": "",
+            "category": "",
+        },
+    ]
