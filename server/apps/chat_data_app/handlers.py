@@ -34,6 +34,7 @@ from .services.conversation_event_service import conversation_event_service
 from .services.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
+from .services.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from .services.skill_service import skill_service
 from .services.semantic_conversation_context import (
     build_agent_prompt_context,
@@ -923,6 +924,12 @@ async def _generate_chat_data_stream(
         logger.warning("技能列表加载失败，回退代码目录: %s", err)
         available_skills_xml = build_system_skills_prompt()
     workspace_runtime.available_skill_names = [str(s.get("name") or "") for s in (available_skills or [])]
+    # 构建本会话 runtime-skills 快照（运行域只读技能根）：幂等、会话内稳定；
+    # 沙箱 /mnt/skills 卷与本地 file_read 均依赖该目录存在。
+    try:
+        await build_runtime_skill_snapshot_async(user_id or "system", thread_id)
+    except Exception as err:
+        logger.warning("技能快照构建失败，技能读取可能不可用: %s", err)
 
     config = {
         "configurable": {

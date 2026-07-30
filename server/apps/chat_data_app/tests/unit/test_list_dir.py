@@ -1,27 +1,31 @@
 import asyncio
 import os
+import shutil
 from pathlib import Path
 
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
-    RuntimeSkillMount,
     ensure_conversation_workspace,
 )
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 
 
-def _build_tools(paths, *, skills=None):
+def _build_tools(paths, *, snapshot_skills=None):
     runtime = ConversationWorkspaceRuntime(
         workspace_root=paths["root"],
         user_id="system",
         backend="local",
     )
-    if skills:
-        for category, name, source_dir in skills:
-            runtime.runtime_skills[f"{category}/{name}"] = RuntimeSkillMount(
-                name=name, category=category, source_dir=Path(source_dir).resolve()
-            )
+    # 运行域技能直接来自本会话 runtime-skills 快照目录；把源目录复制进快照即可被列出。
+    if snapshot_skills:
+        snapshot_dir = runtime.runtime_skills_dir
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for name, source_dir in snapshot_skills.items():
+            dest = snapshot_dir / name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(source_dir, dest)
     return runtime, {t.name: t for t in assemble_tools(AgentRuntimeOptions(), runtime)}
 
 
@@ -124,17 +128,18 @@ def test_list_dir_max_depth_limits(tmp_path):
 
 def test_list_dir_skill_path(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
-    skill_ref = tmp_path / "skills" / "demo" / "references"
-    skill_ref.mkdir(parents=True)
-    (skill_ref / "guide.md").write_text("# guide")
-    _, tools = _build_tools(paths, skills=[("system", "demo", str(skill_ref.parent))])
-    out = _call(tools["list_dir"], path="/mnt/skills/system/demo/references")
-    assert "type=file  path=/mnt/skills/system/demo/references/guide.md" in out
+    skill_src = tmp_path / "skills" / "demo"
+    (skill_src / "references").mkdir(parents=True)
+    (skill_src / "references" / "guide.md").write_text("# guide")
+    # 运行域技能为扁平 /mnt/skills/<name>，来自本会话快照。
+    _, tools = _build_tools(paths, snapshot_skills={"demo": str(skill_src)})
+    out = _call(tools["list_dir"], path="/mnt/skills/demo/references")
+    assert "type=file  path=/mnt/skills/demo/references/guide.md" in out
 
 
 def test_list_dir_unauthorized_skill_rejected(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
     _, tools = _build_tools(paths)
-    out = _call(tools["list_dir"], path="/mnt/skills/system/unknown/references")
-    # 无注册门控：解析改为按 user_id 权限从磁盘/数据库校验，未知技能返回「不存在/无权限」
+    out = _call(tools["list_dir"], path="/mnt/skills/unknown/references")
+    # 快照内无此技能：resolve_readonly_skill_path_async 抛「技能不存在或无权限访问」
     assert "技能不存在" in out or "无权限" in out or "技能路径无效" in out

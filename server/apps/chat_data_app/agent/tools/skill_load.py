@@ -12,7 +12,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
 from utils.logger import get_logger
-from utils.skill_paths import is_valid_skill_category, skill_virtual_root
+from utils.skill_paths import is_valid_skill_category, runtime_skill_visible_root
 from ...services.skill_service import resolve_skill_name, skill_service
 from ...services.conversation_workspace import ConversationWorkspaceRuntime
 
@@ -93,7 +93,7 @@ def format_skill_load_result(payload: dict[str, Any]) -> str:
     )
 
 
-async def _build_skill_payload_async(skill_name: str, user_id: str = "") -> tuple[dict[str, Any], Path, str]:
+async def _build_skill_payload_async(skill_name: str, user_id: str = "") -> dict[str, Any]:
     """异步构建技能加载结果，避免工具执行时阻塞事件循环。"""
     resolved_name = resolve_skill_name(skill_name)
     metadata = await skill_service.resolve_skill_path_async(resolved_name, user_id=user_id)
@@ -123,13 +123,13 @@ async def _build_skill_payload_async(skill_name: str, user_id: str = "") -> tupl
         "name": resolved_name,
         "title": metadata.get("title") or resolved_name,
         "description": metadata.get("description") or "",
-        "runtime_path": skill_virtual_root(category, resolved_name),
-        "visible_path": skill_virtual_root(category, resolved_name),
+        "runtime_path": runtime_skill_visible_root(resolved_name),
+        "visible_path": runtime_skill_visible_root(resolved_name),
         "skill_md": skill_md,
         "references": references,
         "scripts": scripts,
         "assets": assets,
-    }, source_dir, category
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -293,15 +293,11 @@ def create_skill_load_tool(workspace_runtime: ConversationWorkspaceRuntime, user
         返回内容已包含 SKILL.md 正文，通常不需要再用 file_read 读取 SKILL.md 本身。
         """
         try:
-            payload, source_dir, category = await _build_skill_payload_async(
+            payload = await _build_skill_payload_async(
                 skill_name,
                 user_id=user_id,
             )
-            payload["visible_path"] = await workspace_runtime.register_runtime_skill(
-                name=payload["name"],
-                category=category,
-                source_dir=source_dir,
-            )
+            payload["visible_path"] = runtime_skill_visible_root(payload["name"])
             payload["runtime_path"] = payload["visible_path"]
             return format_skill_load_result(payload)
         except Exception as exc:

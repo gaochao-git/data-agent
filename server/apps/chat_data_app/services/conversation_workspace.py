@@ -12,12 +12,16 @@ from typing import Any, Literal
 
 from utils.database import get_session
 from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT, is_valid_skill_category, skill_virtual_root
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
 from utils.tool_result_store import TOOL_RESULTS_DIR_NAME, ToolResultStore
 
 from ..daos.conversation_dao import ConversationDao
 from .artifact_registry import parse_output_artifact
+from .runtime_skill_snapshot import (
+    build_runtime_skill_snapshot_async,
+    runtime_skills_snapshot_dir_from_workspace,
+)
 from .semantic_common import AGENT_ID
 from .skill_service import skill_service
 from .workspace_execution import (
@@ -25,28 +29,26 @@ from .workspace_execution import (
     get_workspace_execution_session,
     sandbox_apply_patch_ops,
     sandbox_artifact_payload,
-    invalidate_workspace_execution_session,
     sandbox_write_text_file,
 )
 
 logger = get_logger(__name__)
 
-THREADS_DIR = Path(CHAT_DATA_HOME) / "users"
+THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
 @dataclass(frozen=True)
 class RuntimeSkillMount:
-    """一个经权限校验后可在当前运行中只读访问的技能目录。"""
+    """一个经权限校验后可在当前运行中只读访问的技能目录（来自本会话快照）。"""
 
     name: str
-    category: Literal["system", "user"]
     source_dir: Path
 
     @property
     def visible_root(self) -> str:
-        return skill_virtual_root(self.category, self.name)
+        return runtime_skill_visible_root(self.name)
 
 
 @dataclass
@@ -55,146 +57,88 @@ class ConversationWorkspaceRuntime:
 
     文件读取始终直接访问受控的共享 ``workspace_root``，确保 local 与 sandbox
     使用同一套路径校验和分页语义。OpenSandbox session 仅在执行、写入或产物操作时创建。
+
+    运行期技能统一来自本会话的 ``runtime-skills`` 快照（只读），模型只看到扁平的
+    ``/mnt/skills/<name>``；不再按名远程解析、不再逐技能登记挂载。
     """
 
     workspace_root: str
     user_id: str
     backend: Literal["local", "sandbox"]
     sandbox_session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
-    runtime_skills: dict[str, RuntimeSkillMount] = field(default_factory=dict)
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
-    # 仅用于沙箱模式预挂载，不作为本地读取的前置条件。
+    # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
 
-    @staticmethod
-    def _skill_key(category: str, name: str) -> str:
-        return f"{category}/{name}"
+    @property
+    def runtime_skills_dir(self) -> Path:
+        """本会话 runtime-skills 快照目录（运行域只读技能根）。"""
+        return runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
 
-    def runtime_skill_mounts(self) -> list[RuntimeSkillMount]:
-        return list(self.runtime_skills.values())
+    async def _ensure_snapshot_async(self) -> None:
+        """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
 
-    async def register_runtime_skill(
-        self,
-        *,
-        name: str,
-        category: Literal["system", "user"],
-        source_dir: Path,
-    ) -> str:
-        """登记本轮可读技能；已创建沙箱时在下次访问前重建只读挂载。"""
-        normalized_name = _safe_segment(name)
-        resolved_source = source_dir.expanduser().resolve()
-        if not resolved_source.is_dir():
-            raise ValueError(f"技能目录不存在: {name}")
-        key = self._skill_key(category, normalized_name)
-        mount = RuntimeSkillMount(
-            name=normalized_name,
-            category=category,
-            source_dir=resolved_source,
-        )
-        if self.runtime_skills.get(key) == mount:
-            return mount.visible_root
-        self.runtime_skills[key] = mount
-        if self.backend == "sandbox" and self.sandbox_session_ref.current is not None:
-            await invalidate_workspace_execution_session(self.sandbox_session_ref.current, self.user_id)
-            self.sandbox_session_ref.current = None
-        return mount.visible_root
+        ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
+        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容（含 ``.snapshot-sig``）
+        的目录视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
+        （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
+        """
+        snapshot_dir = self.runtime_skills_dir
+        # 目录非空（已有技能内容或 .snapshot-sig）则视为已就绪，直接复用。
+        if snapshot_dir.is_dir() and any(snapshot_dir.iterdir()):
+            return
+        base = Path(self.workspace_root).resolve().parent  # .../<cid>
+        uid, cid = base.parent.name, base.name
+        try:
+            await build_runtime_skill_snapshot_async(uid, cid)
+        except Exception as err:
+            logger.warning("惰性构建技能快照失败，技能读取可能不可用: %s", err)
 
     async def resolve_readonly_skill_path_async(self, path: str) -> tuple[Path, str]:
-        """将 /mnt/skills 路径解析到真实文件系统。
+        """将 /mnt/skills 路径解析到本会话快照真实文件系统。
 
-        不再依赖本运行显式「加载」登记（无注册门控，对齐 deer-flow：技能发现基于
-        磁盘/数据库，读取等价于普通文件读取）。解析时按 ``user_id`` 做权限校验，只允许
-        访问当前用户有权读到的技能（system=系统内置，user=该用户自己的技能）。命中后
-        结果缓存在 ``runtime_skills`` 以便同请求内复用，但缓存不作为访问前提。
+        运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
+        ``threads/<uid>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
+        快照内不存在即视为无权限。快照缺失时惰性构建。
         """
         raw = str(path or "").strip().replace("\\", "/")
         prefix = f"{SKILLS_VIRTUAL_ROOT}/"
         if not raw.startswith(prefix):
             raise ValueError(f"只允许访问技能路径: {path}")
         parts = PurePosixPath(raw).parts
-        if len(parts) < 5 or parts[1:3] != ("mnt", "skills"):
+        if len(parts) < 4 or parts[1:3] != ("mnt", "skills"):
             raise ValueError(f"技能路径无效: {path}")
-        category, name = parts[3], parts[4]
-        if not is_valid_skill_category(category):
+        name = parts[3]
+        if not name or name.startswith("."):
             raise ValueError(f"技能路径无效: {path}")
-        mount = await self._resolve_skill_mount_async(category, name)
-        relative_parts = parts[5:]
+        await self._ensure_snapshot_async()
+        source_dir = (self.runtime_skills_dir / name).resolve()
+        if not source_dir.is_dir():
+            raise ValueError(f"技能不存在或无权限访问: {name}")
+        relative_parts = parts[4:]
         if ".." in relative_parts:
             raise ValueError(f"技能路径越界: {path}")
-        target = (mount.source_dir.joinpath(*relative_parts)).resolve()
-        if target != mount.source_dir and mount.source_dir not in target.parents:
+        target = (source_dir.joinpath(*relative_parts)).resolve()
+        if target != source_dir and source_dir not in target.parents:
             raise ValueError(f"技能路径越界: {path}")
-        visible = skill_virtual_root(category, name)
+        visible = runtime_skill_visible_root(name)
         if relative_parts:
             visible += "/" + "/".join(relative_parts)
         return target, visible
-
-    async def _resolve_skill_mount_async(self, category: str, name: str) -> RuntimeSkillMount:
-        """按权限解析技能真实目录，命中则缓存。
-
-        不要求本运行显式 ``skill_load``。先查缓存；未命中则经 ``skill_service`` 做
-        磁盘/数据库解析与权限校验。解析出的真实类别必须与路径中的类别一致，否则拒绝。
-        """
-        key = self._skill_key(category, name)
-        cached = self.runtime_skills.get(key)
-        if cached is not None:
-            return cached
-        metadata = await skill_service.resolve_skill_path_async(name, user_id=self.user_id)
-        if not metadata:
-            raise ValueError(f"技能不存在或无权限访问: {name}")
-        actual_category = _runtime_skill_category(metadata)
-        if actual_category != category:
-            raise ValueError(f"技能路径类别不匹配: {category}/{name}")
-        source_md = Path(str(metadata.get("path") or "")).resolve()
-        source_dir = source_md.parent
-        if not source_dir.is_dir():
-            raise ValueError(f"技能目录不存在: {name}")
-        mount = RuntimeSkillMount(name=name, category=category, source_dir=source_dir)
-        self.runtime_skills[key] = mount
-        return mount
-
-    async def _resolve_skill_mount_async_by_name(self, name: str) -> RuntimeSkillMount | None:
-        """按名解析技能挂载（类别未知时由元数据决定），失败返回 None。"""
-        metadata = await skill_service.resolve_skill_path_async(name, user_id=self.user_id)
-        if not metadata:
-            return None
-        category = _runtime_skill_category(metadata)
-        source_md = Path(str(metadata.get("path") or "")).resolve()
-        source_dir = source_md.parent
-        if not source_dir.is_dir():
-            return None
-        return RuntimeSkillMount(name=name, category=category, source_dir=source_dir)
 
     async def get_sandbox_session_ref(self) -> SandboxExecutionSessionRef:
         if self.backend != "sandbox":
             raise ValueError("当前工作区后端不是 OpenSandbox")
         if self.sandbox_session_ref.current is None:
-            # 挂载当前用户全部有权访问的技能（system + 自己的 user），而非仅本轮回显加载的，
-            # 对齐 deer-flow：技能发现基于磁盘/数据库，沙箱内任意已授权技能路径均可读。
-            await self._ensure_available_skill_mounts_async()
+            # 沙箱只挂载两个固定卷：/mnt/user-data（可写）+ /mnt/skills（只读快照）。
+            # 不再逐技能登记挂载——可见技能由快照在会话首次运行时一次性冻结。
+            await self._ensure_snapshot_async()
             self.sandbox_session_ref.current = await get_workspace_execution_session(
                 self.workspace_root,
                 self.user_id,
-                runtime_skill_mounts=tuple(self.runtime_skill_mounts()),
+                runtime_skills_dir=self.runtime_skills_dir,
             )
         return self.sandbox_session_ref
-
-    async def _ensure_available_skill_mounts_async(self) -> None:
-        """把 ``available_skill_names`` 中尚未缓存的技能解析并缓存，供沙箱挂载。"""
-        for name in self.available_skill_names:
-            if any(m.name == name for m in self.runtime_skills.values()):
-                continue
-            try:
-                mount = await self._resolve_skill_mount_async_by_name(name)
-                if mount is not None:
-                    self.runtime_skills[self._skill_key(mount.category, mount.name)] = mount
-            except Exception as exc:  # 单个技能解析失败不应阻断整个会话
-                logger.debug("预解析技能挂载失败 name=%s: %s", name, exc)
-
-    async def resolve_available_skill_mounts_async(self) -> tuple[RuntimeSkillMount, ...]:
-        """解析并缓存当前用户全部可用技能，返回其挂载列表（供本地 bash 路径翻译）。"""
-        await self._ensure_available_skill_mounts_async()
-        return tuple(self.runtime_skill_mounts())
 
 
 def _safe_segment(value: str) -> str:
@@ -205,22 +149,19 @@ def _safe_segment(value: str) -> str:
         raise ValueError("非法会话 ID") from exc
 
 
-def _runtime_skill_category(metadata: dict[str, Any]) -> Literal["system", "user"]:
-    """校验技能来源并将其直接作为运行时可见目录类别。"""
-    source = str(metadata.get("source") or "").strip()
-    if source == "system":
-        return "system"
-    if source == "user":
-        return "user"
-    raise ValueError("技能来源无效")
-
-
 def ensure_conversation_workspace(conversation_id: str, user_id: str = "system") -> dict[str, str]:
-    """创建并返回 ChatData 会话目录结构。"""
+    """创建并返回 ChatData 会话目录结构。
+
+    布局：``threads/<uid>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
+    ``user-data`` 为模型可写运行域；``runtime-skills`` 为会话级技能快照（由
+    ``runtime_skill_snapshot.build_runtime_skill_snapshot_async`` 惰性填充）。
+    """
     thread_id = _safe_segment(conversation_id)
     safe_user_id = normalize_user_id(user_id or "system")
-    root = (THREADS_DIR / safe_user_id / "threads" / thread_id / "user-data").resolve()
+    base = (THREADS_DIR / safe_user_id / thread_id).resolve()
+    root = (base / "user-data").resolve()
     root.mkdir(parents=True, exist_ok=True)
+    (base / "runtime-skills").mkdir(parents=True, exist_ok=True)
     paths = {"root": str(root)}
     for name in WORKSPACE_DIR_NAMES:
         path = root / name
@@ -330,7 +271,7 @@ class WorkspacePathMapping:
     """
 
     workspace_root: str
-    skill_mounts: tuple[RuntimeSkillMount, ...] = ()
+    runtime_skills_dir: Path | None = None
 
     # 裸别名仅在路径边界处匹配：前置负向断言挡住 server/uploads 之类内部段，
     # 后置负向断言挡住 /workspaceX 误吞。与工作区虚拟前缀共用同一套边界规则。
@@ -352,10 +293,14 @@ class WorkspacePathMapping:
             "outputs": f"{root}/outputs",
             "uploads": f"{root}/uploads",
         }
-        # virtual_root -> 物理 source_dir；按虚拟根长度降序，避免子串误伤。
-        self._skill_physical = {
-            mount.visible_root: str(mount.source_dir) for mount in self.skill_mounts
-        }
+        # /mnt/skills/<name> -> 本会话快照目录/<name>；从快照目录直接枚举，无需逐技能登记。
+        # runtime_skills_dir 为 None 表示本映射不绑定技能快照（仅工作区路径翻译）。
+        self._skill_physical: dict[str, str] = {}
+        skills_dir = self.runtime_skills_dir
+        if skills_dir is not None and skills_dir.is_dir():
+            for item in skills_dir.iterdir():
+                if item.is_dir() and not item.is_symlink() and not item.name.startswith("."):
+                    self._skill_physical[runtime_skill_visible_root(item.name)] = str(item)
 
     def translate(self, text: str) -> str:
         """正向：命令/文本中的虚拟路径 → 物理路径。"""

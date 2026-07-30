@@ -57,11 +57,11 @@ workspace/dashboard_draft.json
 
 1. 确认已经看到 `skill_load("dashboard-generation")` 返回 `[skill_load]`。
 2. 读取主指南：
-   - `/mnt/skills/system/dashboard-generation/references/dashboard-generation-guide.md`
+   - `/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md`
 3. 用户需求宽泛或需要模板时，再读取一个示例：
-   - 综合 / 默认分析：`/mnt/skills/system/dashboard-generation/assets/examples/comprehensive-dashboard.json`
-   - 风险 / 异常 / 预警：`/mnt/skills/system/dashboard-generation/assets/examples/risk-monitoring-dashboard.json`
-   - 机构 / 区域 / 产品 / 客户画像：`/mnt/skills/system/dashboard-generation/assets/examples/profile-dashboard.json`
+   - 综合 / 默认分析：`/mnt/skills/dashboard-generation/assets/examples/comprehensive-dashboard.json`
+   - 风险 / 异常 / 预警：`/mnt/skills/dashboard-generation/assets/examples/risk-monitoring-dashboard.json`
+   - 机构 / 区域 / 产品 / 客户画像：`/mnt/skills/dashboard-generation/assets/examples/profile-dashboard.json`
 
 `skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
 
@@ -71,7 +71,7 @@ workspace/dashboard_draft.json
 每次调用工具前先输出一句短句说明当前要做什么；工具返回后用一句短句概括发现，再继续下一步。
 
 1. `skill_load("dashboard-generation")`
-2. `file_read("/mnt/skills/system/dashboard-generation/references/dashboard-generation-guide.md")`
+2. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
 3. 按需 `file_read` 一个示例 JSON
 4. 如果系统提示词里的 `data_context.semantic_configs` 没有 `selected=true` 的指标集，先调用 `select_semantic_config_tool(query=用户原始看板目标)` 检索相关指标集
 5. 从已手动选择或 `select_semantic_config_tool` 返回的 `semantic_config_ids` 中确定一个指标集，只使用它的真实指标和维度；无法唯一判断时先澄清

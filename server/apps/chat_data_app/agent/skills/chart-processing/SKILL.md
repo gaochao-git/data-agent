@@ -50,11 +50,11 @@ metadata:
 
 1. 确认已经看到 `skill_load("chart-processing")` 返回 `[skill_load]`。
 2. 读取主指南：
-   - `/mnt/skills/system/chart-processing/references/chart-spec-guide.md`
+   - `/mnt/skills/chart-processing/references/chart-spec-guide.md`
 3. 需要写 Python 处理脚本时，优先参考：
-   - 单 SQL 图：`/mnt/skills/system/chart-processing/scripts/single_result_chart.py`
-   - 本期 / 上期、同比 / 环比：`/mnt/skills/system/chart-processing/scripts/compare_period_chart.py`
-   - 多 SQL 多系列拼接：`/mnt/skills/system/chart-processing/scripts/join_results_chart.py`
+   - 单 SQL 图：`/mnt/skills/chart-processing/scripts/single_result_chart.py`
+   - 本期 / 上期、同比 / 环比：`/mnt/skills/chart-processing/scripts/compare_period_chart.py`
+   - 多 SQL 多系列拼接：`/mnt/skills/chart-processing/scripts/join_results_chart.py`
 
 `skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
 
@@ -142,7 +142,7 @@ metadata:
 按下面顺序完成，不把工具参数、JSON、SQL、脚本或工具返回原文写进用户正文。
 
 1. `skill_load("chart-processing")`
-2. `file_read("/mnt/skills/system/chart-processing/references/chart-spec-guide.md")`
+2. `file_read("/mnt/skills/chart-processing/references/chart-spec-guide.md")`
 3. 判断属于单 SQL 还是多 SQL 场景
 4. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 5. 使用 `dsl2sql_tool` 构造真实查询；禁止手写 SQL

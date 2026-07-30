@@ -8,6 +8,10 @@ from sqlalchemy import and_, func, or_, select, update
 
 from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
 
+# chat_data_skill.skill_root_dir / chat_data_skill_version.skill_version_dir 已废弃：
+# 不再承载真实路径，写入侧统一写死该占位串，读取侧按 owner_user_id + skill_name + version_no 推导。
+NO_USE_COLUMN = "no_use_column"
+
 
 def get_session():
     """运行时获取业务库会话，避免无数据库环境导入技能模块失败。"""
@@ -241,7 +245,7 @@ class SkillDao:
                 skill_publish_status=skill.get("skill_publish_status") or "draft",
                 current_skill_version_no=int(skill.get("current_skill_version_no") or 0),
                 owner_user_id=skill.get("owner_user_id") or "",
-                skill_root_dir=skill.get("skill_root_dir") or "",
+                skill_root_dir=NO_USE_COLUMN,
                 create_by=skill.get("create_by") or "",
                 create_by_name=skill.get("create_by_name") or "",
                 update_by=skill.get("update_by") or "",
@@ -253,7 +257,7 @@ class SkillDao:
         allowed = {
             "skill_title", "skill_desc", "skill_category",
             "visibility_type", "enabled_flag", "skill_publish_status",
-            "current_skill_version_no", "skill_root_dir",
+            "current_skill_version_no",
         }
         update_values = {key: values[key] for key in allowed if key in values}
         update_values["update_by"] = update_by or ""
@@ -280,7 +284,7 @@ class SkillDao:
         return ChatDataSkillVersion(
             skill_id=version.get("skill_id") or "",
             skill_version_no=int(version.get("skill_version_no") or 0),
-            skill_version_dir=version.get("skill_version_dir") or "",
+            skill_version_dir=NO_USE_COLUMN,
             version_publish_status=version.get("version_publish_status") or "draft",
             create_by=version.get("create_by") or "",
             create_by_name=version.get("create_by_name") or "",
@@ -313,7 +317,7 @@ class SkillDao:
             "enabled_flag": 1,
         }, update_by=update_by, update_by_name=update_by_name)
 
-    async def delete_skill_async(self, skill_id: str, deleted_skill_name: str, deleted_root_dir: str, update_by: str = "", update_by_name: str = "") -> int:
+    async def delete_skill_async(self, skill_id: str, deleted_skill_name: str, update_by: str = "", update_by_name: str = "") -> int:
         """逻辑删除技能并释放唯一技能名。"""
         stmt = (
             update(ChatDataSkill)
@@ -327,26 +331,10 @@ class SkillDao:
                 skill_publish_status="disabled",
                 enabled_flag=0,
                 delete_flag=1,
-                skill_root_dir=deleted_root_dir,
+                skill_root_dir=NO_USE_COLUMN,
                 update_by=update_by or "",
                 update_by_name=update_by_name or "",
             )
-        )
-        async with get_session() as db:
-            result = await db.execute(stmt)
-            return int(result.rowcount or 0)
-
-    async def update_version_dir_async(self, skill_id: str, skill_version_no: int, version_dir: str, update_by: str = "", update_by_name: str = "") -> int:
-        """更新技能版本目录。"""
-        stmt = (
-            update(ChatDataSkillVersion)
-            .where(
-                ChatDataSkillVersion.skill_id == skill_id,
-                ChatDataSkillVersion.skill_version_no == int(skill_version_no or 0),
-                ChatDataSkillVersion.delete_flag == 0,
-                self._user_skill_id_filter(),
-            )
-            .values(skill_version_dir=version_dir, update_by=update_by or "", update_by_name=update_by_name or "")
         )
         async with get_session() as db:
             result = await db.execute(stmt)

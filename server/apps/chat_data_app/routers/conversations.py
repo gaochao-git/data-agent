@@ -16,6 +16,9 @@ from utils.response import business_response
 from utils.logger import get_logger
 from auth import authenticate_request, AuthenticationError
 
+from ..services.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..services.semantic_common import AGENT_ID
+
 logger = get_logger(__name__)
 
 
@@ -229,6 +232,13 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         if not config:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
         result = await conversation.create(config["db_path"], request.agent_id, user_id)
+        if request.agent_id == AGENT_ID:
+            # 创建会话即构建本会话全部可见技能的快照；构建失败不阻断会话创建，
+            # 首次运行时 build_runtime_skill_snapshot_async 会幂等重试。
+            try:
+                await build_runtime_skill_snapshot_async(user_id, str(result.get("id") or ""))
+            except Exception as err:
+                logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")

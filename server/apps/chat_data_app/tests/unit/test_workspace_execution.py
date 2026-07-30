@@ -16,7 +16,6 @@ from apps.chat_data_app.agent.tools import bash_run
 from apps.chat_data_app.services import workspace_execution
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
-    RuntimeSkillMount,
     WorkspacePathMapping,
 )
 from apps.chat_data_app.services.workspace_execution import (
@@ -28,9 +27,11 @@ from apps.chat_data_app.services.workspace_execution import (
 
 
 def _workspace_root(tmp_path: Path) -> Path:
-    root = tmp_path / "chat-data" / "users" / "user_a" / "threads" / "conv_a" / "user-data"
+    # 新布局：threads/<uid>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}
+    root = tmp_path / "chat-data" / "threads" / "user_a" / "conv_a" / "user-data"
     for name in ("workspace", "outputs", "uploads"):
         (root / name).mkdir(parents=True, exist_ok=True)
+    (root.parent / "runtime-skills").mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -53,7 +54,7 @@ def test_get_host_workspace_path_translates_to_sandbox_host_home(tmp_path, monke
     monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
 
     assert get_host_workspace_path(str(workspace_root)) == str(
-        host_home / "users" / "user_a" / "threads" / "conv_a" / "user-data"
+        host_home / "threads" / "user_a" / "conv_a" / "user-data"
     )
 
 
@@ -81,38 +82,7 @@ def test_get_host_workspace_path_rejects_path_outside_chat_data_home(tmp_path, m
         get_host_workspace_path(str(tmp_path / "outside"))
 
 
-def test_get_host_user_skill_path_uses_chat_data_home_translation(tmp_path, monkeypatch):
-    chat_data_home = tmp_path / "chat-data"
-    host_home = tmp_path / "sandbox-host" / "chat-data"
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
-    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
-    source_dir = chat_data_home / "skills" / "user" / "my-skill"
-    source_dir.mkdir(parents=True)
-
-    assert workspace_execution._get_host_skill_path(source_dir, "user") == str(host_home / "skills" / "user" / "my-skill")
-
-
-def test_get_host_user_skill_path_rejects_outside_chat_data_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
-
-    with pytest.raises(ValueError, match="CHAT_DATA_HOME/skills/user"):
-        workspace_execution._get_host_skill_path(tmp_path / "outside" / "my-skill", "user")
-
-
-def test_get_host_skill_path_system_uses_chat_data_home_translation(tmp_path, monkeypatch):
-    chat_data_home = tmp_path / "chat-data"
-    host_home = tmp_path / "sandbox-host" / "chat-data"
-    system_skill = chat_data_home / "skills" / "system" / "dashboard-generation"
-    system_skill.mkdir(parents=True)
-    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
-    monkeypatch.setenv("OPENSANDBOX_HOST_CHAT_DATA_HOME", str(host_home))
-
-    assert workspace_execution._get_host_skill_path(system_skill, "system") == str(
-        host_home / "skills" / "system" / "dashboard-generation"
-    )
-
-
-def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_path, monkeypatch):
+def test_build_volumes_mounts_shared_workspace_and_readonly_skills_snapshot(tmp_path, monkeypatch):
     class FakeHost:
         def __init__(self, *, path):
             self.path = path
@@ -123,11 +93,10 @@ def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_pa
 
     chat_data_home = tmp_path / "chat-data"
     workspace_root = _workspace_root(tmp_path)
-    user_root = tmp_path / "data" / "skills" / "user"
-    user_skill = user_root / "my-skill" / "versions" / "v1"
-    user_skill.mkdir(parents=True)
-    system_skill = tmp_path / "system-skills" / "dashboard-generation"
-    system_skill.mkdir(parents=True)
+    # 运行域技能统一挂载为单个只读快照卷（来自本会话 runtime-skills 快照目录）。
+    runtime_skills_dir = chat_data_home / "threads" / "user_a" / "conv_a" / "runtime-skills"
+    (runtime_skills_dir / "my-skill").mkdir(parents=True)
+    (runtime_skills_dir / "dashboard-generation").mkdir(parents=True)
 
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setattr(
@@ -135,68 +104,72 @@ def test_build_volumes_mounts_shared_workspace_and_loaded_skills_readonly(tmp_pa
         "_import_opensandbox_sdk",
         lambda: (None, None, None, (FakeHost, None, None, FakeVolume)),
     )
+
+    volumes = workspace_execution._build_volumes(str(workspace_root), runtime_skills_dir)
+
+    # 固定两卷：user-data 整卷可写。
+    assert [(item.kwargs["name"], item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[:1]] == [
+        ("user-data", "/mnt/user-data", False),
+    ]
+    assert [item.kwargs["host"].path for item in volumes[:1]] == [
+        str(workspace_root),
+    ]
+    # 第二卷：扁平 /mnt/skills 只读快照。
+    assert [(item.kwargs["name"], item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[1:]] == [
+        ("skills", "/mnt/skills", True),
+    ]
+    # host_home 未设置时，host 路径即快照目录本身。
+    assert volumes[1].kwargs["host"].path == str(runtime_skills_dir)
+
+
+def test_build_volumes_omits_skills_volume_when_snapshot_missing(tmp_path, monkeypatch):
+    class FakeHost:
+        def __init__(self, *, path):
+            self.path = path
+
+    class FakeVolume:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    chat_data_home = tmp_path / "chat-data"
+    workspace_root = _workspace_root(tmp_path)
+    runtime_skills_dir = chat_data_home / "threads" / "user_a" / "conv_a" / "runtime-skills-missing"
+
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setattr(
         workspace_execution,
-        "_get_host_skill_path",
-        lambda source_dir, category: (
-            f"/host/{'user-skills' if category == 'user' else 'system-skills'}/"
-            f"{Path(source_dir).name}"
-        ),
+        "_import_opensandbox_sdk",
+        lambda: (None, None, None, (FakeHost, None, None, FakeVolume)),
     )
 
-    mounts = (
-        SimpleNamespace(name="my-skill", category="user", source_dir=user_skill),
-        SimpleNamespace(name="dashboard-generation", category="system", source_dir=system_skill),
-    )
-    volumes = workspace_execution._build_volumes(str(workspace_root), mounts)
+    volumes = workspace_execution._build_volumes(str(workspace_root), runtime_skills_dir)
 
-    assert [(item.kwargs["name"], item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[:3]] == [
-        ("thread-workspace", "/mnt/user-data/workspace", False),
-        ("thread-outputs", "/mnt/user-data/outputs", False),
-        ("thread-uploads", "/mnt/user-data/uploads", False),
-    ]
-    assert [item.kwargs["host"].path for item in volumes[:3]] == [
-        str(workspace_root / "workspace"),
-        str(workspace_root / "outputs"),
-        str(workspace_root / "uploads"),
-    ]
-    assert [(item.kwargs["mountPath"], item.kwargs["readOnly"]) for item in volumes[3:]] == [
-        ("/mnt/skills/user/my-skill", True),
-        ("/mnt/skills/system/dashboard-generation", True),
+    assert len(volumes) == 1
+    assert [item.kwargs["mountPath"] for item in volumes] == [
+        "/mnt/user-data",
     ]
 
 
-def test_sandbox_visible_path_allows_only_registered_skill_mounts(tmp_path):
-    source_dir = tmp_path / "dashboard-generation"
-    source_dir.mkdir()
-    mounts = (SimpleNamespace(name="dashboard-generation", category="system", source_dir=source_dir),)
-
+def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
+    # 运行域技能统一为扁平 /mnt/skills/<name>，不再按类别/挂载逐条校验；
+    # sandbox_visible_path 仅做路径级放行与越界校验，文件存在性由运行时快照层保证。
     assert sandbox_visible_path(
-        "/mnt/skills/system/dashboard-generation/references/guide.md",
-        runtime_skill_mounts=mounts,
-    ) == "/mnt/skills/system/dashboard-generation/references/guide.md"
+        "/mnt/skills/dashboard-generation/references/guide.md"
+    ) == "/mnt/skills/dashboard-generation/references/guide.md"
     assert sandbox_visible_path("outputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
     assert sandbox_visible_path("outputs/.tool-results/result_1.json") == "/mnt/user-data/outputs/.tool-results/result_1.json"
     with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
         sandbox_visible_path("outputs/.tool-results/result_1.json", writable=True)
-    with pytest.raises(ValueError, match="当前已加载的技能路径"):
-        sandbox_visible_path("/mnt/skills/system/other-skill/SKILL.md", runtime_skill_mounts=mounts)
+    # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
+    assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
     with pytest.raises(ValueError, match="路径越界"):
         sandbox_visible_path("outputs%2F..%2Fsecret.txt")
+    # 技能路径只读，写入被拒。
     with pytest.raises(ValueError, match="只允许写入"):
         sandbox_visible_path(
-            "/mnt/skills/system/dashboard-generation/SKILL.md",
+            "/mnt/skills/dashboard-generation/SKILL.md",
             writable=True,
-            runtime_skill_mounts=mounts,
         )
-
-    user_mount = (SimpleNamespace(name="sssss", category="user", source_dir=source_dir),)
-    assert sandbox_visible_path(
-        "/mnt/skills/user/sssss/SKILL.md",
-        runtime_skill_mounts=user_mount,
-    ) == "/mnt/skills/user/sssss/SKILL.md"
-    with pytest.raises(ValueError, match="当前已加载的技能路径"):
-        sandbox_visible_path("/mnt/skills/public/dashboard-generation/SKILL.md", runtime_skill_mounts=mounts)
 
 
 def test_sandbox_artifact_payload_rejects_hidden_tool_result():
@@ -217,8 +190,9 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
 
 
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
+    # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
     workspace_root = _workspace_root(tmp_path)
-    skill_dir = tmp_path / "dashboard-generation"
+    skill_dir = workspace_root.parent / "runtime-skills" / "dashboard-generation"
     references = skill_dir / "references"
     references.mkdir(parents=True)
     (references / "guide.md").write_text("guide text\n", encoding="utf-8")
@@ -227,28 +201,22 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
         user_id="user_a",
         backend="local",
     )
-    asyncio.run(
-        runtime.register_runtime_skill(
-            name="dashboard-generation",
-            category="system",
-            source_dir=skill_dir,
-        )
-    )
+    assert (runtime.runtime_skills_dir / "dashboard-generation").is_dir()
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/skills/system/dashboard-generation/references/guide.md",
+            command="cat /mnt/skills/dashboard-generation/references/guide.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,
         )
     )
 
     assert result["success"] is True
-    assert result["stdout"] == "guide text\n"
+    assert result["stdout"].strip() == "guide text"
     with pytest.raises(ValueError, match="当前会话目录"):
         asyncio.run(
             bash_run.run_bash_command(
-                command="cat /mnt/skills/system/other-skill/SKILL.md",
+                command="cat /mnt/skills/other-skill/SKILL.md",
                 workspace_runtime=runtime,
             )
         )
@@ -276,10 +244,11 @@ def test_local_bash_can_read_hidden_tool_result(tmp_path):
     assert result["stdout"] == '{"rows":[1]}'
 
 
-def test_sandbox_bash_uses_current_runtime_skill_mount(monkeypatch, tmp_path):
-    source_dir = tmp_path / "dashboard-generation"
-    source_dir.mkdir()
-    mounts = (SimpleNamespace(name="dashboard-generation", category="system", source_dir=source_dir),)
+def test_sandbox_bash_uses_fixed_skills_volume(monkeypatch, tmp_path):
+    # 沙箱只挂载两个固定卷：/mnt/user-data（可写）+ /mnt/skills（只读快照）；
+    # 不再逐技能登记挂载，命令中的 /mnt/skills/<name> 直接透传。
+    snapshot_dir = tmp_path / "skills-snapshot"
+    snapshot_dir.mkdir()
     calls = []
 
     async def fake_run_command_in_sandbox(*, session, command, timeout_seconds):
@@ -291,19 +260,18 @@ def test_sandbox_bash_uses_current_runtime_skill_mount(monkeypatch, tmp_path):
         user_id="user_a",
         backend="sandbox",
     )
-    runtime.runtime_skills["system/dashboard-generation"] = mounts[0]
     runtime.sandbox_session_ref.current = SandboxExecutionSession(
         sandbox=object(),
         sandbox_id="sbx_1",
         workspace_root=runtime.workspace_root,
         host_workspace_path="/host/workspace",
-        runtime_skill_mounts=mounts,
+        runtime_skills_dir=snapshot_dir,
     )
     monkeypatch.setattr(bash_run, "run_command_in_sandbox", fake_run_command_in_sandbox)
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/skills/system/dashboard-generation/SKILL.md",
+            command="cat /mnt/skills/dashboard-generation/SKILL.md",
             cwd="/mnt/user-data/workspace",
             workspace_runtime=runtime,
         )
@@ -311,7 +279,7 @@ def test_sandbox_bash_uses_current_runtime_skill_mount(monkeypatch, tmp_path):
 
     assert result["success"] is True
     assert result["cwd"] == "/mnt/user-data/workspace"
-    assert "/mnt/skills/system/dashboard-generation/SKILL.md" in calls[0]
+    assert "/mnt/skills/dashboard-generation/SKILL.md" in calls[0]
 
 
 def test_prepare_workspace_execution_session_uses_no_copy_or_seed_step(tmp_path, monkeypatch):
@@ -352,11 +320,9 @@ def test_prepare_workspace_execution_session_uses_no_copy_or_seed_step(tmp_path,
 
     assert session.sandbox_id == "sbx_1"
     assert "network_policy" not in captured
-    assert len(captured["volumes"]) == 3
+    assert len(captured["volumes"]) == 1
     assert [item.kwargs["mountPath"] for item in captured["volumes"]] == [
-        "/mnt/user-data/workspace",
-        "/mnt/user-data/outputs",
-        "/mnt/user-data/uploads",
+        "/mnt/user-data",
     ]
     assert all(".tool-results" not in item.kwargs["host"].path for item in captured["volumes"])
 
@@ -412,8 +378,8 @@ def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
 # 反向 mask（输出遮蔽）与技能路径翻译。
 # ---------------------------------------------------------------------------
 
-_CLEAN_ROOT = "/tmp/fxcjg_test_data/users/u1/threads/t1/user-data"  # 不含 /mnt/user-data/
-_BAD_ROOT = "/tmp/fxcjg_test_data/mnt/user-data/uploads/users/u1/threads/t1/user-data"
+_CLEAN_ROOT = "/tmp/fxcjg_test_data/threads/u1/conv_a/user-data"  # 不含 /mnt/user-data/
+_BAD_ROOT = "/tmp/fxcjg_test_data/mnt/user-data/uploads/threads/u1/conv_a/user-data"
 
 
 def _translate(cmd: str) -> str:
@@ -465,12 +431,13 @@ def test_path_mapping_mask_restores_virtual_paths():
     assert mapping.mask(f"ls {_CLEAN_ROOT}/uploads") == "ls /mnt/user-data/uploads"
 
 
-def test_path_mapping_skill_translate_and_mask_roundtrip():
-    skill_dir = Path("/srv/skills/system/dashboard-generation")
-    mount = RuntimeSkillMount(name="dashboard-generation", category="system", source_dir=skill_dir)
-    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, skill_mounts=(mount,))
-    cmd = "cat /mnt/skills/system/dashboard-generation/references/guide.md"
+def test_path_mapping_skill_translate_and_mask_roundtrip(tmp_path):
+    # 运行域技能：本会话快照目录/<name> <-> 扁平虚拟 /mnt/skills/<name>。
+    snapshot_dir = tmp_path / "skills-snapshot" / "dashboard-generation"
+    snapshot_dir.mkdir(parents=True)
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, runtime_skills_dir=snapshot_dir.parent)
+    cmd = "cat /mnt/skills/dashboard-generation/references/guide.md"
     translated = mapping.translate(cmd)
-    assert translated == f"cat {skill_dir}/references/guide.md"
+    assert translated == f"cat {snapshot_dir}/references/guide.md"
     # 反向遮蔽后应还原为原始虚拟路径
     assert mapping.mask(translated) == cmd

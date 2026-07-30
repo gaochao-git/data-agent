@@ -102,7 +102,7 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
 
     assert record.virtual_path == f"/mnt/user-data/outputs/.tool-results/{record.result_id}.json"
     assert (
-        tmp_path / "users" / "u1" / "threads" / "conv_a" / "user-data" / "outputs" / ".tool-results" / f"{record.result_id}.json"
+        tmp_path / "threads" / "u1" / "conv_a" / "user-data" / "outputs" / ".tool-results" / f"{record.result_id}.json"
     ).is_file()
     assert store.load_query_result_for_conversation(
         result_id=record.result_id,
@@ -124,7 +124,7 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
 
 def test_tool_result_store_handles_corrupt_json(tmp_path):
     store = tool_result_store.ToolResultStore(tmp_path)
-    bad_path = tmp_path / "users" / "u1" / "threads" / "conv" / "user-data" / "outputs" / ".tool-results" / "bad.json"
+    bad_path = tmp_path / "threads" / "u1" / "conv" / "user-data" / "outputs" / ".tool-results" / "bad.json"
     bad_path.parent.mkdir(parents=True)
     bad_path.write_text("{bad", encoding="utf-8")
     assert store.load_query_result_for_conversation(

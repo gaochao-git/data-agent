@@ -104,7 +104,7 @@ kill -9 $(lsof -ti :5001)
 
 `CHAT_DATA_HOME` 是 local 与 sandbox 共用的运行时文件根。生产多实例必须把它配置为所有应用实例和 OpenSandbox 宿主机可访问的同一 POSIX 共享目录，例如 GFS、NFS、CephFS、EFS 或 RWX PVC；代码不做跨节点文件同步。
 
-会话文件位于 `users/{user_id}/threads/{conversation_id}/user-data/`，系统技能位于 `skills/system/`，用户技能位于 `skills/user/`。大工具结果统一位于会话 `outputs/.tool-results/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-results/<id>.<suffix>`。该目录随 `outputs/` 挂载，可由 Agent 的 `file_read` 分页读取或 Bash 处理；但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能由发布流程将代码包 `apps/chat_data_app/agent/skills/` 下的技能目录复制到 `skills/system/`，应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和 `skills/user/<skill-name>/versions/vN/` 管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+会话文件位于 `threads/{user_id}/{conversation_id}/user-data/`，系统技能位于 `skills/system/`，用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建只读技能快照 `threads/{user_id}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变，沙箱仅固定挂载两卷：`user-data/` → `/mnt/user-data`（可写）、`runtime-skills/` → `/mnt/skills`（只读）。大工具结果统一位于会话 `outputs/.tool-results/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-results/<id>.<suffix>`。该目录随 `user-data/` 挂载，可由 Agent 的 `file_read` 分页读取或 Bash 处理；但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能由发布流程将代码包 `apps/chat_data_app/agent/skills/` 下的技能目录复制到 `skills/system/`，应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
 
 ## 权限边界
 

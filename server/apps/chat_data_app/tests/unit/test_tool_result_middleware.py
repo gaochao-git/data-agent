@@ -86,7 +86,7 @@ async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tm
     assert payload["data"] is None
     assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/.tool-results/{result_id}.json"
     assert payload["meta"]["llm_analysis_skipped"] is True
-    saved_path = tmp_path / "users" / "user_a" / "threads" / "conv_a" / "user-data" / "outputs" / ".tool-results" / f"{result_id}.json"
+    saved_path = tmp_path / "threads" / "user_a" / "conv_a" / "user-data" / "outputs" / ".tool-results" / f"{result_id}.json"
     assert json.loads(saved_path.read_text(encoding="utf-8"))["results"][0]["data"][0]["content"] == "x" * 200
 
 
@@ -100,7 +100,7 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
 
     assert "/mnt/user-data/outputs/.tool-results/" in result.content
     assert "file_read 按行分段读取" in result.content
-    files = list((tmp_path / "users" / "user_a" / "threads" / "conv_a" / "user-data" / "outputs" / ".tool-results").glob("*.txt"))
+    files = list((tmp_path / "threads" / "user_a" / "conv_a" / "user-data" / "outputs" / ".tool-results").glob("*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == "x" * 200
 
@@ -115,7 +115,7 @@ async def test_structured_generic_tool_result_is_serialized_before_offload(monke
     result = await tool_result._finalize_tool_message(message, _request(), _Budget())
 
     assert "/mnt/user-data/outputs/.tool-results/" in result.content
-    files = list((tmp_path / "users" / "user_a" / "threads" / "conv_a" / "user-data" / "outputs" / ".tool-results").glob("*.txt"))
+    files = list((tmp_path / "threads" / "user_a" / "conv_a" / "user-data" / "outputs" / ".tool-results").glob("*.txt"))
     assert len(files) == 1
     assert json.loads(files[0].read_text(encoding="utf-8")) == content
 

@@ -1,7 +1,9 @@
 """技能路径的单一事实源（Single Source of Truth）。
 
-Agent 视角看到的技能路径统一为 ``/mnt/skills/{system,user}/<name>/...``，
-磁盘真实位置为 ``CHAT_DATA_HOME/skills/{system,user}/<name>/...``。
+Agent 运行期看到的技能路径统一为扁平的 ``/mnt/skills/<name>/...``（会话级
+runtime-skills 快照，不区分系统 / 用户类别）；磁盘真实管理域位置为
+``CHAT_DATA_HOME/skills/system/<name>/...``（系统技能）、
+``CHAT_DATA_HOME/skills/user/<user_id>/<name>/...``（用户技能）。
 
 此前该虚拟根、类别集合、物理根在 ``conversation_workspace.py``、
 ``workspace_execution.py``、``skill_service.py``、``loader.py``、``skill_load.py``
@@ -31,9 +33,13 @@ def is_valid_skill_category(category: str) -> bool:
     return category in SKILL_CATEGORIES
 
 
-def skill_virtual_root(category: str, name: str) -> str:
-    """构造技能虚拟路径根，如 ``/mnt/skills/system/demo``。"""
-    return f"{SKILLS_VIRTUAL_ROOT}/{category}/{name}"
+def runtime_skill_visible_root(name: str) -> str:
+    """会话运行期技能扁平虚拟根，如 ``/mnt/skills/demo``。
+
+    运行域不区分系统 / 用户类别，所有可见技能统一挂在 ``/mnt/skills/<name>``
+    之下（快照来自 ``threads/<uid>/<cid>/runtime-skills/<name>``）。
+    """
+    return f"{SKILLS_VIRTUAL_ROOT}/{name}"
 
 
 def physical_skill_category_root(category: str, chat_data_home: str | None = None) -> Path:
@@ -61,7 +67,7 @@ __all__ = [
     "USER_SKILL_CATEGORY",
     "SKILL_CATEGORIES",
     "is_valid_skill_category",
-    "skill_virtual_root",
+    "runtime_skill_visible_root",
     "physical_skill_category_root",
     "physical_skill_root",
 ]

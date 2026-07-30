@@ -17,7 +17,7 @@ from urllib.parse import unquote
 
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT, is_valid_skill_category, physical_skill_category_root
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
 from .artifact_registry import parse_output_artifact
 
@@ -61,7 +61,7 @@ class SandboxExecutionSession:
     workspace_root: str
     host_workspace_path: str
     mode: str = "sandbox"
-    runtime_skill_mounts: tuple[object, ...] = ()
+    runtime_skills_dir: Path | None = None
     cache_key: str = ""
 
 
@@ -147,31 +147,6 @@ def get_host_workspace_path(workspace_root: str) -> str:
     )
 
 
-def _runtime_skill_mount_values(mount: object) -> tuple[str, str, Path]:
-    name = str(getattr(mount, "name", "")).strip()
-    category = str(getattr(mount, "category", "")).strip()
-    source_dir = Path(getattr(mount, "source_dir", "")).expanduser().resolve()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", name) or not is_valid_skill_category(category):
-        raise ValueError("运行时技能挂载配置非法")
-    if not source_dir.is_dir():
-        raise ValueError(f"技能目录不存在: {source_dir}")
-    return name, category, source_dir
-
-
-def _get_host_skill_path(source_dir: Path, category: str) -> str:
-    resolved = source_dir.expanduser().resolve()
-    skill_root_name = category
-    root = physical_skill_category_root(skill_root_name, chat_data_home=CHAT_DATA_HOME).expanduser().resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError(f"技能不在 CHAT_DATA_HOME/skills/{skill_root_name} 内: {source_dir}")
-    return _translate_host_path(
-        resolved,
-        application_root=Path(CHAT_DATA_HOME),
-        host_root_name="OPENSANDBOX_HOST_CHAT_DATA_HOME",
-        allow_application_root=True,
-    )
-
-
 def _import_opensandbox_sdk() -> tuple[Any, Any, Any, Any]:
     try:
         from opensandbox import Sandbox
@@ -204,13 +179,10 @@ def _str_to_bool(value: str | None, default: bool = False) -> bool:
 def _workspace_session_cache_key(
     workspace_root: str,
     mode: str = "sandbox",
-    runtime_skill_mounts: tuple[object, ...] = (),
+    runtime_skills_dir: Path | None = None,
 ) -> str:
-    mounted_skills = sorted(
-        f"{category}/{name}:{source_dir}"
-        for name, category, source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts)
-    )
-    return f"{get_host_workspace_path(workspace_root)}#{mode}#{'|'.join(mounted_skills)}"
+    skills = str(runtime_skills_dir or "")
+    return f"{get_host_workspace_path(workspace_root)}#{mode}#{skills}"
 
 
 def _workspace_session_ttl_seconds() -> int:
@@ -304,30 +276,29 @@ def _build_network_policy() -> Any | None:
     return NetworkPolicy(defaultAction=action, egress=egress_rules)
 
 
-def _build_volumes(workspace_root: str, runtime_skill_mounts: tuple[object, ...] = ()) -> list[Any]:
+def _build_volumes(workspace_root: str, runtime_skills_dir: Path | None = None) -> list[Any]:
     _, _, _, models = _import_opensandbox_sdk()
     Host, _, _, Volume = models
-    # outputs includes the hidden .tool-results cache, matching the virtual
-    # workspace contract used by file_read and Bash inside the sandbox.
+    # 固定两卷：整个 user-data 挂 /mnt/user-data（可写，含 workspace/outputs/uploads
+    # 及隐藏的 .tool-results 缓存）+ runtime-skills 快照挂 /mnt/skills（只读）。
     volumes = [
         _build_host_volume(
             Host=Host,
             Volume=Volume,
-            name=f"thread-{name}",
-            host_path=get_host_workspace_path(str(Path(workspace_root) / name)),
-            mount_path=f"{sandbox_thread_root()}/{name}",
+            name="user-data",
+            host_path=get_host_workspace_path(workspace_root),
+            mount_path=sandbox_thread_root(),
             read_only=False,
         )
-        for name in ("workspace", "outputs", "uploads")
     ]
-    for name, category, source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts):
+    if runtime_skills_dir is not None and Path(runtime_skills_dir).is_dir():
         volumes.append(
             _build_host_volume(
                 Host=Host,
                 Volume=Volume,
-                name=f"skill-{category}-{name}",
-                host_path=_get_host_skill_path(source_dir, category),
-                mount_path=f"{sandbox_skills_root()}/{category}/{name}",
+                name="skills",
+                host_path=get_host_workspace_path(str(runtime_skills_dir)),
+                mount_path=sandbox_skills_root(),
                 read_only=True,
             )
         )
@@ -427,7 +398,7 @@ async def prepare_workspace_execution_session(
     workspace_root: str,
     user_id: str = "system",
     mode: str = "sandbox",
-    runtime_skill_mounts: tuple[object, ...] = (),
+    runtime_skills_dir: Path | None = None,
 ) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
@@ -439,7 +410,7 @@ async def prepare_workspace_execution_session(
         "timeout": timedelta(seconds=timeout_seconds),
         "ready_timeout": timedelta(seconds=ready_timeout),
         "entrypoint": ["sleep", "infinity"],
-        "volumes": _build_volumes(workspace_root, runtime_skill_mounts),
+        "volumes": _build_volumes(workspace_root, runtime_skills_dir),
         "connection_config": _connection_config(timeout_seconds),
         "metadata": {"managed_by": "fxcjg", "module": "chat_data_app", "workspace_backend": OPENSANDBOX_BACKEND, "sandbox_mode": mode},
     }
@@ -453,8 +424,8 @@ async def prepare_workspace_execution_session(
         workspace_root=workspace_root,
         host_workspace_path=get_host_workspace_path(workspace_root),
         mode=mode,
-        runtime_skill_mounts=runtime_skill_mounts,
-        cache_key=_workspace_session_cache_key(workspace_root, mode, runtime_skill_mounts),
+        runtime_skills_dir=runtime_skills_dir,
+        cache_key=_workspace_session_cache_key(workspace_root, mode, runtime_skills_dir),
     )
     return session
 
@@ -463,9 +434,9 @@ async def get_workspace_execution_session(
     workspace_root: str,
     user_id: str = "system",
     mode: str = "sandbox",
-    runtime_skill_mounts: tuple[object, ...] = (),
+    runtime_skills_dir: Path | None = None,
 ) -> SandboxExecutionSession:
-    cache_key = _workspace_session_cache_key(workspace_root, mode, runtime_skill_mounts)
+    cache_key = _workspace_session_cache_key(workspace_root, mode, runtime_skills_dir)
     now = time.monotonic()
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
@@ -483,7 +454,7 @@ async def get_workspace_execution_session(
             workspace_root,
             user_id,
             mode,
-            runtime_skill_mounts,
+            runtime_skills_dir,
         )
         _WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = CachedSandboxExecutionSession(
             session=session,
@@ -498,7 +469,7 @@ async def attach_workspace_execution_session(session: SandboxExecutionSession | 
     cache_key = session.cache_key or _workspace_session_cache_key(
         session.workspace_root,
         session.mode,
-        session.runtime_skill_mounts,
+        session.runtime_skills_dir,
     )
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.session is not session:
@@ -515,7 +486,7 @@ async def invalidate_workspace_execution_session(session: SandboxExecutionSessio
     cache_key = session.cache_key or _workspace_session_cache_key(
         session.workspace_root,
         session.mode,
-        session.runtime_skill_mounts,
+        session.runtime_skills_dir,
     )
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.session is session:
@@ -548,19 +519,10 @@ async def release_workspace_execution_session(session: SandboxExecutionSession |
         logger.warning("OpenSandbox close sandbox 失败: %s", exc, exc_info=True)
 
 
-def _sandbox_runtime_skill_roots(runtime_skill_mounts: tuple[object, ...]) -> tuple[str, ...]:
-    """返回当前会话已授权的沙箱技能只读挂载根目录。"""
-    return tuple(
-        f"{sandbox_skills_root()}/{category}/{name}"
-        for name, category, _source_dir in (_runtime_skill_mount_values(item) for item in runtime_skill_mounts)
-    )
-
-
 def sandbox_visible_path(
     path: str,
     *,
     writable: bool = False,
-    runtime_skill_mounts: tuple[object, ...] = (),
 ) -> str:
     raw = unquote(str(path or "").strip())
     while raw.startswith("./"):
@@ -592,11 +554,11 @@ def sandbox_visible_path(
         sandbox_path = f"{sandbox_thread_root()}/{raw.lstrip('/')}"
     if ".." in PurePosixPath(sandbox_path).parts:
         raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
+    # 运行域固定两卷：/mnt/user-data 整卷（可写，含 workspace/outputs/uploads）+ /mnt/skills（只读快照）。
     workspace_roots = (sandbox_workspace_dir(), sandbox_outputs_dir(), sandbox_uploads_dir())
-    skill_roots = _sandbox_runtime_skill_roots(runtime_skill_mounts)
-    readable_roots = workspace_roots + skill_roots
+    readable_roots = workspace_roots + (sandbox_skills_root(),)
     if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in readable_roots):
-        raise ValueError(f"只允许访问 workspace/、outputs/、uploads/ 或当前已加载的技能路径: {path}")
+        raise ValueError(f"只允许访问 workspace/、outputs/、uploads/ 或技能路径: {path}")
     if writable:
         writable_roots = (sandbox_workspace_dir(), sandbox_outputs_dir())
         if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in writable_roots):

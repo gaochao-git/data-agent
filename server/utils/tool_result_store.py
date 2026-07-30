@@ -147,9 +147,8 @@ class ToolResultStore:
         conversation_id = _safe_conversation_id(record.conversation_id)
         path = (
             self.base_dir
-            / "users"
-            / user_id
             / "threads"
+            / user_id
             / conversation_id
             / "user-data"
             / "outputs"

@@ -43,8 +43,7 @@ async def _normalize_cwd(cwd: str | None, workspace_runtime: ConversationWorkspa
     raw = str(cwd or "").strip()
     if not raw:
         return sandbox_workspace_dir()
-    mounts = await workspace_runtime.resolve_available_skill_mounts_async()
-    return sandbox_visible_path(raw, runtime_skill_mounts=mounts)
+    return sandbox_visible_path(raw)
 
 
 def _validate_command(command: str) -> str:
@@ -73,9 +72,6 @@ async def _validate_command_paths(command: str, workspace_runtime: ConversationW
         tokens = shlex.split(command)
     except ValueError as exc:
         raise ValueError(f"command 解析失败: {exc}") from exc
-    sandbox_mounts = None
-    if workspace_runtime.backend == "sandbox":
-        sandbox_mounts = await workspace_runtime.resolve_available_skill_mounts_async()
     disallowed: list[str] = []
     for token in tokens:
         normalized_token = token.lstrip("<>")
@@ -89,7 +85,7 @@ async def _validate_command_paths(command: str, workspace_runtime: ConversationW
             if workspace_runtime.backend == "local":
                 await _local_visible_path(workspace_runtime, normalized_token)
             else:
-                sandbox_visible_path(normalized_token, runtime_skill_mounts=sandbox_mounts)
+                sandbox_visible_path(normalized_token)
         except ValueError:
             disallowed.append(token)
     if disallowed:
@@ -111,7 +107,7 @@ async def run_bash_command(
         local_cwd = await _local_visible_path(workspace_runtime, cwd or "workspace")
         path_mapping = WorkspacePathMapping(
             workspace_root=workspace_runtime.workspace_root,
-            skill_mounts=await workspace_runtime.resolve_available_skill_mounts_async(),
+            runtime_skills_dir=workspace_runtime.runtime_skills_dir,
         )
         inner = "cd {cwd} && {command}".format(
             cwd=shlex.quote(str(local_cwd)),

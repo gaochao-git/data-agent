@@ -134,7 +134,9 @@ def test_skill_dao_crud_visibility_and_versions(skill_db):
         assert await dao.get_skill_async("global-draft-skill", user_id="u2") is None
         assert await dao.get_skill_async("owner-skill", user_id="u2") is None
         assert (await dao.get_skill_async("owner-skill", user_id="u1"))["skill_id"] == "skill_owner"
-        assert (await dao.get_published_version_async("skill_global", 1))["skill_version_dir"] == "/tmp/global-skill/v1"
+        # skill_root_dir / skill_version_dir 为废弃列，写入侧统一写死 no_use_column
+        assert owner_skill["skill_root_dir"] == "no_use_column"
+        assert (await dao.get_published_version_async("skill_global", 1))["skill_version_dir"] == "no_use_column"
         assert await dao.get_published_version_async("skill_owner", 1) is None
         assert (await dao.get_latest_draft_version_async("skill_owner"))["skill_version_no"] == 1
         assert (await dao.get_latest_published_version_async("skill_global"))["skill_version_no"] == 1
@@ -189,9 +191,8 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
         assert published["skill_publish_status"] == "published"
         assert published["current_skill_version_no"] == 2
         assert (await dao.get_published_version_async("skill_a", 2))["update_by_name"] == "用户三"
-
-        assert await dao.update_version_dir_async("skill_a", 2, "/tmp/demo-skill/v2-new", update_by="u4", update_by_name="用户四") == 1
-        assert (await dao.get_version_async("skill_a", 2))["skill_version_dir"] == "/tmp/demo-skill/v2-new"
+        # 版本目录列为废弃列，始终写入 no_use_column
+        assert (await dao.get_version_async("skill_a", 2))["skill_version_dir"] == "no_use_column"
 
         await dao.set_favorite_async("u1", "skill_a", True, operator="u1", operator_name="用户一")
         assert (await dao.get_skill_async("skill_a", user_id="u1"))["favorite_flag"] == 1
@@ -207,8 +208,8 @@ def test_skill_dao_updates_publish_delete_and_favorite(skill_db):
         with pytest.raises(ValueError, match="用户技能不存在"):
             await dao.set_favorite_async("u1", "missing-skill", True)
 
-        assert await dao.delete_skill_async("skill_a", "demo-skill--deleted-12345678", "/tmp/archive", update_by="u5", update_by_name="用户五") == 1
+        assert await dao.delete_skill_async("skill_a", "demo-skill--deleted-12345678", update_by="u5", update_by_name="用户五") == 1
         assert await dao.get_skill_async("skill_a", user_id="u1") is None
-        assert await dao.delete_skill_async("skill_a", "again", "/tmp/archive", update_by="u5") == 0
+        assert await dao.delete_skill_async("skill_a", "again", update_by="u5") == 0
 
     asyncio.run(run_checks())

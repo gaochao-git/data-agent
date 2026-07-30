@@ -194,7 +194,7 @@ def test_conversation_workspace_imports_presented_output_skill(client, monkeypat
     )
     rejected_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",
-        json={"skill_dir_path": "/mnt/skills/system/dashboard-generation"},
+        json={"skill_dir_path": "/mnt/skills/dashboard-generation"},
     )
 
     assert success_response.status_code == 200

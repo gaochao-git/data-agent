@@ -78,11 +78,13 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     paths = ensure_conversation_workspace("conv_workspace_test", "user_a")
 
     assert Path(paths["root"]).exists()
-    assert Path(paths["root"]).as_posix().endswith("users/user_a/threads/conv_workspace_test/user-data")
+    assert Path(paths["root"]).as_posix().endswith("threads/user_a/conv_workspace_test/user-data")
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
     assert (Path(paths["outputs"]) / ".tool-results").exists()
+    # 运行域技能快照目录随工作区一并创建（扁平 /mnt/skills/<name> 快照），但不进入 paths 字典
+    assert (Path(paths["root"]).parent / "runtime-skills").is_dir()
     assert "runtime_skills" not in paths
 
 
@@ -230,47 +232,48 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     assert result.startswith("[skill_load]\n")
     assert "skill_name=demo-skill" in result
     assert "title=演示技能" in result
-    assert "runtime_path=/mnt/skills/system/demo-skill" in result
-    assert 'references=["/mnt/skills/system/demo-skill/references/guide.md"]' in result
-    assert 'scripts=["/mnt/skills/system/demo-skill/scripts/run.py"]' in result
-    assert 'assets=["/mnt/skills/system/demo-skill/assets/demo.txt"]' in result
+    assert "runtime_path=/mnt/skills/demo-skill" in result
+    assert 'references=["/mnt/skills/demo-skill/references/guide.md"]' in result
+    assert 'scripts=["/mnt/skills/demo-skill/scripts/run.py"]' in result
+    assert 'assets=["/mnt/skills/demo-skill/assets/demo.txt"]' in result
     assert "# 演示技能" in result
 
 
 @pytest.mark.asyncio
-async def test_runtime_resolves_system_skill_file_under_system_path(monkeypatch, tmp_path):
-    skill_dir = tmp_path / "skill-creator"
+async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
+    # 运行域技能统一为扁平 /mnt/skills/<name>：直接从本会话快照目录解析，
+    # 不再按类别/远程解析 skill_service.resolve_skill_path_async。
+    workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
+    workspace_root.mkdir(parents=True)
+    skill_dir = workspace_root.parent / "runtime-skills" / "skill-creator"
     script_path = skill_dir / "scripts" / "quick_validate.py"
     script_path.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: skill-creator\n---\n# Skill Creator", encoding="utf-8")
     script_path.write_text("print('ok')\n", encoding="utf-8")
 
-    async def fake_resolve_skill_path_async(name, user_id=""):
-        assert name == "skill-creator"
-        assert user_id == "u1"
-        return {"path": str(skill_dir / "SKILL.md"), "source": "system"}
-
-    monkeypatch.setattr(
-        conversation_workspace_module.skill_service,
-        "resolve_skill_path_async",
-        fake_resolve_skill_path_async,
-    )
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(tmp_path / "workspace"),
+        workspace_root=str(workspace_root),
         user_id="u1",
         backend="local",
     )
+    # 快照目录已存在则 _ensure_snapshot_async 直接复用，不触发远程构建
+    assert (runtime.runtime_skills_dir / "skill-creator").is_dir()
 
     target, visible_path = await runtime.resolve_readonly_skill_path_async(
-        "/mnt/skills/system/skill-creator/scripts/quick_validate.py"
+        "/mnt/skills/skill-creator/scripts/quick_validate.py"
     )
 
     assert target == script_path
-    assert visible_path == "/mnt/skills/system/skill-creator/scripts/quick_validate.py"
+    assert visible_path == "/mnt/skills/skill-creator/scripts/quick_validate.py"
 
+    # 快照中不存在的技能名 → 无权限/不存在；隐藏名 → 路径无效
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        await runtime.resolve_readonly_skill_path_async(
+            "/mnt/skills/unknown/scripts/quick_validate.py"
+        )
     with pytest.raises(ValueError, match="技能路径无效"):
         await runtime.resolve_readonly_skill_path_async(
-            "/mnt/skills/public/skill-creator/scripts/quick_validate.py"
+            "/mnt/skills/.evil/scripts/quick_validate.py"
         )
 
 
