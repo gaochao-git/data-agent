@@ -198,7 +198,13 @@ def test_read_workspace_text_file_rejects_missing_and_large_files():
 
 @pytest.mark.asyncio
 async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tmp_path):
-    skill_dir = tmp_path / "demo-skill"
+    # skill_load 只从本会话运行域快照读取，不再回退管理域。
+    workspace_root = tmp_path / "workspace-root" / "user-data"
+    workspace_root.mkdir(parents=True)
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+    skill_dir = runtime.runtime_skills_dir / "demo-skill"
     (skill_dir / "references").mkdir(parents=True)
     (skill_dir / "scripts").mkdir()
     (skill_dir / "assets").mkdir()
@@ -210,22 +216,7 @@ async def test_skill_load_tool_builds_payload_in_local_workspace(monkeypatch, tm
     (skill_dir / "scripts" / "run.py").write_text("print('ok')\n", encoding="utf-8")
     (skill_dir / "assets" / "demo.txt").write_text("asset\n", encoding="utf-8")
 
-    async def fake_resolve_skill_path_async(name, user_id=""):
-        assert name == "demo-skill"
-        assert user_id == "u1"
-        return {
-            "path": str(skill_dir / "SKILL.md"),
-            "title": "演示技能",
-            "description": "演示说明",
-            "source": "system",
-        }
-
-    monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
-    workspace_root = tmp_path / "workspace-root"
-    workspace_root.mkdir()
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root), user_id="u1", backend="local",
-    )
+    # 快照已预置 → _ensure_snapshot_async 直接复用，不触发管理域构建
     tool = skill_load_tool_module.create_skill_load_tool(runtime, user_id="u1")
     result = await tool.ainvoke({"skill_name": "demo-skill"})
 
@@ -1427,3 +1418,74 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
         "dsl": {"metrics": ["订单数"]},
         "state": state,
     }) == "semantic_query_tool 执行失败: 执行失败"
+
+
+@pytest.mark.asyncio
+async def test_skill_load_prefers_session_snapshot(monkeypatch, tmp_path):
+    # 回归：skill_load 只从本会话运行域快照读取，与管理域完全解耦——
+    # 即便管理域解析返回另一个 title/路径，工具也不回退管理域，读到的必是快照副本。
+    workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
+    workspace_root.mkdir(parents=True)
+    snapshot_skill = workspace_root.parent / "runtime-skills" / "demo-skill"
+    snapshot_skill.mkdir(parents=True)
+    (snapshot_skill / "SKILL.md").write_text(
+        "---\nname: demo-skill\ntitle: 快照版\ndescription: 来自快照\n---\n# 快照版正文\n",
+        encoding="utf-8",
+    )
+    (snapshot_skill / "references" / "guide.md").parent.mkdir(parents=True)
+    (snapshot_skill / "references" / "guide.md").write_text("# guide from snapshot\n", encoding="utf-8")
+
+    # 管理域返回不存在的路径与不同 title——用于证明 skill_load 绝不回退管理域
+    async def fake_resolve_skill_path_async(name, user_id=""):
+        assert name == "demo-skill"
+        return {
+            "path": str(tmp_path / "managed" / "SKILL.md"),
+            "title": "管理域版",
+            "description": "来自管理域",
+            "source": "user",
+            "enabled": True,
+        }
+
+    monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+    tool = skill_load_tool_module.create_skill_load_tool(runtime, user_id="u1")
+    result = await tool.ainvoke({"skill_name": "demo-skill"})
+
+    # title/正文/references 均来自快照副本，而非管理域（证明无回退）
+    assert "title=快照版" in result
+    assert "# 快照版正文" in result
+    assert 'references=["/mnt/skills/demo-skill/references/guide.md"]' in result
+
+
+@pytest.mark.asyncio
+async def test_skill_load_rejects_skill_not_in_snapshot(monkeypatch, tmp_path):
+    # 回归：草稿/禁用的技能本就不进入运行域快照。skill_load 只认快照，加载不到时统一报
+    # “技能不存在或无权限访问”，无需回退管理域判断（与设计一致，杜绝运行域暴露但 references 404）。
+    workspace_root = tmp_path / "threads" / "u1" / "conv_b" / "user-data"
+    workspace_root.mkdir(parents=True)
+    # 预置另一个技能，使快照目录非空（_ensure_snapshot_async 直接复用、不触发管理域构建）；
+    # 但不放入 demo-skill，模拟其被禁用/草稿而排除在快照外。
+    other = workspace_root.parent / "runtime-skills" / "other-skill"
+    other.mkdir(parents=True)
+    (other / "SKILL.md").write_text("---\nname: other-skill\ntitle: 其他\n---\n# 其他\n", encoding="utf-8")
+
+    async def fake_resolve_skill_path_async(name, user_id=""):
+        assert name == "demo-skill"
+        return {
+            "path": str(tmp_path / "managed" / "SKILL.md"),
+            "title": "禁用技能",
+            "description": "x",
+            "source": "user",
+            "enabled": False,
+        }
+
+    monkeypatch.setattr(skill_load_tool_module.skill_service, "resolve_skill_path_async", fake_resolve_skill_path_async)
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+    tool = skill_load_tool_module.create_skill_load_tool(runtime, user_id="u1")
+    result = await tool.ainvoke({"skill_name": "demo-skill"})
+
+    assert "技能不存在或无权限访问" in result
