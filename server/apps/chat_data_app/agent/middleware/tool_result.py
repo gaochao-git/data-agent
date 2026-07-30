@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any
 
 from langchain.agents.middleware import wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
-from utils.tool_result_store import ToolResultStore
+from utils.tool_result_store import ToolResultRecord
 from ...services.context_budget import ToolResultBudget, estimate_text_tokens
-from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_write_text_file
+from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..tool_results import (
@@ -94,11 +95,10 @@ async def _finalize_query_result(
         return build_query_result_response(status=status, data=query_result, meta=public_meta)
 
     try:
-        record = await asyncio.to_thread(
-            ToolResultStore().save_query_result,
-            query_result,
-            conversation_id=_required_state_value(request, "conversation_id"),
-            user_id=_required_state_value(request, "user_id"),
+        record = await _write_private_tool_result(
+            content=json.dumps(query_result, ensure_ascii=False, indent=2),
+            suffix=".json",
+            request=request,
         )
     except Exception as exc:
         logger.error("卸载查询工具结果失败: %s", exc, exc_info=True)
@@ -152,8 +152,7 @@ async def _save_query_result_to_workspace(
         backend="sandbox" if workspace.get("workspace_backend") == "sandbox" else "local",
     )
     try:
-        write_result = await workspace_write_text_file(
-            runtime,
+        write_result = await runtime.write_text_file(
             file_path=save_as,
             content=json.dumps(query_result, ensure_ascii=False, indent=2),
             mode="overwrite",
@@ -211,11 +210,10 @@ async def _externalize_generic_text(
     tool_result_budget: ToolResultBudget,
 ) -> str:
     try:
-        record = await asyncio.to_thread(
-            ToolResultStore().save_text_result,
-            content,
-            conversation_id=_required_state_value(request, "conversation_id"),
-            user_id=_required_state_value(request, "user_id"),
+        record = await _write_private_tool_result(
+            content=content,
+            suffix=".txt",
+            request=request,
         )
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
@@ -228,6 +226,40 @@ async def _externalize_generic_text(
         "摘要：",
         preview,
     ])
+
+
+async def _write_private_tool_result(
+    *,
+    content: str,
+    suffix: str,
+    request: Any,
+) -> ToolResultRecord:
+    """Persist one hidden result through the active conversation backend.
+
+    Sandbox runs must write the remote workspace first so subsequent tools read
+    the same filesystem view. Agent requests without a workspace are invalid;
+    allowing a direct local-store fallback would reintroduce a second write path.
+    """
+    conversation_id = _required_state_value(request, "conversation_id")
+    user_id = _required_state_value(request, "user_id")
+    workspace = _request_workspace(request)
+    workspace_root = str(workspace.get("workspace_root") or "").strip()
+    if not workspace_root:
+        raise ValueError("当前请求缺少会话工作区，无法保存工具结果")
+
+    record = ToolResultRecord(
+        result_id=str(uuid.uuid4()),
+        suffix=suffix,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=user_id,
+        backend="sandbox" if workspace.get("workspace_backend") == "sandbox" else "local",
+    )
+    await runtime.write_tool_result(file_path=record.virtual_path, content=content)
+    return record
 
 
 def _requires_externalization(content: str, request: Any, tool_result_budget: ToolResultBudget) -> bool:
@@ -269,6 +301,11 @@ def _clip_text_to_budget(content: str, token_limit: int) -> str:
 def _request_state(request: Any) -> dict[str, Any]:
     state = getattr(request, "state", None)
     return state if isinstance(state, dict) else {}
+
+
+def _request_workspace(request: Any) -> dict[str, Any]:
+    workspace = _request_state(request).get("workspace")
+    return workspace if isinstance(workspace, dict) else {}
 
 
 def _required_state_value(request: Any, field: str) -> str:

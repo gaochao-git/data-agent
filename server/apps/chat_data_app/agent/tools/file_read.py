@@ -5,7 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_read_text_file
+from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from ...services.runtime_config import FILE_READ_MAX_CHARS
 from .common import DEFAULT_READ_LIMIT, MAX_READ_LIMIT, format_lines
 
@@ -37,8 +37,7 @@ def create_file_read_tool(workspace_runtime: ConversationWorkspaceRuntime):
                 return "offset 必须大于等于 0"
             if limit < 1 or limit > MAX_READ_LIMIT:
                 return f"limit 必须在 1-{MAX_READ_LIMIT} 之间"
-            result = await workspace_read_text_file(
-                workspace_runtime,
+            result = await workspace_runtime.read_text_file(
                 file_path=file_path,
                 offset=offset,
                 limit=limit,

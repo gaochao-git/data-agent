@@ -2,31 +2,11 @@
 
 from __future__ import annotations
 
-import shlex
-import asyncio
-import os
-from pathlib import PurePosixPath
-
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from utils.skill_paths import SKILLS_VIRTUAL_ROOT
-from ...services.conversation_workspace import (
-    ConversationWorkspaceRuntime,
-    WorkspacePathMapping,
-    resolve_workspace_path,
-    to_visible_path,
-)
-from ...services.workspace_execution import (
-    OPENSANDBOX_BACKEND,
-    run_command_in_sandbox,
-    sandbox_outputs_dir,
-    sandbox_path_to_visible,
-    sandbox_uploads_dir,
-    sandbox_visible_path,
-    sandbox_workspace_dir,
-    truncate_output,
-)
+from ...services.conversation_workspace import ConversationWorkspaceRuntime
+from ...services.workspace_execution import truncate_output
 from .common import json_dumps
 
 logger = get_logger(__name__)
@@ -37,13 +17,6 @@ MAX_TIMEOUT_SECONDS = 120
 
 def _tool_result(payload: dict) -> str:
     return "[bash_run]\n" + json_dumps(payload)
-
-
-async def _normalize_cwd(cwd: str | None, workspace_runtime: ConversationWorkspaceRuntime) -> str:
-    raw = str(cwd or "").strip()
-    if not raw:
-        return sandbox_workspace_dir()
-    return sandbox_visible_path(raw)
 
 
 def _validate_command(command: str) -> str:
@@ -60,38 +33,6 @@ def _validate_command(command: str) -> str:
     return value
 
 
-async def _local_visible_path(workspace_runtime: ConversationWorkspaceRuntime, path: str):
-    normalized = str(path or "").strip()
-    if normalized.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-        return (await workspace_runtime.resolve_readonly_skill_path_async(normalized))[0]
-    return resolve_workspace_path(workspace_runtime.workspace_root, normalized)
-
-
-async def _validate_command_paths(command: str, workspace_runtime: ConversationWorkspaceRuntime) -> None:
-    try:
-        tokens = shlex.split(command)
-    except ValueError as exc:
-        raise ValueError(f"command 解析失败: {exc}") from exc
-    disallowed: list[str] = []
-    for token in tokens:
-        normalized_token = token.lstrip("<>")
-        token_parts = PurePosixPath(normalized_token).parts
-        if ".." in token_parts:
-            disallowed.append(token)
-            continue
-        if not normalized_token.startswith("/"):
-            continue
-        try:
-            if workspace_runtime.backend == "local":
-                await _local_visible_path(workspace_runtime, normalized_token)
-            else:
-                sandbox_visible_path(normalized_token)
-        except ValueError:
-            disallowed.append(token)
-    if disallowed:
-        raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(disallowed[:3]))
-
-
 async def run_bash_command(
     *,
     command: str,
@@ -101,69 +42,22 @@ async def run_bash_command(
 ) -> dict:
     """在当前工作区执行受限 Bash 命令。"""
     safe_command = _validate_command(command)
-    await _validate_command_paths(safe_command, workspace_runtime)
+    await workspace_runtime.validate_bash_paths(command=safe_command)
     timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS))
-    if workspace_runtime.backend == "local":
-        local_cwd = await _local_visible_path(workspace_runtime, cwd or "workspace")
-        path_mapping = WorkspacePathMapping(
-            workspace_root=workspace_runtime.workspace_root,
-            runtime_skills_dir=workspace_runtime.runtime_skills_dir,
-        )
-        inner = "cd {cwd} && {command}".format(
-            cwd=shlex.quote(str(local_cwd)),
-            command=path_mapping.translate(safe_command),
-        )
-        process = await asyncio.create_subprocess_exec(
-            "bash",
-            "-o",
-            "pipefail",
-            "-lc",
-            inner,
-            cwd=str(local_cwd),
-            env={"PATH": os.environ.get("PATH", ""), "HOME": str(local_cwd), "LANG": "C.UTF-8"},
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
-            exit_code = int(process.returncode or 0)
-            stdout_text = path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace"))
-            stderr_text = path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace"))
-            timed_out = False
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            exit_code, stdout_text, stderr_text, timed_out = 124, "", "command timed out", True
-        cwd_value = to_visible_path(workspace_runtime.workspace_root, local_cwd)
-        backend = "local"
-        sandbox_id = ""
-    else:
-        session_ref = await workspace_runtime.get_sandbox_session_ref()
-        session = session_ref.current
-        if session is None:
-            raise ValueError("OpenSandbox 执行环境未准备")
-        sandbox_cwd = await _normalize_cwd(cwd, workspace_runtime)
-        inner = "cd {cwd} && {command}".format(cwd=shlex.quote(sandbox_cwd), command=safe_command)
-        exit_code, stdout_text, stderr_text = await run_command_in_sandbox(
-            session=session,
-            command=f"bash -o pipefail -lc {shlex.quote(inner)}",
-            timeout_seconds=timeout,
-        )
-        timed_out = "timeout" in stderr_text.lower() or "timed out" in stderr_text.lower()
-        cwd_value = sandbox_path_to_visible(sandbox_cwd)
-        backend = OPENSANDBOX_BACKEND
-        sandbox_id = session.sandbox_id
-    stdout, stdout_truncated = truncate_output(stdout_text)
-    stderr, stderr_truncated = truncate_output(stderr_text)
-    success = (exit_code == 0) and not timed_out
+    execution = await workspace_runtime.run_bash(
+        command=safe_command, cwd=cwd, timeout_seconds=timeout
+    )
+    stdout, stdout_truncated = truncate_output(str(execution["stdout"]))
+    stderr, stderr_truncated = truncate_output(str(execution["stderr"]))
+    success = (int(execution["exit_code"]) == 0) and not bool(execution["timed_out"])
     return {
         "success": success,
-        "backend": backend,
-        "sandbox_id": sandbox_id,
-        "cwd": cwd_value,
+        "backend": execution["backend"],
+        "sandbox_id": execution["sandbox_id"],
+        "cwd": execution["cwd"],
         "command": safe_command,
-        "exit_code": exit_code,
-        "timed_out": timed_out,
+        "exit_code": execution["exit_code"],
+        "timed_out": execution["timed_out"],
         "timeout_seconds": timeout,
         "stdout": stdout,
         "stderr": stderr,

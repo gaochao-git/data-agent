@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any, Protocol, runtime_checkable
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -24,14 +26,26 @@ from .runtime_skill_snapshot import (
     runtime_skills_snapshot_dir_from_workspace,
 )
 from .semantic_common import AGENT_ID
-from .skill_service import skill_service
+from .skill_service import resolve_skill_name
 from .workspace_execution import (
+    OPENSANDBOX_BACKEND,
     SandboxExecutionSessionRef,
     get_workspace_execution_session,
+    run_command_in_sandbox,
     sandbox_apply_patch_ops,
     sandbox_artifact_payload,
+    sandbox_list_dir,
+    sandbox_load_skill_payload,
+    sandbox_outputs_dir,
+    sandbox_path_to_visible,
+    sandbox_read_text_file,
+    sandbox_write_tool_result,
+    sync_sandbox_working_trees,
+    sandbox_visible_path,
     sandbox_write_text_file,
+    sandbox_workspace_dir,
 )
+from .workspace_patch import PatchOp, apply_patch_ops
 
 logger = get_logger(__name__)
 
@@ -40,24 +54,113 @@ WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
+@runtime_checkable
+class WorkspaceBackend(Protocol):
+    """Backend contract for one conversation's model-visible workspace."""
+
+    name: str
+
+    async def read_text_file(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]: ...
+
+    async def write_text_file(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]: ...
+
+    async def write_tool_result(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        content: str,
+    ) -> dict[str, Any]: ...
+
+    async def apply_patch_ops(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        ops: list[PatchOp],
+        dry_run: bool,
+    ) -> list[str]: ...
+
+    async def artifact_payload(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def load_skill_payload(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        skill_name: str,
+        max_chars: int,
+    ) -> dict[str, Any]: ...
+
+    async def list_dir(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def get_sandbox_session_ref(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+    ) -> SandboxExecutionSessionRef: ...
+
+    async def validate_bash_paths(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        command: str,
+    ) -> None: ...
+
+    async def run_bash(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]: ...
+
+
 @dataclass
 class ConversationWorkspaceRuntime:
-    """当前会话工作区的后端绑定。
-
-    文件读取始终直接访问受控的共享 ``workspace_root``，确保 local 与 sandbox
-    使用同一套路径校验和分页语义。OpenSandbox session 仅在执行、写入或产物操作时创建。
-
-    运行期技能统一来自本会话的 ``runtime-skills`` 快照（只读），模型只看到扁平的
-    ``/mnt/skills/<name>``；不再按名远程解析、不再逐技能登记挂载。
-    """
+    """当前会话的路径、技能快照和工作区后端绑定。"""
 
     workspace_root: str
     user_id: str
-    backend: Literal["local", "sandbox"]
-    sandbox_session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
+    backend: "WorkspaceBackend | str" = "local"
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Convert the configured backend name once; tools only see the backend contract."""
+        if isinstance(self.backend, str):
+            self.backend = create_workspace_backend(self.backend)
+        if not isinstance(self.backend, WorkspaceBackend):
+            raise TypeError("backend 必须是 local、sandbox 或 WorkspaceBackend 实现")
+
+    @property
+    def backend_name(self) -> str:
+        return self.backend.name
 
     @property
     def runtime_skills_dir(self) -> Path:
@@ -100,8 +203,14 @@ class ConversationWorkspaceRuntime:
         if not name or name.startswith("."):
             raise ValueError(f"技能路径无效: {path}")
         await self._ensure_snapshot_async()
-        source_dir = (self.runtime_skills_dir / name).resolve()
-        if not source_dir.is_dir():
+        snapshot_root = self.runtime_skills_dir.resolve()
+        source_entry = self.runtime_skills_dir / name
+        source_dir = source_entry.resolve()
+        if (
+            source_entry.is_symlink()
+            or not source_dir.is_dir()
+            or snapshot_root not in source_dir.parents
+        ):
             raise ValueError(f"技能不存在或无权限访问: {name}")
         relative_parts = parts[4:]
         if ".." in relative_parts:
@@ -115,18 +224,53 @@ class ConversationWorkspaceRuntime:
         return target, visible
 
     async def get_sandbox_session_ref(self) -> SandboxExecutionSessionRef:
-        if self.backend != "sandbox":
-            raise ValueError("当前工作区后端不是 OpenSandbox")
-        if self.sandbox_session_ref.current is None:
-            # 沙箱只挂载两个固定卷：/mnt/user-data（可写）+ /mnt/skills（只读快照）。
-            # 不再逐技能登记挂载——可见技能由快照在会话首次运行时一次性冻结。
-            await self._ensure_snapshot_async()
-            self.sandbox_session_ref.current = await get_workspace_execution_session(
-                self.workspace_root,
-                self.user_id,
-                runtime_skills_dir=self.runtime_skills_dir,
-            )
-        return self.sandbox_session_ref
+        """Return the execution session for ``bash_run`` when the backend supports it."""
+        return await self.backend.get_sandbox_session_ref(self)
+
+    async def read_text_file(
+        self,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await self.backend.read_text_file(
+            self, file_path=file_path, offset=offset, limit=limit, max_chars=max_chars
+        )
+
+    async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
+        return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
+
+    async def write_tool_result(self, *, file_path: str, content: str) -> dict[str, Any]:
+        """Persist a middleware-owned hidden tool result through the active backend."""
+        return await self.backend.write_tool_result(self, file_path=file_path, content=content)
+
+    async def apply_patch_ops(self, *, ops: list[PatchOp], dry_run: bool) -> list[str]:
+        return await self.backend.apply_patch_ops(self, ops=ops, dry_run=dry_run)
+
+    async def artifact_payload(self, *, file_path: str) -> dict[str, Any]:
+        return await self.backend.artifact_payload(self, file_path=file_path)
+
+    async def load_skill_payload(self, *, skill_name: str, max_chars: int) -> dict[str, Any]:
+        return await self.backend.load_skill_payload(self, skill_name=skill_name, max_chars=max_chars)
+
+    async def list_dir(self, *, path: str, max_depth: int) -> list[dict[str, Any]]:
+        return await self.backend.list_dir(self, path=path, max_depth=max_depth)
+
+    async def validate_bash_paths(self, *, command: str) -> None:
+        await self.backend.validate_bash_paths(self, command=command)
+
+    async def run_bash(
+        self,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        return await self.backend.run_bash(
+            self, command=command, cwd=cwd, timeout_seconds=timeout_seconds
+        )
 
 
 def _safe_segment(value: str) -> str:
@@ -660,95 +804,547 @@ def _write_local_text_file(workspace_root: str, file_path: str, content: str, mo
     }
 
 
-async def workspace_read_text_file(
-    runtime: ConversationWorkspaceRuntime,
-    *,
-    file_path: str,
-    offset: int,
-    limit: int,
-    max_chars: int,
-) -> dict[str, Any]:
-    raw_path = str(file_path or "").strip()
-    if raw_path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
-        target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
-        return await asyncio.to_thread(
-            _read_local_runtime_skill_file,
-            target,
-            visible_path,
-            offset,
-            limit,
-            max_chars,
-        )
-    _ensure_workspace_root_in_chat_data_home(runtime.workspace_root)
-    return await asyncio.to_thread(
-        _read_local_text_file,
-        runtime.workspace_root,
-        file_path,
-        offset,
-        limit,
-        max_chars,
-    )
+def _write_local_tool_result(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
+    """Write a private result once; this path is never exposed to file_edit."""
+    target = resolve_workspace_path(workspace_root, file_path)
+    if not is_tool_result_workspace_path(workspace_root, target):
+        raise ValueError("内部工具结果只能写入 outputs/.tool-results/")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = content.encode("utf-8")
+    with target.open("xb") as file_obj:
+        file_obj.write(data)
+    return {"file_path": to_visible_path(workspace_root, target), "bytes": len(data)}
 
 
-async def workspace_write_text_file(
-    runtime: ConversationWorkspaceRuntime,
-    *,
-    file_path: str,
-    content: str,
-    mode: str,
-) -> dict[str, Any]:
-    if runtime.backend == "local":
-        return await asyncio.to_thread(
-            _write_local_text_file,
-            runtime.workspace_root,
-            file_path,
-            content,
-            mode,
-        )
-    return await sandbox_write_text_file(
-        session_ref=await runtime.get_sandbox_session_ref(),
-        file_path=file_path,
-        content=content,
-        mode=mode,
-    )
-
-
-async def workspace_apply_patch_ops(
-    runtime: ConversationWorkspaceRuntime,
-    *,
-    ops: list[dict[str, Any]],
-    dry_run: bool,
-    local_apply: Any,
-) -> list[str]:
-    if runtime.backend == "local":
-        return await asyncio.to_thread(
-            local_apply,
-            ops,
-            root=runtime.workspace_root,
-            dry_run=dry_run,
-        )
-    return await sandbox_apply_patch_ops(
-        session_ref=await runtime.get_sandbox_session_ref(),
-        ops=ops,
-        dry_run=dry_run,
-    )
-
-
-async def workspace_artifact_payload(
-    runtime: ConversationWorkspaceRuntime,
-    *,
-    file_path: str,
-    local_loader: Any,
-) -> dict[str, Any]:
+def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[str, Any]:
     try:
-        target = resolve_workspace_path(runtime.workspace_root, file_path)
+        target = resolve_workspace_path(workspace_root, file_path)
     except ValueError:
         return {}
-    if is_tool_result_workspace_path(runtime.workspace_root, target):
+    if is_tool_result_workspace_path(workspace_root, target):
         return {}
-    if runtime.backend == "local":
-        return await asyncio.to_thread(local_loader, runtime.workspace_root, [file_path])
-    return await sandbox_artifact_payload(
-        session_ref=await runtime.get_sandbox_session_ref(),
-        file_path=file_path,
+    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    if target != outputs_root and outputs_root not in target.parents:
+        return {}
+    if not target.is_file():
+        return {}
+    try:
+        return parse_output_artifact(
+            visible_path=to_visible_path(workspace_root, target),
+            data=target.read_bytes(),
+        )
+    except OSError:
+        return {}
+
+
+def _list_skill_files(snapshot_dir: Path, directory_name: str, pattern: str = "*") -> list[str]:
+    root = snapshot_dir / directory_name
+    if not root.exists() or root.is_symlink():
+        return []
+    return sorted(
+        str(item.relative_to(root).with_suffix("")) if directory_name == "references" else str(item.relative_to(root))
+        for item in root.rglob(pattern)
+        if item.is_file() and not item.is_symlink()
     )
+
+
+def _build_local_skill_payload(runtime: ConversationWorkspaceRuntime, skill_name: str, max_chars: int) -> dict[str, Any]:
+    resolved_name = resolve_skill_name(skill_name)
+    snapshot_root = runtime.runtime_skills_dir.resolve()
+    snapshot_entry = runtime.runtime_skills_dir / resolved_name
+    snapshot_dir = snapshot_entry.resolve()
+    if (
+        snapshot_entry.is_symlink()
+        or not snapshot_dir.is_dir()
+        or snapshot_root not in snapshot_dir.parents
+    ):
+        raise ValueError(f"技能不存在或无权限访问: {resolved_name}")
+    skill_md_path = (snapshot_dir / "SKILL.md").resolve()
+    if not skill_md_path.is_file() or snapshot_dir not in skill_md_path.parents:
+        raise ValueError(f"技能文件不存在: {resolved_name}")
+    skill_md = _read_text_prefix(skill_md_path, max_chars + 1)
+    title, description = _parse_skill_frontmatter(skill_md)
+    return {
+        "name": resolved_name,
+        "title": title or resolved_name,
+        "description": description or "",
+        "visible_path": runtime_skill_visible_root(resolved_name),
+        "skill_md": skill_md,
+        "references": _list_skill_files(snapshot_dir, "references", "*.md"),
+        "scripts": _list_skill_files(snapshot_dir, "scripts"),
+        "assets": _list_skill_files(snapshot_dir, "assets"),
+    }
+
+
+def _read_text_prefix(path: Path, max_chars: int) -> str:
+    with path.open("r", encoding="utf-8", errors="replace") as file_obj:
+        return file_obj.read(max_chars)
+
+
+def _list_local_workspace_dir(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    max_depth: int,
+) -> list[dict[str, Any]]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        if is_tool_result_workspace_path(runtime.workspace_root, target):
+            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出")
+        visible_root = ""
+        is_skill = False
+    if not target.exists():
+        raise FileNotFoundError(f"目录不存在: {raw}")
+    if not target.is_dir():
+        raise ValueError(f"目标不是目录: {raw}")
+
+    entries: list[dict[str, Any]] = []
+    root = Path(runtime.workspace_root).resolve()
+
+    def visit(directory: Path, visible_dir: str, depth: int) -> None:
+        if len(entries) >= 500:
+            return
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name))
+        except OSError:
+            return
+        for child in children:
+            if len(entries) >= 500:
+                return
+            resolved = child.resolve()
+            if child.is_symlink():
+                continue
+            if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            if is_skill:
+                visible_path = f"{visible_dir}/{child.name}"
+            else:
+                try:
+                    visible_path = "/mnt/user-data/" + resolved.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+            is_dir = child.is_dir()
+            entries.append({
+                "type": "dir" if is_dir else "file",
+                "path": visible_path + ("/" if is_dir else ""),
+                "size": "-" if is_dir else stat.st_size,
+                "mtime": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+            if is_dir and depth + 1 < max_depth:
+                visit(child, visible_path, depth + 1)
+
+    visit(target, visible_root, 0)
+    return entries
+
+
+def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:
+    raw = str(path or "").strip().replace("\\", "/")
+    prefix = f"{SKILLS_VIRTUAL_ROOT}/"
+    if not raw.startswith(prefix):
+        raise ValueError(f"只允许访问技能路径: {path}")
+    parts = PurePosixPath(raw).parts
+    if len(parts) < 4 or parts[1:3] != ("mnt", "skills") or ".." in parts[4:]:
+        raise ValueError(f"技能路径无效: {path}")
+    name = parts[3]
+    snapshot_root = runtime.runtime_skills_dir.resolve()
+    source_entry = runtime.runtime_skills_dir / name
+    source = source_entry.resolve()
+    if (
+        source_entry.is_symlink()
+        or not source.is_dir()
+        or snapshot_root not in source.parents
+    ):
+        raise ValueError(f"技能不存在或无权限访问: {name}")
+    target = source.joinpath(*parts[4:]).resolve()
+    if target != source and source not in target.parents:
+        raise ValueError(f"技能路径越界: {path}")
+    return target, runtime_skill_visible_root(name) + (
+        "/" + "/".join(parts[4:]) if parts[4:] else ""
+    )
+
+
+def _parse_skill_frontmatter(text: str) -> tuple[str, str]:
+    if not text.startswith("---\n"):
+        return "", ""
+    closing_index = text.find("\n---\n", len("---\n"))
+    if closing_index < 0:
+        return "", ""
+    title = name = description = ""
+    for line in text[len("---\n"):closing_index].splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        normalized = value.strip().strip('"').strip("'")
+        if key.strip() == "title":
+            title = normalized
+        elif key.strip() == "name":
+            name = normalized
+        elif key.strip() == "description":
+            description = normalized
+    return title or name, description
+
+
+@dataclass
+class LocalWorkspaceBackend:
+    """Path-validated local filesystem backend for a conversation workspace."""
+
+    name: str = "local"
+
+    async def read_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        raw_path = str(file_path or "").strip()
+        if raw_path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
+            return await asyncio.to_thread(
+                _read_local_runtime_skill_file, target, visible_path, offset, limit, max_chars
+            )
+        _ensure_workspace_root_in_chat_data_home(runtime.workspace_root)
+        return await asyncio.to_thread(
+            _read_local_text_file, runtime.workspace_root, file_path, offset, limit, max_chars
+        )
+
+    async def write_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
+
+    async def write_tool_result(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _write_local_tool_result, runtime.workspace_root, file_path, content
+        )
+
+    async def apply_patch_ops(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        ops: list[PatchOp],
+        dry_run: bool,
+    ) -> list[str]:
+        return await asyncio.to_thread(
+            apply_patch_ops,
+            ops,
+            resolve_writable_path=lambda path: resolve_workspace_path(runtime.workspace_root, path, writable=True),
+            dry_run=dry_run,
+        )
+
+    async def artifact_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_load_local_artifact_payload, runtime.workspace_root, file_path)
+
+    async def load_skill_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        skill_name: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(_build_local_skill_payload, runtime, skill_name, max_chars)
+
+    async def list_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _list_local_workspace_dir, runtime, path, max_depth
+        )
+
+    async def get_sandbox_session_ref(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+    ) -> SandboxExecutionSessionRef:
+        raise ValueError("当前工作区后端不支持 OpenSandbox 执行")
+
+    async def validate_bash_paths(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+    ) -> None:
+        for token in _absolute_command_path_tokens(command):
+            try:
+                if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                    await runtime.resolve_readonly_skill_path_async(token)
+                else:
+                    resolve_workspace_path(runtime.workspace_root, token)
+            except ValueError as exc:
+                raise ValueError(
+                    "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token
+                ) from exc
+
+    async def run_bash(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        raw_cwd = str(cwd or "workspace").strip()
+        if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            local_cwd = (await runtime.resolve_readonly_skill_path_async(raw_cwd))[0]
+        else:
+            local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+        path_mapping = WorkspacePathMapping(
+            workspace_root=runtime.workspace_root,
+            runtime_skills_dir=runtime.runtime_skills_dir,
+        )
+        inner = "cd {cwd} && {command}".format(
+            cwd=shlex.quote(str(local_cwd)),
+            command=path_mapping.translate(command),
+        )
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-o",
+            "pipefail",
+            "-lc",
+            inner,
+            cwd=str(local_cwd),
+            env={"PATH": os.environ.get("PATH", ""), "HOME": str(local_cwd), "LANG": "C.UTF-8"},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "exit_code": int(process.returncode or 0),
+                "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
+                "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
+                "timed_out": False,
+            }
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "exit_code": 124,
+                "stdout": "",
+                "stderr": "command timed out",
+                "timed_out": True,
+            }
+
+
+@dataclass
+class SandboxWorkspaceBackend:
+    """OpenSandbox backend; all remote filesystem calls stay behind this adapter."""
+
+    name: str = "sandbox"
+    session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
+
+    async def _session_ref(self, runtime: ConversationWorkspaceRuntime) -> SandboxExecutionSessionRef:
+        if self.session_ref.current is None:
+            await runtime._ensure_snapshot_async()
+            self.session_ref.current = await get_workspace_execution_session(
+                runtime.workspace_root,
+                runtime.user_id,
+                runtime_skills_dir=runtime.runtime_skills_dir,
+            )
+        return self.session_ref
+
+    async def read_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_read_text_file(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            offset=offset,
+            limit=limit,
+            max_chars=max_chars,
+        )
+
+    async def write_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        return await sandbox_write_text_file(
+            session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
+        )
+
+    async def write_tool_result(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        return await sandbox_write_tool_result(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            content=content,
+        )
+
+    async def apply_patch_ops(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        ops: list[PatchOp],
+        dry_run: bool,
+    ) -> list[str]:
+        return await sandbox_apply_patch_ops(
+            session_ref=await self._session_ref(runtime),
+            ops=ops,
+            dry_run=dry_run,
+        )
+
+    async def artifact_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_artifact_payload(
+            session_ref=await self._session_ref(runtime), file_path=file_path
+        )
+
+    async def load_skill_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        skill_name: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        await runtime._ensure_snapshot_async()
+        return await sandbox_load_skill_payload(
+            session_ref=await self._session_ref(runtime), skill_name=resolve_skill_name(skill_name), max_chars=max_chars
+        )
+
+    async def list_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]:
+        return await sandbox_list_dir(
+            session_ref=await self._session_ref(runtime), path=path, max_depth=max_depth
+        )
+
+    async def get_sandbox_session_ref(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+    ) -> SandboxExecutionSessionRef:
+        return await self._session_ref(runtime)
+
+    async def validate_bash_paths(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+    ) -> None:
+        invalid = []
+        for token in _absolute_command_path_tokens(command):
+            try:
+                sandbox_visible_path(token)
+            except ValueError:
+                invalid.append(token)
+        if invalid:
+            raise ValueError(
+                "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: "
+                + ", ".join(invalid[:3])
+            )
+
+    async def run_bash(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        sandbox_cwd = sandbox_visible_path(str(cwd or sandbox_workspace_dir()))
+        session_ref = await self._session_ref(runtime)
+        session = session_ref.current
+        if session is None:
+            raise ValueError("OpenSandbox 执行环境未准备")
+        async with session.operation_lock:
+            inner = "cd {cwd} && {command}".format(cwd=shlex.quote(sandbox_cwd), command=command)
+            exit_code, stdout, stderr = await run_command_in_sandbox(
+                session=session,
+                command=f"bash -o pipefail -lc {shlex.quote(inner)}",
+                timeout_seconds=timeout_seconds,
+            )
+            try:
+                await sync_sandbox_working_trees(session)
+            except Exception as exc:
+                raise ValueError(f"Bash 执行后的工作区同步失败: {exc}") from exc
+        return {
+            "backend": OPENSANDBOX_BACKEND,
+            "sandbox_id": session.sandbox_id,
+            "cwd": sandbox_path_to_visible(sandbox_cwd),
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
+        }
+
+
+def create_workspace_backend(name: str) -> WorkspaceBackend:
+    """Create a backend once at runtime construction; invalid input falls back to local."""
+    return SandboxWorkspaceBackend() if str(name or "").strip().lower() == "sandbox" else LocalWorkspaceBackend()
+
+
+def _absolute_command_path_tokens(command: str) -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"command 解析失败: {exc}") from exc
+    invalid = []
+    paths: list[str] = []
+    for token in tokens:
+        normalized = token.lstrip("<>")
+        if ".." in PurePosixPath(normalized).parts:
+            invalid.append(token)
+        elif normalized.startswith("/"):
+            paths.append(normalized)
+    if invalid:
+        raise ValueError("bash_run 不允许路径越界: " + ", ".join(invalid[:3]))
+    return paths

@@ -23,7 +23,16 @@ from apps.chat_data_app.services.conversation_workspace import (
     read_workspace_text_file,
     resolve_workspace_path,
     to_visible_path,
-    workspace_read_text_file,
+)
+from apps.chat_data_app.services.workspace_patch import (
+    AddOp,
+    DeleteOp,
+    Hunk,
+    PatchFileChange,
+    PatchError,
+    UpdateOp,
+    apply_patch_ops,
+    parse_patch,
 )
 from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
 from utils import tool_result_store
@@ -134,8 +143,7 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
     assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
     with pytest.raises(ValueError):
         read_workspace_text_file("conv_private", "outputs/.tool-results/result_1.json", user_id="user_a")
-    result = await workspace_read_text_file(
-        runtime,
+    result = await runtime.read_text_file(
         file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
         offset=0,
         limit=10,
@@ -265,6 +273,28 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
         await runtime.resolve_readonly_skill_path_async(
             "/mnt/skills/.evil/scripts/quick_validate.py"
         )
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_symlinked_skill_directory(tmp_path):
+    workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
+    workspace_root.mkdir(parents=True)
+    skill_root = workspace_root.parent / "runtime-skills"
+    valid_skill = skill_root / "skill-creator"
+    valid_skill.mkdir(parents=True)
+    (valid_skill / "SKILL.md").write_text("# Skill Creator", encoding="utf-8")
+    outside_skill = tmp_path / "outside-skill"
+    outside_skill.mkdir()
+    (outside_skill / "SKILL.md").write_text("# Outside", encoding="utf-8")
+    (skill_root / "evil-skill").symlink_to(outside_skill, target_is_directory=True)
+    runtime = ConversationWorkspaceRuntime(workspace_root=str(workspace_root), user_id="u1")
+
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        await runtime.resolve_readonly_skill_path_async("/mnt/skills/evil-skill/SKILL.md")
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        await runtime.load_skill_payload(skill_name="evil-skill", max_chars=100)
+    with pytest.raises(ValueError, match="技能不存在或无权限访问"):
+        await runtime.list_dir(path="/mnt/skills/evil-skill", max_depth=1)
 
 
 def test_normalize_dsl_payload_accepts_escaped_json_string():
@@ -578,29 +608,61 @@ async def test_file_read_truncates_long_lines_without_char_continuation(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_file_read_uses_shared_reader_without_starting_sandbox(monkeypatch, tmp_path):
-    workspace_root = tmp_path / "user-data"
-    (workspace_root / "workspace").mkdir(parents=True)
-    (workspace_root / "outputs").mkdir()
-    (workspace_root / "uploads").mkdir()
-    (workspace_root / "workspace" / "report.txt").write_text("shared result\n", encoding="utf-8")
+async def test_file_read_delegates_to_runtime_backend():
+    class RecordingBackend:
+        name = "recording"
+
+        async def read_text_file(self, _runtime, **kwargs):
+            assert kwargs == {
+                "file_path": "workspace/report.txt", "offset": 0, "limit": 200, "max_chars": 16000,
+            }
+            return {
+                "exists": True,
+                "is_dir": False,
+                "is_binary": False,
+                "path": "/mnt/user-data/workspace/report.txt",
+                "lines": ["backend result"],
+                "total_lines": 1,
+                "start_line": 1,
+                "end_line": 1,
+                "has_more": False,
+                "truncated_lines": [],
+            }
+
+        async def write_text_file(self, *_args, **_kwargs):
+            raise AssertionError("unexpected write")
+
+        async def apply_patch_ops(self, *_args, **_kwargs):
+            raise AssertionError("unexpected patch")
+
+        async def artifact_payload(self, *_args, **_kwargs):
+            raise AssertionError("unexpected artifact")
+
+        async def load_skill_payload(self, *_args, **_kwargs):
+            raise AssertionError("unexpected skill load")
+
+        async def list_dir(self, *_args, **_kwargs):
+            raise AssertionError("unexpected list")
+
+        async def get_sandbox_session_ref(self, *_args, **_kwargs):
+            raise AssertionError("unexpected sandbox session")
+
+        async def validate_bash_paths(self, *_args, **_kwargs):
+            raise AssertionError("unexpected bash validation")
+
+        async def run_bash(self, *_args, **_kwargs):
+            raise AssertionError("unexpected bash run")
+
     runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root),
+        workspace_root="/unused",
         user_id="u1",
-        backend="sandbox",
+        backend=RecordingBackend(),
     )
-    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
-
-    async def fail_if_sandbox_starts():
-        raise AssertionError("file_read 不应创建 OpenSandbox 会话")
-
-    monkeypatch.setattr(runtime, "get_sandbox_session_ref", fail_if_sandbox_starts)
     tool = file_read_tool_module.create_file_read_tool(runtime)
 
     result = await tool.ainvoke({"file_path": "workspace/report.txt"})
 
-    assert "shared result" in result
-    assert runtime.sandbox_session_ref.current is None
+    assert "backend result" in result
 
 
 def test_text_page_content_body_respects_budget_and_preserves_source_order(tmp_path):
@@ -756,26 +818,26 @@ async def test_file_edit_patch_dry_run_does_not_write_file(monkeypatch):
 
 
 def test_parse_patch_rejects_malformed_inputs():
-    with pytest.raises(file_edit_tool_module.PatchError, match="must start"):
-        file_edit_tool_module.parse_patch("*** Add File: workspace/a.txt")
-    with pytest.raises(file_edit_tool_module.PatchError, match="unexpected content"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** End Patch\nextra")
-    with pytest.raises(file_edit_tool_module.PatchError, match="add file lines"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\nbad\n*** End Patch")
-    with pytest.raises(file_edit_tool_module.PatchError, match="missing '@@'"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n+bad\n*** End Patch")
-    with pytest.raises(file_edit_tool_module.PatchError, match="invalid update line"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n@@\n?bad\n*** End Patch")
-    with pytest.raises(file_edit_tool_module.PatchError, match="no hunks"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n*** End Patch")
-    with pytest.raises(file_edit_tool_module.PatchError, match="unexpected patch header"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Move File: workspace/a.txt\n*** End Patch")
-    with pytest.raises(file_edit_tool_module.PatchError, match="missing"):
-        file_edit_tool_module.parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\n+x")
+    with pytest.raises(PatchError, match="must start"):
+        parse_patch("*** Add File: workspace/a.txt")
+    with pytest.raises(PatchError, match="unexpected content"):
+        parse_patch("*** Begin Patch\n*** End Patch\nextra")
+    with pytest.raises(PatchError, match="add file lines"):
+        parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\nbad\n*** End Patch")
+    with pytest.raises(PatchError, match="missing '@@'"):
+        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n+bad\n*** End Patch")
+    with pytest.raises(PatchError, match="invalid update line"):
+        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n@@\n?bad\n*** End Patch")
+    with pytest.raises(PatchError, match="no hunks"):
+        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n*** End Patch")
+    with pytest.raises(PatchError, match="unexpected patch header"):
+        parse_patch("*** Begin Patch\n*** Move File: workspace/a.txt\n*** End Patch")
+    with pytest.raises(PatchError, match="missing"):
+        parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\n+x")
 
 
 def test_parse_patch_accepts_delete_eof_and_multiple_update_hunks():
-    ops = file_edit_tool_module.parse_patch(
+    ops = parse_patch(
         "*** Begin Patch\n"
         "*** Delete File: workspace/remove.txt\n"
         "*** Update File: workspace/demo.txt\n"
@@ -790,8 +852,8 @@ def test_parse_patch_accepts_delete_eof_and_multiple_update_hunks():
         "*** End Patch"
     )
 
-    assert isinstance(ops[0], file_edit_tool_module.DeleteOp)
-    assert isinstance(ops[1], file_edit_tool_module.UpdateOp)
+    assert isinstance(ops[0], DeleteOp)
+    assert isinstance(ops[1], UpdateOp)
     assert len(ops[1].hunks) == 2
 
 
@@ -800,25 +862,26 @@ def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp
     (root / "workspace").mkdir()
     (root / "workspace" / "exists.txt").write_text("old\n", encoding="utf-8")
 
-    with pytest.raises(file_edit_tool_module.PatchError, match="existing file"):
-        file_edit_tool_module.apply_patch_ops(
-            [file_edit_tool_module.AddOp(path="workspace/exists.txt", lines=["new"])],
-            root=str(root),
+    resolver = lambda path: resolve_workspace_path(str(root), path, writable=True)
+    with pytest.raises(PatchError, match="existing file"):
+        apply_patch_ops(
+            [AddOp(path="workspace/exists.txt", lines=["new"])],
+            resolve_writable_path=resolver,
         )
-    with pytest.raises(file_edit_tool_module.PatchError, match="missing file"):
-        file_edit_tool_module.apply_patch_ops(
-            [file_edit_tool_module.DeleteOp(path="workspace/missing.txt")],
-            root=str(root),
+    with pytest.raises(PatchError, match="missing file"):
+        apply_patch_ops(
+            [DeleteOp(path="workspace/missing.txt")],
+            resolve_writable_path=resolver,
         )
-    with pytest.raises(file_edit_tool_module.PatchError, match="missing file"):
-        file_edit_tool_module.apply_patch_ops(
-            [file_edit_tool_module.UpdateOp(path="workspace/missing.txt", hunks=[file_edit_tool_module.Hunk(lines=[" old", "+new"])])],
-            root=str(root),
+    with pytest.raises(PatchError, match="missing file"):
+        apply_patch_ops(
+            [UpdateOp(path="workspace/missing.txt", hunks=[Hunk(lines=[" old", "+new"])])],
+            resolve_writable_path=resolver,
         )
-    with pytest.raises(file_edit_tool_module.PatchError, match="failed to locate"):
-        file_edit_tool_module.apply_patch_ops(
-            [file_edit_tool_module.UpdateOp(path="workspace/exists.txt", hunks=[file_edit_tool_module.Hunk(lines=[" missing", "+new"])])],
-            root=str(root),
+    with pytest.raises(PatchError, match="failed to locate"):
+        apply_patch_ops(
+            [UpdateOp(path="workspace/exists.txt", hunks=[Hunk(lines=[" missing", "+new"])])],
+            resolve_writable_path=resolver,
         )
 
 
@@ -831,15 +894,15 @@ def test_apply_patch_ops_delete_and_update_without_trailing_newline(tmp_path):
     delete_target.write_text("remove", encoding="utf-8")
     update_target.write_text("old", encoding="utf-8")
 
-    actions = file_edit_tool_module.apply_patch_ops(
+    actions = apply_patch_ops(
         [
-            file_edit_tool_module.DeleteOp(path="workspace/remove.txt"),
-            file_edit_tool_module.UpdateOp(
+            DeleteOp(path="workspace/remove.txt"),
+            UpdateOp(
                 path="workspace/exists.txt",
-                hunks=[file_edit_tool_module.Hunk(lines=["-old", "+new"])],
+                hunks=[Hunk(lines=["-old", "+new"])],
             ),
         ],
-        root=str(root),
+        resolve_writable_path=lambda path: resolve_workspace_path(str(root), path, writable=True),
     )
 
     assert actions == ["delete workspace/remove.txt", "update workspace/exists.txt"]
@@ -847,11 +910,23 @@ def test_apply_patch_ops_delete_and_update_without_trailing_newline(tmp_path):
     assert update_target.read_text(encoding="utf-8") == "new\n"
 
 
-def test_file_edit_private_patch_helpers_cover_remaining_branches():
-    assert file_edit_tool_module._find_hunk_start(["a", "b"], [], 1) == 1
-    assert file_edit_tool_module._ops_to_sandbox_payload([
-        file_edit_tool_module.DeleteOp(path="workspace/remove.txt")
-    ]) == [{"kind": "delete", "path": "workspace/remove.txt", "visible_path": "workspace/remove.txt"}]
+def test_plan_patch_ops_returns_one_final_change_per_path():
+    from apps.chat_data_app.services.workspace_patch import plan_patch_ops
+
+    actions, changes = plan_patch_ops(
+        [
+            AddOp(path="workspace/demo.txt", lines=["old"]),
+            UpdateOp(path="workspace/demo.txt", hunks=[Hunk(lines=["-old", "+new"])]),
+        ],
+        {},
+    )
+
+    assert actions == ["add workspace/demo.txt", "update workspace/demo.txt"]
+    assert changes == [
+        PatchFileChange(
+            path="workspace/demo.txt", exists=True, text="new\n"
+        )
+    ]
 
 
 def test_file_edit_next_action_helpers_cover_path_variants():

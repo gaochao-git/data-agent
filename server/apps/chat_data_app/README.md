@@ -85,7 +85,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 | 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
-- **文件工具（`file_read` / `file_edit` / `list_dir` / `present_artifacts`）始终可用且始终严格路径管控**，安全语义不随 backend 改变；其中 `file_read` 统一由服务端从共享 `CHAT_DATA_HOME` 读取，不创建沙箱会话，确保 local / sandbox 使用同一实现和分页口径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
+- **文件工具（`file_read` / `file_edit` / `list_dir` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox 的受控虚拟路径访问 `/mnt/user-data` 与 `/mnt/skills`，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
 - `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
 
 ```text

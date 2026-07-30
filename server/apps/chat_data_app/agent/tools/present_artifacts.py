@@ -9,10 +9,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.conversation_workspace import ConversationWorkspaceRuntime, workspace_artifact_payload
-from .artifact_payloads import (
-    load_output_artifact_payload,
-)
+from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from .common import json_dumps
 
 logger = get_logger(__name__)
@@ -59,10 +56,6 @@ def _presentation_artifact_payload(artifact: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _load_artifact_payload(workspace_root: str, paths: list[str]) -> dict[str, Any]:
-    return load_output_artifact_payload(workspace_root, paths)
-
-
 def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntime):
     @tool("present_artifacts")
     async def present_artifacts(files: list[str]) -> str:
@@ -81,11 +74,7 @@ def create_present_artifacts_tool(workspace_runtime: ConversationWorkspaceRuntim
             if not path:
                 continue
             try:
-                artifact = await workspace_artifact_payload(
-                    workspace_runtime,
-                    file_path=path,
-                    local_loader=_load_artifact_payload,
-                )
+                artifact = await workspace_runtime.artifact_payload(file_path=path)
             except Exception as exc:
                 logger.error("present_artifacts 校验产物失败: path=%s error=%s", path, exc, exc_info=True)
                 errors.append({"file_path": path, "error": str(exc)})

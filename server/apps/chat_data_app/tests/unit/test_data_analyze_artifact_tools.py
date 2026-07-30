@@ -11,8 +11,12 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.agent.tools import artifact_payloads, dsl2sql
-from apps.chat_data_app.services.artifact_registry import parse_output_artifact
+from apps.chat_data_app.agent.tools import dsl2sql
+from apps.chat_data_app.services.artifact_registry import (
+    parse_chart_spec_payload_value,
+    parse_output_artifact,
+)
+from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
 
 
 def _write_json(path, payload):
@@ -23,6 +27,11 @@ def _write_json(path, payload):
 
 def _strip_tool_payload(text: str) -> dict:
     return json.loads(text.replace("[dsl2sql_tool]", "", 1).strip())
+
+
+def _local_artifact_payload(root, file_path: str) -> dict:
+    runtime = ConversationWorkspaceRuntime(workspace_root=str(root), user_id="system")
+    return asyncio.run(runtime.artifact_payload(file_path=file_path))
 
 
 def test_output_artifact_registry_preserves_suffix_specific_table_type():
@@ -89,130 +98,122 @@ def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
     _write_json(invalid_output, {**chart_payload, "encoding": {"x": "不存在", "y": ["销售额"]}})
     _write_json(workspace, chart_payload)
 
-    assert artifact_payloads._is_outputs_target(str(root), output) is True
-    assert artifact_payloads._is_outputs_target(str(root), workspace) is False
-    assert [path.name for path in artifact_payloads._iter_targets(str(root), ["outputs/chart.json", "outputs/invalid.json"])] == ["invalid.json", "chart.json"]
-    assert artifact_payloads.parse_chart_spec_payload(workspace)["chart_type"] == "line"
-    assert artifact_payloads.parse_chart_spec_payload(root / "missing.json") is None
-    assert artifact_payloads.parse_chart_spec_payload(_write_json(root / "outputs" / "bad.json", "not dict")) is None
-    assert artifact_payloads.parse_chart_spec_payload(invalid_output) is None
+    assert parse_chart_spec_payload_value(chart_payload)["chart_type"] == "line"
+    assert parse_chart_spec_payload_value({**chart_payload, "encoding": {"x": "不存在", "y": ["销售额"]}}) is None
+    assert parse_output_artifact(visible_path="/outputs/bad.json", data=b'"not dict"') == {}
 
-    loaded = artifact_payloads.load_chart_spec_artifact_payload(str(root), ["workspace/chart.json", "outputs/chart.json"])
+    loaded = _local_artifact_payload(root, "outputs/chart.json")
 
     assert loaded["file_path"] == "/outputs/chart.json"
     assert loaded["artifact_type"] == "chart_spec"
     assert loaded["chart_spec"]["chart_type"] == "line"
-    assert artifact_payloads.load_chart_spec_artifact_payload(str(root), ["workspace/chart.json"]) == {}
+    assert _local_artifact_payload(root, "workspace/chart.json") == {}
 
 
 def test_chart_artifact_payload_supports_graph_and_rejects_incomplete_specs(tmp_path):
-    graph_path = _write_json(tmp_path / "outputs" / "graph.json", {
+    graph_payload = {
         "version": "1.0",
         "chart_type": "graph",
         "data": {"nodes": [{"id": "a"}], "edges": [{"source": "a", "target": "b"}]},
-    })
-    pie_without_y = _write_json(tmp_path / "outputs" / "pie.json", {
+    }
+    pie_without_y = {
         "version": "1.0",
         "chart_type": "pie",
         "data": [{"name": "A", "value": 1}],
         "encoding": {"x": "name", "y": []},
-    })
-    wrong_version = _write_json(tmp_path / "outputs" / "wrong-version.json", {
+    }
+    wrong_version = {
         "version": "2.0",
         "chart_type": "bar",
         "data": [{"x": "A", "y": 1}],
         "encoding": {"x": "x", "y": ["y"]},
-    })
+    }
 
-    assert artifact_payloads.parse_chart_spec_payload(graph_path)["chart_type"] == "graph"
-    assert artifact_payloads.parse_chart_spec_payload(pie_without_y) is None
-    assert artifact_payloads.parse_chart_spec_payload(wrong_version) is None
+    assert parse_chart_spec_payload_value(graph_payload)["chart_type"] == "graph"
+    assert parse_chart_spec_payload_value(pie_without_y) is None
+    assert parse_chart_spec_payload_value(wrong_version) is None
 
-    graph_top_level = _write_json(tmp_path / "outputs" / "graph-top.json", {
+    graph_top_level = {
         "version": "1.0",
         "chart_type": "graph",
         "nodes": [{"id": "a"}],
         "links": [{"source": "a", "target": "b"}],
-    })
-    graph_empty_nodes = _write_json(tmp_path / "outputs" / "graph-empty-nodes.json", {
+    }
+    graph_empty_nodes = {
         "version": "1.0",
         "chart_type": "graph",
         "data": {"nodes": [], "links": [{"source": "a", "target": "b"}]},
-    })
-    assert artifact_payloads.parse_chart_spec_payload(graph_top_level)["chart_type"] == "graph"
-    assert artifact_payloads.parse_chart_spec_payload(graph_empty_nodes) is None
+    }
+    assert parse_chart_spec_payload_value(graph_top_level)["chart_type"] == "graph"
+    assert parse_chart_spec_payload_value(graph_empty_nodes) is None
 
 
 def test_chart_artifact_payload_limits_combo_to_two_y_fields(tmp_path):
-    target = _write_json(tmp_path / "outputs" / "combo.json", {
+    payload = {
         "version": "1.0",
         "chart_type": "combo",
         "data": [{"month": "2026-01", "a": 1, "b": 2, "c": 3}],
         "encoding": {"x": "month", "y": ["a", "b", "c"]},
-    })
+    }
 
-    assert artifact_payloads.parse_chart_spec_payload(target) is None
+    assert parse_chart_spec_payload_value(payload) is None
 
 
 def test_chart_artifact_payload_rejects_invalid_json_shape_and_missing_encoding(tmp_path):
-    invalid_json = tmp_path / "outputs" / "invalid-json.json"
-    invalid_json.parent.mkdir(parents=True, exist_ok=True)
-    invalid_json.write_text("{bad", encoding="utf-8")
-    unsupported_type = _write_json(tmp_path / "outputs" / "unsupported.json", {
+    unsupported_type = {
         "version": "1.0",
         "chart_type": "unknown",
         "data": [],
         "encoding": {},
-    })
-    empty_line = _write_json(tmp_path / "outputs" / "empty-line.json", {
+    }
+    empty_line = {
         "version": "1.0",
         "chart_type": "line",
         "data": [],
         "encoding": {"x": "month", "y": ["sales"]},
-    })
-    missing_encoding = _write_json(tmp_path / "outputs" / "missing-encoding.json", {
+    }
+    missing_encoding = {
         "version": "1.0",
         "chart_type": "bar",
         "data": [{"month": "2026-01", "sales": 1}],
-    })
-    missing_x = _write_json(tmp_path / "outputs" / "missing-x.json", {
+    }
+    missing_x = {
         "version": "1.0",
         "chart_type": "bar",
         "data": [{"month": "2026-01", "sales": 1}],
         "encoding": {"x": "", "y": ["sales"]},
-    })
-    graph_without_links = _write_json(tmp_path / "outputs" / "graph-without-links.json", {
+    }
+    graph_without_links = {
         "version": "1.0",
         "chart_type": "graph",
         "data": {"nodes": [{"id": "a"}], "edges": []},
-    })
-    y_missing = _write_json(tmp_path / "outputs" / "missing-y-field.json", {
+    }
+    y_missing = {
         "version": "1.0",
         "chart_type": "line",
         "data": [{"month": "2026-01", "sales": 1}],
         "encoding": {"x": "month", "y": ["missing"]},
-    })
-    non_dict_rows = _write_json(tmp_path / "outputs" / "non-dict-rows.json", {
+    }
+    non_dict_rows = {
         "version": "1.0",
         "chart_type": "table",
         "data": ["row"],
         "encoding": {"x": "", "y": []},
-    })
+    }
 
-    assert artifact_payloads.parse_chart_spec_payload(invalid_json) is None
-    assert artifact_payloads.parse_chart_spec_payload(unsupported_type) is None
-    assert artifact_payloads.parse_chart_spec_payload(empty_line) is None
-    assert artifact_payloads.parse_chart_spec_payload(missing_encoding) is None
-    assert artifact_payloads.parse_chart_spec_payload(missing_x) is None
-    assert artifact_payloads.parse_chart_spec_payload(graph_without_links) is None
-    assert artifact_payloads.parse_chart_spec_payload(y_missing) is None
-    assert artifact_payloads.parse_chart_spec_payload(non_dict_rows)["chart_type"] == "table"
+    assert parse_output_artifact(visible_path="/outputs/invalid-json.json", data=b"{bad") == {}
+    assert parse_chart_spec_payload_value(unsupported_type) is None
+    assert parse_chart_spec_payload_value(empty_line) is None
+    assert parse_chart_spec_payload_value(missing_encoding) is None
+    assert parse_chart_spec_payload_value(missing_x) is None
+    assert parse_chart_spec_payload_value(graph_without_links) is None
+    assert parse_chart_spec_payload_value(y_missing) is None
+    assert parse_chart_spec_payload_value(non_dict_rows)["chart_type"] == "table"
 
 
 def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path):
     root = tmp_path
-    missing_chart = root / "outputs" / "missing.json"
-    bad_chart = _write_json(root / "outputs" / "bad-chart.json", {
+    _write_json(root / "outputs" / "bad-chart.json", {
         "version": "1.0",
         "chart_type": "line",
         "data": [],
@@ -224,12 +225,14 @@ def test_artifact_payload_loaders_skip_invalid_targets_until_valid_one(tmp_path)
         "data": [],
         "encoding": {"x": "", "y": []},
     })
-    bad_dashboard = root / "outputs" / "bad-dashboard-json.json"
-    bad_dashboard.write_text("{bad", encoding="utf-8")
+    (root / "outputs" / "bad-dashboard-json.json").write_text("{bad", encoding="utf-8")
     valid_dashboard = _write_json(root / "outputs" / "valid-dashboard.json", {"cards": []})
 
-    loaded_chart = artifact_payloads.load_chart_spec_artifact_payload(str(root), [valid_chart, bad_chart, missing_chart])
-    loaded_dashboard = artifact_payloads.load_dashboard_spec_artifact_payload(str(root), [valid_dashboard, bad_dashboard, root / "outputs" / "missing-dashboard.json"])
+    assert _local_artifact_payload(root, "outputs/missing.json") == {}
+    assert _local_artifact_payload(root, "outputs/bad-chart.json") == {}
+    assert _local_artifact_payload(root, "outputs/bad-dashboard-json.json") == {}
+    loaded_chart = _local_artifact_payload(root, "outputs/valid-chart.json")
+    loaded_dashboard = _local_artifact_payload(root, "outputs/valid-dashboard.json")
 
     assert loaded_chart["file_path"] == "/outputs/valid-chart.json"
     assert loaded_chart["chart_spec"]["chart_type"] == "table"
@@ -246,12 +249,13 @@ def test_dashboard_artifact_payload_reads_cards_from_outputs(tmp_path):
     _write_json(root / "outputs" / "bad-dashboard.json", {"cards": "bad"})
     _write_json(root / "workspace" / "dashboard.json", {"cards": []})
 
-    loaded = artifact_payloads.load_dashboard_spec_artifact_payload(str(root), [output])
+    loaded = _local_artifact_payload(root, "outputs/dashboard.json")
 
     assert loaded["file_path"] == "/outputs/dashboard.json"
     assert loaded["artifact_type"] == "dashboard_spec"
     assert loaded["dashboard_spec"]["dashboard_name"] == "订单看板"
-    assert artifact_payloads.load_dashboard_spec_artifact_payload(str(root), ["workspace/dashboard.json", "outputs/bad-dashboard.json"]) == {}
+    assert _local_artifact_payload(root, "workspace/dashboard.json") == {}
+    assert _local_artifact_payload(root, "outputs/bad-dashboard.json") == {}
 
 
 @pytest.mark.asyncio

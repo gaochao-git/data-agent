@@ -1331,22 +1331,25 @@ def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
         user_id="u1",
         backend="local",
     )
-    built = asyncio.run(skill_load._build_skill_payload_async("skill-a", user_id="u1", workspace_runtime=runtime))
+    built = asyncio.run(runtime.load_skill_payload(skill_name="skill-a", max_chars=16000))
     assert built["references"] == ["guide"]
     assert built["scripts"] == ["run.py"]
     assert built["assets"] == ["a.png"]
     assert built["visible_path"] == "/mnt/skills/skill-a"
 
     with pytest.raises(ValueError, match="技能不存在"):
-        asyncio.run(skill_load._build_skill_payload_async("missing", workspace_runtime=runtime))
+        asyncio.run(runtime.load_skill_payload(skill_name="missing", max_chars=16000))
 
     tool = skill_load.create_skill_load_tool(runtime, user_id="u1")
-    monkeypatch.setattr(skill_load, "_build_skill_payload_async", lambda *_args, **_kwargs: asyncio.sleep(0, result=dict(built)))
+    async def load_payload(*_args, **_kwargs):
+        return dict(built)
+
+    monkeypatch.setattr(runtime, "load_skill_payload", load_payload)
     result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
     assert "runtime_path=/mnt/skills/skill-a" in result
 
     async def raise_payload(*_args, **_kwargs):
         raise RuntimeError("load failed")
 
-    monkeypatch.setattr(skill_load, "_build_skill_payload_async", raise_payload)
+    monkeypatch.setattr(runtime, "load_skill_payload", raise_payload)
     assert "skill_load 执行失败: load failed" in asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))

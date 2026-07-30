@@ -16,6 +16,7 @@ from apps.chat_data_app.agent.tools import bash_run
 from apps.chat_data_app.services import workspace_execution
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
+    SandboxWorkspaceBackend,
     WorkspacePathMapping,
 )
 from apps.chat_data_app.services.workspace_execution import (
@@ -189,6 +190,225 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
     assert payload == {}
 
 
+def test_sandbox_path_requires_a_skill_name():
+    with pytest.raises(ValueError, match="技能路径必须包含技能名"):
+        sandbox_visible_path("/mnt/skills")
+
+
+def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monkeypatch):
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+    captured = {}
+
+    async def fake_resolve(**kwargs):
+        captured["resolve"] = kwargs
+        return "/mnt/user-data/workspace/report.txt"
+
+    async def fake_run(**kwargs):
+        captured["run"] = kwargs
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "lines": ["row"],
+            "total_lines": None,
+            "start_line": 1,
+            "end_line": 1,
+            "next_offset": None,
+            "has_more_lines": False,
+            "has_more": False,
+            "truncated_lines": [],
+        }
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "run_sandbox_python_json", fake_run)
+
+    result = asyncio.run(workspace_execution.sandbox_read_text_file(
+        session_ref=session_ref,
+        file_path="workspace/report.txt",
+        offset=0,
+        limit=200,
+        max_chars=25000,
+    ))
+
+    assert captured["resolve"]["file_path"] == "workspace/report.txt"
+    assert captured["run"]["payload"] == {
+        "path": "/mnt/user-data/workspace/report.txt",
+        "offset": 0,
+        "limit": 200,
+        "max_chars": 25000,
+    }
+    assert result["path"] == "/mnt/user-data/workspace/report.txt"
+    assert result["has_more_lines"] is False
+
+
+def test_sandbox_patch_uses_shared_plan_and_files_api(monkeypatch):
+    class FakeFiles:
+        pass
+
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=FakeFiles()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+    calls = {"reads": [], "writes": [], "deletes": [], "rpc": []}
+
+    async def fake_resolve(**kwargs):
+        return "/mnt/user-data/" + kwargs["file_path"].lstrip("/")
+
+    async def fake_read(**kwargs):
+        calls["reads"].append(kwargs["path"])
+        if kwargs["path"].endswith("remove.txt"):
+            return b"remove\n"
+        if kwargs["path"].endswith("update.txt"):
+            return b"old\n"
+        raise FileNotFoundError(kwargs["path"])
+
+    async def fake_write(**kwargs):
+        calls["writes"].append((kwargs["path"], kwargs["data"]))
+
+    async def fake_delete(**kwargs):
+        calls["deletes"].append(kwargs["paths"])
+
+    async def unexpected_rpc(**kwargs):
+        calls["rpc"].append(kwargs)
+        raise AssertionError("sandbox patch must not use a patch RPC script")
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes_with_fallback", fake_read)
+    monkeypatch.setattr(workspace_execution, "_write_sandbox_file", fake_write)
+    monkeypatch.setattr(workspace_execution, "_delete_sandbox_files", fake_delete)
+    monkeypatch.setattr(workspace_execution, "run_sandbox_python_json", unexpected_rpc)
+
+    from apps.chat_data_app.services.workspace_patch import AddOp, DeleteOp, Hunk, UpdateOp
+
+    actions = asyncio.run(workspace_execution.sandbox_apply_patch_ops(
+        session_ref=session_ref,
+        ops=[
+            AddOp(path="workspace/add.txt", lines=["new"]),
+            UpdateOp(path="workspace/update.txt", hunks=[Hunk(lines=["-old", "+updated"])]),
+            DeleteOp(path="workspace/remove.txt"),
+        ],
+        dry_run=False,
+    ))
+
+    assert actions == [
+        "add workspace/add.txt",
+        "update workspace/update.txt",
+        "delete workspace/remove.txt",
+    ]
+    assert calls["writes"] == [
+        ("/mnt/user-data/workspace/add.txt", b"new\n"),
+        ("/mnt/user-data/workspace/update.txt", b"updated\n"),
+    ]
+    assert calls["deletes"] == [["/mnt/user-data/workspace/remove.txt"]]
+    assert calls["rpc"] == []
+
+
+def test_sandbox_patch_dry_run_does_not_persist(monkeypatch):
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=object()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+
+    async def fake_resolve(**kwargs):
+        return "/mnt/user-data/workspace/add.txt"
+
+    async def missing_file(**_kwargs):
+        raise FileNotFoundError("missing")
+
+    async def unexpected_persist(**_kwargs):
+        raise AssertionError("dry run must not persist changes")
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes_with_fallback", missing_file)
+    monkeypatch.setattr(workspace_execution, "_write_sandbox_file", unexpected_persist)
+    monkeypatch.setattr(workspace_execution, "_delete_sandbox_files", unexpected_persist)
+
+    from apps.chat_data_app.services.workspace_patch import AddOp
+
+    assert asyncio.run(workspace_execution.sandbox_apply_patch_ops(
+        session_ref=session_ref,
+        ops=[AddOp(path="workspace/add.txt", lines=["new"])],
+        dry_run=True,
+    )) == ["add workspace/add.txt"]
+
+
+def test_sandbox_patch_accepts_sdk_not_found_for_add(monkeypatch):
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=object()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+
+    class NotFoundError(Exception):
+        status_code = 404
+
+    async def fake_resolve(**_kwargs):
+        return "/mnt/user-data/workspace/add.txt"
+
+    async def missing_file(**_kwargs):
+        raise NotFoundError("not found")
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes_with_fallback", missing_file)
+
+    from apps.chat_data_app.services.workspace_patch import AddOp
+
+    assert asyncio.run(workspace_execution.sandbox_apply_patch_ops(
+        session_ref=session_ref,
+        ops=[AddOp(path="workspace/add.txt", lines=["new"])],
+        dry_run=True,
+    )) == ["add workspace/add.txt"]
+
+
+def test_sandbox_load_skill_and_list_dir_delegate_through_real_path(monkeypatch):
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+        host_workspace_path="/host/user-data",
+    )
+    resolved_paths = []
+
+    async def fake_resolve(**kwargs):
+        resolved_paths.append(kwargs["file_path"])
+        path = kwargs["file_path"]
+        return "/mnt/skills/demo-skill" if path.startswith("/mnt/skills") else "/mnt/user-data/workspace"
+
+    async def fake_run(**kwargs):
+        if kwargs["payload"].get("name"):
+            return {"name": "demo-skill", "title": "Demo", "description": "", "skill_md": "# Demo", "references": [], "scripts": [], "assets": []}
+        return {"entries": [{"type": "file", "path": "/mnt/user-data/workspace/a.txt", "size": 1, "mtime": "2026-01-01 00:00"}]}
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "run_sandbox_python_json", fake_run)
+
+    skill = asyncio.run(workspace_execution.sandbox_load_skill_payload(
+        session_ref=session_ref, skill_name="demo-skill", max_chars=100,
+    ))
+    entries = asyncio.run(workspace_execution.sandbox_list_dir(
+        session_ref=session_ref, path="workspace", max_depth=2,
+    ))
+
+    assert resolved_paths == ["/mnt/skills/demo-skill", "workspace"]
+    assert skill["visible_path"] == "/mnt/skills/demo-skill"
+    assert entries[0]["path"] == "/mnt/user-data/workspace/a.txt"
+
+
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
     # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
     workspace_root = _workspace_root(tmp_path)
@@ -260,14 +480,18 @@ def test_sandbox_bash_uses_fixed_skills_volume(monkeypatch, tmp_path):
         user_id="user_a",
         backend="sandbox",
     )
-    runtime.sandbox_session_ref.current = SandboxExecutionSession(
+    assert isinstance(runtime.backend, SandboxWorkspaceBackend)
+    runtime.backend.session_ref.current = SandboxExecutionSession(
         sandbox=object(),
         sandbox_id="sbx_1",
         workspace_root=runtime.workspace_root,
         host_workspace_path="/host/workspace",
         runtime_skills_dir=snapshot_dir,
     )
-    monkeypatch.setattr(bash_run, "run_command_in_sandbox", fake_run_command_in_sandbox)
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.conversation_workspace.run_command_in_sandbox",
+        fake_run_command_in_sandbox,
+    )
 
     result = asyncio.run(
         bash_run.run_bash_command(
