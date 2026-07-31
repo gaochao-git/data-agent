@@ -45,5 +45,5 @@ thrift
 thrift-sasl
 rdflib
 pyshacl
-opensandbox==0.1.9
+opensandbox==0.1.15
 sqlglot==30.8.0

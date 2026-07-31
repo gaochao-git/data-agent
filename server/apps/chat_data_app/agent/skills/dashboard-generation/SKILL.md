@@ -67,7 +67,7 @@ workspace/dashboard_draft.json
 
 ## 工具流程
 
-按下面顺序完成，不把工具参数、JSON、DSL、SQL、patch 或工具返回原文写进用户正文。
+按下面顺序完成，不把工具参数、JSON、DSL、SQL 或工具返回原文写进用户正文。
 每次调用工具前先输出一句短句说明当前要做什么；工具返回后用一句短句概括发现，再继续下一步。
 
 1. `skill_load("dashboard-generation")`
@@ -79,9 +79,9 @@ workspace/dashboard_draft.json
 7. 内部构建完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`
 8. `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)` 校验整份规格
 9. 校验失败时，按主指南修正后重新调用 `dsl2sql_tool`
-10. 校验通过后 `file_edit(operation="write", file_path="workspace/dashboard_draft.json", content=dashboard_spec, mode="overwrite")`
-11. 新建预览时写入 `/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json`
-12. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(operation="patch", patch=...)` 修改
+10. 校验通过后用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿
+11. 新建预览时用 `file_write` 写入 `/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json`
+12. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文；需要整体覆盖时改用 `file_write`
 13. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 展示最终看板预览
 14. 简短总结预览结果
 
@@ -100,8 +100,8 @@ workspace/dashboard_draft.json
 - 默认生成最小可用看板，优先覆盖总览、趋势、结构 / 对比、排行 / 诊断等核心视角。
 - 每张卡片必须包含 `title`、`chart_type`、`layout`、`dsl`。
 - 卡片中不包含 `sql`、`data`、`rows`、`result`、`x_field`、`y_field`，不使用 `type` 代替 `chart_type`。
-- 生成或修改 `dashboard_spec` 时必须使用多行缩进 JSON，不要压缩成一行；后续 patch 必须基于文件当前真实内容。
-- 修改已有 `dashboard_spec` 前必须先用 `file_read` 读取目标文件；`file_edit` patch 失败后必须重新 `file_read` 再生成新 patch，不能凭记忆重试。
+- 生成或整体覆盖 `dashboard_spec` 时必须使用多行缩进 JSON 和 `file_write`，不要压缩成一行。
+- 修改已有 `dashboard_spec` 的局部内容前必须先用 `file_read` 读取目标文件，再用 `file_edit(file_path, old_content, new_content)` 精确替换；找不到或匹配多处时重新读取，不能凭记忆重试。
 - 最终文件必须是看板规格文件，不是查询结果文件。
 - 写入或更新 outputs 看板文件后，必须调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])`，否则聊天框不会展示看板预览。
 
@@ -127,4 +127,4 @@ workspace/dashboard_draft.json
 - 卡片数量和默认口径
 - 提醒用户在右侧预览区点击“写入看板”
 
-不要在正文展示完整看板 JSON、DSL、SQL、patch、工具参数或原始查询结果。
+不要在正文展示完整看板 JSON、DSL、SQL、工具参数或原始查询结果。

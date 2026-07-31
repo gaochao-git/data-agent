@@ -196,8 +196,8 @@ outputs/chart_spec_sales_ratio.json
 
 不要用版本号区分多个图表；后缀必须表达图表业务含义。
 
-写入或修改 `chart_spec` 时必须使用多行缩进 JSON，不要压缩成一行；如果需要 patch 已有文件，先用 `file_read` 读取目标文件当前内容，再基于真实内容生成 patch，避免用记忆中的旧片段。`file_edit` patch 失败后必须重新 `file_read`，不能凭上一次失败 patch 重试。
+写入或整体覆盖 `chart_spec` 时必须使用多行缩进 JSON 和 `file_write`，不要压缩成一行。局部修改已有文件时，先用 `file_read` 读取目标文件当前内容，再用 `file_edit(file_path, old_content, new_content)` 替换一段完整且唯一的原文；找不到或匹配多处时重新读取，不能凭记忆重试。
 
-最终图表文件写入 outputs 后，必须调用 `present_artifacts(files=[...])` 显式展示给用户；`file_edit` 只代表文件已写入，不代表聊天框已展示预览。
+最终图表文件写入 outputs 后，必须调用 `present_artifacts(files=[...])` 显式展示给用户；`file_write` 或 `file_edit` 只代表文件已写入或更新，不代表聊天框已展示预览。
 
 不要把完整 JSON 展示给用户。用户只需要知道预览已生成、图表类型、口径和文件路径。

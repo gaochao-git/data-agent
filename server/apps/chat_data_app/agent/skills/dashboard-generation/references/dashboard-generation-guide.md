@@ -6,13 +6,13 @@
 
 看板生成的交付物是 `dashboard_spec`，不是 SQL 查询结果报表。它描述“看什么、怎么查、怎么布局”，只保存卡片定义、图表类型、布局和语义 DSL，不保存 SQL 执行后的结果数据。
 
-看板预览文件写入 outputs 后，必须调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示给用户；`file_edit` 只代表文件已写入，不代表聊天框已展示预览。
+看板预览文件写入 outputs 后，必须调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示给用户；`file_write` 或 `file_edit` 只代表文件已写入或更新，不代表聊天框已展示预览。
 
 ```text
 outputs/<业务主题>-<短时间戳或短随机后缀>.dashboard.json
 ```
 
-每次新建看板必须使用独立文件名，不要复用或覆盖已有 outputs 看板预览文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。只有用户明确要求修改某个已有看板预览文件时，才读取并 patch 该文件。
+每次新建看板必须使用独立文件名，不要复用或覆盖已有 outputs 看板预览文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。只有用户明确要求修改某个已有看板预览文件时，才读取并更新该文件。
 
 看板生成时先维护草稿，最终再移动为预览文件：
 
@@ -21,28 +21,9 @@ workspace/dashboard_draft.json
   -> outputs/<业务主题>-<唯一后缀>.dashboard.json
 ```
 
-新建看板时先写入 `workspace/dashboard_draft.json`，校验通过后用 `file_edit(file_path="outputs/<业务主题>-<唯一后缀>.dashboard.json", content=...)` 写入最终预览文件。修改已有看板预览时，先 `file_read` 指定 outputs 文件，再用 `file_edit(operation="patch", patch=...)` 修改。
+新建看板时先用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿，校验通过后用 `file_write(file_path="outputs/<业务主题>-<唯一后缀>.dashboard.json", content=dashboard_spec)` 写入最终预览文件。修改已有看板预览时，先 `file_read` 指定 outputs 文件；局部修改使用 `file_edit(file_path, old_content, new_content)`，其中 `old_content` 必须是最新文件中完整、非空且唯一的一段原文。需要整体替换时使用 `file_write`。
 
-草稿阶段可以整体覆盖同一个 `workspace/dashboard_draft.json`；局部调整必须使用 `file_edit(operation="patch", patch=...)`，不要用 `append` 拼接 JSON。写入或修改 `dashboard_spec` 时必须使用多行缩进 JSON，不要压缩成一行；patch 必须基于文件当前真实内容。修改已有 `dashboard_spec` 前必须先用 `file_read` 读取目标文件；`file_edit` patch 失败后必须重新 `file_read` 再生成新 patch，不能凭记忆重试。
-
-`file_edit(operation="patch", patch=...)` 标准语法：
-
-```text
-*** Begin Patch
-*** Update File: workspace/dashboard_draft.json
-@@
--      "title": "旧标题",
-+      "title": "新标题",
-*** End Patch
-```
-
-要求：
-
-- 开始行必须是 `*** Begin Patch`。
-- 结束行必须是 `*** End Patch`。
-- 更新文件使用 `*** Update File: <path>`。
-- 修改内容前必须有 `@@`。
-- hunk 内每行必须以空格、`-` 或 `+` 开头。
+草稿阶段可以整体覆盖同一个 `workspace/dashboard_draft.json`；不要用 append 拼接 JSON。写入或整体覆盖 `dashboard_spec` 时必须使用多行缩进 JSON 和 `file_write`。局部修改前必须先用 `file_read` 读取当前内容；`file_edit` 找不到原文或匹配多处时，重新读取并提供更长且唯一的 `old_content`，不能凭记忆重试。
 
 ## 规格结构
 
@@ -327,10 +308,10 @@ DSL 字段：
 3. 调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`。
 4. 根据返回 warnings 和错误修正 DSL。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
-6. 新建预览时写入一个新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才 patch 指定 outputs 文件。
+6. 新建预览时用 `file_write` 写入一个新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才先 `file_read` 再用 `file_edit` 精确替换唯一内容，或用 `file_write` 整体覆盖。
 7. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示最终看板预览。
 
-写入或 patch `workspace/dashboard_draft.json` 后必须继续校验，并写入 outputs 最终预览文件；不能把草稿写入当成看板生成完成。patch outputs 看板文件后必要时重新校验，确认看板规格仍可执行。
+写入或更新 `workspace/dashboard_draft.json` 后必须继续校验，并写入 outputs 最终预览文件；不能把草稿写入当成看板生成完成。更新已有 outputs 看板文件后必要时重新校验，确认看板规格仍可执行。
 
 ## 失败处理
 
@@ -340,5 +321,5 @@ DSL 字段：
 - 排行卡片校验失败：确认 `order_by.field` 使用指标名，`dimensions` 使用对象、商品、机构、区域等真实维度。
 - 过滤条件失败：只使用当前存在的维度作为 `filters.dimension`，不要使用物理字段名或自由文本字段。
 - 有卡片长期无法通过校验：删除该卡片或改成可通过校验的替代视角，不要反复使用同一错误 DSL。
-- `file_edit` patch 失败：重新读取当前目标文件内容并生成标准 patch；不要使用 append 拼接 JSON。
-- outputs 目标已存在：如果用户是在新建看板，改用新的唯一 `.dashboard.json` 文件名；如果用户明确要求修改该文件，先 `file_read` 再 patch。
+- `file_edit` 失败：重新读取当前目标文件内容，提供更长且唯一的 `old_content`；不要使用 append 拼接 JSON。
+- outputs 目标已存在：如果用户是在新建看板，改用新的唯一 `.dashboard.json` 文件名；如果用户明确要求修改该文件，先 `file_read` 再精确替换或整体覆盖。

@@ -1,3 +1,4 @@
+# 增加表结构
 CREATE TABLE IF NOT EXISTS chat_data_conversation_event (
     id BIGINT(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     conversation_id VARCHAR(255) NOT NULL COMMENT '会话ID',
@@ -19,3 +20,6 @@ CREATE TABLE IF NOT EXISTS chat_data_conversation_event (
     KEY idx_conv_event_seq (conversation_id, sequence_no),
     KEY idx_conv_event_turn (conversation_id, turn_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData会话原始事件历史';
+
+# 升级opensandbox客户端
+python -m pip install opensandbox

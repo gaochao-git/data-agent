@@ -89,22 +89,21 @@ kill -9 $(lsof -ti :5001)
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
 - `CHAT_DATA_HOME`：ChatData 应用**唯一的数据根目录**（**必填**，禁止回退到其它变量推导）；会话工作区、卸载的查询结果、系统技能（`skills/system`）、用户技能（`skills/user`）、SQLite 检查点（`checkpoints.db`）均派生自此
-- `OPENSANDBOX_HOST_CHAT_DATA_HOME`：OpenSandbox 宿主机看到的同一共享数据根；留空表示与应用侧路径相同，不同时按相对路径翻译
 - `CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` / `CHAT_DATA_MODEL`：智能问数模型配置，其中 `CHAT_DATA_API_KEY` 存放 SM4 加密后的密文；`CHAT_DATA_MODEL` 格式为 `模型名;温度;上下文窗口`，多个模型用逗号分隔
 - `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制
 - `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：工具结果卸载阈值，默认 32000 字符；查询结果保存为私有 JSON，其他工具结果保存为私有文本
-- `CHAT_DATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 16000 字符；按请求源行分页，超限时优先截断最长行并返回该行续读位置
+- `CHAT_DATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 25000 字符；按请求源行分页，单行最多返回 500 字符
 - `CHAT_DATA_CONTEXT_COMPRESSION_ENABLED`：智能问数上下文压缩总开关，仅影响发给大模型的上下文，不影响页面历史、checkpoint 和审计记录
 - `CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`、最大 `0.80`；实际触发点同时受 `CHAT_DATA_OUTPUT_MAX_TOKENS` 输出预留约束
 - `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`：上下文压缩摘要调用的最大输出 token，默认 `2000`；独立于主模型调用的 `CHAT_DATA_OUTPUT_MAX_TOKENS`
 
 ## 运行时存储
 
-`CHAT_DATA_HOME` 是 local 与 sandbox 共用的运行时文件根。生产多实例必须把它配置为所有应用实例和 OpenSandbox 宿主机可访问的同一 POSIX 共享目录，例如 GFS、NFS、CephFS、EFS 或 RWX PVC；代码不做跨节点文件同步。
+`CHAT_DATA_HOME` 是应用侧唯一的运行时文件根。local 直接在该目录读写；sandbox 不访问该目录，也不使用宿主机目录挂载，而是通过 OpenSandbox Files API 上传会话快照，并在操作完成后把允许同步的 `workspace/`、`outputs/` 文件下载回应用侧。多应用实例之间的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。
 
-会话文件位于 `threads/{user_id}/{conversation_id}/user-data/`，系统技能位于 `skills/system/`，用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建只读技能快照 `threads/{user_id}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变，沙箱仅固定挂载两卷：`user-data/` → `/mnt/user-data`（可写）、`runtime-skills/` → `/mnt/skills`（只读）。大工具结果统一位于会话 `outputs/.tool-results/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-results/<id>.<suffix>`。该目录随 `user-data/` 挂载，可由 Agent 的 `file_read` 分页读取或 Bash 处理；但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能由发布流程将代码包 `apps/chat_data_app/agent/skills/` 下的技能目录复制到 `skills/system/`，应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+会话文件位于 `threads/{user_id}/{conversation_id}/user-data/`，系统技能位于 `skills/system/`，用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `outputs/.tool-results/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-results/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能由发布流程将代码包 `apps/chat_data_app/agent/skills/` 下的技能目录复制到 `skills/system/`，应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
 
 ## 权限边界
 

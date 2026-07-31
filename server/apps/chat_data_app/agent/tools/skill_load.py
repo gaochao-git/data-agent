@@ -84,7 +84,7 @@ def create_skill_load_tool(workspace_runtime: ConversationWorkspaceRuntime, user
         加载指定技能说明，返回受 CHAT_DATA_FILE_READ_MAX_CHARS 限制的 SKILL.md 正文、references/scripts/assets 清单与只读 `/mnt/skills/...` 路径。
 
         技能目录保留在既有技能仓库，不复制到会话 workspace。本工具是「获取 SKILL.md 内联文本」的便捷入口；
-        读取技能的 references/scripts/assets 子文件时，也可直接用返回的 runtime_path 拼接后交给 file_read/list_dir，
+        读取技能的 references/scripts/assets 子文件时，也可直接用返回的 runtime_path 拼接后交给 file_read/dir_list，
         无需先调用本工具（任何当前用户有权访问的技能路径均可直接读取，按权限校验，对齐 deer-flow 的
         discover + read_file 模型）。
 

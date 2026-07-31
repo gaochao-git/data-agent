@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import fnmatch
 import os
 import re
 import shlex
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -32,20 +34,24 @@ from .workspace_execution import (
     SandboxExecutionSessionRef,
     get_workspace_execution_session,
     run_command_in_sandbox,
-    sandbox_apply_patch_ops,
     sandbox_artifact_payload,
+    sandbox_create_dir,
+    sandbox_delete_path,
+    sandbox_grep_text,
     sandbox_list_dir,
     sandbox_load_skill_payload,
+    sandbox_move_path,
     sandbox_outputs_dir,
     sandbox_path_to_visible,
     sandbox_read_text_file,
     sandbox_write_tool_result,
     sync_sandbox_working_trees,
+    sandbox_search_files,
     sandbox_visible_path,
+    sandbox_replace_text_file,
     sandbox_write_text_file,
     sandbox_workspace_dir,
 )
-from .workspace_patch import PatchOp, apply_patch_ops
 
 logger = get_logger(__name__)
 
@@ -87,13 +93,14 @@ class WorkspaceBackend(Protocol):
         content: str,
     ) -> dict[str, Any]: ...
 
-    async def apply_patch_ops(
+    async def replace_text_file(
         self,
         runtime: "ConversationWorkspaceRuntime",
         *,
-        ops: list[PatchOp],
-        dry_run: bool,
-    ) -> list[str]: ...
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]: ...
 
     async def artifact_payload(
         self,
@@ -117,6 +124,50 @@ class WorkspaceBackend(Protocol):
         path: str,
         max_depth: int,
     ) -> list[dict[str, Any]]: ...
+
+    async def create_dir(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+    ) -> dict[str, Any]: ...
+
+    async def delete_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]: ...
+
+    async def move_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def search_files(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def grep_text(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        pattern: str,
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]: ...
 
     async def get_sandbox_session_ref(
         self,
@@ -242,12 +293,23 @@ class ConversationWorkspaceRuntime:
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
         return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
+    async def replace_text_file(
+        self,
+        *,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
+        return await self.backend.replace_text_file(
+            self,
+            file_path=file_path,
+            old_content=old_content,
+            new_content=new_content,
+        )
+
     async def write_tool_result(self, *, file_path: str, content: str) -> dict[str, Any]:
         """Persist a middleware-owned hidden tool result through the active backend."""
         return await self.backend.write_tool_result(self, file_path=file_path, content=content)
-
-    async def apply_patch_ops(self, *, ops: list[PatchOp], dry_run: bool) -> list[str]:
-        return await self.backend.apply_patch_ops(self, ops=ops, dry_run=dry_run)
 
     async def artifact_payload(self, *, file_path: str) -> dict[str, Any]:
         return await self.backend.artifact_payload(self, file_path=file_path)
@@ -257,6 +319,62 @@ class ConversationWorkspaceRuntime:
 
     async def list_dir(self, *, path: str, max_depth: int) -> list[dict[str, Any]]:
         return await self.backend.list_dir(self, path=path, max_depth=max_depth)
+
+    async def create_dir(self, *, path: str) -> dict[str, Any]:
+        return await self.backend.create_dir(self, path=path)
+
+    async def delete_path(
+        self,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await self.backend.delete_path(
+            self,
+            path=path,
+            recursive=recursive,
+            expected_type=expected_type,
+        )
+
+    async def move_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
+        return await self.backend.move_path(
+            self,
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def search_files(
+        self,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        return await self.backend.search_files(
+            self,
+            path=path,
+            pattern=pattern,
+            max_results=max_results,
+        )
+
+    async def grep_text(
+        self,
+        *,
+        path: str,
+        pattern: str,
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await self.backend.grep_text(
+            self,
+            path=path,
+            pattern=pattern,
+            glob=glob,
+            max_results=max_results,
+            max_chars=max_chars,
+        )
 
     async def validate_bash_paths(self, *, command: str) -> None:
         await self.backend.validate_bash_paths(self, command=command)
@@ -574,6 +692,7 @@ async def read_conversation_query_result(
 _TEXT_READ_CHUNK_CHARS = 64 * 1024
 _TEXT_LINE_SEPARATOR_RE = re.compile(r"[\n\v\f\x1c-\x1e\x85\u2028\u2029]")
 MAX_FILE_READ_LINE_CHARS = 500
+_TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
 def _iter_text_line_fragments(file_obj: Any):
@@ -792,15 +911,46 @@ def _read_local_runtime_skill_file(
 
 
 def _write_local_text_file(workspace_root: str, file_path: str, content: str, mode: str) -> dict[str, Any]:
+    if mode != "overwrite":
+        raise ValueError("内部文件写入只支持 overwrite")
     target = resolve_workspace_path(workspace_root, file_path, writable=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w" if mode == "overwrite" else "a", encoding="utf-8") as file_obj:
+    with target.open("w", encoding="utf-8") as file_obj:
         file_obj.write(content)
     return {
         "operation": "write",
         "file_path": to_visible_path(workspace_root, target),
         "mode": mode,
         "bytes": len(content.encode("utf-8")),
+    }
+
+
+def _replace_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    old_content: str,
+    new_content: str,
+) -> dict[str, Any]:
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    if not target.exists():
+        raise ValueError(f"文件不存在: {file_path}")
+    if not target.is_file():
+        raise ValueError(f"目标是目录，不是文件: {file_path}")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"暂不支持修改二进制文件: {file_path}") from exc
+    match_count = content.count(old_content)
+    if match_count == 0:
+        raise ValueError("old_content 未在文件中找到；请先用 file_read 获取最新内容")
+    if match_count > 1:
+        raise ValueError("old_content 在文件中匹配多处；请提供更长且唯一的原文")
+    target.write_text(content.replace(old_content, new_content, 1), encoding="utf-8")
+    return {
+        "operation": "edit",
+        "file_path": to_visible_path(workspace_root, target),
+        "replaced_count": 1,
+        "bytes": len(new_content.encode("utf-8")),
     }
 
 
@@ -944,6 +1094,176 @@ def _list_local_workspace_dir(
     return entries
 
 
+def _resolve_local_mutable_path(workspace_root: str, path: str) -> Path:
+    target = resolve_workspace_path(workspace_root, path, writable=True)
+    mutable_roots = {
+        resolve_workspace_path(workspace_root, "workspace"),
+        resolve_workspace_path(workspace_root, "outputs"),
+    }
+    if target in mutable_roots:
+        raise ValueError("不允许操作 workspace/ 或 outputs/ 根目录")
+    return target
+
+
+def _create_local_dir(workspace_root: str, path: str) -> dict[str, Any]:
+    target = _resolve_local_mutable_path(workspace_root, path)
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"目录已存在: {path}")
+    target.mkdir(parents=True, exist_ok=False)
+    return {"path": to_visible_path(workspace_root, target), "type": "dir"}
+
+
+def _delete_local_path(
+    workspace_root: str,
+    path: str,
+    recursive: bool,
+    expected_type: Literal["file", "dir"],
+) -> dict[str, Any]:
+    target = _resolve_local_mutable_path(workspace_root, path)
+    if target.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not target.exists():
+        raise FileNotFoundError(f"路径不存在: {path}")
+    is_dir = target.is_dir()
+    actual_type = "dir" if is_dir else "file"
+    if actual_type != expected_type:
+        raise ValueError(f"目标是{actual_type}，不能作为{expected_type}删除")
+    if is_dir:
+        if recursive:
+            shutil.rmtree(target)
+        else:
+            target.rmdir()
+    else:
+        target.unlink()
+    return {"path": to_visible_path(workspace_root, target), "type": "dir" if is_dir else "file"}
+
+
+def _move_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:
+    source = _resolve_local_mutable_path(workspace_root, source_path)
+    destination = _resolve_local_mutable_path(workspace_root, destination_path)
+    if source.is_symlink() or destination.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not source.exists():
+        raise FileNotFoundError(f"源路径不存在: {source_path}")
+    if destination.exists():
+        raise ValueError(f"目标路径已存在: {destination_path}")
+    if not destination.parent.is_dir():
+        raise ValueError(f"目标父目录不存在: {destination_path}")
+    source.rename(destination)
+    return {
+        "source_path": to_visible_path(workspace_root, source),
+        "destination_path": to_visible_path(workspace_root, destination),
+        "type": "dir" if destination.is_dir() else "file",
+    }
+
+
+def _search_local_workspace_files(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    pattern: str,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        if is_tool_result_workspace_path(runtime.workspace_root, target):
+            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+        visible_root = to_visible_path(runtime.workspace_root, target)
+        is_skill = False
+    if not target.is_dir() or target.is_symlink():
+        raise ValueError(f"搜索路径必须是目录: {path}")
+    matches: list[dict[str, Any]] = []
+    for item in sorted(target.rglob("*")):
+        if len(matches) >= max_results:
+            break
+        if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
+            continue
+        resolved = item.resolve()
+        if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
+            continue
+        if is_skill:
+            visible_path = visible_root.rstrip("/") + "/" + item.relative_to(target).as_posix()
+        else:
+            visible_path = to_visible_path(runtime.workspace_root, resolved)
+        matches.append({"path": visible_path, "type": "file"})
+    return matches
+
+
+def _grep_local_workspace_text(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    pattern: str,
+    glob: str,
+    max_results: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        if is_tool_result_workspace_path(runtime.workspace_root, target):
+            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+        visible_root = to_visible_path(runtime.workspace_root, target)
+        is_skill = False
+    if target.is_symlink() or not target.exists():
+        raise FileNotFoundError(f"路径不存在: {path}")
+    files = [target] if target.is_file() else sorted(target.glob(glob))
+    matches: list[dict[str, Any]] = []
+    skipped_binary = skipped_large = 0
+    body_chars = 0
+    has_more = False
+    for item in files:
+        if item.is_symlink() or not item.is_file():
+            continue
+        resolved = item.resolve()
+        if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
+            continue
+        try:
+            if item.stat().st_size > _TEXT_GREP_MAX_FILE_BYTES:
+                skipped_large += 1
+                continue
+            with item.open("rb") as file_obj:
+                if b"\x00" in file_obj.read(4096):
+                    skipped_binary += 1
+                    continue
+            relative = item.relative_to(target).as_posix() if target.is_dir() else item.name
+            visible_path = (
+                visible_root.rstrip("/") + "/" + relative
+                if is_skill and target.is_dir()
+                else to_visible_path(runtime.workspace_root, resolved)
+            )
+            with item.open("r", encoding="utf-8", errors="replace") as file_obj:
+                for line_number, raw_line in enumerate(file_obj, start=1):
+                    if pattern not in raw_line:
+                        continue
+                    line = raw_line.rstrip("\r\n")[:MAX_FILE_READ_LINE_CHARS]
+                    line_cost = len(line) + (1 if matches else 0)
+                    if len(matches) >= max_results or body_chars + line_cost > max_chars:
+                        has_more = True
+                        break
+                    matches.append({
+                        "path": visible_path,
+                        "line_number": line_number,
+                        "line": line,
+                    })
+                    body_chars += line_cost
+                if has_more:
+                    break
+        except OSError:
+            continue
+    return {
+        "matches": matches,
+        "has_more": has_more,
+        "skipped_binary": skipped_binary,
+        "skipped_large": skipped_large,
+    }
+
+
 def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:
     raw = str(path or "").strip().replace("\\", "/")
     prefix = f"{SKILLS_VIRTUAL_ROOT}/"
@@ -1038,18 +1358,20 @@ class LocalWorkspaceBackend:
             _write_local_tool_result, runtime.workspace_root, file_path, content
         )
 
-    async def apply_patch_ops(
+    async def replace_text_file(
         self,
         runtime: ConversationWorkspaceRuntime,
         *,
-        ops: list[PatchOp],
-        dry_run: bool,
-    ) -> list[str]:
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
         return await asyncio.to_thread(
-            apply_patch_ops,
-            ops,
-            resolve_writable_path=lambda path: resolve_workspace_path(runtime.workspace_root, path, writable=True),
-            dry_run=dry_run,
+            _replace_local_text_file,
+            runtime.workspace_root,
+            file_path,
+            old_content,
+            new_content,
         )
 
     async def artifact_payload(
@@ -1081,6 +1403,84 @@ class LocalWorkspaceBackend:
             await runtime._ensure_snapshot_async()
         return await asyncio.to_thread(
             _list_local_workspace_dir, runtime, path, max_depth
+        )
+
+    async def create_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_create_local_dir, runtime.workspace_root, path)
+
+    async def delete_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _delete_local_path,
+            runtime.workspace_root,
+            path,
+            recursive,
+            expected_type,
+        )
+
+    async def move_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _move_local_path,
+            runtime.workspace_root,
+            source_path,
+            destination_path,
+        )
+
+    async def search_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _search_local_workspace_files,
+            runtime,
+            path,
+            pattern,
+            max_results,
+        )
+
+    async def grep_text(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _grep_local_workspace_text,
+            runtime,
+            path,
+            pattern,
+            glob,
+            max_results,
+            max_chars,
         )
 
     async def get_sandbox_session_ref(
@@ -1222,17 +1622,19 @@ class SandboxWorkspaceBackend:
             content=content,
         )
 
-    async def apply_patch_ops(
+    async def replace_text_file(
         self,
         runtime: ConversationWorkspaceRuntime,
         *,
-        ops: list[PatchOp],
-        dry_run: bool,
-    ) -> list[str]:
-        return await sandbox_apply_patch_ops(
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
+        return await sandbox_replace_text_file(
             session_ref=await self._session_ref(runtime),
-            ops=ops,
-            dry_run=dry_run,
+            file_path=file_path,
+            old_content=old_content,
+            new_content=new_content,
         )
 
     async def artifact_payload(
@@ -1266,6 +1668,76 @@ class SandboxWorkspaceBackend:
     ) -> list[dict[str, Any]]:
         return await sandbox_list_dir(
             session_ref=await self._session_ref(runtime), path=path, max_depth=max_depth
+        )
+
+    async def create_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_create_dir(session_ref=await self._session_ref(runtime), path=path)
+
+    async def delete_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await sandbox_delete_path(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            recursive=recursive,
+            expected_type=expected_type,
+        )
+
+    async def move_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_move_path(
+            session_ref=await self._session_ref(runtime),
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def search_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        return await sandbox_search_files(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            pattern=pattern,
+            max_results=max_results,
+        )
+
+    async def grep_text(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_grep_text(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            pattern=pattern,
+            glob=glob,
+            max_results=max_results,
+            max_chars=max_chars,
         )
 
     async def get_sandbox_session_ref(

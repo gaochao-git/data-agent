@@ -63,9 +63,9 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）与 `bash_enabled`（安全策略）是两个独立维度：前者只决定工作区跑在受限本地目录还是 OpenSandbox，后者决定 `bash_run` 是否注册。两者职责不同且必须耦合选型，详见下文「运行环境后端与 Bash 安全模型」。
 
-ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `threads/{user_id}/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`，大工具结果保存到 `outputs/.tool-results/<id>.json|txt`。查询工具返回受会话约束的 `result_id` 和 `result_path=/mnt/user-data/outputs/.tool-results/<id>.json`，前端按 `result_id` 回放完整结果，Agent 需要核对明细时可用 `file_read` 分页读取，开启 Bash 时也可在沙箱中处理。`.tool-results` 随 `user-data/` 挂载，但不出现在工作区文件列表，`file_edit`、`present_artifacts` 与技能导入均拒绝它，因此不作为用户产物。前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/{user_id}/<skill-name>/versions/vN/`；管理域不直接暴露给模型，每个会话在创建/首次运行时构建只读快照 `threads/{user_id}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布，会话内冻结不变），统一只读挂载为扁平的 `/mnt/skills/<技能名>/`。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
+ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `threads/{user_id}/{conversation_id}/user-data/`，其中固定创建 `workspace/`、`outputs/`、`uploads/`，大工具结果保存到 `outputs/.tool-results/<id>.json|txt`。查询工具返回受会话约束的 `result_id` 和 `result_path=/mnt/user-data/outputs/.tool-results/<id>.json`，前端按 `result_id` 回放完整结果，Agent 需要核对明细时可用 `file_read` 分页读取，开启 Bash 时也可在沙箱中处理。`.tool-results` 不出现在工作区文件列表，`file_edit`、`present_artifacts` 与技能导入均拒绝它，因此不作为用户产物。前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/{user_id}/<skill-name>/versions/vN/`；管理域不直接暴露给模型，每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布，会话内冻结不变），通过 Files API 上传到 sandbox 的扁平 `/mnt/skills/<技能名>/`；sandbox 也通过 Files API 上传 `/mnt/user-data`，操作完成后下载 `workspace/`、`outputs/` 变更回应用侧，不使用宿主机目录挂载。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
-生产多实例将 `CHAT_DATA_HOME` 配置为所有应用实例与 OpenSandbox 宿主机均可访问的同一 POSIX 共享目录（GFS/NFS/CephFS/EFS/RWX PVC）。local 与 sandbox 使用相同会话目录；`OPENSANDBOX_HOST_CHAT_DATA_HOME` 仅在宿主机路径不同的时候做相对路径翻译。共享文件由挂载基础设施保证，不使用 MinIO，也不在应用代码中做多节点同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
+应用多实例的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
 
 ### 运行环境后端与 Bash 安全模型
 
@@ -85,7 +85,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 | 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
-- **文件工具（`file_read` / `file_edit` / `list_dir` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox 的受控虚拟路径访问 `/mnt/user-data` 与 `/mnt/skills`，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
+- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
 - `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
 
 ```text

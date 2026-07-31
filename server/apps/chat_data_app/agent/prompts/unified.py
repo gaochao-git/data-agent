@@ -284,12 +284,13 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 每次调用工具前先输出一句短句，说明当前要做什么；工具返回后用一句短句概括发现，再决定是否继续。
 - `select_semantic_config_tool` 返回后，根据检索到的语义摘要继续执行、澄清或说明限制；不得输出工具名标题和 JSON 代码块。
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
-- 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` patch 失败后必须重新 `file_read`，基于最新内容重写 patch，不能凭记忆或上一次失败 patch 重试。
+- 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` 必须传入从最新内容中截取的唯一 `old_content` 和对应 `new_content`，匹配失败或多处匹配后重新读取，不要凭记忆重试。新建或整体覆盖文件使用 `file_write`。
+- 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
 - `semantic_query_tool` 返回 `result_id` 和 `result_path` 时，表示结果已卸载到当前会话的隐藏 `/mnt/user-data/outputs/.tool-results/<id>.json`。后续需要核对明细时，用 `file_read(file_path=result_path, offset=..., limit=...)` 按行小段读取；不要一次读取全部内容，也不要猜测或拼接结果路径。每次默认读取 200 行、最多 500 行，单行超过 500 个字符会直接截断。需要用脚本处理时，Bash 可直接读取该路径；该缓存不会出现在工作区列表中，也不能通过 `file_edit` 修改或通过 `present_artifacts` 展示。需要重新筛选、聚合、排序或计算时，优先重新执行受控 DSL/SQL，不把整份明细读回上下文。
 - `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、`/mnt/skills/system/...`、`/mnt/skills/user/...`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
-- `file_edit` 只负责生成或修改文件，不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
+- `file_write` 负责新建或整体覆盖，`file_edit` 负责已有文件的一处唯一精确替换；两者都不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
 
 ## 图表能力
 - 回答“支持哪些图表 / 有哪些图表 / 能画什么图”时，必须基于 `supported_chart_types` 清单，不要用通用 ECharts 知识扩展未注册类型。
@@ -302,11 +303,11 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 不在正文暴露：工具参数、JSON、DSL、SQL、patch、XML、YAML、工具返回原文或原始查询行。
 - 过程说明只写当前动作或发现，不展开指标、维度、SQL、卡片清单或工具结果明细。
 - `semantic_query_tool` 的查询结果会由前端自动渲染为表格/图表；最终回复不要再次输出 markdown 表格、逐行明细列表、完整结果清单或大段复述查询结果，只提炼关键结论或说明已完成查询。
-- `file_edit` 仅代表会话文件已生成，任何业务系统写入不能由模型自行宣称成功。
+- `file_write` / `file_edit` 仅代表会话文件已生成或更新，任何业务系统写入不能由模型自行宣称成功。
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。"""
 
 BASH_WORKFLOW_BLOCK = """## Bash 使用
-- 浏览目录统一使用 `list_dir(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `bash_run`。不要臆测文件是否存在。
+- 浏览目录统一使用 `dir_list(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `bash_run`。不要臆测文件是否存在。
 - Bash 只处理当前会话工作区；生成最终产物仍须写入 outputs 并调用 `present_artifacts`。"""
 
 CHART_BLOCK = """## 支持图表类型

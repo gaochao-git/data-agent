@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass, field
 from datetime import timedelta
+import fnmatch
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import time
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote
 from uuid import uuid4
 
@@ -22,18 +20,24 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
 from .artifact_registry import parse_output_artifact
-from .workspace_patch import FileState, PatchOp, plan_patch_ops
 
 logger = get_logger(__name__)
 
 OPENSANDBOX_BACKEND = "opensandbox"
 MAX_OUTPUT_CHARS = 12000
-_SANDBOX_RUNTIME_UID = 65534
+MAX_FILE_READ_LINE_CHARS = 500
+_TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
+# OpenSandbox execd parses permission values as base-8 *strings*.  These must
+# therefore be decimal integers whose digits are the intended Unix mode.
+_SANDBOX_WRITABLE_FILE_MODE = 666
+_SANDBOX_WRITABLE_DIRECTORY_MODE = 777
+_SANDBOX_READONLY_FILE_MODE = 444
+_SANDBOX_READONLY_DIRECTORY_MODE = 555
 
 
 def _sandbox_root() -> str:
-    # 沙箱 VM 内挂载根固定为 /mnt（sandbox_visible_path / sandbox_workspace_dir 等映射
-    # 硬编码 /mnt/user-data），不对外暴露为可配置项，避免与映射前缀不一致。
+    # 沙箱 Files API 快照根固定为 /mnt（sandbox_visible_path / sandbox_workspace_dir
+    # 等映射硬编码 /mnt/user-data），不对外暴露为可配置项，避免前缀不一致。
     return "/mnt"
 
 
@@ -54,7 +58,7 @@ def sandbox_uploads_dir() -> str:
 
 
 def sandbox_skills_root() -> str:
-    # 沙箱内技能挂载根与 Agent 视角的虚拟根一致（容器 /mnt 即虚拟根）。
+    # 沙箱内技能快照根与 Agent 视角的虚拟根一致。
     return SKILLS_VIRTUAL_ROOT
 
 
@@ -102,6 +106,31 @@ def _import_opensandbox_sdk() -> tuple[Any, Any, Any, Any]:
     except ImportError as exc:
         raise ValueError("OpenSandbox Python SDK 未安装或不支持 Files API / NetworkPolicy，请升级 `opensandbox`") from exc
     return Sandbox, ConnectionConfig, RunCommandOpts, (NetworkPolicy, NetworkRule)
+
+
+def _import_opensandbox_filesystem_models() -> tuple[Any, Any, Any]:
+    try:
+        from opensandbox.models.filesystem import MoveEntry, SearchEntry, WriteEntry
+    except ImportError as exc:
+        raise ValueError("当前 OpenSandbox SDK 不支持 Files API models，请升级 `opensandbox`") from exc
+    return MoveEntry, SearchEntry, WriteEntry
+
+
+def _import_opensandbox_content_replace_entry() -> Any:
+    try:
+        from opensandbox.models.filesystem import ContentReplaceEntry
+    except ImportError as exc:
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.replace_contents，请升级 `opensandbox`") from exc
+    return ContentReplaceEntry
+
+
+def _import_opensandbox_directory_list_entry() -> Any:
+    try:
+        from opensandbox.models.filesystem import DirectoryListEntry
+    except ImportError as exc:
+        raise ValueError(
+            "当前 OpenSandbox SDK 不支持 files.list_directory，请升级 `opensandbox`") from exc
+    return DirectoryListEntry
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -185,15 +214,6 @@ def _application_workspace_root(workspace_root: str) -> Path:
 
 
 
-def _sandbox_python_bin() -> str:
-    python_bin = str(os.getenv("OPENSANDBOX_PYTHON_BIN") or "python3").strip()
-    if not python_bin:
-        return "python3"
-    if any(char.isspace() for char in python_bin) or any(char in python_bin for char in "'\";&|`$<>"):
-        raise ValueError("OPENSANDBOX_PYTHON_BIN 只能配置 Python 命令名或绝对路径")
-    return python_bin
-
-
 def _connection_config(timeout_seconds: int) -> Any:
     _, ConnectionConfig, _, _ = _import_opensandbox_sdk()
     sandbox_url = str(os.getenv("OPENSANDBOX_URL") or "").strip()
@@ -220,12 +240,18 @@ def _build_network_policy() -> Any | None:
     return NetworkPolicy(defaultAction=action, egress=egress_rules)
 
 
-async def _write_sandbox_file(*, sandbox: Any, path: str, data: bytes) -> None:
+async def _write_sandbox_file(
+    *,
+    sandbox: Any,
+    path: str,
+    data: bytes,
+    mode: int = _SANDBOX_WRITABLE_FILE_MODE,
+) -> None:
     files = getattr(sandbox, "files", None)
     writer = getattr(files, "write_file", None)
     if not callable(writer):
         raise ValueError("当前 OpenSandbox SDK 不支持 files.write_file")
-    await writer(path, data, mode=0o644)
+    await writer(path, data, mode=mode)
     logger.info(
         "OpenSandbox Files API 上传完成: sandbox_id=%s path=%s bytes=%s",
         str(getattr(sandbox, "id", "") or ""),
@@ -234,36 +260,30 @@ async def _write_sandbox_file(*, sandbox: Any, path: str, data: bytes) -> None:
     )
 
 
-async def _grant_sandbox_runtime_write_access(
+async def _replace_sandbox_file_content(
     *,
-    session: SandboxExecutionSession,
-    paths: list[str],
+    sandbox: Any,
+    path: str,
+    old_content: str,
+    new_content: str,
 ) -> None:
-    """Make Files API writes editable by the unprivileged sandbox process.
-
-    Files API writes may be owned by the service user. Bash and filesystem RPCs
-    run as the isolated runtime uid, so normalize ownership after every remote
-    write instead of relying on the OpenSandbox implementation detail.
-    """
-    unique_paths = sorted({str(path) for path in paths if str(path).strip()})
-    if not unique_paths:
-        return
-    command = " && ".join([
-        "chown {uid}:{uid} {paths}".format(
-            uid=_SANDBOX_RUNTIME_UID,
-            paths=" ".join(shlex.quote(path) for path in unique_paths),
-        ),
-        "chmod u+rw {paths}".format(
-            paths=" ".join(shlex.quote(path) for path in unique_paths),
-        ),
+    files = getattr(sandbox, "files", None)
+    replacer = getattr(files, "replace_contents", None)
+    if not callable(replacer):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.replace_contents")
+    ContentReplaceEntry = _import_opensandbox_content_replace_entry()
+    await replacer([
+        ContentReplaceEntry(
+            path=path,
+            old_content=old_content,
+            new_content=new_content,
+        )
     ])
-    exit_code, _, stderr = await run_command_in_sandbox(
-        session=session,
-        command=f"bash -o pipefail -lc {shlex.quote(command)}",
-        privileged=True,
+    logger.info(
+        "OpenSandbox Files API 精确替换完成: sandbox_id=%s path=%s",
+        str(getattr(sandbox, "id", "") or ""),
+        path,
     )
-    if exit_code != 0:
-        raise ValueError(f"设置沙箱文件写权限失败: {stderr or '未知错误'}")
 
 
 async def _read_sandbox_file_bytes(*, sandbox: Any, path: str) -> bytes:
@@ -281,37 +301,6 @@ async def _read_sandbox_file_bytes(*, sandbox: Any, path: str) -> bytes:
     return data
 
 
-async def _read_sandbox_file_bytes_with_fallback(*, session: SandboxExecutionSession, path: str) -> bytes:
-    try:
-        return await _read_sandbox_file_bytes(sandbox=session.sandbox, path=path)
-    except (FileNotFoundError, IsADirectoryError):
-        raise
-    except Exception as exc:
-        logger.warning("OpenSandbox files.read_bytes 失败，尝试沙箱内读取: path=%s error=%s", path, exc)
-        result = await run_sandbox_python_json(
-            session=session,
-            payload={"path": path},
-            script_body=r'''
-from pathlib import Path
-import base64
-path = Path(payload["path"])
-data = path.read_bytes()
-print(json.dumps({"content_b64": base64.b64encode(data).decode("ascii")}, ensure_ascii=False))
-''',
-        )
-        return base64.b64decode(str(result.get("content_b64") or ""))
-
-
-async def _delete_sandbox_files(*, sandbox: Any, paths: list[str]) -> None:
-    if not paths:
-        return
-    files = getattr(sandbox, "files", None)
-    deleter = getattr(files, "delete_files", None)
-    if not callable(deleter):
-        raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_files")
-    await deleter(paths)
-
-
 def _iter_application_files(root: Path) -> list[tuple[str, Path]]:
     """Return regular files only; uploads must never follow application symlinks."""
     if not root.is_dir() or root.is_symlink():
@@ -321,6 +310,17 @@ def _iter_application_files(root: Path) -> list[tuple[str, Path]]:
         if path.is_file() and not path.is_symlink():
             files.append((path.relative_to(root).as_posix(), path))
     return files
+
+
+def _iter_application_directories(root: Path) -> list[str]:
+    """Return relative directories without following application symlinks."""
+    if not root.is_dir() or root.is_symlink():
+        return []
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_dir() and not path.is_symlink()
+    )
 
 
 def _file_fingerprint(path: Path) -> tuple[int, int, str]:
@@ -356,6 +356,7 @@ async def _upload_application_tree(
     sandbox: Any,
     application_root: Path,
     sandbox_root: str,
+    file_mode: int,
 ) -> tuple[int, int]:
     files = _iter_application_files(application_root)
     total_bytes = 0
@@ -365,9 +366,28 @@ async def _upload_application_tree(
             sandbox=sandbox,
             path=f"{sandbox_root}/{relative}",
             data=data,
+            mode=file_mode,
         )
         total_bytes += len(data)
     return len(files), total_bytes
+
+
+async def _create_sandbox_directories(*, sandbox: Any, paths: list[str], mode: int) -> None:
+    unique_paths = sorted({str(path).rstrip("/") for path in paths if str(path).strip()})
+    if not unique_paths:
+        return
+    files = getattr(sandbox, "files", None)
+    creator = getattr(files, "create_directories", None)
+    if not callable(creator):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.create_directories")
+    _, _, WriteEntry = _import_opensandbox_filesystem_models()
+    await creator([WriteEntry(path=path, mode=mode) for path in unique_paths])
+
+
+def _sandbox_tree_directories(application_root: Path, sandbox_root: str) -> list[str]:
+    return [sandbox_root] + [
+        f"{sandbox_root}/{relative}" for relative in _iter_application_directories(application_root)
+    ]
 
 
 async def _initialize_sandbox_filesystem(
@@ -376,34 +396,36 @@ async def _initialize_sandbox_filesystem(
 ) -> None:
     """Seed the isolated sandbox from application-owned persistent files."""
     application_root = _application_workspace_root(session.workspace_root)
-    directory_command = "mkdir -p " + " ".join(
-        shlex.quote(path)
-        for path in (
-            sandbox_workspace_dir(),
-            sandbox_outputs_dir(),
-            f"{sandbox_outputs_dir()}/.tool-results",
-            sandbox_uploads_dir(),
-            sandbox_skills_root(),
-        )
+    user_data_directories = _sandbox_tree_directories(application_root, sandbox_thread_root())
+    user_data_directories.extend([
+        sandbox_workspace_dir(),
+        sandbox_outputs_dir(),
+        f"{sandbox_outputs_dir()}/.tool-results",
+        sandbox_uploads_dir(),
+    ])
+    await _create_sandbox_directories(
+        sandbox=session.sandbox,
+        paths=user_data_directories,
+        mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
     )
-    exit_code, _, stderr = await run_command_in_sandbox(
-        session=session,
-        command=f"bash -o pipefail -lc {shlex.quote(directory_command)}",
-        privileged=True,
-    )
-    if exit_code != 0:
-        raise ValueError(f"初始化沙箱工作目录失败: {stderr or '未知错误'}")
     user_data_count, user_data_bytes = await _upload_application_tree(
         sandbox=session.sandbox,
         application_root=application_root,
         sandbox_root=sandbox_thread_root(),
+        file_mode=_SANDBOX_WRITABLE_FILE_MODE,
     )
     skill_count = skill_bytes = 0
     if session.runtime_skills_dir is not None:
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=_sandbox_tree_directories(session.runtime_skills_dir, sandbox_skills_root()),
+            mode=_SANDBOX_READONLY_DIRECTORY_MODE,
+        )
         skill_count, skill_bytes = await _upload_application_tree(
             sandbox=session.sandbox,
             application_root=session.runtime_skills_dir,
             sandbox_root=sandbox_skills_root(),
+            file_mode=_SANDBOX_READONLY_FILE_MODE,
         )
     logger.info(
         "OpenSandbox 会话快照上传完成: sandbox_id=%s user_data_files=%s user_data_bytes=%s skill_files=%s skill_bytes=%s",
@@ -413,19 +435,6 @@ async def _initialize_sandbox_filesystem(
         skill_count,
         skill_bytes,
     )
-    # The sandbox is a disposable copy. Bash is explicitly allowed to mutate
-    # every uploaded file; only workspace/outputs are downloaded back to A.
-    permission_command = " && ".join([
-        f"chmod -R u+rwX,go-rwx {shlex.quote(sandbox_thread_root())} {shlex.quote(sandbox_skills_root())}",
-        f"chown -R {_SANDBOX_RUNTIME_UID}:{_SANDBOX_RUNTIME_UID} {shlex.quote(sandbox_thread_root())} {shlex.quote(sandbox_skills_root())}",
-    ])
-    exit_code, _, stderr = await run_command_in_sandbox(
-        session=session,
-        command=f"bash -o pipefail -lc {shlex.quote(permission_command)}",
-        privileged=True,
-    )
-    if exit_code != 0:
-        raise ValueError(f"设置沙箱工作区权限失败: {stderr or '未知错误'}")
     session.application_manifest = await asyncio.to_thread(_mutable_application_manifest, application_root)
 
 
@@ -437,7 +446,7 @@ def _application_path_for_sandbox_path(session: SandboxExecutionSession, sandbox
         relative = target.relative_to(sandbox_root)
     except ValueError as exc:
         raise ValueError(f"沙箱路径不属于当前会话: {sandbox_path}") from exc
-    if not relative.parts or relative.parts[0] not in {"workspace", "outputs", "uploads"}:
+    if not relative.parts or relative.parts[0] not in {"workspace", "outputs"}:
         raise ValueError(f"沙箱路径不属于允许同步目录: {sandbox_path}")
     local_path = (root / relative.as_posix()).resolve()
     if root not in local_path.parents:
@@ -479,10 +488,7 @@ async def _persist_sandbox_paths(
     try:
         for sandbox_path in changed_paths:
             local_path = _application_path_for_sandbox_path(session, sandbox_path)
-            data = await _read_sandbox_file_bytes_with_fallback(
-                session=session,
-                path=sandbox_path,
-            )
+            data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=sandbox_path)
             staged.append((local_path, data))
         _ensure_application_paths_unchanged(
             session=session,
@@ -535,34 +541,109 @@ def _ensure_application_paths_unchanged(
         )
 
 
-async def _list_sandbox_files_under(*, session: SandboxExecutionSession, root: str) -> list[str]:
-    result = await run_sandbox_python_json(
-        session=session,
-        payload={"root": root},
-        script_body=r'''
-from pathlib import Path
+def _is_sandbox_descendant(path: str, root: str) -> bool:
+    try:
+        relative = PurePosixPath(path).relative_to(PurePosixPath(root))
+    except ValueError:
+        return False
+    return bool(relative.parts)
 
-root = Path(payload["root"])
-if not root.exists():
-    print(json.dumps({"files": []}, ensure_ascii=False))
-else:
-    files = [str(path) for path in root.rglob("*") if path.is_file() and not path.is_symlink()]
-    print(json.dumps({"files": sorted(files)}, ensure_ascii=False))
-''',
+
+async def _list_sandbox_directory_entries(
+    *,
+    session: SandboxExecutionSession,
+    path: str,
+) -> list[Any]:
+    files = getattr(session.sandbox, "files", None)
+    lister = getattr(files, "list_directory", None)
+    if not callable(lister):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.list_directory")
+    DirectoryListEntry = _import_opensandbox_directory_list_entry()
+    try:
+        entries = await lister(DirectoryListEntry(path=path, depth=1))
+    except Exception as exc:
+        if _is_sandbox_file_not_found(exc):
+            return []
+        raise
+    return [
+        entry
+        for entry in entries
+        if _is_sandbox_descendant(str(getattr(entry, "path", "") or ""), path)
+    ]
+
+
+async def _walk_sandbox_tree(
+    *,
+    session: SandboxExecutionSession,
+    root: str,
+) -> tuple[list[Any], list[Any]]:
+    """Recursively enumerate remote regular files and directories via Files API."""
+    pending = [root]
+    visited: set[str] = set()
+    files: dict[str, Any] = {}
+    directories: dict[str, Any] = {}
+    while pending:
+        directory = pending.pop()
+        if directory in visited:
+            continue
+        visited.add(directory)
+        for entry in await _list_sandbox_directory_entries(session=session, path=directory):
+            entry_path = str(getattr(entry, "path", "") or "")
+            entry_type = _sandbox_entry_type(entry)
+            if not entry_path or entry_type == "symlink":
+                continue
+            path_kind = await _sandbox_path_kind(
+                session=session,
+                path=entry_path,
+                entry=entry,
+            )
+            if path_kind == "dir":
+                directories[entry_path] = entry
+                pending.append(entry_path)
+            elif path_kind == "file":
+                files[entry_path] = entry
+    return (
+        [files[path] for path in sorted(files)],
+        [directories[path] for path in sorted(directories)],
     )
-    return [str(path) for path in result.get("files") or []]
+
+
+def _application_directory_for_sandbox_path(session: SandboxExecutionSession, sandbox_path: str) -> Path:
+    local_path = _application_path_for_sandbox_path(session, sandbox_path)
+    root = _application_workspace_root(session.workspace_root)
+    if local_path == root / "workspace" or local_path == root / "outputs":
+        raise ValueError("不允许同步覆盖工作区根目录")
+    return local_path
+
+
+def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bool:
+    hidden_root = application_root / "outputs" / ".tool-results"
+    return path == hidden_root or hidden_root in path.parents
 
 
 async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
     """Persist the sandbox-owned mutable trees after commands with unknown file effects."""
     remote_files: list[str] = []
+    remote_directories: list[str] = []
     for root in (sandbox_workspace_dir(), sandbox_outputs_dir()):
-        remote_files.extend(await _list_sandbox_files_under(session=session, root=root))
+        files, directories = await _walk_sandbox_tree(session=session, root=root)
+        remote_files.extend(str(getattr(entry, "path", "") or "") for entry in files)
+        remote_directories.extend(str(getattr(entry, "path", "") or "") for entry in directories)
     remote_set = set(remote_files)
+    remote_directory_set = set(remote_directories)
     application_root = _application_workspace_root(session.workspace_root)
     local_files: list[Path] = []
+    local_directories: list[Path] = []
     for directory_name in ("workspace", "outputs"):
         local_files.extend(path for _, path in _iter_application_files(application_root / directory_name))
+        root = application_root / directory_name
+        local_directories.extend(
+            path
+            for path in root.rglob("*")
+            if path.is_dir()
+            and not path.is_symlink()
+            and not _is_hidden_tool_results_local_path(application_root, path)
+        )
     deleted_paths = [
         f"{sandbox_thread_root()}/{path.relative_to(application_root).as_posix()}"
         for path in local_files
@@ -573,6 +654,15 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
         changed_paths=sorted(remote_set),
         deleted_paths=deleted_paths,
     )
+    for sandbox_path in sorted(remote_directory_set):
+        if _is_tool_results_sandbox_path(sandbox_path):
+            continue
+        local_path = _application_directory_for_sandbox_path(session, sandbox_path)
+        await asyncio.to_thread(local_path.mkdir, parents=True, exist_ok=True)
+    for local_path in sorted(local_directories, key=lambda path: len(path.parts), reverse=True):
+        sandbox_path = f"{sandbox_thread_root()}/{local_path.relative_to(application_root).as_posix()}"
+        if sandbox_path not in remote_directory_set and local_path.exists():
+            await asyncio.to_thread(local_path.rmdir)
 
 
 async def sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
@@ -616,13 +706,10 @@ async def run_command_in_sandbox(
     session: SandboxExecutionSession,
     command: str,
     timeout_seconds: int = 30,
-    privileged: bool = False,
 ) -> tuple[int, str, str]:
-    """Run a sandbox command as the unprivileged workspace user by default."""
+    """Run the one Commands API operation used by the registered Bash tool."""
     _, _, RunCommandOpts, _ = _import_opensandbox_sdk()
     options: dict[str, Any] = {"timeout": timedelta(seconds=max(1, timeout_seconds))}
-    if not privileged:
-        options.update({"uid": _SANDBOX_RUNTIME_UID, "gid": _SANDBOX_RUNTIME_UID})
     execution = await session.sandbox.commands.run(command, opts=RunCommandOpts(**options))
     command_status = None
     status_lookup_error = ""
@@ -634,27 +721,6 @@ async def run_command_in_sandbox(
             status_lookup_error = str(exc)
             logger.warning("OpenSandbox 获取 command status 失败: %s", exc, exc_info=True)
     return _extract_command_output(execution, command_status, status_lookup_error)
-
-
-async def run_sandbox_python_json(*, session: SandboxExecutionSession, script_body: str, payload: dict[str, Any], timeout_seconds: int = 30) -> dict[str, Any]:
-    payload_b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")).decode("ascii")
-    command = (
-        f"PAYLOAD_B64={shlex.quote(payload_b64)} {shlex.quote(_sandbox_python_bin())} - <<'PY'\n"
-        "import base64\nimport json\nimport os\n"
-        "payload = json.loads(base64.b64decode(os.environ['PAYLOAD_B64']).decode('utf-8'))\n"
-        f"{script_body}\n"
-        "PY"
-    )
-    exit_code, stdout, stderr = await run_command_in_sandbox(session=session, command=f"bash -o pipefail -lc {shlex.quote(command)}", timeout_seconds=timeout_seconds)
-    if exit_code != 0:
-        raise ValueError((stderr or stdout or "sandbox filesystem execution failed").strip())
-    text = str(stdout or "").strip()
-    if not text:
-        raise ValueError("sandbox filesystem execution returned empty stdout")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"sandbox filesystem execution returned invalid JSON: {text[:200]}") from exc
 
 
 async def prepare_workspace_execution_session(
@@ -820,7 +886,7 @@ def sandbox_visible_path(
         sandbox_path = f"{sandbox_thread_root()}/{raw.lstrip('/')}"
     if ".." in PurePosixPath(sandbox_path).parts:
         raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
-    # 运行域固定两卷：/mnt/user-data 整卷（可写，含 workspace/outputs/uploads）+ /mnt/skills（只读快照）。
+    # 沙箱快照使用固定虚拟根：/mnt/user-data（可写）和 /mnt/skills（只读）。
     workspace_roots = (sandbox_workspace_dir(), sandbox_outputs_dir(), sandbox_uploads_dir())
     readable_roots = workspace_roots + (sandbox_skills_root(),)
     if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in readable_roots):
@@ -879,54 +945,106 @@ async def _resolve_sandbox_real_path(
     outputs_only: bool = False,
     allow_tool_result_write: bool = False,
 ) -> str:
-    """Resolve a sandbox path and reject symlinks that leave the mounted roots."""
+    """Apply the model-visible virtual-path policy before calling the Files API.
+
+    The Files API receives only lexical paths rooted in the current sandbox
+    snapshot. It must not depend on Commands API just to resolve a path: when
+    Bash is disabled no model-visible filesystem operation may spawn a shell.
+    """
     target = sandbox_visible_path(
         file_path,
         writable=writable and not allow_tool_result_write,
     )
-    result = await run_sandbox_python_json(
-        session=session,
-        payload={
-            "path": target,
-            "readable_roots": [
-                sandbox_workspace_dir(),
-                sandbox_outputs_dir(),
-                sandbox_uploads_dir(),
-                sandbox_skills_root(),
-            ],
-            "writable_roots": [sandbox_workspace_dir(), sandbox_outputs_dir()],
-            "tool_results_root": f"{sandbox_outputs_dir()}/.tool-results",
-            "writable": writable,
-            "outputs_only": outputs_only,
-            "allow_tool_result_write": allow_tool_result_write,
-        },
-        script_body=r'''
-from pathlib import Path
-
-target = Path(payload["path"])
-resolved = target.resolve(strict=False)
-
-def within(path, root):
-    return path == root or root in path.parents
-
-readable_roots = [Path(value).resolve() for value in payload["readable_roots"]]
-if not any(within(resolved, root) for root in readable_roots):
-    raise ValueError("路径越界，禁止通过软链接访问当前会话目录之外的路径")
-if payload["writable"]:
-    writable_roots = [Path(value).resolve() for value in payload["writable_roots"]]
-    if not any(within(resolved, root) for root in writable_roots):
-        raise ValueError("只允许写入 workspace/ 或 outputs/")
-    tool_results_root = Path(payload["tool_results_root"]).resolve()
-    if within(resolved, tool_results_root) and not payload["allow_tool_result_write"]:
-        raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-results/")
-if payload["outputs_only"]:
-    outputs_root = Path(payload["writable_roots"][1]).resolve()
-    if not within(resolved, outputs_root):
+    if outputs_only and not _is_outputs_sandbox_path(target):
         raise ValueError("只允许呈现 outputs/ 下的产物")
-print(json.dumps({"path": str(resolved)}, ensure_ascii=False))
-''',
+    return target
+
+
+def _sandbox_entry_type(entry: Any) -> str:
+    """Normalize the SDK's optional entry type without trusting a path suffix."""
+    value = getattr(entry, "entry_type", getattr(entry, "type", ""))
+    return str(value or "").strip().lower()
+
+
+def _is_sandbox_not_directory(error: Exception) -> bool:
+    message = str(error).lower()
+    return "not a directory" in message or "enotdir" in message
+
+
+async def _sandbox_path_info(*, session: SandboxExecutionSession, path: str) -> Any | None:
+    files = getattr(session.sandbox, "files", None)
+    getter = getattr(files, "get_file_info", None)
+    if not callable(getter):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.get_file_info")
+    try:
+        entries = await getter([path])
+    except Exception as exc:
+        if _is_sandbox_file_not_found(exc):
+            return None
+        raise
+    if not isinstance(entries, dict):
+        return None
+    entry = entries.get(path)
+    if entry is not None:
+        return entry
+    return next(
+        (item for item in entries.values() if str(getattr(item, "path", "")) == path),
+        None,
     )
-    return str(result["path"])
+
+
+async def _sandbox_path_kind(
+    *,
+    session: SandboxExecutionSession,
+    path: str,
+    entry: Any | None = None,
+) -> Literal["file", "dir"]:
+    """Resolve a Files API path kind when execd omits optional ``type`` metadata."""
+    resolved_entry = entry if entry is not None else await _sandbox_path_info(session=session, path=path)
+    if resolved_entry is None:
+        raise FileNotFoundError(f"路径不存在: {path}")
+    entry_type = _sandbox_entry_type(resolved_entry)
+    if entry_type == "symlink":
+        raise ValueError("不允许操作符号链接")
+    if entry_type == "directory":
+        return "dir"
+    if entry_type == "file":
+        return "file"
+
+    # Older/current execd responses can omit FileInfo.type. A depth-0 list is
+    # the only Files API operation that distinguishes directories from files.
+    files = getattr(session.sandbox, "files", None)
+    lister = getattr(files, "list_directory", None)
+    if not callable(lister):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.list_directory")
+    DirectoryListEntry = _import_opensandbox_directory_list_entry()
+    try:
+        await lister(DirectoryListEntry(path=path, depth=0))
+    except Exception as exc:
+        if _is_sandbox_not_directory(exc):
+            return "file"
+        raise
+    return "dir"
+
+
+def _allocate_file_read_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
+    """Allocate the shared file_read body budget in source-line order."""
+    budgets: list[int] = []
+    remaining = max(0, int(max_chars))
+    for original_length in line_lengths:
+        separator_chars = 1 if budgets else 0
+        if remaining < separator_chars:
+            break
+        desired_chars = min(max(0, int(original_length)), MAX_FILE_READ_LINE_CHARS)
+        available_chars = remaining - separator_chars
+        if desired_chars > available_chars:
+            if available_chars <= 0 and desired_chars > 0:
+                break
+            budgets.append(max(0, available_chars))
+            break
+        budgets.append(desired_chars)
+        remaining -= desired_chars + separator_chars
+    return budgets
 
 
 async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, file_path: str) -> dict[str, Any]:
@@ -943,7 +1061,7 @@ async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, f
         except ValueError:
             return {}
         try:
-            data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
+            data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
         except Exception:
             return {}
         visible_path = sandbox_path_to_visible(target)
@@ -958,91 +1076,75 @@ async def sandbox_read_text_file(
     limit: int,
     max_chars: int,
 ) -> dict[str, Any]:
-    """Read a text page inside the sandbox after applying the virtual path policy."""
+    """Read a text page through OpenSandbox Files API, never Commands API."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
         target = await _resolve_sandbox_real_path(session=session, file_path=file_path)
-        result = await run_sandbox_python_json(
-            session=session,
-            payload={
-                "path": target,
-                "offset": max(0, int(offset)),
-                "limit": max(1, int(limit)),
-                "max_chars": max(1, int(max_chars)),
-            },
-            script_body=r'''
-from pathlib import Path
-
-path = Path(payload["path"])
-visible_path = payload["path"]
-if not path.exists():
-    print(json.dumps({"exists": False}, ensure_ascii=False))
-elif path.is_dir():
-    print(json.dumps({"exists": True, "is_dir": True}, ensure_ascii=False))
-else:
-    with path.open("rb") as file_obj:
-        sample = file_obj.read(4096)
-    if b"\x00" in sample:
-        print(json.dumps({"exists": True, "is_binary": True}, ensure_ascii=False))
-    else:
-        offset = payload["offset"]
-        limit = payload["limit"]
-        max_chars = payload["max_chars"]
-        lines = []
-        truncated_lines = []
-        chars = 0
-        has_more = False
-        with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
-            for line_index, line in enumerate(file_obj):
-                if line_index < offset:
-                    continue
-                if len(lines) >= limit:
-                    has_more = True
-                    break
-                body = line.rstrip("\n\r")
-                available = max_chars - chars - (1 if lines else 0)
-                if available <= 0:
-                    has_more = True
-                    break
-                returned = body[:min(500, available)]
-                if len(returned) < len(body):
-                    truncated_lines.append({
-                        "line_number": line_index + 1,
-                        "original_chars": len(body),
-                        "returned_chars": len(returned),
-                    })
-                lines.append(returned)
-                chars += len(returned) + (1 if len(lines) > 1 else 0)
-        if not lines:
-            with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
-                total_lines = sum(1 for _ in file_obj)
-            result = {
-                "exists": True,
-                "is_dir": False,
-                "is_binary": False,
-                "total_lines": total_lines,
-                "empty": total_lines == 0,
-                "offset_out_of_range": total_lines > 0,
-            }
-        else:
-            result = {
-                "exists": True,
-                "is_dir": False,
-                "is_binary": False,
-                "lines": lines,
-                "total_lines": None,
-                "start_line": offset + 1,
-                "end_line": offset + len(lines),
-                "next_offset": offset + len(lines) if has_more else None,
-                "has_more_lines": has_more,
-                "has_more": has_more,
-                "truncated_lines": truncated_lines,
-            }
-        print(json.dumps(result, ensure_ascii=False))
-''',
+        visible_path = sandbox_path_to_visible(target)
+        entry = await _sandbox_path_info(session=session, path=target)
+        if entry is None:
+            return {"exists": False, "path": visible_path}
+        path_kind = await _sandbox_path_kind(session=session, path=target, entry=entry)
+        if path_kind == "dir":
+            return {"exists": True, "is_dir": True, "path": visible_path}
+        files = getattr(session.sandbox, "files", None)
+        reader = getattr(files, "read_bytes", None)
+        if not callable(reader):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.read_bytes")
+        sample = bytes(await reader(target, range_header="bytes=0-4095"))
+        if b"\x00" in sample:
+            return {"exists": True, "is_binary": True, "path": visible_path}
+        source_offset = max(0, int(offset)) + 1
+        source_limit = max(1, int(limit)) + 1
+        page_text = bytes(await reader(target, offset=source_offset, limit=source_limit)).decode(
+            "utf-8", errors="replace"
         )
-        result["path"] = sandbox_path_to_visible(target)
+        source_lines = page_text.splitlines()
+        has_more_lines = len(source_lines) > source_limit - 1
+        selected_source_lines = source_lines[:source_limit - 1]
+        if not selected_source_lines:
+            is_empty = int(getattr(entry, "size", 0) or 0) == 0
+            return {
+                "exists": True,
+                "is_dir": False,
+                "is_binary": False,
+                "path": visible_path,
+                "total_lines": 0 if is_empty else None,
+                "empty": is_empty,
+                "offset_out_of_range": not is_empty,
+            }
+        budgets = _allocate_file_read_line_budgets(
+            [len(line) for line in selected_source_lines],
+            max_chars,
+        )
+        selected_lines = selected_source_lines[:len(budgets)]
+        lines = [line[:budget] for line, budget in zip(selected_lines, budgets)]
+        start_line = max(0, int(offset)) + 1
+        truncated_lines = [
+            {
+                "line_number": start_line + position,
+                "original_chars": len(line),
+                "returned_chars": budget,
+            }
+            for position, (line, budget) in enumerate(zip(selected_lines, budgets))
+            if budget < len(line)
+        ]
+        has_more_lines = has_more_lines or len(budgets) < len(selected_source_lines)
+        result = {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": visible_path,
+            "lines": lines,
+            "total_lines": None,
+            "start_line": start_line,
+            "end_line": start_line + len(lines) - 1,
+            "next_offset": max(0, int(offset)) + len(lines) if has_more_lines else None,
+            "has_more_lines": has_more_lines,
+            "has_more": has_more_lines,
+            "truncated_lines": truncated_lines,
+        }
         logger.info(
             "OpenSandbox file_read 完成: sandbox_id=%s path=%s offset=%s limit=%s returned_lines=%s returned_chars=%s has_more=%s",
             session.sandbox_id,
@@ -1073,55 +1175,56 @@ async def sandbox_load_skill_payload(
             session=session,
             file_path=f"{sandbox_skills_root()}/{normalized_name}",
         )
-        result = await run_sandbox_python_json(
+        root_entry = await _sandbox_path_info(session=session, path=skill_root)
+        if root_entry is None or await _sandbox_path_kind(
             session=session,
-            payload={"root": skill_root, "name": normalized_name, "max_chars": max(1, int(max_chars)) + 1},
-            script_body=r'''
-from pathlib import Path
-
-root = Path(payload["root"])
-if not root.is_dir() or root.is_symlink():
-    raise ValueError(f"技能不存在或无权限访问: {payload['name']}")
-skill_md_path = root / "SKILL.md"
-if not skill_md_path.is_file() or skill_md_path.is_symlink():
-    raise ValueError(f"技能文件不存在: {payload['name']}")
-skill_md = skill_md_path.read_text(encoding="utf-8", errors="replace")[:payload["max_chars"]]
-title = description = ""
-if skill_md.startswith("---\n"):
-    closing = skill_md.find("\n---\n", len("---\n"))
-    if closing >= 0:
-        for line in skill_md[len("---\n"):closing].splitlines():
-            key, separator, value = line.partition(":")
-            if not separator:
-                continue
-            value = value.strip().strip('"').strip("'")
-            if key.strip() == "title":
-                title = value
-            elif key.strip() == "description":
-                description = value
-
-def files_in(name, suffix=None):
-    directory = root / name
-    if not directory.is_dir() or directory.is_symlink():
-        return []
-    return sorted(
-        str(item.relative_to(directory).with_suffix("")) if name == "references" else str(item.relative_to(directory))
-        for item in directory.rglob("*" if suffix is None else suffix)
-        if item.is_file() and not item.is_symlink()
-    )
-
-print(json.dumps({
-    "name": payload["name"],
-    "title": title or payload["name"],
-    "description": description,
-    "skill_md": skill_md,
-    "references": files_in("references", "*.md"),
-    "scripts": files_in("scripts"),
-    "assets": files_in("assets"),
-}, ensure_ascii=False))
-''',
+            path=skill_root,
+            entry=root_entry,
+        ) != "dir":
+            raise ValueError(f"技能不存在或无权限访问: {normalized_name}")
+        skill_md_path = f"{skill_root}/SKILL.md"
+        skill_md_entry = await _sandbox_path_info(session=session, path=skill_md_path)
+        if skill_md_entry is None or await _sandbox_path_kind(
+            session=session,
+            path=skill_md_path,
+            entry=skill_md_entry,
+        ) != "file":
+            raise ValueError(f"技能文件不存在: {normalized_name}")
+        max_skill_chars = max(1, int(max_chars))
+        skill_bytes = await _read_sandbox_bytes_prefix(
+            sandbox=session.sandbox,
+            path=skill_md_path,
+            max_chars=max_skill_chars,
         )
-        result["visible_path"] = f"{sandbox_skills_root()}/{normalized_name}"
+        skill_md = skill_bytes.decode("utf-8", errors="replace")[:max_skill_chars]
+        title, description = _parse_sandbox_skill_frontmatter(skill_md)
+        files, _ = await _walk_sandbox_tree(session=session, root=skill_root)
+        references: list[str] = []
+        scripts: list[str] = []
+        assets: list[str] = []
+        for entry in files:
+            entry_path = str(getattr(entry, "path", "") or "")
+            relative = PurePosixPath(entry_path).relative_to(PurePosixPath(skill_root))
+            if not relative.parts:
+                continue
+            category = relative.parts[0]
+            item = PurePosixPath(*relative.parts[1:]).as_posix()
+            if category == "references" and item.endswith(".md"):
+                references.append(item[:-3])
+            elif category == "scripts":
+                scripts.append(item)
+            elif category == "assets":
+                assets.append(item)
+        result = {
+            "name": normalized_name,
+            "title": title or normalized_name,
+            "description": description,
+            "skill_md": skill_md,
+            "references": sorted(references),
+            "scripts": sorted(scripts),
+            "assets": sorted(assets),
+            "visible_path": f"{sandbox_skills_root()}/{normalized_name}",
+        }
         logger.info(
             "OpenSandbox skill_load 完成: sandbox_id=%s skill_name=%s skill_chars=%s references=%s scripts=%s assets=%s",
             session.sandbox_id,
@@ -1134,13 +1237,43 @@ print(json.dumps({
         return result
 
 
+def _parse_sandbox_skill_frontmatter(text: str) -> tuple[str, str]:
+    """Parse only the display fields needed by skill_load."""
+    if not text.startswith("---\n"):
+        return "", ""
+    closing = text.find("\n---\n", len("---\n"))
+    if closing < 0:
+        return "", ""
+    title = description = ""
+    for line in text[len("---\n"):closing].splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        normalized = value.strip().strip('"').strip("'")
+        if key.strip() == "title":
+            title = normalized
+        elif key.strip() == "description":
+            description = normalized
+    return title, description
+
+
+async def _read_sandbox_bytes_prefix(*, sandbox: Any, path: str, max_chars: int) -> bytes:
+    """Read at most the UTF-8 byte budget needed to satisfy a text char limit."""
+    files = getattr(sandbox, "files", None)
+    reader = getattr(files, "read_bytes", None)
+    if not callable(reader):
+        raise ValueError("当前 OpenSandbox SDK 不支持 files.read_bytes")
+    max_bytes = max(1, int(max_chars)) * 4
+    return bytes(await reader(path, range_header=f"bytes=0-{max_bytes - 1}"))
+
+
 async def sandbox_list_dir(
     *,
     session_ref: SandboxExecutionSessionRef,
     path: str,
     max_depth: int,
 ) -> list[dict[str, Any]]:
-    """List one sandbox-visible directory with the same hiding rules as local mode."""
+    """List one sandbox-visible directory through OpenSandbox Files API."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
@@ -1150,80 +1283,313 @@ async def sandbox_list_dir(
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
         if _is_tool_results_sandbox_path(target):
             raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出")
-        visible_root = sandbox_path_to_visible(target)
-        result = await run_sandbox_python_json(
-            session=session,
-            payload={"path": target, "visible_root": visible_root, "max_depth": max(1, int(max_depth))},
-            script_body=r'''
-from datetime import datetime
-from pathlib import Path
-
-root = Path(payload["path"])
-if not root.exists():
-    raise FileNotFoundError(f"目录不存在: {root}")
-if not root.is_dir():
-    raise ValueError(f"目标不是目录: {root}")
-entries = []
-hidden_root = Path("/mnt/user-data/outputs/.tool-results")
-
-def visit(directory, visible_dir, depth):
-    if len(entries) >= 500:
-        return
-    try:
-        children = sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name))
-    except OSError:
-        return
-    for child in children:
-        if len(entries) >= 500:
-            return
-        if child.is_symlink() or child == hidden_root or hidden_root in child.parents:
-            continue
-        try:
-            stat = child.stat()
-        except OSError:
-            continue
-        is_dir = child.is_dir()
-        visible = f"{visible_dir}/{child.name}"
-        entries.append({
-            "type": "dir" if is_dir else "file",
-            "path": visible + ("/" if is_dir else ""),
-            "size": "-" if is_dir else stat.st_size,
-            "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-        })
-        if is_dir and depth + 1 < payload["max_depth"]:
-            visit(child, visible, depth + 1)
-
-visit(root, payload["visible_root"], 0)
-print(json.dumps({"entries": entries}, ensure_ascii=False))
-''',
+        if await _sandbox_path_kind(session=session, path=target) != "dir":
+            raise ValueError(f"路径不是目录: {path}")
+        files = getattr(session.sandbox, "files", None)
+        lister = getattr(files, "list_directory", None)
+        if not callable(lister):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.list_directory")
+        DirectoryListEntry = _import_opensandbox_directory_list_entry()
+        raw_entries = await lister(
+            DirectoryListEntry(path=target, depth=max(1, int(max_depth)))
         )
-        entries = result.get("entries")
-        return entries if isinstance(entries, list) else []
+        target_prefix = f"{target.rstrip('/')}/"
+        entries: list[dict[str, Any]] = []
+        for entry in raw_entries:
+            entry_path = str(getattr(entry, "path", "") or "")
+            entry_type = _sandbox_entry_type(entry)
+            if (
+                not entry_path.startswith(target_prefix)
+                or _is_tool_results_sandbox_path(entry_path)
+                or entry_type == "symlink"
+            ):
+                continue
+            is_dir = await _sandbox_path_kind(
+                session=session,
+                path=entry_path,
+                entry=entry,
+            ) == "dir"
+            modified_at = getattr(entry, "modified_at", None)
+            mtime = (
+                modified_at.strftime("%Y-%m-%d %H:%M")
+                if hasattr(modified_at, "strftime")
+                else str(modified_at or "")
+            )
+            visible_path = sandbox_path_to_visible(entry_path)
+            entries.append({
+                "type": "dir" if is_dir else "file",
+                "path": visible_path + ("/" if is_dir else ""),
+                "size": "-" if is_dir else int(getattr(entry, "size", 0) or 0),
+                "mtime": mtime,
+            })
+        return sorted(entries, key=lambda item: (item["type"] == "file", item["path"]))[:500]
+
+
+async def _sandbox_mutable_path(
+    *,
+    session: SandboxExecutionSession,
+    file_path: str,
+) -> str:
+    target = await _resolve_sandbox_real_path(
+        session=session,
+        file_path=file_path,
+        writable=True,
+    )
+    if target in {sandbox_workspace_dir(), sandbox_outputs_dir()}:
+        raise ValueError("不允许操作 workspace/ 或 outputs/ 根目录")
+    return target
+
+
+async def sandbox_create_dir(*, session_ref: SandboxExecutionSessionRef, path: str) -> dict[str, Any]:
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        target = await _sandbox_mutable_path(session=session, file_path=path)
+        try:
+            await _sandbox_path_kind(session=session, path=target)
+        except Exception as exc:
+            if not _is_sandbox_file_not_found(exc):
+                raise
+        else:
+            raise ValueError(f"目录已存在: {path}")
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=[target],
+            mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        )
+        await sync_sandbox_working_trees(session)
+        logger.info("OpenSandbox dir_create 完成: sandbox_id=%s path=%s", session.sandbox_id, target)
+        return {"path": sandbox_path_to_visible(target), "type": "dir"}
+
+
+async def sandbox_delete_path(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    path: str,
+    recursive: bool,
+    expected_type: Literal["file", "dir"],
+) -> dict[str, Any]:
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        target = await _sandbox_mutable_path(session=session, file_path=path)
+        path_type = await _sandbox_path_kind(session=session, path=target)
+        if path_type != expected_type:
+            raise ValueError(f"目标是{path_type}，不能作为{expected_type}删除")
+        files = getattr(session.sandbox, "files", None)
+        if path_type == "dir":
+            if not recursive:
+                if await _list_sandbox_directory_entries(session=session, path=target):
+                    raise ValueError("目录非空；如确认删除，请设置 recursive=true")
+            deleter = getattr(files, "delete_directories", None)
+        else:
+            deleter = getattr(files, "delete_files", None)
+        if not callable(deleter):
+            raise ValueError("当前 OpenSandbox SDK 不支持对应的删除 Files API")
+        await deleter([target])
+        await sync_sandbox_working_trees(session)
+        logger.info("OpenSandbox file_delete 完成: sandbox_id=%s path=%s type=%s", session.sandbox_id, target, path_type)
+        return {"path": sandbox_path_to_visible(target), "type": path_type}
+
+
+async def sandbox_move_path(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    source_path: str,
+    destination_path: str,
+) -> dict[str, Any]:
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        source = await _sandbox_mutable_path(session=session, file_path=source_path)
+        destination = await _sandbox_mutable_path(session=session, file_path=destination_path)
+        path_type = await _sandbox_path_kind(session=session, path=source)
+        try:
+            await _sandbox_path_kind(session=session, path=destination)
+        except Exception as exc:
+            if not _is_sandbox_file_not_found(exc):
+                raise
+        else:
+            raise ValueError(f"目标路径已存在: {destination_path}")
+        parent_type = await _sandbox_path_kind(
+            session=session,
+            path=str(PurePosixPath(destination).parent),
+        )
+        if parent_type != "dir":
+            raise ValueError(f"目标父路径不是目录: {destination_path}")
+        files = getattr(session.sandbox, "files", None)
+        mover = getattr(files, "move_files", None)
+        if not callable(mover):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.move_files")
+        MoveEntry, _, _ = _import_opensandbox_filesystem_models()
+        await mover([MoveEntry(source=source, destination=destination)])
+        await sync_sandbox_working_trees(session)
+        logger.info(
+            "OpenSandbox file_move 完成: sandbox_id=%s source=%s destination=%s type=%s",
+            session.sandbox_id,
+            source,
+            destination,
+            path_type,
+        )
+        return {
+            "source_path": sandbox_path_to_visible(source),
+            "destination_path": sandbox_path_to_visible(destination),
+            "type": path_type,
+        }
+
+
+async def sandbox_search_files(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    path: str,
+    pattern: str,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        lexical_target = sandbox_visible_path(path)
+        if _is_tool_results_sandbox_path(lexical_target):
+            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+        target = await _resolve_sandbox_real_path(session=session, file_path=path)
+        files = getattr(session.sandbox, "files", None)
+        searcher = getattr(files, "search", None)
+        if not callable(searcher):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.search")
+        _, SearchEntry, _ = _import_opensandbox_filesystem_models()
+        entries = await searcher(SearchEntry(path=target, pattern=pattern))
+        results: list[dict[str, Any]] = []
+        target_prefix = f"{target.rstrip('/')}/"
+        for entry in sorted(entries, key=lambda item: str(getattr(item, "path", "") or "")):
+            entry_path = str(getattr(entry, "path", "") or "")
+            if (
+                not entry_path
+                or not entry_path.startswith(target_prefix)
+                or _is_tool_results_sandbox_path(entry_path)
+            ):
+                continue
+            results.append({"path": sandbox_path_to_visible(entry_path), "type": "file"})
+            if len(results) >= max(1, int(max_results)):
+                break
+        logger.info(
+            "OpenSandbox file_search 完成: sandbox_id=%s path=%s pattern=%s count=%s",
+            session.sandbox_id,
+            target,
+            pattern,
+            len(results),
+        )
+        return results
+
+
+def _matches_sandbox_glob(relative_path: str, pattern: str) -> bool:
+    """Match root files for **/ patterns like pathlib's recursive glob does."""
+    normalized = str(pattern or "**/*")
+    return fnmatch.fnmatchcase(relative_path, normalized) or (
+        normalized.startswith("**/")
+        and fnmatch.fnmatchcase(relative_path, normalized[3:])
+    )
+
+
+async def sandbox_grep_text(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    path: str,
+    pattern: str,
+    glob: str,
+    max_results: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    """Search literal text in sandbox files using the same limits as local mode."""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        lexical_target = sandbox_visible_path(path)
+        if _is_tool_results_sandbox_path(lexical_target):
+            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+        target = await _resolve_sandbox_real_path(session=session, file_path=path)
+        path_type = await _sandbox_path_kind(session=session, path=target)
+        if path_type == "file":
+            candidate_paths = [target]
+        else:
+            files, _ = await _walk_sandbox_tree(session=session, root=target)
+            candidate_paths = [str(getattr(entry, "path", "") or "") for entry in files]
+        matches: list[dict[str, Any]] = []
+        skipped_binary = skipped_large = 0
+        body_chars = 0
+        has_more = False
+        target_root = PurePosixPath(target)
+        for candidate in sorted(candidate_paths):
+            if _is_tool_results_sandbox_path(candidate):
+                continue
+            relative = PurePosixPath(candidate).name if path_type == "file" else PurePosixPath(candidate).relative_to(target_root).as_posix()
+            if path_type == "dir" and not _matches_sandbox_glob(relative, glob):
+                continue
+            if await _sandbox_path_kind(session=session, path=candidate) != "file":
+                continue
+            entry = await _sandbox_path_info(session=session, path=candidate)
+            if entry is None:
+                continue
+            file_size = int(getattr(entry, "size", 0) or 0)
+            if file_size > _TEXT_GREP_MAX_FILE_BYTES:
+                skipped_large += 1
+                continue
+            sample = await _read_sandbox_bytes_prefix(
+                sandbox=session.sandbox,
+                path=candidate,
+                max_chars=4096,
+            )
+            if b"\x00" in sample:
+                skipped_binary += 1
+                continue
+            raw_bytes = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=candidate)
+            text = raw_bytes.decode("utf-8", errors="replace")
+            for line_number, raw_line in enumerate(text.splitlines(), start=1):
+                if pattern not in raw_line:
+                    continue
+                line = raw_line[:MAX_FILE_READ_LINE_CHARS]
+                line_cost = len(line) + (1 if matches else 0)
+                if len(matches) >= max_results or body_chars + line_cost > max_chars:
+                    has_more = True
+                    break
+                matches.append({
+                    "path": sandbox_path_to_visible(candidate),
+                    "line_number": line_number,
+                    "line": line,
+                })
+                body_chars += line_cost
+            if has_more:
+                break
+        payload = {
+            "matches": matches,
+            "has_more": has_more,
+            "skipped_binary": skipped_binary,
+            "skipped_large": skipped_large,
+        }
+        logger.info(
+            "OpenSandbox file_grep 完成: sandbox_id=%s path=%s matches=%s has_more=%s",
+            session.sandbox_id,
+            target,
+            len(matches),
+            payload["has_more"],
+        )
+        return payload
 
 
 async def sandbox_write_text_file(*, session_ref: SandboxExecutionSessionRef, file_path: str, content: str, mode: str) -> dict[str, Any]:
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
+        if mode != "overwrite":
+            raise ValueError("内部文件写入只支持 overwrite")
         target = await _resolve_sandbox_real_path(session=session, file_path=file_path, writable=True)
-        if mode == "overwrite":
-            data = content.encode("utf-8")
-            await _write_sandbox_file(sandbox=session.sandbox, path=target, data=data)
-        else:
-            result = await run_sandbox_python_json(
-                session=session,
-                payload={"path": target, "content": content},
-                script_body=r'''
-from pathlib import Path
-path = Path(payload["path"])
-path.parent.mkdir(parents=True, exist_ok=True)
-with path.open("a", encoding="utf-8") as file_obj:
-    file_obj.write(str(payload.get("content") or ""))
-print(json.dumps({"bytes": len(str(payload.get("content") or "").encode("utf-8"))}, ensure_ascii=False))
-''',
-            )
-            data = await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
-        await _grant_sandbox_runtime_write_access(session=session, paths=[target])
+        parent = str(PurePosixPath(target).parent)
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=[parent],
+            mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        )
+        data = content.encode("utf-8")
+        await _write_sandbox_file(sandbox=session.sandbox, path=target, data=data)
         await _persist_sandbox_paths(session=session, changed_paths=[target])
         return {
             "operation": "write",
@@ -1233,54 +1599,43 @@ print(json.dumps({"bytes": len(str(payload.get("content") or "").encode("utf-8")
         }
 
 
-async def sandbox_apply_patch_ops(*, session_ref: SandboxExecutionSessionRef, ops: list[PatchOp], dry_run: bool) -> list[str]:
+async def sandbox_replace_text_file(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    file_path: str,
+    old_content: str,
+    new_content: str,
+) -> dict[str, Any]:
+    """Replace one validated text fragment through the OpenSandbox Files API."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
-        resolved_paths: dict[str, str] = {}
-        source: dict[str, FileState] = {}
-        for op in ops:
-            if op.path in resolved_paths:
-                continue
-            target = await _resolve_sandbox_real_path(
-                session=session,
-                file_path=op.path,
-                writable=True,
-            )
-            resolved_paths[op.path] = target
-            try:
-                source[op.path] = FileState(
-                    exists=True,
-                    text=(await _read_sandbox_file_bytes_with_fallback(session=session, path=target)).decode(
-                        "utf-8"
-                    ),
-                )
-            except Exception as exc:
-                if not _is_sandbox_file_not_found(exc):
-                    raise
-                source[op.path] = FileState(exists=False)
-        actions, changes = plan_patch_ops(ops, source)
-        if dry_run:
-            return actions
-        writes = [change for change in changes if change.exists]
-        deletes = [resolved_paths[change.path] for change in changes if not change.exists]
-        for change in writes:
-            await _write_sandbox_file(
+        target = await _resolve_sandbox_real_path(session=session, file_path=file_path, writable=True)
+        try:
+            content = (await _read_sandbox_file_bytes(
                 sandbox=session.sandbox,
-                path=resolved_paths[change.path],
-                data=change.text.encode("utf-8"),
-            )
-        await _grant_sandbox_runtime_write_access(
-            session=session,
-            paths=[resolved_paths[change.path] for change in writes],
+                path=target,
+            )).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"暂不支持修改二进制文件: {file_path}") from exc
+        match_count = content.count(old_content)
+        if match_count == 0:
+            raise ValueError("old_content 未在文件中找到；请先用 file_read 获取最新内容")
+        if match_count > 1:
+            raise ValueError("old_content 在文件中匹配多处；请提供更长且唯一的原文")
+        await _replace_sandbox_file_content(
+            sandbox=session.sandbox,
+            path=target,
+            old_content=old_content,
+            new_content=new_content,
         )
-        await _delete_sandbox_files(sandbox=session.sandbox, paths=deletes)
-        await _persist_sandbox_paths(
-            session=session,
-            changed_paths=[resolved_paths[change.path] for change in writes],
-            deleted_paths=deletes,
-        )
-        return actions
+        await _persist_sandbox_paths(session=session, changed_paths=[target])
+        return {
+            "operation": "edit",
+            "file_path": sandbox_path_to_visible(target),
+            "replaced_count": 1,
+            "bytes": len(new_content.encode("utf-8")),
+        }
 
 
 async def sandbox_write_tool_result(
@@ -1302,7 +1657,7 @@ async def sandbox_write_tool_result(
         if not _is_tool_results_sandbox_path(target):
             raise ValueError("内部工具结果只能写入 outputs/.tool-results/")
         try:
-            await _read_sandbox_file_bytes_with_fallback(session=session, path=target)
+            await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
         except Exception as exc:
             if not _is_sandbox_file_not_found(exc):
                 raise
@@ -1310,7 +1665,6 @@ async def sandbox_write_tool_result(
             raise ValueError("工具结果文件已存在")
         data = content.encode("utf-8")
         await _write_sandbox_file(sandbox=session.sandbox, path=target, data=data)
-        await _grant_sandbox_runtime_write_access(session=session, paths=[target])
         await _persist_sandbox_paths(session=session, changed_paths=[target])
         return {"file_path": sandbox_path_to_visible(target), "bytes": len(data)}
 

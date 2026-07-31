@@ -150,7 +150,7 @@ metadata:
 └── assets/
 ```
 
-初始化完成后再写入或修改文件。不要在未初始化目录结构的情况下直接输出零散文件。
+初始化完成后再写入或修改文件。对会话中的待导入技能，先依次调用 `dir_create` 创建 `/mnt/user-data/outputs/<skill-name>`、`references`、`scripts`、`assets`，再用 `file_write` 写入 `SKILL.md` 和需要的子文件。不要在未初始化目录结构的情况下直接输出零散文件。
 
 ### 4. 生成技能草稿
 
@@ -164,7 +164,7 @@ metadata:
 - 需要的 `scripts/*.py`
 - 可选 `assets/**`
 
-如果当前系统提供技能管理接口或编辑器，应该使用系统已有“新建 / 保存 / 发布”流程，不要绕过权限直接写系统目录。
+对话中生成待导入技能时，写入 `/mnt/user-data/outputs/<skill-name>/` 后调用 `present_artifacts(files=["/mnt/user-data/outputs/<skill-name>/SKILL.md"])`。用户在消息卡片中点击导入后，系统再创建草稿；不要绕过权限直接写系统技能目录或用户技能管理目录。
 
 ### 5. 校验技能
 
@@ -180,7 +180,7 @@ metadata:
 - 脚本只依赖标准库或当前环境明确已有依赖。
 - 不包含密钥、真实敏感数据或不该沉淀的业务数据。
 
-如能访问技能目录，可运行：
+仅当本轮提供 `bash_run` 时，如能访问技能目录，可运行：
 
 ```bash
 python /mnt/skills/skill-creator/scripts/quick_validate.py <skill-directory>
@@ -216,4 +216,4 @@ python /mnt/skills/skill-creator/scripts/quick_validate.py <skill-directory>
 2. `SKILL.md` 符合 frontmatter 规范。
 3. 技能目录已初始化，且 `references/`、`scripts/`、`assets/` 都存在。
 4. 如有 references/scripts/assets，已说明用途。
-5. 已提示用户保存草稿或发布，而不是只给出抽象建议。
+5. 已调用 `present_artifacts` 展示可导入的 `outputs/<skill-name>/SKILL.md`，而不是只给出抽象建议。

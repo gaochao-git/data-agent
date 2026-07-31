@@ -702,7 +702,7 @@ def test_unified_prompt_injects_skill_metadata_not_skill_body():
     assert "<name>dashboard-generation</name>" in prompt
     assert "<title>看板生成技能</title>" in prompt
     assert "`bash_run`" in prompt
-    assert "`file_move`" not in prompt
+    assert "`file_move`" in prompt
     assert '调用 `skill_load("<name>")`' in prompt
     assert "不能使用 title、skill_id 或自造名称" in prompt
     assert "同一轮必须立刻调用 `skill_load`" in prompt

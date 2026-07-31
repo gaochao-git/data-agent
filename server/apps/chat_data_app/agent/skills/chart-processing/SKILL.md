@@ -131,8 +131,8 @@ metadata:
 - 派生字段必须由脚本计算，例如 `diff`、`change_rate`、`ratio`、`rank`。
 - 缺失值处理必须显式，例如补 0、保留 null 或丢弃，并写入 `meta.missing_policy`。
 - 当指标或维度没有说明枚举值含义、状态码 / 类型码映射、时间字段存储格式 / 粒度 / 时区、金额单位等关键存储口径时，先查询 3 条原始明细确认字段取值和时间格式，再执行正式图表查询和处理。
-- 生成或修改 `chart_spec` 时必须使用多行缩进 JSON，不要压缩成一行；后续 patch 必须基于文件当前真实内容。
-- 修改已有 `chart_spec` 前必须先用 `file_read` 读取目标文件；`file_edit` patch 失败后必须重新 `file_read` 再生成新 patch，不能凭记忆重试。
+- 生成或整体覆盖 `chart_spec` 时必须使用多行缩进 JSON，并使用 `file_write`；不要压缩成一行。
+- 修改已有 `chart_spec` 的局部内容前必须先用 `file_read` 读取目标文件，再使用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文。找不到或匹配多处时重新读取，不要凭记忆重试；需要整体替换时改用 `file_write`。
 - 最终输出写入 `outputs/<业务名>.chart.json`。多图必须使用业务语义命名区分，例如 `sales_rank.chart.json`、`sales_ratio.chart.json`。不要用版本号区分图表含义。
 - 写入或更新 outputs 图表文件后，必须调用 `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])`，否则聊天框不会展示图表预览。
 - 不要在用户正文展示完整 JSON、SQL、脚本或原始查询行。
@@ -147,10 +147,10 @@ metadata:
 4. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 5. 使用 `dsl2sql_tool` 构造真实查询；禁止手写 SQL
 6. 使用 `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/current.json")` 获取真实数据并保存中间文件；多 SQL 场景分别保存为 `/mnt/user-data/workspace/current.json`、`/mnt/user-data/workspace/previous.json` 等
-7. 简单单 SQL 场景：按主指南生成 `/mnt/user-data/workspace/chart_spec_draft.json`；多图使用带业务后缀的草稿名
-8. 复杂场景：参考 `scripts/` 写入 `/mnt/user-data/workspace/build_chart_spec.py`
-9. 使用 `bash_run(command="python3 /mnt/user-data/workspace/build_chart_spec.py ...")` 执行脚本，生成 `/mnt/user-data/workspace/chart_spec_draft.json` 或带业务后缀的草稿文件
-10. 将草稿复制或写入 `/mnt/user-data/outputs/<业务名>.chart.json`；多图用业务命名区分，不使用版本号
+7. 简单单 SQL 场景：用 `file_write` 写入 `/mnt/user-data/workspace/chart_spec_draft.json`；多图使用带业务后缀的草稿名
+8. 复杂场景：用 `file_write` 写入 `/mnt/user-data/workspace/build_chart_spec.py`，并让脚本读取第 6 步物化的查询结果文件
+9. 仅当本轮可用 `bash_run` 时，执行 `bash_run(command="python3 /mnt/user-data/workspace/build_chart_spec.py ...")` 生成草稿文件；未提供 `bash_run` 时不要假装脚本已执行，复杂处理应说明当前无法执行脚本
+10. 用 `file_write` 将草稿整体写入 `/mnt/user-data/outputs/<业务名>.chart.json`；仅需改动已有产物的一处唯一文本时，先 `file_read` 再用 `file_edit`。多图用业务命名区分，不使用版本号
 11. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])` 展示最终图表预览；多图一次传入多个 outputs 文件
 12. 简短总结图表预览状态
 

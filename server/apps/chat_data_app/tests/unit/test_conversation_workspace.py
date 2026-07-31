@@ -24,16 +24,6 @@ from apps.chat_data_app.services.conversation_workspace import (
     resolve_workspace_path,
     to_visible_path,
 )
-from apps.chat_data_app.services.workspace_patch import (
-    AddOp,
-    DeleteOp,
-    Hunk,
-    PatchFileChange,
-    PatchError,
-    UpdateOp,
-    apply_patch_ops,
-    parse_patch,
-)
 from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
 from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import assemble_tools
@@ -42,8 +32,7 @@ from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
-file_edit_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.file_edit")
-file_read_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.file_read")
+filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 skill_load_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.skill_load")
 
@@ -348,44 +337,62 @@ def test_outputs_standard_file_artifact_detected_by_native_suffix():
 
 
 @pytest.mark.asyncio
-async def test_file_edit_accepts_structured_content(monkeypatch):
+async def test_file_write_accepts_structured_content(monkeypatch):
     paths = ensure_conversation_workspace("conv_workspace_file_edit")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
+    result = await tools["file_write"].ainvoke({
         "file_path": "workspace/plan.json",
         "content": {"cards": [{"title": "风险总览"}]},
-        "mode": "overwrite",
     })
 
-    assert "[file_edit]" in result
+    assert "[file_write]" in result
     assert '"风险总览"' in (Path(paths["workspace"]) / "plan.json").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
-async def test_file_edit_rejects_invalid_operation_and_mode(monkeypatch):
-    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_invalid_{uuid.uuid4().hex}")
+async def test_file_edit_requires_unique_existing_content(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_unique_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
+    target = Path(paths["workspace"]) / "report.txt"
+    target.write_text("title=old\nvalue=old\n", encoding="utf-8")
 
-    bad_operation = await tools["file_edit"].ainvoke({"operation": "delete", "file_path": "workspace/a.txt"})
-    bad_mode = await tools["file_edit"].ainvoke({"operation": "write", "mode": "bad", "file_path": "workspace/a.txt"})
+    duplicate = await tools["file_edit"].ainvoke({
+        "file_path": "workspace/report.txt",
+        "old_content": "old",
+        "new_content": "new",
+    })
+    success = await tools["file_edit"].ainvoke({
+        "file_path": "workspace/report.txt",
+        "old_content": "title=old",
+        "new_content": "title=new",
+    })
+    missing = await tools["file_edit"].ainvoke({
+        "file_path": "workspace/report.txt",
+        "old_content": "missing",
+        "new_content": "new",
+    })
 
-    assert "operation 只支持 write / patch" in bad_operation
-    assert "mode 只支持 overwrite / append" in bad_mode
+    assert "匹配多处" in duplicate
+    assert "[file_edit]" in success
+    assert target.read_text(encoding="utf-8") == "title=new\nvalue=old\n"
+    assert "未在文件中找到" in missing
 
 
 @pytest.mark.asyncio
-async def test_file_edit_append_uses_local_workspace(monkeypatch):
-    paths = ensure_conversation_workspace(f"conv_workspace_file_edit_append_{uuid.uuid4().hex}")
+async def test_file_write_and_edit_reject_uploads(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_write_uploads_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    await tools["file_edit"].ainvoke({"file_path": "workspace/a.txt", "content": "first\n"})
-    await tools["file_edit"].ainvoke({"file_path": "workspace/a.txt", "content": "second\n", "mode": "append"})
-    assert (Path(paths["workspace"]) / "a.txt").read_text(encoding="utf-8") == "first\nsecond\n"
+    write_result = await tools["file_write"].ainvoke({"file_path": "uploads/a.txt", "content": "x"})
+    edit_result = await tools["file_edit"].ainvoke({
+        "file_path": "uploads/a.txt",
+        "old_content": "x",
+        "new_content": "y",
+    })
 
-    result = await tools["file_edit"].ainvoke({"file_path": "workspace/b.txt", "content": "x"})
-    assert "[file_edit]" in result
-    assert (Path(paths["workspace"]) / "b.txt").read_text(encoding="utf-8") == "x"
+    assert write_result.startswith("file_write 执行失败: 只允许写入 workspace/ 或 outputs/")
+    assert edit_result.startswith("file_edit 执行失败: 只允许写入 workspace/ 或 outputs/")
 
 
 @pytest.mark.asyncio
@@ -584,7 +591,7 @@ async def test_file_read_truncates_long_lines_without_char_continuation(monkeypa
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["workspace"]) / "rows.jsonl"
     target.write_text("a" * 600 + "\n" + "b" * 600 + "\nnext", encoding="utf-8")
-    monkeypatch.setattr(file_read_tool_module, "FILE_READ_MAX_CHARS", 1000)
+    monkeypatch.setattr(filesystem_tool_module, "FILE_READ_MAX_CHARS", 1000)
 
     first_page = await tools["file_read"].ainvoke({
         "file_path": "workspace/rows.jsonl",
@@ -614,7 +621,7 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def read_text_file(self, _runtime, **kwargs):
             assert kwargs == {
-                "file_path": "workspace/report.txt", "offset": 0, "limit": 200, "max_chars": 16000,
+                "file_path": "workspace/report.txt", "offset": 0, "limit": 200, "max_chars": 25000,
             }
             return {
                 "exists": True,
@@ -632,8 +639,11 @@ async def test_file_read_delegates_to_runtime_backend():
         async def write_text_file(self, *_args, **_kwargs):
             raise AssertionError("unexpected write")
 
-        async def apply_patch_ops(self, *_args, **_kwargs):
-            raise AssertionError("unexpected patch")
+        async def write_tool_result(self, *_args, **_kwargs):
+            raise AssertionError("unexpected tool result")
+
+        async def replace_text_file(self, *_args, **_kwargs):
+            raise AssertionError("unexpected replace")
 
         async def artifact_payload(self, *_args, **_kwargs):
             raise AssertionError("unexpected artifact")
@@ -653,12 +663,27 @@ async def test_file_read_delegates_to_runtime_backend():
         async def run_bash(self, *_args, **_kwargs):
             raise AssertionError("unexpected bash run")
 
+        async def create_dir(self, *_args, **_kwargs):
+            raise AssertionError("unexpected create dir")
+
+        async def delete_path(self, *_args, **_kwargs):
+            raise AssertionError("unexpected delete")
+
+        async def move_path(self, *_args, **_kwargs):
+            raise AssertionError("unexpected move")
+
+        async def search_files(self, *_args, **_kwargs):
+            raise AssertionError("unexpected search")
+
+        async def grep_text(self, *_args, **_kwargs):
+            raise AssertionError("unexpected grep")
+
     runtime = ConversationWorkspaceRuntime(
         workspace_root="/unused",
         user_id="u1",
         backend=RecordingBackend(),
     )
-    tool = file_read_tool_module.create_file_read_tool(runtime)
+    tool = next(tool for tool in filesystem_tool_module.create_filesystem_tools(runtime) if tool.name == "file_read")
 
     result = await tool.ainvoke({"file_path": "workspace/report.txt"})
 
@@ -733,13 +758,12 @@ async def test_file_read_rejects_workspace_root_outside_chat_data_home(monkeypat
     (workspace_root / "uploads").mkdir()
     (workspace_root / "workspace" / "secret.txt").write_text("secret", encoding="utf-8")
     monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
-    tool = file_read_tool_module.create_file_read_tool(
-        ConversationWorkspaceRuntime(
-            workspace_root=str(workspace_root),
-            user_id="u1",
-            backend="sandbox",
-        )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root),
+        user_id="u1",
+        backend="sandbox",
     )
+    tool = next(tool for tool in filesystem_tool_module.create_filesystem_tools(runtime) if tool.name == "file_read")
 
     result = await tool.ainvoke({"file_path": "workspace/secret.txt"})
 
@@ -778,174 +802,54 @@ async def test_file_read_rejects_local_path_escape(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_edit_patch_updates_file(monkeypatch):
-    paths = ensure_conversation_workspace(f"conv_workspace_file_patch_{uuid.uuid4().hex}")
+async def test_file_glob_recursively_matches_filenames_and_hides_tool_results(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_glob_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
+    (Path(paths["workspace"]) / "reports" / "daily").mkdir(parents=True)
+    (Path(paths["workspace"]) / "reports" / "daily" / "sales.json").write_text("{}", encoding="utf-8")
+    (Path(paths["workspace"]) / "summary.json").write_text("{}", encoding="utf-8")
+    hidden = Path(paths["outputs"]) / ".tool-results" / "query.json"
+    hidden.write_text("{}", encoding="utf-8")
 
-    patch = """*** Begin Patch
-*** Add File: workspace/demo.txt
-+hello
-*** Update File: workspace/demo.txt
-@@
--hello
-+world
-*** End Patch"""
+    result = await tools["file_glob"].ainvoke({
+        "path": "workspace",
+        "pattern": "*.json",
+    })
 
-    result = await tools["file_edit"].ainvoke({"patch": patch})
-
-    assert "[file_edit]" in result
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
-    assert payload["operation"] == "patch"
-    assert payload["action_count"] == 2
-    assert (Path(paths["workspace"]) / "demo.txt").read_text(encoding="utf-8") == "world\n"
-
-
-@pytest.mark.asyncio
-async def test_file_edit_patch_dry_run_does_not_write_file(monkeypatch):
-    paths = ensure_conversation_workspace(f"conv_workspace_file_patch_dry_{uuid.uuid4().hex}")
-    tools = _create_local_workspace_tools(monkeypatch, paths)
-    patch = """*** Begin Patch
-*** Add File: workspace/dry.txt
-+dry
-*** End Patch"""
-
-    result = await tools["file_edit"].ainvoke({"patch": patch, "dry_run": True})
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
-
-    assert payload["dry_run"] is True
-    assert payload["actions"] == ["add workspace/dry.txt"]
-    assert not (Path(paths["workspace"]) / "dry.txt").exists()
-
-
-def test_parse_patch_rejects_malformed_inputs():
-    with pytest.raises(PatchError, match="must start"):
-        parse_patch("*** Add File: workspace/a.txt")
-    with pytest.raises(PatchError, match="unexpected content"):
-        parse_patch("*** Begin Patch\n*** End Patch\nextra")
-    with pytest.raises(PatchError, match="add file lines"):
-        parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\nbad\n*** End Patch")
-    with pytest.raises(PatchError, match="missing '@@'"):
-        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n+bad\n*** End Patch")
-    with pytest.raises(PatchError, match="invalid update line"):
-        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n@@\n?bad\n*** End Patch")
-    with pytest.raises(PatchError, match="no hunks"):
-        parse_patch("*** Begin Patch\n*** Update File: workspace/a.txt\n*** End Patch")
-    with pytest.raises(PatchError, match="unexpected patch header"):
-        parse_patch("*** Begin Patch\n*** Move File: workspace/a.txt\n*** End Patch")
-    with pytest.raises(PatchError, match="missing"):
-        parse_patch("*** Begin Patch\n*** Add File: workspace/a.txt\n+x")
-
-
-def test_parse_patch_accepts_delete_eof_and_multiple_update_hunks():
-    ops = parse_patch(
-        "*** Begin Patch\n"
-        "*** Delete File: workspace/remove.txt\n"
-        "*** Update File: workspace/demo.txt\n"
-        "@@\n"
-        " old\n"
-        "-a\n"
-        "+b\n"
-        "*** End of File\n"
-        "@@ second\n"
-        " b\n"
-        "+c\n"
-        "*** End Patch"
-    )
-
-    assert isinstance(ops[0], DeleteOp)
-    assert isinstance(ops[1], UpdateOp)
-    assert len(ops[1].hunks) == 2
-
-
-def test_apply_patch_ops_rejects_existing_add_missing_delete_and_bad_context(tmp_path):
-    root = tmp_path
-    (root / "workspace").mkdir()
-    (root / "workspace" / "exists.txt").write_text("old\n", encoding="utf-8")
-
-    resolver = lambda path: resolve_workspace_path(str(root), path, writable=True)
-    with pytest.raises(PatchError, match="existing file"):
-        apply_patch_ops(
-            [AddOp(path="workspace/exists.txt", lines=["new"])],
-            resolve_writable_path=resolver,
-        )
-    with pytest.raises(PatchError, match="missing file"):
-        apply_patch_ops(
-            [DeleteOp(path="workspace/missing.txt")],
-            resolve_writable_path=resolver,
-        )
-    with pytest.raises(PatchError, match="missing file"):
-        apply_patch_ops(
-            [UpdateOp(path="workspace/missing.txt", hunks=[Hunk(lines=[" old", "+new"])])],
-            resolve_writable_path=resolver,
-        )
-    with pytest.raises(PatchError, match="failed to locate"):
-        apply_patch_ops(
-            [UpdateOp(path="workspace/exists.txt", hunks=[Hunk(lines=[" missing", "+new"])])],
-            resolve_writable_path=resolver,
-        )
-
-
-def test_apply_patch_ops_delete_and_update_without_trailing_newline(tmp_path):
-    root = tmp_path
-    workspace = root / "workspace"
-    workspace.mkdir()
-    delete_target = workspace / "remove.txt"
-    update_target = workspace / "exists.txt"
-    delete_target.write_text("remove", encoding="utf-8")
-    update_target.write_text("old", encoding="utf-8")
-
-    actions = apply_patch_ops(
-        [
-            DeleteOp(path="workspace/remove.txt"),
-            UpdateOp(
-                path="workspace/exists.txt",
-                hunks=[Hunk(lines=["-old", "+new"])],
-            ),
-        ],
-        resolve_writable_path=lambda path: resolve_workspace_path(str(root), path, writable=True),
-    )
-
-    assert actions == ["delete workspace/remove.txt", "update workspace/exists.txt"]
-    assert not delete_target.exists()
-    assert update_target.read_text(encoding="utf-8") == "new\n"
-
-
-def test_plan_patch_ops_returns_one_final_change_per_path():
-    from apps.chat_data_app.services.workspace_patch import plan_patch_ops
-
-    actions, changes = plan_patch_ops(
-        [
-            AddOp(path="workspace/demo.txt", lines=["old"]),
-            UpdateOp(path="workspace/demo.txt", hunks=[Hunk(lines=["-old", "+new"])]),
-        ],
-        {},
-    )
-
-    assert actions == ["add workspace/demo.txt", "update workspace/demo.txt"]
-    assert changes == [
-        PatchFileChange(
-            path="workspace/demo.txt", exists=True, text="new\n"
-        )
+    payload = json.loads(result.replace("[file_glob]\n", "", 1))
+    assert payload["entries"] == [
+        {"path": "/workspace/reports/daily/sales.json", "type": "file"},
+        {"path": "/workspace/summary.json", "type": "file"},
     ]
 
 
-def test_file_edit_next_action_helpers_cover_path_variants():
-    assert "草稿已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+@pytest.mark.asyncio
+async def test_file_glob_rejects_path_patterns(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_glob_pattern_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["file_glob"].ainvoke({"pattern": "**/*.json"})
+
+    assert result.startswith("file_glob 执行失败: pattern 只能匹配文件名")
+
+
+def test_filesystem_next_action_helpers_cover_path_variants():
+    assert "草稿已更新" in filesystem_tool_module._dashboard_next_action_for_path(
         "/workspace/dashboard_draft/demo.json",
         "write",
     )
-    assert "看板预览文件已更新" in file_edit_tool_module._dashboard_next_action_for_path(
+    assert "看板预览文件已更新" in filesystem_tool_module._dashboard_next_action_for_path(
         "/mnt/user-data/outputs/demo.dashboard.json",
         "write",
     )
-    assert "文件已 patch 更新" in file_edit_tool_module._dashboard_next_action_for_path(
+    assert "精确替换" in filesystem_tool_module._dashboard_next_action_for_path(
         "workspace/notes.txt",
-        "patch",
+        "edit",
     )
-    assert file_edit_tool_module._dashboard_next_action_for_path("workspace/notes.txt", "write") is None
+    assert filesystem_tool_module._dashboard_next_action_for_path("workspace/notes.txt", "write") is None
 
     payload = {}
-    file_edit_tool_module._attach_dashboard_next_action(
+    filesystem_tool_module._attach_dashboard_next_action(
         payload,
         operation="write",
         paths=["workspace/notes.txt", "outputs/demo.dashboard.json"],
@@ -953,28 +857,26 @@ def test_file_edit_next_action_helpers_cover_path_variants():
     assert "看板预览文件已更新" in payload["next_required_action"]
 
 @pytest.mark.asyncio
-async def test_file_edit_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):
+async def test_file_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_draft_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "workspace/dashboard_draft.json",
         "content": {"dashboard_name": "草稿看板", "cards": [{"title": "销售额"}]},
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/workspace/dashboard_draft.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
+async def test_file_write_returns_chart_spec_payload(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "outputs/monthly_simple_bar.chart.json",
         "content": {
             "version": "1.0",
@@ -985,7 +887,7 @@ async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
         },
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/monthly_simple_bar.chart.json"
     assert payload["artifact_type"] == "chart_spec"
     assert payload["artifact_version"] == "v1"
@@ -994,12 +896,11 @@ async def test_file_edit_write_returns_chart_spec_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_workspace_chart_spec_has_no_chart_artifact_type(monkeypatch):
+async def test_file_write_workspace_chart_spec_has_no_chart_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_chart_draft_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "workspace/chart_spec_sales_trend_draft.json",
         "content": {
             "version": "1.0",
@@ -1010,34 +911,32 @@ async def test_file_edit_write_workspace_chart_spec_has_no_chart_artifact_type(m
         },
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/workspace/chart_spec_sales_trend_draft.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_non_chart_json_has_no_chart_artifact_type(monkeypatch):
+async def test_file_write_non_chart_json_has_no_chart_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_non_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "outputs/query_result.json",
         "content": {"rows": [{"month": "2026-01", "sales": 120}]},
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/query_result.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_empty_line_chart_has_no_chart_artifact_type(monkeypatch):
+async def test_file_write_empty_line_chart_has_no_chart_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_empty_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "outputs/empty_chart.json",
         "content": {
             "version": "1.0",
@@ -1048,18 +947,17 @@ async def test_file_edit_write_empty_line_chart_has_no_chart_artifact_type(monke
         },
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/empty_chart.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_invalid_chart_spec_has_no_chart_artifact_type(monkeypatch):
+async def test_file_write_invalid_chart_spec_has_no_chart_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "outputs/invalid_chart.json",
         "content": {
             "chart_type": "line",
@@ -1068,18 +966,17 @@ async def test_file_edit_write_invalid_chart_spec_has_no_chart_artifact_type(mon
         },
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/invalid_chart.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_write_chart_spec_with_missing_encoding_field_has_no_chart_artifact_type(monkeypatch):
+async def test_file_write_chart_spec_with_missing_encoding_field_has_no_chart_artifact_type(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_invalid_chart_encoding_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
-    result = await tools["file_edit"].ainvoke({
-        "operation": "write",
+    result = await tools["file_write"].ainvoke({
         "file_path": "outputs/invalid_chart_encoding.json",
         "content": {
             "version": "1.0",
@@ -1090,13 +987,13 @@ async def test_file_edit_write_chart_spec_with_missing_encoding_field_has_no_cha
         },
     })
 
-    payload = json.loads(result.replace("[file_edit]\n", "", 1))
+    payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/invalid_chart_encoding.json"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_edit_patch_returns_dashboard_spec_payload(monkeypatch):
+async def test_file_edit_returns_dashboard_spec_payload(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_patch_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "dashboard.dashboard.json"
@@ -1109,14 +1006,11 @@ async def test_file_edit_patch_returns_dashboard_spec_payload(monkeypatch):
             "dsl": {"metrics": ["订单金额"], "dimensions": [], "filters": [], "order_by": [], "limit": 100},
         }],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    patch = """*** Begin Patch
-*** Update File: outputs/dashboard.dashboard.json
-@@
--  "dashboard_name": "旧看板",
-+  "dashboard_name": "新看板",
-*** End Patch"""
-
-    result = await tools["file_edit"].ainvoke({"operation": "patch", "patch": patch})
+    result = await tools["file_edit"].ainvoke({
+        "file_path": "outputs/dashboard.dashboard.json",
+        "old_content": '  "dashboard_name": "旧看板",',
+        "new_content": '  "dashboard_name": "新看板",',
+    })
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
     assert payload["file_path"] == "/outputs/dashboard.dashboard.json"
@@ -1125,16 +1019,17 @@ async def test_file_edit_patch_returns_dashboard_spec_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_edit_patch_rejects_uploads_write(monkeypatch):
-    paths = ensure_conversation_workspace("conv_workspace_file_patch_uploads")
+async def test_file_edit_rejects_uploads_write(monkeypatch):
+    paths = ensure_conversation_workspace("conv_workspace_file_edit_uploads")
     tools = _create_local_workspace_tools(monkeypatch, paths)
+    target = Path(paths["uploads"]) / "demo.txt"
+    target.write_text("old", encoding="utf-8")
 
-    patch = """*** Begin Patch
-*** Add File: uploads/demo.txt
-+bad
-*** End Patch"""
-
-    result = await tools["file_edit"].ainvoke({"patch": patch})
+    result = await tools["file_edit"].ainvoke({
+        "file_path": "uploads/demo.txt",
+        "old_content": "old",
+        "new_content": "new",
+    })
 
     assert "file_edit 执行失败" in result
 

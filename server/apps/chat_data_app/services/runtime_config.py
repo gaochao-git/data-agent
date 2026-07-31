@@ -35,7 +35,7 @@ def read_bool_env(name: str, default: bool = False) -> bool:
 
 DEFAULT_ROW_LIMIT = read_positive_int_env("CHATDATA_ROW_LIMIT", 100)
 TOOL_RESULT_OFFLOAD_SIZE = read_positive_int_env("CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE", 32000)
-FILE_READ_MAX_CHARS = max(4096, read_positive_int_env("CHAT_DATA_FILE_READ_MAX_CHARS", 16000))
+FILE_READ_MAX_CHARS = max(4096, read_positive_int_env("CHAT_DATA_FILE_READ_MAX_CHARS", 25000))
 QUERY_CACHE_ENABLED = read_bool_env("CHAT_DATA_QUERY_CACHE_ENABLED", False)
 QUERY_CACHE_TTL_SECONDS = read_positive_int_env("CHAT_DATA_QUERY_CACHE_TTL_SECONDS", 3600)
 DEFAULT_CONTEXT_WINDOW = 128000
