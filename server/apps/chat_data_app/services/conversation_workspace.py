@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -33,6 +34,7 @@ from .workspace_execution import (
     OPENSANDBOX_BACKEND,
     SandboxExecutionSessionRef,
     get_workspace_execution_session,
+    parse_rg_output,
     run_command_in_sandbox,
     sandbox_artifact_payload,
     sandbox_create_dir,
@@ -1192,6 +1194,21 @@ def _search_local_workspace_files(
     return matches
 
 
+_rg_available: bool | None = None
+
+
+def _check_rg_available() -> bool:
+    """Detect ripgrep at module level (cached)."""
+    global _rg_available
+    if _rg_available is None:
+        try:
+            subprocess.run(["rg", "--version"], capture_output=True, timeout=5)
+            _rg_available = True
+        except Exception:
+            _rg_available = False
+    return _rg_available
+
+
 def _grep_local_workspace_text(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -1206,62 +1223,42 @@ def _grep_local_workspace_text(
         is_skill = True
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
-        if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         visible_root = to_visible_path(runtime.workspace_root, target)
         is_skill = False
     if target.is_symlink() or not target.exists():
         raise FileNotFoundError(f"路径不存在: {path}")
-    files = [target] if target.is_file() else sorted(target.glob(glob))
+
+    if not _check_rg_available():
+        raise RuntimeError("file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)")
+
+    args: list[str] = ["rg", "-F", "--json", "--hidden"]
+    if glob and glob != "**/*":
+        args.extend(["--glob", glob])
+    args.append(str(target))
+    for p in patterns:
+        args.extend(["-e", p])
+    proc = subprocess.run(args, capture_output=True, timeout=30)
+    if proc.returncode > 1:
+        raise RuntimeError(f"rg 执行失败 (exit={proc.returncode}): {proc.stderr.decode('utf-8', errors='replace')}")
+
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    raw_matches, has_more = parse_rg_output(
+        stdout, str(target), max_results=max_results, max_chars=max_chars,
+    )
     matches: list[dict[str, Any]] = []
-    skipped_binary = skipped_large = 0
-    body_chars = 0
-    has_more = False
-    for item in files:
-        if item.is_symlink() or not item.is_file():
-            continue
-        resolved = item.resolve()
-        if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
-            continue
-        try:
-            if item.stat().st_size > _TEXT_GREP_MAX_FILE_BYTES:
-                skipped_large += 1
-                continue
-            with item.open("rb") as file_obj:
-                if b"\x00" in file_obj.read(4096):
-                    skipped_binary += 1
-                    continue
-            relative = item.relative_to(target).as_posix() if target.is_dir() else item.name
-            visible_path = (
-                visible_root.rstrip("/") + "/" + relative
-                if is_skill and target.is_dir()
-                else to_visible_path(runtime.workspace_root, resolved)
-            )
-            with item.open("r", encoding="utf-8", errors="replace") as file_obj:
-                for line_number, raw_line in enumerate(file_obj, start=1):
-                    if not any(p in raw_line for p in patterns):
-                        continue
-                    line = raw_line.rstrip("\r\n")[:MAX_FILE_READ_LINE_CHARS]
-                    line_cost = len(line) + (1 if matches else 0)
-                    if len(matches) >= max_results or body_chars + line_cost > max_chars:
-                        has_more = True
-                        break
-                    matches.append({
-                        "path": visible_path,
-                        "line_number": line_number,
-                        "line": line,
-                    })
-                    body_chars += line_cost
-                if has_more:
-                    break
-        except OSError:
-            continue
-    return {
-        "matches": matches,
-        "has_more": has_more,
-        "skipped_binary": skipped_binary,
-        "skipped_large": skipped_large,
-    }
+    for m in raw_matches:
+        file_rel = m["file"]
+        if is_skill and target.is_dir():
+            visible_path = visible_root.rstrip("/") + "/" + file_rel
+        else:
+            resolved = (target / file_rel).resolve()
+            visible_path = to_visible_path(runtime.workspace_root, resolved)
+        matches.append({
+            "path": visible_path,
+            "line_number": m["line_number"],
+            "line": m["content"],
+        })
+    return {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
 
 
 def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:

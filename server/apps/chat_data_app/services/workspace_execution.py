@@ -7,9 +7,11 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import fnmatch
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import time
 from typing import Any, Literal
 from urllib.parse import unquote
@@ -1490,6 +1492,73 @@ def _matches_sandbox_glob(relative_path: str, pattern: str) -> bool:
     )
 
 
+def build_rg_command_str(
+    target: str,
+    patterns: list[str],
+    *,
+    glob: str = "**/*",
+) -> str:
+    """Build an rg command string for the sandbox backend (shell-executed).
+
+    -F: fixed strings, --json: structured JSON Lines output for robust parsing.
+    rg skips hidden dirs (``.tool-offload``) and binary files by default.
+    """
+    parts = ["rg", "-F", "--json", "--hidden"]
+    if glob and glob != "**/*":
+        parts.extend(["--glob", shlex.quote(glob)])
+    parts.append(shlex.quote(target))
+    for p in patterns:
+        parts.extend(["-e", shlex.quote(p)])
+    return " ".join(parts)
+
+
+def parse_rg_output(
+    stdout: str,
+    target: str,
+    *,
+    max_results: int,
+    max_chars: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Parse ``rg --json`` output into (matches, has_more).
+
+    Each line is a JSON object. ``type == "match"`` entries contain
+    ``data.path.text``, ``data.line_number`` and ``data.lines.text``.
+    The ``target`` prefix is stripped from the file path so that ``file``
+    in each match is relative to the search root.
+    """
+    prefix = target.rstrip("/") + "/"
+    prefix_len = len(prefix)
+    matches: list[dict[str, Any]] = []
+    body_chars = 0
+    has_more = False
+    for line in stdout.splitlines():
+        if len(matches) >= max_results:
+            has_more = True
+            break
+        try:
+            data = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if data.get("type") != "match":
+            continue
+        pdata = data.get("data") or {}
+        file_path = (pdata.get("path") or {}).get("text") or ""
+        if not file_path.startswith(prefix):
+            continue
+        file_rel = file_path[prefix_len:]
+        line_no = pdata.get("line_number")
+        if line_no is None:
+            continue
+        content = ((pdata.get("lines") or {}).get("text") or "").rstrip("\n")[:MAX_FILE_READ_LINE_CHARS]
+        line_cost = len(content) + (1 if matches else 0)
+        if body_chars + line_cost > max_chars:
+            has_more = True
+            break
+        matches.append({"file": file_rel, "line_number": int(line_no), "content": content})
+        body_chars += line_cost
+    return matches, has_more
+
+
 async def sandbox_grep_text(
     *,
     session_ref: SandboxExecutionSessionRef,
@@ -1499,78 +1568,41 @@ async def sandbox_grep_text(
     max_results: int,
     max_chars: int,
 ) -> dict[str, Any]:
-    """Search literal text in sandbox files using the same limits as local mode."""
+    """Search literal text in sandbox files via rg."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
-        lexical_target = sandbox_visible_path(path)
-        if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
-        path_type = await _sandbox_path_kind(session=session, path=target)
-        if path_type == "file":
-            candidate_paths = [target]
-        else:
-            files, _ = await _walk_sandbox_tree(session=session, root=target)
-            candidate_paths = [str(getattr(entry, "path", "") or "") for entry in files]
-        matches: list[dict[str, Any]] = []
-        skipped_binary = skipped_large = 0
-        body_chars = 0
-        has_more = False
-        target_root = PurePosixPath(target)
-        for candidate in sorted(candidate_paths):
-            if _is_tool_results_sandbox_path(candidate):
-                continue
-            relative = PurePosixPath(candidate).name if path_type == "file" else PurePosixPath(candidate).relative_to(target_root).as_posix()
-            if path_type == "dir" and not _matches_sandbox_glob(relative, glob):
-                continue
-            if await _sandbox_path_kind(session=session, path=candidate) != "file":
-                continue
-            entry = await _sandbox_path_info(session=session, path=candidate)
-            if entry is None:
-                continue
-            file_size = int(getattr(entry, "size", 0) or 0)
-            if file_size > _TEXT_GREP_MAX_FILE_BYTES:
-                skipped_large += 1
-                continue
-            sample = await _read_sandbox_bytes_prefix(
-                sandbox=session.sandbox,
-                path=candidate,
-                max_chars=4096,
+
+        command = build_rg_command_str(target, patterns, glob=glob)
+        exit_code, stdout, stderr = await run_command_in_sandbox(
+            session=session,
+            command=f"bash -lc {shlex.quote(command)}",
+            timeout_seconds=30,
+        )
+        if exit_code == 127 or "command not found" in (stderr or "").lower():
+            raise RuntimeError(
+                "file_grep 需要 ripgrep (rg)，沙箱环境未安装。"
+                "请在沙箱镜像中安装 ripgrep: apt-get install ripgrep"
             )
-            if b"\x00" in sample:
-                skipped_binary += 1
-                continue
-            raw_bytes = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=candidate)
-            text = raw_bytes.decode("utf-8", errors="replace")
-            for line_number, raw_line in enumerate(text.splitlines(), start=1):
-                if not any(p in raw_line for p in patterns):
-                    continue
-                line = raw_line[:MAX_FILE_READ_LINE_CHARS]
-                line_cost = len(line) + (1 if matches else 0)
-                if len(matches) >= max_results or body_chars + line_cost > max_chars:
-                    has_more = True
-                    break
-                matches.append({
-                    "path": sandbox_path_to_visible(candidate),
-                    "line_number": line_number,
-                    "line": line,
-                })
-                body_chars += line_cost
-            if has_more:
-                break
-        payload = {
-            "matches": matches,
-            "has_more": has_more,
-            "skipped_binary": skipped_binary,
-            "skipped_large": skipped_large,
-        }
+        if exit_code > 1:
+            raise RuntimeError(f"rg 执行失败 (exit={exit_code}): {stderr}")
+
+        raw_matches, has_more = parse_rg_output(
+            stdout, target, max_results=max_results, max_chars=max_chars,
+        )
+        matches = [
+            {
+                "path": sandbox_path_to_visible(f"{target.rstrip('/')}/{m['file']}"),
+                "line_number": m["line_number"],
+                "line": m["content"],
+            }
+            for m in raw_matches
+        ]
+        payload = {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
         logger.info(
             "OpenSandbox file_grep 完成: sandbox_id=%s path=%s matches=%s has_more=%s",
-            session.sandbox_id,
-            target,
-            len(matches),
-            payload["has_more"],
+            session.sandbox_id, target, len(matches), payload["has_more"],
         )
         return payload
 
