@@ -29,40 +29,6 @@ def _json_result(tool_name: str, payload: dict[str, Any]) -> str:
     return f"[{tool_name}]\n" + json_dumps(payload)
 
 
-def _dashboard_next_action_for_path(path: str, operation: str) -> str | None:
-    normalized = str(path or "").strip().replace("\\", "/")
-    if (
-        normalized.startswith("/mnt/user-data/workspace/dashboard_draft")
-        or normalized.startswith("/workspace/dashboard_draft")
-        or normalized.startswith("workspace/dashboard_draft")
-    ):
-        return (
-            "草稿已更新，但看板生成任务尚未完成。继续调用 dsl2sql_tool 校验完整 dashboard_spec；"
-            "校验通过后写入 outputs/<业务名>-<唯一后缀>.dashboard.json；只有用户明确要求修改已有看板预览时才 patch outputs 文件。"
-        )
-    visible_path = normalized
-    for prefix in ("/mnt/user-data/", "/"):
-        if visible_path.startswith(prefix):
-            visible_path = visible_path[len(prefix):]
-            break
-    if visible_path.startswith("outputs/") and visible_path.endswith(".dashboard.json"):
-        return (
-            "看板预览文件已更新。确认 cards 非空且已通过 dsl2sql_tool 校验后，"
-            "输出简短最终说明；不要继续写入系统看板。"
-        )
-    if operation == "edit":
-        return "文件已精确替换。根据当前任务继续执行下一步；不要把 file_edit 成功等同于任务完成。"
-    return None
-
-
-def _attach_dashboard_next_action(payload: dict[str, Any], *, operation: str, paths: list[str]) -> None:
-    for path in reversed(paths):
-        next_action = _dashboard_next_action_for_path(path, operation)
-        if next_action:
-            payload["next_required_action"] = next_action
-            return
-
-
 def _validate_relative_glob(pattern: str, *, field_name: str) -> str:
     normalized = str(pattern or "").strip().replace("\\", "/")
     if not normalized:
@@ -172,9 +138,6 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
                 old_content=old_content,
                 new_content=text,
             )
-            visible_path = str(payload.get("file_path") or file_path)
-            payload.update(await workspace_runtime.artifact_payload(file_path=visible_path))
-            _attach_dashboard_next_action(payload, operation="edit", paths=[visible_path])
             return _json_result("file_edit", payload)
         except Exception as exc:
             logger.error("file_edit 执行失败: %s", exc, exc_info=True)
@@ -197,9 +160,6 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
                 content=text,
                 mode="overwrite",
             )
-            visible_path = str(payload.get("file_path") or file_path)
-            payload.update(await workspace_runtime.artifact_payload(file_path=visible_path))
-            _attach_dashboard_next_action(payload, operation="write", paths=[visible_path])
             return _json_result("file_write", payload)
         except Exception as exc:
             logger.error("file_write 执行失败: %s", exc, exc_info=True)

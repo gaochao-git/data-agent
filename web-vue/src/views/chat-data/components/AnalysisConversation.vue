@@ -115,6 +115,9 @@ const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
+const presentedArtifactContents = ref<Record<string, string>>({})
+const loadedPresentedArtifactKeys = ref<Set<string>>(new Set())
+const loadingPresentedArtifactKeys = ref<Set<string>>(new Set())
 const workspaceFilesRefreshTimer = ref<number | null>(null)
 const isSkillManagerOpen = ref(false)
 const importedSkillIdForManager = ref<string | null>(null)
@@ -206,8 +209,6 @@ const sidePanelSubtitle = computed(() => (
     : '工具调用参数与结果'
 ))
 
-const allToolCalls = computed(() => Array.from(toolCallsMap.value.values()))
-
 const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
   if (toolInfo.tool_name !== 'semantic_query_tool') return toolInfo
   const result = String(toolInfo.result || '')
@@ -233,42 +234,6 @@ const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => 
     toolCall.renderType === 'queryResult'
   )
 )
-
-const outputArtifactFiles = computed(() => workspaceFiles.value
-  .filter(file => normalizeVisiblePath(file.relative_path || file.path).startsWith('outputs/'))
-  .filter(file => typeof file.artifact_type === 'string' && file.artifact_type.trim())
-  .slice()
-  .sort((a, b) => Number(b.mtime || 0) - Number(a.mtime || 0)))
-
-const outputArtifactTools = computed<ToolCallInfo[]>(() => outputArtifactFiles.value.map((file) => {
-  const filePath = file.path || file.relative_path
-  const payload: Record<string, unknown> = {
-    file_path: filePath,
-    artifact_type: file.artifact_type,
-    renderer: file.renderer,
-    artifact_payload: file.artifact_payload,
-  }
-  if (file.chart_spec !== undefined) payload.chart_spec = file.chart_spec
-  if (file.dashboard_spec !== undefined) payload.dashboard_spec = file.dashboard_spec
-  return {
-    tool_call_id: `artifact:${normalizeVisiblePath(filePath)}`,
-    tool_name: 'output_artifact',
-    status: 'completed',
-    args: { file_path: filePath },
-    result: JSON.stringify(payload),
-  } as ToolCallInfo
-}))
-
-const consoleDashboardTool = computed(() => {
-  for (const tool of outputArtifactTools.value) {
-    if (getDashboardSpecFromTool(tool)) return tool
-  }
-  for (let index = allToolCalls.value.length - 1; index >= 0; index -= 1) {
-    const tool = allToolCalls.value[index]
-    if (getDashboardSpecFromTool(tool)) return tool
-  }
-  return null
-})
 
 interface ProducedFile {
   path: string
@@ -328,13 +293,6 @@ const producedFiles = computed(() => {
   const files: ProducedFile[] = []
   for (const file of workspaceFiles.value) {
     pushProducedFile(files, file.relative_path || file.path, file.source || 'workspace', 'completed')
-  }
-  for (const tool of allToolCalls.value) {
-    for (const path of getToolProducedPaths(tool)) {
-      if (!files.some(file => file.relativePath === normalizeVisiblePath(path))) {
-        pushProducedFile(files, path, tool.tool_name, tool.status)
-      }
-    }
   }
   return files
 })
@@ -491,22 +449,6 @@ const parseToolResultPayload = (result?: string): Record<string, unknown> | null
   }
 }
 
-const getToolProducedPaths = (tool: ToolCallInfo): string[] => {
-  if (!['file_edit', 'semantic_query_tool', 'file_read'].includes(tool.tool_name)) return []
-  const payload = parseToolResultPayload(tool.result)
-  const argPath = typeof tool.args?.file_path === 'string' ? tool.args.file_path : ''
-  const argSaveAs = typeof tool.args?.save_as === 'string' ? tool.args.save_as : ''
-  const resultPath = getFileEditResultPath(tool.result)
-  const path = resultPath || argPath || argSaveAs
-  return isWorkspaceVisiblePath(path) ? [path] : []
-}
-
-const isWorkspaceVisiblePath = (path: unknown): boolean => {
-  const normalized = normalizeVisiblePath(path)
-  if (normalized === 'outputs/.tool-results' || normalized.startsWith('outputs/.tool-results/')) return false
-  return ['workspace/', 'outputs/', 'uploads/'].some(prefix => normalized.startsWith(prefix))
-}
-
 const getPresentedArtifacts = (tool?: ToolCallInfo | null): Array<Record<string, unknown>> => {
   if (!tool || tool.tool_name !== 'present_artifacts') return []
   const payload = parseToolResultPayload(tool.result)
@@ -515,40 +457,22 @@ const getPresentedArtifacts = (tool?: ToolCallInfo | null): Array<Record<string,
   return artifacts.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item))
 }
 
-const getOutputArtifactToolByPath = (path: unknown): ToolCallInfo | null => {
-  const normalized = normalizeVisiblePath(path)
-  if (!normalized) return null
-  return outputArtifactTools.value.find((tool) => {
-    const payload = parseToolResultPayload(tool.result)
-    return normalizeVisiblePath(payload?.file_path || tool.args?.file_path) === normalized
-  }) || null
-}
-
 const getPresentedArtifactTools = (message: Message, artifactType: string): ToolCallInfo[] => {
   const tools: ToolCallInfo[] = []
   for (const tool of message.toolCalls || []) {
     if (tool.tool_name !== 'present_artifacts') continue
     getPresentedArtifacts(tool).forEach((artifact, index) => {
       if (String(artifact.artifact_type || '').trim() !== artifactType) return
-      const filePath = String(artifact.file_path || index).trim()
-      const outputArtifactTool = getOutputArtifactToolByPath(filePath)
-      const outputArtifactPayload = parseToolResultPayload(outputArtifactTool?.result)
-      const messageFileEditContent = findMessageFileEditContentByPath(message, filePath)
-      const messageDashboardSpec = artifactType === 'dashboard_spec' ? parseDashboardSpecValue(messageFileEditContent) : null
-      const messageChartSpec = artifactType === 'chart_spec' ? parseChartSpecValue(messageFileEditContent) : null
-      const artifactPayload = messageDashboardSpec || messageChartSpec || outputArtifactPayload?.artifact_payload
-      const semanticConfigId = messageDashboardSpec?.semantic_config_id || outputArtifactPayload?.semantic_config_id
-      const payload = {
-        ...artifact,
-        artifact_payload: artifactPayload,
-        chart_spec: messageChartSpec || outputArtifactPayload?.chart_spec,
-        dashboard_spec: messageDashboardSpec || outputArtifactPayload?.dashboard_spec,
-        semantic_config_id: semanticConfigId,
-      }
+      const filePath = normalizeVisiblePath(artifact.file_path)
+      if (!filePath) return
       tools.push({
         ...tool,
         tool_call_id: `${tool.tool_call_id}:${artifactType}:${filePath || index}`,
-        result: JSON.stringify(payload),
+        result: JSON.stringify({
+          ...artifact,
+          file_path: filePath,
+          presentation_tool_call_id: tool.tool_call_id,
+        }),
       })
     })
   }
@@ -616,10 +540,6 @@ const parseChartSpecValue = (value: unknown): Record<string, unknown> | null => 
   return spec
 }
 
-const isChartSpecValue = (value: unknown): value is Record<string, unknown> => {
-  return parseChartSpecValue(value) !== null
-}
-
 const normalizeVisiblePath = (path: unknown): string => {
   let value = String(path || '').trim().replace(/\\/g, '/')
   value = value.replace(/^\/mnt\/user-data\/?/, '')
@@ -632,27 +552,13 @@ const replaceVisiblePathsForDisplay = (text: string): string => {
     .replace(/(?<!\/mnt\/user-data)\/(workspace|outputs|uploads)(?=\/|["'\s,}\]]|$)/g, '/mnt/user-data/$1')
 }
 
-const getFileEditResultPath = (result?: string): string => {
-  const text = String(result || '')
-  const payload = parseToolResultPayload(result)
-  if (typeof payload?.file_path === 'string') return payload.file_path
-  if (typeof payload?.target_path === 'string') return payload.target_path
-  if (typeof payload?.result_path === 'string') return payload.result_path
-  return (
-    text.match(/file_path=([^\n]+)/)?.[1]
-    || text.match(/target_path=([^\n]+)/)?.[1]
-    || text.match(/result_path=([^\n]+)/)?.[1]
-    || ''
-  ).trim()
-}
-
 const isDashboardSpecArtifactTool = (tool: ToolCallInfo): boolean => {
-  if (!['present_artifacts', 'output_artifact'].includes(tool.tool_name)) return false
+  if (tool.tool_name !== 'present_artifacts') return false
   return getArtifactType(tool) === 'dashboard_spec'
 }
 
 const isChartSpecArtifactTool = (tool: ToolCallInfo): boolean => {
-  if (!['present_artifacts', 'output_artifact'].includes(tool.tool_name)) return false
+  if (tool.tool_name !== 'present_artifacts') return false
   return getArtifactType(tool) === 'chart_spec'
 }
 
@@ -661,53 +567,28 @@ const getArtifactType = (tool?: ToolCallInfo | null): string => {
   return String(payload?.artifact_type || '').trim()
 }
 
-const getArtifactPayload = (tool?: ToolCallInfo | null): unknown => {
+const getPresentedArtifactPath = (tool?: ToolCallInfo | null): string => {
   const payload = parseToolResultPayload(tool?.result)
-  if (payload?.artifact_payload !== undefined) return payload.artifact_payload
-  if (payload?.chart_spec !== undefined) return payload.chart_spec
-  if (payload?.dashboard_spec !== undefined) return payload.dashboard_spec
-  return payload?.content
+  return normalizeVisiblePath(payload?.file_path)
 }
 
-const findFileEditContentByPath = (path: unknown): unknown => {
-  const normalized = normalizeVisiblePath(path)
-  if (!normalized) return null
-  return findFileEditContentByPathInTools(normalized, allToolCalls.value)
+const getPresentedArtifactKey = (tool?: ToolCallInfo | null): string => {
+  const filePath = getPresentedArtifactPath(tool)
+  const payload = parseToolResultPayload(tool?.result)
+  const presentationToolCallId = String(payload?.presentation_tool_call_id || tool?.tool_call_id || '').trim()
+  return presentationToolCallId && filePath ? `${presentationToolCallId}:${filePath}` : ''
 }
 
-const findFileEditContentByPathInTools = (path: unknown, tools: ToolCallInfo[]): unknown => {
-  const normalized = normalizeVisiblePath(path)
-  if (!normalized) return null
-  const candidates = tools.filter((tool) => {
-    if (tool.tool_name !== 'file_edit') return false
-    if (normalizeVisiblePath(tool.args?.file_path) === normalized) return true
-    return normalizeVisiblePath(getFileEditResultPath(tool.result)) === normalized
-  })
-  for (let index = candidates.length - 1; index >= 0; index -= 1) {
-    const candidate = candidates[index]
-    const content = candidate?.args?.content
-    if (content !== undefined && content !== null && String(content).trim() !== '') {
-      return content
-    }
-    const payload = getArtifactPayload(candidate)
-    if (payload !== undefined && payload !== null) {
-      return payload
-    }
-  }
-  return null
+const getPresentedArtifactContent = (tool?: ToolCallInfo | null): string | null => {
+  const key = getPresentedArtifactKey(tool)
+  return key ? presentedArtifactContents.value[key] ?? null : null
 }
 
-const findMessageFileEditContentByPath = (message: Message, path: unknown): unknown => {
-  return findFileEditContentByPathInTools(path, message.toolCalls || [])
-}
-
-const getDashboardSpecFromTool = (tool?: ToolCallInfo | null, message?: Message | null): DashboardSpecPayload | null => {
+const getDashboardSpecFromTool = (tool?: ToolCallInfo | null): DashboardSpecPayload | null => {
   if (!tool) return null
   if (!isDashboardSpecArtifactTool(tool)) return null
   const resultPayload = parseToolResultPayload(tool.result)
-  const artifactPath = resultPayload?.file_path || tool.args?.file_path
-  const messageFileEditContent = message ? findMessageFileEditContentByPath(message, artifactPath) : null
-  const content = messageFileEditContent ?? getArtifactPayload(tool) ?? tool.args?.content ?? findFileEditContentByPath(tool.args?.source_path)
+  const content = getPresentedArtifactContent(tool)
   const spec = parseDashboardSpecValue(content)
   if (!spec) return null
   const cards = Array.isArray(spec.cards) ? spec.cards : []
@@ -735,7 +616,7 @@ const getDashboardPreviewTools = (message: Message): ToolCallInfo[] => {
   const indexByKey = new Map<string, number>()
   const candidates = getPresentedArtifactTools(message, 'dashboard_spec')
   for (const tool of candidates) {
-    const payload = getDashboardSpecFromTool(tool, message)
+    const payload = getDashboardSpecFromTool(tool)
     if (!payload) continue
     const title = getDashboardPreviewTitle(payload).trim()
     const cards = getDashboardPreviewCards(payload)
@@ -754,20 +635,7 @@ const getDashboardPreviewTools = (message: Message): ToolCallInfo[] => {
 
 const getChartSpecFromTool = (tool?: ToolCallInfo | null): Record<string, unknown> | null => {
   if (!tool || !isChartSpecArtifactTool(tool)) return null
-  const resultPayload = parseToolResultPayload(tool.result)
-  const candidates = [
-    getArtifactPayload(tool),
-    resultPayload?.content,
-    tool.args?.content,
-    findFileEditContentByPath(tool.args?.source_path),
-    findFileEditContentByPath(tool.args?.target_path),
-    findFileEditContentByPath(getFileEditResultPath(tool.result)),
-  ]
-  for (const candidate of candidates) {
-    const spec = parseChartSpecValue(candidate)
-    if (spec) return spec
-  }
-  return null
+  return parseChartSpecValue(getPresentedArtifactContent(tool))
 }
 
 const getChartPreviewTools = (message: Message): ToolCallInfo[] => {
@@ -837,17 +705,6 @@ const selectedConsoleFile = computed(() => {
   const selectedPath = selectedConsoleFilePath.value
   if (!selectedPath) return null
   return producedFiles.value.find(file => file.relativePath === selectedPath) || null
-})
-
-const selectedConsoleFileTool = computed(() => {
-  const selectedPath = selectedConsoleFilePath.value
-  if (!selectedPath) return null
-  for (let index = allToolCalls.value.length - 1; index >= 0; index -= 1) {
-    const tool = allToolCalls.value[index]
-    if (!tool) continue
-    if (getToolProducedPaths(tool).some(path => normalizeVisiblePath(path) === selectedPath)) return tool
-  }
-  return null
 })
 
 const selectedWorkspaceFile = computed(() => {
@@ -937,26 +794,67 @@ const loadWorkspaceFileContent = async (conversationId: string | null | undefine
   }
 }
 
-const selectedConsoleFileText = computed(() => {
-  const selectedPath = selectedConsoleFilePath.value
-  if (!selectedPath) return ''
-  if (selectedWorkspaceFile.value) {
-    if (loadingWorkspaceFilePath.value === selectedPath) return '文件内容加载中...'
-    const content = workspaceFileContents.value[selectedPath] ?? ''
-    if (!selectedPath.toLowerCase().endsWith('.json')) return replaceVisiblePathsForDisplay(content)
-    try {
-      return replaceVisiblePathsForDisplay(JSON.stringify(JSON.parse(content), null, 2))
-    } catch {
-      return replaceVisiblePathsForDisplay(content)
+const loadPresentedArtifactContent = async (conversationId: string | null | undefined, tool: ToolCallInfo) => {
+  const key = getPresentedArtifactKey(tool)
+  const path = getPresentedArtifactPath(tool)
+  if (
+    !conversationId
+    || !key
+    || !path
+    || loadedPresentedArtifactKeys.value.has(key)
+    || loadingPresentedArtifactKeys.value.has(key)
+  ) return
+  loadingPresentedArtifactKeys.value.add(key)
+  let loaded = false
+  try {
+    const response = await getConversationWorkspaceFileContent(conversationId, path)
+    if (conversationId !== localConversationId.value) return
+    presentedArtifactContents.value = {
+      ...presentedArtifactContents.value,
+      [key]: response.data?.content || '',
+    }
+    loaded = true
+  } catch (err) {
+    if (conversationId !== localConversationId.value) return
+    console.error('加载呈现产物内容失败:', err)
+  } finally {
+    if (conversationId !== localConversationId.value) return
+    if (loaded) loadedPresentedArtifactKeys.value.add(key)
+    loadingPresentedArtifactKeys.value.delete(key)
+  }
+}
+
+const loadPresentedArtifacts = (conversationId: string | null | undefined) => {
+  if (!conversationId) return
+  for (const message of messages.value) {
+    if (message.role !== 'assistant') continue
+    for (const tool of message.toolCalls || []) {
+      if (tool.status !== 'completed' || tool.tool_name !== 'present_artifacts') continue
+      getPresentedArtifacts(tool).forEach((artifact, index) => {
+        const artifactType = String(artifact.artifact_type || '').trim()
+        if (!['dashboard_spec', 'chart_spec'].includes(artifactType)) return
+        const filePath = normalizeVisiblePath(artifact.file_path)
+        if (!filePath) return
+        const artifactTool: ToolCallInfo = {
+          ...tool,
+          tool_call_id: `${tool.tool_call_id}:${artifactType}:${filePath || index}`,
+          result: JSON.stringify({
+            ...artifact,
+            file_path: filePath,
+            presentation_tool_call_id: tool.tool_call_id,
+          }),
+        }
+        void loadPresentedArtifactContent(conversationId, artifactTool)
+      })
     }
   }
-  const tool = selectedConsoleFileTool.value
-  const payload = parseToolResultPayload(tool?.result)
-  const payloadContent = getArtifactPayload(tool) ?? payload?.content
-  const fileEditContent = findFileEditContentByPath(selectedPath)
-  const content = payloadContent ?? tool?.args?.content ?? fileEditContent ?? tool?.result ?? ''
-  if (content === null || content === undefined) return ''
-  if (typeof content !== 'string') return replaceVisiblePathsForDisplay(JSON.stringify(content, null, 2))
+}
+
+const selectedConsoleFileText = computed(() => {
+  const selectedPath = selectedConsoleFilePath.value
+  if (!selectedPath || !selectedWorkspaceFile.value) return ''
+  if (loadingWorkspaceFilePath.value === selectedPath) return '文件内容加载中...'
+  const content = workspaceFileContents.value[selectedPath] ?? ''
   if (!selectedPath.toLowerCase().endsWith('.json')) return replaceVisiblePathsForDisplay(content)
   try {
     return replaceVisiblePathsForDisplay(JSON.stringify(JSON.parse(content), null, 2))
@@ -967,25 +865,8 @@ const selectedConsoleFileText = computed(() => {
 
 const selectedConsoleChartSpec = computed<Record<string, unknown> | null>(() => {
   const selectedPath = selectedConsoleFilePath.value
-  if (!selectedPath || !selectedPath.toLowerCase().endsWith('.json')) return null
-  const tool = selectedConsoleFileTool.value
-  const payload = parseToolResultPayload(tool?.result)
-  const fileEditContent = findFileEditContentByPath(selectedPath)
-  const workspaceContent = selectedWorkspaceFile.value ? selectedConsoleFileText.value : null
-  const candidates = selectedWorkspaceFile.value
-    ? [workspaceContent]
-    : [
-        getArtifactPayload(tool),
-        payload?.content,
-        tool?.args?.content,
-        fileEditContent,
-        selectedConsoleFileText.value,
-      ]
-  for (const candidate of candidates) {
-    const spec = parseChartSpecValue(candidate)
-    if (spec) return spec
-  }
-  return null
+  if (!selectedPath || !selectedWorkspaceFile.value || !selectedPath.toLowerCase().endsWith('.json')) return null
+  return parseChartSpecValue(selectedConsoleFileText.value)
 })
 
 const selectedConsoleJsonValue = computed<unknown>(() => {
@@ -1045,7 +926,7 @@ const resolveDashboardPreviewSemanticConfigId = (message: Message, payload: Dash
 }
 
 const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCallInfo) => {
-  const payload = getDashboardSpecFromTool(tool, message)
+  const payload = getDashboardSpecFromTool(tool)
   if (!payload?.dashboard_spec) return
   if (!isDashboardPreviewWritable(tool, payload)) return
   creatingDashboardToolCallId.value = tool.tool_call_id
@@ -1259,6 +1140,9 @@ watch(
       toolCallsMap.value.clear()
       workspaceFiles.value = []
       workspaceFileContents.value = {}
+      presentedArtifactContents.value = {}
+      loadedPresentedArtifactKeys.value = new Set()
+      loadingPresentedArtifactKeys.value = new Set()
       activeToolCallId.value = null
       sidePanelOpen.value = false
       sidePanelTab.value = 'console'
@@ -1301,6 +1185,7 @@ watch(
 watch(messages, () => {
   if (isGenerating.value) return
   syncHistoryToolCalls()
+  loadPresentedArtifacts(localConversationId.value)
   if (messages.value.length > 0) {
     hasLocalConversationStarted.value = true
   }
@@ -1399,6 +1284,7 @@ const upsertToolMessage = (toolInfo: ToolCallInfo) => {
   activeAssistantMessageId.value = assistant.id
   if (displayToolInfo.status === 'completed') {
     scheduleWorkspaceFilesRefresh()
+    loadPresentedArtifacts(localConversationId.value)
   }
 }
 
@@ -1831,25 +1717,25 @@ const handleKeyDown = (event: KeyboardEvent) => {
                             <i class="fa-solid fa-chart-pie text-xs"></i>
                           </span>
                           <div class="min-w-0">
-                            <div class="truncate text-sm font-semibold text-slate-800">{{ getDashboardPreviewTitle(getDashboardSpecFromTool(tool, msg)) }}</div>
+                            <div class="truncate text-sm font-semibold text-slate-800">{{ getDashboardPreviewTitle(getDashboardSpecFromTool(tool)) }}</div>
                             <div class="mt-0.5 text-[11px] text-slate-500">
-                              {{ getDashboardPreviewCards(getDashboardSpecFromTool(tool, msg)).length }} 个卡片，{{ getDashboardPreviewWritableCount(getDashboardSpecFromTool(tool, msg)) }} 个可写入
+                              {{ getDashboardPreviewCards(getDashboardSpecFromTool(tool)).length }} 个卡片，{{ getDashboardPreviewWritableCount(getDashboardSpecFromTool(tool)) }} 个可写入
                             </div>
                           </div>
                         </div>
                         <div
-                          v-if="getDashboardPreviewWarningCount(getDashboardSpecFromTool(tool, msg)) > 0"
+                          v-if="getDashboardPreviewWarningCount(getDashboardSpecFromTool(tool)) > 0"
                           class="mt-2 text-[11px] text-amber-600"
                         >
                           <i class="fa-solid fa-triangle-exclamation mr-1"></i>
-                          {{ getDashboardPreviewWarningCount(getDashboardSpecFromTool(tool, msg)) }} 条校验提示，写入时会跳过不可生成 SQL 的卡片。
+                          {{ getDashboardPreviewWarningCount(getDashboardSpecFromTool(tool)) }} 条校验提示，写入时会跳过不可生成 SQL 的卡片。
                         </div>
                       </div>
                       <button
                         v-if="!createdDashboardByToolId[tool.tool_call_id]"
                         type="button"
                         class="shrink-0 h-8 rounded-lg border border-blue-200 bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        :disabled="creatingDashboardToolCallId === tool.tool_call_id || !isDashboardPreviewWritable(tool, getDashboardSpecFromTool(tool, msg))"
+                        :disabled="creatingDashboardToolCallId === tool.tool_call_id || !isDashboardPreviewWritable(tool, getDashboardSpecFromTool(tool))"
                         @click="handleCreateDashboardFromPreview(msg, tool)"
                       >
                         <i v-if="creatingDashboardToolCallId === tool.tool_call_id" class="fa-solid fa-spinner fa-spin mr-1"></i>
@@ -1862,7 +1748,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     </div>
                     <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <div
-                        v-for="(card, cardIndex) in getDashboardPreviewCards(getDashboardSpecFromTool(tool, msg))"
+                        v-for="(card, cardIndex) in getDashboardPreviewCards(getDashboardSpecFromTool(tool))"
                         :key="`${tool.tool_call_id}-${cardIndex}`"
                         class="rounded-lg border border-white/80 bg-white px-3 py-2"
                       >

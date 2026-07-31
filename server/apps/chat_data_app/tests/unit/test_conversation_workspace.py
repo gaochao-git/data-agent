@@ -32,9 +32,9 @@ from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
-filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 skill_load_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.skill_load")
+filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
 
 
 def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
@@ -833,31 +833,8 @@ async def test_file_glob_rejects_path_patterns(monkeypatch):
     assert result.startswith("file_glob 执行失败: pattern 只能匹配文件名")
 
 
-def test_filesystem_next_action_helpers_cover_path_variants():
-    assert "草稿已更新" in filesystem_tool_module._dashboard_next_action_for_path(
-        "/workspace/dashboard_draft/demo.json",
-        "write",
-    )
-    assert "看板预览文件已更新" in filesystem_tool_module._dashboard_next_action_for_path(
-        "/mnt/user-data/outputs/demo.dashboard.json",
-        "write",
-    )
-    assert "精确替换" in filesystem_tool_module._dashboard_next_action_for_path(
-        "workspace/notes.txt",
-        "edit",
-    )
-    assert filesystem_tool_module._dashboard_next_action_for_path("workspace/notes.txt", "write") is None
-
-    payload = {}
-    filesystem_tool_module._attach_dashboard_next_action(
-        payload,
-        operation="write",
-        paths=["workspace/notes.txt", "outputs/demo.dashboard.json"],
-    )
-    assert "看板预览文件已更新" in payload["next_required_action"]
-
 @pytest.mark.asyncio
-async def test_file_write_workspace_dashboard_spec_has_no_dashboard_artifact_type(monkeypatch):
+async def test_file_write_returns_only_file_change_payload(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_draft_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
@@ -868,11 +845,14 @@ async def test_file_write_workspace_dashboard_spec_has_no_dashboard_artifact_typ
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/workspace/dashboard_draft.json"
+    assert payload["bytes"] > 0
+    assert payload["operation"] == "write"
+    assert payload["mode"] == "overwrite"
     assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
-async def test_file_write_returns_chart_spec_payload(monkeypatch):
+async def test_file_write_does_not_classify_output_artifact(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_chart_write_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
@@ -889,10 +869,10 @@ async def test_file_write_returns_chart_spec_payload(monkeypatch):
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
     assert payload["file_path"] == "/outputs/monthly_simple_bar.chart.json"
-    assert payload["artifact_type"] == "chart_spec"
-    assert payload["artifact_version"] == "v1"
-    assert payload["artifact_payload"]["title"] == "销售额趋势"
-    assert payload["chart_spec"]["title"] == "销售额趋势"
+    assert payload["bytes"] > 0
+    assert payload["operation"] == "write"
+    assert payload["mode"] == "overwrite"
+    assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
@@ -993,7 +973,7 @@ async def test_file_write_chart_spec_with_missing_encoding_field_has_no_chart_ar
 
 
 @pytest.mark.asyncio
-async def test_file_edit_returns_dashboard_spec_payload(monkeypatch):
+async def test_file_edit_does_not_classify_output_artifact(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_dashboard_patch_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     target = Path(paths["outputs"]) / "dashboard.dashboard.json"
@@ -1014,8 +994,10 @@ async def test_file_edit_returns_dashboard_spec_payload(monkeypatch):
 
     payload = json.loads(result.replace("[file_edit]\n", "", 1))
     assert payload["file_path"] == "/outputs/dashboard.dashboard.json"
-    assert payload["artifact_type"] == "dashboard_spec"
-    assert payload["dashboard_spec"]["dashboard_name"] == "新看板"
+    assert payload["operation"] == "edit"
+    assert payload["replaced_count"] == 1
+    assert payload["bytes"] > 0
+    assert "artifact_type" not in payload
 
 
 @pytest.mark.asyncio
