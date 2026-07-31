@@ -10,6 +10,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import time
 from typing import Any, Literal
 from urllib.parse import unquote
@@ -1494,7 +1495,7 @@ async def sandbox_grep_text(
     *,
     session_ref: SandboxExecutionSessionRef,
     path: str,
-    pattern: str,
+    patterns: list[str],
     glob: str,
     max_results: int,
     max_chars: int,
@@ -1544,7 +1545,7 @@ async def sandbox_grep_text(
             raw_bytes = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=candidate)
             text = raw_bytes.decode("utf-8", errors="replace")
             for line_number, raw_line in enumerate(text.splitlines(), start=1):
-                if pattern not in raw_line:
+                if not any(p in raw_line for p in patterns):
                     continue
                 line = raw_line[:MAX_FILE_READ_LINE_CHARS]
                 line_cost = len(line) + (1 if matches else 0)

@@ -163,7 +163,7 @@ class WorkspaceBackend(Protocol):
         runtime: "ConversationWorkspaceRuntime",
         *,
         path: str,
-        pattern: str,
+        patterns: list[str],
         glob: str,
         max_results: int,
         max_chars: int,
@@ -362,7 +362,7 @@ class ConversationWorkspaceRuntime:
         self,
         *,
         path: str,
-        pattern: str,
+        patterns: list[str],
         glob: str,
         max_results: int,
         max_chars: int,
@@ -370,7 +370,7 @@ class ConversationWorkspaceRuntime:
         return await self.backend.grep_text(
             self,
             path=path,
-            pattern=pattern,
+            patterns=patterns,
             glob=glob,
             max_results=max_results,
             max_chars=max_chars,
@@ -1195,7 +1195,7 @@ def _search_local_workspace_files(
 def _grep_local_workspace_text(
     runtime: ConversationWorkspaceRuntime,
     path: str,
-    pattern: str,
+    patterns: list[str],
     glob: str,
     max_results: int,
     max_chars: int,
@@ -1239,7 +1239,7 @@ def _grep_local_workspace_text(
             )
             with item.open("r", encoding="utf-8", errors="replace") as file_obj:
                 for line_number, raw_line in enumerate(file_obj, start=1):
-                    if pattern not in raw_line:
+                    if not any(p in raw_line for p in patterns):
                         continue
                     line = raw_line.rstrip("\r\n")[:MAX_FILE_READ_LINE_CHARS]
                     line_cost = len(line) + (1 if matches else 0)
@@ -1466,7 +1466,7 @@ class LocalWorkspaceBackend:
         runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
-        pattern: str,
+        patterns: list[str],
         glob: str,
         max_results: int,
         max_chars: int,
@@ -1477,7 +1477,7 @@ class LocalWorkspaceBackend:
             _grep_local_workspace_text,
             runtime,
             path,
-            pattern,
+            patterns,
             glob,
             max_results,
             max_chars,
@@ -1726,7 +1726,7 @@ class SandboxWorkspaceBackend:
         runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
-        pattern: str,
+        patterns: list[str],
         glob: str,
         max_results: int,
         max_chars: int,
@@ -1734,7 +1734,7 @@ class SandboxWorkspaceBackend:
         return await sandbox_grep_text(
             session_ref=await self._session_ref(runtime),
             path=path,
-            pattern=pattern,
+            patterns=patterns,
             glob=glob,
             max_results=max_results,
             max_chars=max_chars,

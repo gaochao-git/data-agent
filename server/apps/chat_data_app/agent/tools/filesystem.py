@@ -227,27 +227,27 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         max_results: int = _DEFAULT_GREP_RESULTS,
     ) -> str:
         """
-        在文本文件中按字面内容查找，默认递归搜索 workspace。pattern 不支持正则；glob 可限定文件范围，例如 `**/*.md`。
+        在文本文件中按字面内容查找，默认递归搜索 workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail），不支持正则；glob 可限定文件范围，例如 `**/*.md`。
 
         最多返回 200 条匹配，每条最多 500 字符，整体正文受 CHAT_DATA_FILE_READ_MAX_CHARS 限制；二进制文件和超过 2 MiB 的文件会跳过。
         """
         try:
-            normalized_pattern = str(pattern or "")
-            if not normalized_pattern:
+            patterns = [p for p in str(pattern or "").split("|") if p]
+            if not patterns:
                 return "pattern 不能为空"
             normalized_glob = _validate_relative_glob(glob, field_name="glob")
             if max_results < 1 or max_results > MAX_GREP_RESULTS:
                 return f"max_results 必须在 1-{MAX_GREP_RESULTS} 之间"
             result = await workspace_runtime.grep_text(
                 path=str(path or "workspace").strip(),
-                pattern=normalized_pattern,
+                patterns=patterns,
                 glob=normalized_glob,
                 max_results=max_results,
                 max_chars=FILE_READ_MAX_CHARS,
             )
             payload = {
                 "path": str(path or "workspace").strip(),
-                "pattern": normalized_pattern,
+                "pattern": pattern,
                 "glob": normalized_glob,
                 "count": len(result.get("matches") or []),
                 "has_more": bool(result.get("has_more")),
