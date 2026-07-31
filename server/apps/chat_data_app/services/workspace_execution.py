@@ -10,7 +10,6 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import time
 from typing import Any, Literal
 from urllib.parse import unquote
