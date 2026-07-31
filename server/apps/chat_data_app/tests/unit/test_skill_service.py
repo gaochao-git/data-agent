@@ -664,27 +664,6 @@ def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(t
     assert updated["skill_publish_status"] == "published"
 
 
-    assert "技能优先" in prompt
-    assert "完全遵循 SKILL.md 的 Mandatory Reading、Workflow 和成功判定" not in prompt
-    assert "<execution_protocol>" not in prompt
-    assert "现在开始加载技能" not in prompt
-    assert "可调用工具：" not in prompt
-    assert "*** Begin Patch" not in prompt
-    assert "*** Update File: workspace/demo.json" not in prompt
-    assert "*** End Patch" not in prompt
-    assert "/mnt/user-data/workspace/data_context.json" not in prompt
-    assert "workspace/data_context.json" not in prompt
-    assert "context.json" not in prompt
-    assert "任何 `workspace/*` 上下文文件" not in prompt
-    assert "不在正文暴露：工具参数、JSON、DSL、SQL、patch" in prompt
-    assert "dsl={\"metrics\"" not in prompt
-    assert "已加载技能内容" not in prompt
-    assert "# 看板生成技能" not in prompt
-    assert "`funnel` | 漏斗图 | 阶段转化、阶段递减、流程流失分析" in prompt
-    assert "`graph` | 关系图 | 实体关系、依赖网络、起点终点连接" in prompt
-    assert "漏斗图 `funnel` 表达阶段转化、阶段递减和流失分析" in prompt
-
-
 def test_skill_service_reload_async_clears_and_reloads_cache():
     result = asyncio.run(skill_service.reload_async())
 

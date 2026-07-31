@@ -37,7 +37,6 @@ def assemble_tools(
     user_id: str = "system",
     operator_name: str | None = None,
     model_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
     datasource_group_context: str | None = None,
 ) -> list:
     """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
@@ -97,7 +96,6 @@ def create_data_agent(
         user_id=user_id or "",
         operator_name=operator_name,
         model_id=model_id,
-        tool_result_budget=tool_result_budget,
         datasource_group_context=datasource_group_context,
     )
     effective_system_prompt = system_prompt or build_unified_system_prompt(
