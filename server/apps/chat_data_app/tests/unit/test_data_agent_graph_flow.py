@@ -92,7 +92,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
 
     assert tool_names == [
         "skill_load", "file_read", "file_edit", "file_write", "file_move", "file_delete", "file_glob", "file_grep", "dir_create", "dir_list", "dir_delete", "present_artifacts", "get_current_time",
-        "select_semantic_config_tool", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
+        "search_dataset", "dsl2sql_tool", "semantic_query_tool", "calculator_tool",
     ]
     assert bash_tool_names[-1] == "bash_run"
     assert bash_tool_names[:-1] == tool_names
@@ -146,7 +146,7 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
 
 @pytest.mark.asyncio
 async def test_tool_call_name_normalizer_middleware():
-    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="select_semantic_config_tool")])
+    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="search_dataset")])
 
     async def handler(_request):
         return SimpleNamespace(result=[
@@ -154,7 +154,7 @@ async def test_tool_call_name_normalizer_middleware():
                 content="",
                 tool_calls=[{
                     "id": "call_select",
-                    "name": "select_semantic_config_toolselect_semantic_config_tool",
+                    "name": "search_datasetsearch_dataset",
                     "args": {"query": "查询入金金额"},
                 }],
             ),
@@ -162,7 +162,7 @@ async def test_tool_call_name_normalizer_middleware():
 
     response = await middleware.awrap_model_call(SimpleNamespace(), handler)
 
-    assert response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert response.result[0].tool_calls[0]["name"] == "search_dataset"
     assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 

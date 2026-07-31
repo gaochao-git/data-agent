@@ -81,9 +81,13 @@ const PARAM_LABELS: Record<string, string> = {
   file_path: '文件路径',
   source_path: '源路径',
   target_path: '目标路径',
+  destination_path: '目标路径',
   semantic_config_id: '指标集ID',
   content: '内容',
   mode: '写入模式',
+  max_depth: '最大深度',
+  recursive: '递归删除',
+  detail: '详细信息',
   pattern: '关键词',
   path: '路径',
   glob: '文件匹配',
@@ -298,8 +302,8 @@ function cleanResult(result: string): string {
 }
 
 function parseSemanticSelectionResult(result?: string): SemanticSelectionResult | null {
-  if (props.toolCall.tool_name !== 'select_semantic_config_tool') return null
-  const cleaned = cleanResult(String(result || '')).replace(/^\[select_semantic_config_tool\]\s*/, '').trim()
+  if (props.toolCall.tool_name !== 'search_dataset') return null
+  const cleaned = cleanResult(String(result || '')).replace(/^\[search_dataset\]\s*/, '').trim()
   if (!cleaned) return null
   try {
     return JSON.parse(cleaned) as SemanticSelectionResult
@@ -347,7 +351,7 @@ function formatQueryResultJson(result: string): string {
 
 // 解析结果内容，将 SQL 代码块、JSON 与普通文本分离
 function parseResultContent(result: string): ResultPart[] {
-  if (props.toolCall.tool_name === 'select_semantic_config_tool' && semanticSelectionResult.value) return []
+  if (props.toolCall.tool_name === 'search_dataset' && semanticSelectionResult.value) return []
   if (props.toolCall.tool_name === 'semantic_query_tool' && !props.renderQueryResultPreview) {
     const jsonText = formatQueryResultJson(result)
     if (jsonText) return [{ type: 'json', content: jsonText }]

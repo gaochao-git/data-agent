@@ -1472,7 +1472,7 @@ async def sandbox_search_files(
             if len(results) >= max(1, int(max_results)):
                 break
         logger.info(
-            "OpenSandbox file_search 完成: sandbox_id=%s path=%s pattern=%s count=%s",
+            "OpenSandbox file_glob 完成: sandbox_id=%s path=%s pattern=%s count=%s",
             session.sandbox_id,
             target,
             pattern,

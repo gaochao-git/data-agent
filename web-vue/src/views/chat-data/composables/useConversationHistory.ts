@@ -15,8 +15,6 @@ import type {
 } from '../types'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 
-const HIDDEN_TOOLS = ['load_skill_tool']
-
 const parseHistoryTimestamp = (value: unknown): Date | null => {
   if (typeof value !== 'string' || !value.trim()) return null
   const parsed = new Date(value.trim().replace(' ', 'T'))
@@ -80,7 +78,6 @@ const appendHistoryThinkingSegment = (message: Message, segment: ThinkingSegment
 }
 
 const appendHistoryToolCall = (message: Message, toolCall: ToolCallInfo) => {
-  if (HIDDEN_TOOLS.includes(toolCall.tool_name)) return
   if (message.toolCalls?.some(item => item.tool_call_id === toolCall.tool_call_id)) return
   message.toolCalls = [...(message.toolCalls || []), toolCall]
   message.segments = [
@@ -170,13 +167,6 @@ const withHistoryToolResult = (toolCall: ToolCallInfo, result: string): ToolCall
       renderType = 'queryResult'
     }
     semanticParams = extractSemanticParamsFromArgs(toolCall.args)
-  } else if (toolCall.tool_name === 'generate_chart_tool') {
-    const chartMatch = result.match(/<chart_config>([^<]+)<\/chart_config>/)
-    const chartId = chartMatch?.[1]?.trim()
-    if (chartId && /^[a-f0-9-]{36}$/.test(chartId)) {
-      renderId = chartId
-      renderType = 'chart'
-    }
   }
 
   return {
@@ -413,7 +403,7 @@ export const buildHistoryMessages = (
         if (!toolCall) continue
         appendHistoryToolCall(assistant, toolCall)
         toolCallTargets.set(toolCall.tool_call_id, assistant)
-        if (!HIDDEN_TOOLS.includes(toolCall.tool_name)) visibleToolCallCount += 1
+        visibleToolCallCount += 1
       }
       appendHistoryTextSegment(assistant, String(rawMessage.content || ''))
       continue

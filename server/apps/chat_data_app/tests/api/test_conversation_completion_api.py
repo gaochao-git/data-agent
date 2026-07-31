@@ -114,7 +114,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     graph = FakeGraph([
         (
             FakeMessageChunk(
-                tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}],
+                tool_calls=[{"id": "call_select", "name": "search_dataset"}],
             ),
             {"langgraph_node": "model"},
         ),
@@ -123,7 +123,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
                 tool_call_chunks=[
                     {
                         "id": "call_select",
-                        "name": "select_semantic_config_tool",
+                        "name": "search_dataset",
                         "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
                     }
                 ],
@@ -132,10 +132,10 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
         ),
         (
             FakeMessageChunk(
-                content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="select_semantic_config_tool",
+                name="search_dataset",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -176,15 +176,15 @@ def test_completion_api_streams_single_semantic_retrieval_tool_result(client, au
     }
     graph = FakeGraph([
         (
-            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]),
+            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "search_dataset"}]),
             {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
-                content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="select_semantic_config_tool",
+                name="search_dataset",
             ),
             {"langgraph_node": "tools"},
         ),

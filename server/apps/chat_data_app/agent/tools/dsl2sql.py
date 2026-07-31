@@ -37,7 +37,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, semantic_config_id: st
                 return "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
             effective_semantic_config_id = str(semantic_config_id or "").strip() or None
             if not effective_semantic_config_id:
-                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 select_semantic_config_tool 后显式传入指标集ID"
+                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 search_dataset 后显式传入指标集ID"
             if bound_semantic_config_id and effective_semantic_config_id != bound_semantic_config_id:
                 return f"dsl2sql_tool 执行失败: 当前会话已选择指标集 {bound_semantic_config_id}，请传入该 semantic_config_id"
             dsl = normalize_dsl_payload(dsl)

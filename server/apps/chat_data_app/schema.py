@@ -604,7 +604,7 @@ OrFilter.model_rebuild()
 # ============ 语义工具输入模型 ============
 
 class SelectSemanticConfigInput(BaseModel):
-    """指标集选择工具的输入参数"""
+    """指标集搜索工具的输入参数"""
     query: Optional[str] = Field(
         default=None,
         description="用户问题；可包含只读技能路由后追加的简短业务限定、查询类型或粒度要求；不传时使用当前会话最近一条用户消息",
@@ -617,7 +617,7 @@ class ExecuteSemanticInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次 DSL 使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
+        description="本次 DSL 使用的指标集 ID，必须来自当前已选择指标集或 search_dataset 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -652,7 +652,7 @@ class SemanticQueryInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次查询使用的指标集 ID，必须来自当前已选择指标集或 select_semantic_config_tool 返回结果",
+        description="本次查询使用的指标集 ID，必须来自当前已选择指标集或 search_dataset 返回结果",
     )
     member_datasource_ids: List[str] = Field(
         ...,

@@ -50,7 +50,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     if config_id:
         header += f"（semantic_config_id: {config_id}）"
     header += (
-        "。业务数据查询不要调用 `select_semantic_config_tool`。\n"
+        "。业务数据查询不要调用 `search_dataset`。\n"
         "优先使用数据源组说明和当前指标集理解用户问题；只有用户本轮显式指定业务知识技能时，才读取对应技能补充查询判断；最终回答不要提及技能加载过程。\n\n"
     )
     return header + build_semantic_prompt(semantic_config, "query")
@@ -282,7 +282,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 说了要做的事立即调用工具或给出结果，不停留在“下一步 / 准备 / 将要 / 正在设计”等意图句。
 - 工具调用成功不等于任务完成；必须满足用户目标、技能成功判定或产物检查后才结束。
 - 每次调用工具前先输出一句短句，说明当前要做什么；工具返回后用一句短句概括发现，再决定是否继续。
-- `select_semantic_config_tool` 返回后，根据检索到的语义摘要继续执行、澄清或说明限制；不得输出工具名标题和 JSON 代码块。
+- `search_dataset` 返回后，根据检索到的语义摘要继续执行、澄清或说明限制；不得输出工具名标题和 JSON 代码块。
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` 必须传入从最新内容中截取的唯一 `old_content` 和对应 `new_content`，匹配失败或多处匹配后重新读取，不要凭记忆重试。新建或整体覆盖文件使用 `file_write`。
 - 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。

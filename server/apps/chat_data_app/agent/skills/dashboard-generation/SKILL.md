@@ -73,8 +73,8 @@ workspace/dashboard_draft.json
 1. `skill_load("dashboard-generation")`
 2. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
 3. 按需 `file_read` 一个示例 JSON
-4. 如果系统提示词里的 `data_context.semantic_configs` 没有 `selected=true` 的指标集，先调用 `select_semantic_config_tool(query=用户原始看板目标)` 检索相关指标集
-5. 从已手动选择或 `select_semantic_config_tool` 返回的 `semantic_config_ids` 中确定一个指标集，只使用它的真实指标和维度；无法唯一判断时先澄清
+4. 如果系统提示词里的 `data_context.semantic_configs` 没有 `selected=true` 的指标集，先调用 `search_dataset(query=用户原始看板目标)` 检索相关指标集
+5. 从已手动选择或 `search_dataset` 返回的 `semantic_config_ids` 中确定一个指标集，只使用它的真实指标和维度；无法唯一判断时先澄清
 6. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 7. 内部构建完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`
 8. `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)` 校验整份规格
@@ -94,8 +94,8 @@ workspace/dashboard_draft.json
 具体规格、布局、图表选择、DSL 规则和失败处理以 `references/dashboard-generation-guide.md` 为准。这里保留必须遵守的底线：
 
 - 指标、维度、过滤、排序字段必须来自已确定的唯一指标集。
-- 没有已手动选择指标集时，必须先调用 `select_semantic_config_tool`；它只返回相关指标集，主模型需根据用户问题选择一个真实 ID。无法唯一判断时先向用户澄清，不得生成看板 DSL。
-- `dashboard_spec.semantic_config_id` 必填，取值必须是已手动选择的指标集 ID，或 `select_semantic_config_tool` 返回的 `semantic_config_ids` 之一。
+- 没有已手动选择指标集时，必须先调用 `search_dataset`；它只返回相关指标集，主模型需根据用户问题选择一个真实 ID。无法唯一判断时先向用户澄清，不得生成看板 DSL。
+- `dashboard_spec.semantic_config_id` 必填，取值必须是已手动选择的指标集 ID，或 `search_dataset` 返回的 `semantic_config_ids` 之一。
 - outputs 看板文件中的 `semantic_config_id` 必须与 `dsl2sql_tool` 校验时传入的指标集 ID 一致。
 - 默认生成最小可用看板，优先覆盖总览、趋势、结构 / 对比、排行 / 诊断等核心视角。
 - 每张卡片必须包含 `title`、`chart_type`、`layout`、`dsl`。

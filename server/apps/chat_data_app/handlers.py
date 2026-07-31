@@ -47,7 +47,7 @@ logger = get_logger(__name__)
 
 AGENT_ID = "chat_data"
 REASONING_TOOL_DISPLAY_NAMES = {
-    "select_semantic_config_tool": "选择指标集",
+    "search_dataset": "搜索指标集",
     "dsl2sql_tool": "生成 SQL",
     "semantic_query_tool": "查询数据",
     "calculator_tool": "精确计算",
@@ -63,8 +63,8 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "dir_list": "列出目录",
     "dir_delete": "删除目录",
     "bash_run": "运行脚本",
+    "get_current_time": "获取当前时间",
     "present_artifacts": "展示文件",
-    "output_artifact": "生成文件",
 }
 
 
@@ -233,8 +233,8 @@ def _append_reasoning_segment(
 
 
 def _visible_tool_count(tool_names: dict[str, str]) -> int:
-    """计算已出现且前端可见的工具数量，用于恢复思考与工具的时序。"""
-    return sum(1 for name in tool_names.values() if name != "load_skill_tool")
+    """计算已出现的工具数量，用于恢复思考与工具的时序。"""
+    return len(tool_names)
 
 
 def _normalize_enable_thinking(value: Any) -> bool | None:
@@ -454,12 +454,6 @@ def _is_tool_result_error(content: Any) -> bool:
     text = str(content or "").strip()
     if not text:
         return False
-    if text.startswith("[dashboard_write]"):
-        try:
-            payload = json.loads(text.replace("[dashboard_write]", "", 1).strip())
-            return payload.get("success") is False
-        except Exception:
-            return False
     return "执行失败" in text or text.lower().startswith("error:")
 
 

@@ -18,7 +18,7 @@ describe('toolDisplay', () => {
       dir_delete: '删除目录',
       present_artifacts: '展示文件',
       get_current_time: '获取当前时间',
-      select_semantic_config_tool: '选择指标集',
+      search_dataset: '搜索指标集',
       dsl2sql_tool: '生成 SQL',
       semantic_query_tool: '查询数据',
       calculator_tool: '精确计算',
@@ -32,6 +32,7 @@ describe('toolDisplay', () => {
 
   it('keeps the generic fallback for unknown or empty tool names', () => {
     expect(getToolDisplayName('unknown_tool')).toBe('工具调用')
+    expect(getToolDisplayName('select_semantic_config_tool')).toBe('工具调用')
     expect(getToolDisplayName('  ')).toBe('工具调用')
     expect(getToolDisplayName(null)).toBe('工具调用')
   })

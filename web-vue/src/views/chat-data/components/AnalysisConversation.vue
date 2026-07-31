@@ -199,8 +199,7 @@ const activeToolCall = computed(() => {
   return findToolCallById(id)
 })
 const getVisibleToolCalls = (toolCalls?: ToolCallInfo[]): ToolCallInfo[] => {
-  if (!toolCalls) return []
-  return toolCalls.filter((tc) => tc.tool_name !== 'load_skill_tool')
+  return toolCalls || []
 }
 const sidePanelTitle = computed(() => sidePanelTab.value === 'console' ? '控制台' : '工具详情')
 const sidePanelSubtitle = computed(() => (

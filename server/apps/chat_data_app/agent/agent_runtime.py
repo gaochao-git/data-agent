@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage
 from utils.logger import get_logger
 from ..services.context_budget import ToolResultBudget
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic_tools import create_semantic_config_selection_tools
 from .middleware.tool_error import create_tool_error_middleware
 from .middleware.tool_result import create_tool_result_middleware
 
@@ -95,33 +94,6 @@ def build_standard_agent_middleware(
         middleware.append(tool_result_middleware)
     middleware.append(create_tool_error_middleware())
     return middleware
-
-
-def create_semantic_selection_tools_bundle(
-    *,
-    model_id: str | None = None,
-    datasource_id: str | None = None,
-    semantic_config: dict | None = None,
-    user_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
-    include_query_tools: bool = True,
-    datasource_group_context: str | None = None,
-    selection_tool_factory: Callable[..., list[Any]] = create_semantic_config_selection_tools,
-) -> list[Any]:
-    """创建指标集选择工具 bundle，统一问数和分析的公共参数。"""
-    kwargs: dict[str, Any] = {
-        "model_id": model_id,
-        "user_id": user_id,
-        "tool_result_budget": tool_result_budget,
-        "include_query_tools": include_query_tools,
-    }
-    if datasource_id:
-        kwargs["datasource_id"] = datasource_id
-    if semantic_config is not None:
-        kwargs["semantic_config"] = semantic_config
-    if datasource_group_context:
-        kwargs["datasource_group_context"] = datasource_group_context
-    return selection_tool_factory(**kwargs)
 
 
 def _get_available_tool_names(tools: list) -> set[str]:

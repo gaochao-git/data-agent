@@ -477,7 +477,7 @@ chat_data_app/
 ```
 create_agent
   ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
-  └─ tools 节点：执行 skill_load、select_semantic_config_tool、dsl2sql_tool、semantic_query_tool 等工具
+  └─ tools 节点：执行 skill_load、search_dataset、dsl2sql_tool、semantic_query_tool 等工具
 
 model → tools → model，直到模型不再发起工具调用后结束。
 ```

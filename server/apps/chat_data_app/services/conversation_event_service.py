@@ -20,9 +20,6 @@ EVENT_ASSISTANT_MESSAGE = "assistant_message"
 EVENT_TOOL_RESULT = "tool_result"
 EVENT_CONTEXT_COMPRESSION = "context_compression"
 
-_HIDDEN_TOOLS = {"load_skill_tool"}
-
-
 class ConversationEventService:
     """将 Agent 完整消息转换为追加式历史事件。"""
 
@@ -261,10 +258,7 @@ def _build_turn_events(
                 event_type=EVENT_ASSISTANT_MESSAGE,
                 payload=_serialize_ai_message(message),
             ))
-            visible_tool_count += sum(
-                1 for tool_call in getattr(message, "tool_calls", None) or []
-                if str((tool_call or {}).get("name") or "") not in _HIDDEN_TOOLS
-            )
+            visible_tool_count += len(getattr(message, "tool_calls", None) or [])
             append_context_compression_events(message_id)
             continue
         if isinstance(message, ToolMessage):

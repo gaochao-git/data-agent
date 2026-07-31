@@ -322,7 +322,7 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
     assert "复杂同比/环比请使用智能分析" in compare["error"]
 
     assert await dsl2sql.create_dsl2sql_tool("", "sc_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
-    assert await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 select_semantic_config_tool 后显式传入指标集ID"
+    assert await dsl2sql.create_dsl2sql_tool("ds_a", None).ainvoke({"semantic_config_id": "", "dsl": {"metrics": ["销售额"]}}) == "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 search_dataset 后显式传入指标集ID"
     assert await tool.ainvoke({"semantic_config_id": "sc_a", "dsl": "不是json"}) == "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
 
 

@@ -109,7 +109,7 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
 
     normalized = normalize_response_tool_call_names(
         unknown_message,
-        [SimpleNamespace(name="select_semantic_config_tool")],
+        [SimpleNamespace(name="search_dataset")],
     )
 
     assert normalized.tool_calls[0]["name"] == "unknown_toolunknown_tool"
@@ -118,29 +118,29 @@ def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
         content="",
         tool_calls=[{
             "id": "call_select",
-            "name": "select_semantic_config_toolselect_semantic_config_toolselect_semantic_config_tool",
+            "name": "search_datasetsearch_datasetsearch_dataset",
             "args": {},
         }],
     )
     normalized = normalize_response_tool_call_names(
         repeated_message,
-        [SimpleNamespace(name="select_semantic_config_tool")],
+        [SimpleNamespace(name="search_dataset")],
     )
-    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert normalized.tool_calls[0]["name"] == "search_dataset"
 
     similar_message = AIMessage(
         content="",
         tool_calls=[{
             "id": "call_similar",
-            "name": "select_semantic_config_tool_extra",
+            "name": "search_dataset_extra",
             "args": {},
         }],
     )
     normalized = normalize_response_tool_call_names(
         similar_message,
-        [SimpleNamespace(name="select_semantic_config_tool")],
+        [SimpleNamespace(name="search_dataset")],
     )
-    assert normalized.tool_calls[0]["name"] == "select_semantic_config_tool_extra"
+    assert normalized.tool_calls[0]["name"] == "search_dataset_extra"
 
 
 @pytest.mark.asyncio
@@ -717,7 +717,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
 
 @pytest.mark.asyncio
 async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
-    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="select_semantic_config_tool")])
+    middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="search_dataset")])
 
     async def handler(_request):
         return ModelResponse(result=[
@@ -725,7 +725,7 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
                 content="",
                 tool_calls=[{
                     "id": "call_select",
-                    "name": "select_semantic_config_toolselect_semantic_config_tool",
+                    "name": "search_datasetsearch_dataset",
                     "args": {"query": "查询入金金额"},
                 }],
             )
@@ -733,14 +733,14 @@ async def test_tool_call_name_normalizer_middleware_normalizes_tool_call_name():
 
     response = await middleware.awrap_model_call(SimpleNamespace(), handler)
 
-    assert response.result[0].tool_calls[0]["name"] == "select_semantic_config_tool"
+    assert response.result[0].tool_calls[0]["name"] == "search_dataset"
     assert response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
 @pytest.mark.asyncio
 async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standard_normalizer(monkeypatch):
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
-    tool = SimpleNamespace(name="select_semantic_config_tool")
+    tool = SimpleNamespace(name="search_dataset")
     middleware = context_usage.create_chat_data_context_usage_middleware([tool])
 
     async def handler(_request):
@@ -749,7 +749,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
                 content="",
                 tool_calls=[{
                     "id": "call_select",
-                    "name": "select_semantic_config_toolselect_semantic_config_tool",
+                    "name": "search_datasetsearch_dataset",
                     "args": {"query": "查询入金金额"},
                 }],
             )
@@ -765,7 +765,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_call_name_to_standa
 
     response = await middleware.awrap_model_call(request, handler)
 
-    assert response.model_response.result[0].tool_calls[0]["name"] == "select_semantic_config_toolselect_semantic_config_tool"
+    assert response.model_response.result[0].tool_calls[0]["name"] == "search_datasetsearch_dataset"
     assert response.model_response.result[0].tool_calls[0]["args"] == {"query": "查询入金金额"}
 
 
@@ -800,9 +800,9 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     captured = {}
     selection_tool_kwargs = {}
 
-    def fake_create_semantic_selection_tools_bundle(**kwargs):
+    def fake_create_search_dataset_tool(**kwargs):
         selection_tool_kwargs.update(kwargs)
-        return ["select_semantic_config_tool"]
+        return "search_dataset"
 
     def fake_create_agent(**kwargs):
         captured.update(kwargs)
@@ -815,7 +815,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         return FakeChatModel()
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", fake_create_streaming_chat_model)
-    monkeypatch.setattr(data_agent, "create_semantic_selection_tools_bundle", fake_create_semantic_selection_tools_bundle)
+    monkeypatch.setattr(data_agent, "create_search_dataset_tool", fake_create_search_dataset_tool)
     monkeypatch.setattr(data_agent, "semantic_query_tool", "semantic_query_tool")
     monkeypatch.setattr(data_agent, "calculator_tool", "calculator_tool")
     monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
@@ -833,7 +833,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
 
     assert agent.name == "agent"
     assert selection_tool_kwargs["model_id"] == "m1"
-    assert selection_tool_kwargs["semantic_config"] == {"id": "sc_a"}
     assert selection_tool_kwargs["datasource_id"] == "ds_a"
     assert selection_tool_kwargs["user_id"] == "u1"
     assert selection_tool_kwargs["tool_result_budget"] is not None
@@ -858,7 +857,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "dir_delete",
         "present_artifacts",
         "get_current_time",
-        "select_semantic_config_tool",
+        "search_dataset",
         "dsl2sql_tool",
         "semantic_query_tool",
         "calculator_tool",

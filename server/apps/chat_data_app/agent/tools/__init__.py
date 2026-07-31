@@ -2,10 +2,10 @@
 
 from .calculator import calculator_tool
 from .semantic_query import semantic_query_tool
-from ...services.semantic_tools import create_semantic_config_selection_tools
+from .search_dataset import create_search_dataset_tool
 
 __all__ = [
     "calculator_tool",
-    "create_semantic_config_selection_tools",
+    "create_search_dataset_tool",
     "semantic_query_tool",
 ]

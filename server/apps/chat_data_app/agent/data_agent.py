@@ -7,7 +7,6 @@ from ..services.conversation_workspace import ConversationWorkspaceRuntime, ensu
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
     build_standard_agent_middleware,
-    create_semantic_selection_tools_bundle,
     create_streaming_chat_model,
 )
 from .agent_state import ChatDataAgentState
@@ -26,6 +25,7 @@ from .tools.filesystem import create_filesystem_tools
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.bash_run import create_bash_run_tool
 from .tools.semantic_query import semantic_query_tool
+from .tools.search_dataset import create_search_dataset_tool
 from .tools.skill_load import create_skill_load_tool
 
 
@@ -34,7 +34,6 @@ def assemble_tools(
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
     datasource_id: str | None = None,
-    semantic_config: dict | None = None,
     semantic_config_id: str | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
@@ -43,11 +42,9 @@ def assemble_tools(
     datasource_group_context: str | None = None,
 ) -> list:
     """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
-    selection_bundle = create_semantic_selection_tools_bundle(
+    search_dataset_tool = create_search_dataset_tool(
         model_id=model_id,
         datasource_id=datasource_id,
-        semantic_config=semantic_config,
-        include_query_tools=False,
         user_id=user_id,
         tool_result_budget=tool_result_budget,
         datasource_group_context=datasource_group_context,
@@ -57,7 +54,7 @@ def assemble_tools(
         *create_filesystem_tools(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),
         get_current_time_tool,
-        *selection_bundle,
+        search_dataset_tool,
         create_dsl2sql_tool(
             datasource_id,
             semantic_config_id,
@@ -102,7 +99,6 @@ def create_data_agent(
         options,
         runtime,
         datasource_id=datasource_id,
-        semantic_config=semantic_config,
         semantic_config_id=semantic_config_id,
         user_id=user_id or "",
         operator_name=operator_name,

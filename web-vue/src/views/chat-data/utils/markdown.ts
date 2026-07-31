@@ -56,18 +56,23 @@ const findJsonObjectEnd = (text: string, start: number): number => {
 }
 
 const hideTaggedSemanticConfigSelectionPayloads = (content: string): string => {
-  const marker = '[select_semantic_config_tool]'
+  const markers = ['[search_dataset]']
   let text = content
   let searchFrom = 0
   while (searchFrom < text.length) {
-    const markerIndex = text.indexOf(marker, searchFrom)
-    if (markerIndex < 0) break
-    let jsonStart = markerIndex + marker.length
+    const matches = markers
+      .map(marker => ({ marker, index: text.indexOf(marker, searchFrom) }))
+      .filter(item => item.index >= 0)
+      .sort((left, right) => left.index - right.index)
+    const match = matches[0]
+    if (!match) break
+    const markerIndex = match.index
+    let jsonStart = markerIndex + match.marker.length
     while (jsonStart < text.length && /\s/.test(text[jsonStart] || '')) {
       jsonStart += 1
     }
     if (text[jsonStart] !== '{') {
-      searchFrom = markerIndex + marker.length
+      searchFrom = markerIndex + match.marker.length
       continue
     }
     const jsonEnd = findJsonObjectEnd(text, jsonStart)

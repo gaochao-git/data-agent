@@ -181,10 +181,11 @@ def test_reasoning_and_thinking_helper_branches():
     thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "正在分析"}))
     assert thinking_event.startswith("event: thinking")
     assert "正在分析" in thinking_event
-    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 select_semantic_config_tool"}))
-    assert "选择指标集" in tool_thinking_event
-    assert "select_semantic_config_tool" not in tool_thinking_event
+    tool_thinking_event = _format_thinking_event(SimpleNamespace(additional_kwargs={"reasoning_content": "调用 search_dataset"}))
+    assert "搜索指标集" in tool_thinking_event
+    assert "search_dataset" not in tool_thinking_event
     assert _format_reasoning_for_display("调用 semantic_query_tool") == "调用 查询数据"
+    assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
 
     segments = []
     _append_reasoning_segment(segments, "", 0)
@@ -192,10 +193,10 @@ def test_reasoning_and_thinking_helper_branches():
     _append_reasoning_segment(segments, "a", 0)
     _append_reasoning_segment(segments, "b", 0)
     _append_reasoning_segment(segments, "c", 1)
-    _append_reasoning_segment(segments, "调用 select_semantic_config_tool", 1)
+    _append_reasoning_segment(segments, "调用 search_dataset", 1)
     assert segments == [
         {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
-        {"id": "reasoning-1", "content": "c调用 选择指标集", "tool_call_count": 1},
+        {"id": "reasoning-1", "content": "c调用 搜索指标集", "tool_call_count": 1},
     ]
 
 
@@ -264,11 +265,10 @@ def test_parse_tool_args_buffer_falls_back_on_invalid_json():
     assert _parse_tool_args_buffer("{bad json", fallback) == fallback
 
 
-def test_is_tool_result_error_detects_plain_and_dashboard_errors():
+def test_is_tool_result_error_detects_plain_errors():
     assert _is_tool_result_error("执行失败: 表不存在") is True
     assert _is_tool_result_error("error: syntax error") is True
-    assert _is_tool_result_error("[dashboard_write] {\"success\": false}") is True
-    assert _is_tool_result_error("[dashboard_write] {bad json}") is False
+    assert _is_tool_result_error("[dashboard_write] {\"success\": false}") is False
     assert _is_tool_result_error("执行完成") is False
 
 
@@ -454,9 +454,9 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_select", "name": "select_semantic_config_tool", "args": "{\"query\":\"查交易金额\"}"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="", tool_call_chunks=[{"id": "call_select", "name": "search_dataset", "args": "{\"query\":\"查交易金额\"}"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已查询支付数据"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -473,10 +473,10 @@ def test_generate_chat_data_stream_streams_semantic_retrieval_tool_result(monkey
 
     joined = "".join(events)
     assert "event: tool" in joined
-    assert "[select_semantic_config_tool]" in _tool_event_contents(events)[-1]
+    assert "[search_dataset]" in _tool_event_contents(events)[-1]
     assert '"semantic_config_ids": ["cfg_pay"]' in _tool_event_contents(events)[-1]
     assert '"expression": "SUM(pay.amount)"' in _tool_event_contents(events)[-1]
-    assert '"tool_name": "select_semantic_config_tool"' in joined
+    assert '"tool_name": "search_dataset"' in joined
     assert "event: semantic_config_selected" not in joined
     assert "event: semantic_config_select_required" not in joined
     assert "已查询支付数据" in joined
@@ -560,8 +560,8 @@ def test_generate_chat_data_stream_streams_multiple_semantic_configs_as_tool_res
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="请选择指标集"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -599,8 +599,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_query_plan(monkeypa
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="已按多个指标集完成查询"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -636,8 +636,8 @@ def test_generate_chat_data_stream_streams_retrieval_without_cross_config_decisi
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
             (_FakeMessageChunk(content="这个问题需要跨指标集合并，当前不支持。"), {"langgraph_node": "model"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
@@ -771,8 +771,8 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
@@ -808,8 +808,8 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     }
     fake_graph = _FakeGraph(
         events=[
-            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "select_semantic_config_tool"}]), {"langgraph_node": "model"}),
-            (_FakeMessageChunk(content="[select_semantic_config_tool]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="select_semantic_config_tool"), {"langgraph_node": "tools"}),
+            (_FakeMessageChunk(content="", tool_calls=[{"id": "call_select", "name": "search_dataset"}]), {"langgraph_node": "model"}),
+            (_FakeMessageChunk(content="[search_dataset]\n" + json.dumps(payload, ensure_ascii=False), type_="tool", tool_call_id="call_select", name="search_dataset"), {"langgraph_node": "tools"}),
         ],
         state=SimpleNamespace(tasks=[], values={}),
     )
