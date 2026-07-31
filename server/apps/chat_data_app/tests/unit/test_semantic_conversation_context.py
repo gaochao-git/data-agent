@@ -98,14 +98,8 @@ async def test_build_agent_prompt_context_reuses_semantic_context_without_loadin
     prompt_context = semantic_conversation_context.build_agent_prompt_context(context)
 
     assert prompt_context["datasource"] == {
-        "id": "ds_1",
-        "name": "",
-        "description": "",
         "source_type": "",
     }
-    assert prompt_context["execution_targets"] == [
-        {"member_datasource_id": "m_hz", "member_name": "杭州分公司", "org_code": "ORG_HZ"},
-    ]
     assert prompt_context["datasource_group_context"] == context.datasource_group_context
     assert prompt_context["semantic_config_directory_info"] == context.semantic_config_directory_info
     assert prompt_context["selected_semantic_config"] is None
@@ -148,7 +142,6 @@ async def test_prepare_context_loads_selected_config_and_keeps_directory_for_pro
         semantic_conversation_context.build_agent_prompt_context(context),
     )
 
-    assert data_context["tables"] == []
     assert data_context["semantic_configs"] == [{
         "id": "cfg_1",
         "name": "订单指标集",

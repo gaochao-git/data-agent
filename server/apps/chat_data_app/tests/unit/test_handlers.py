@@ -14,7 +14,6 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.handlers import (
-    _build_query_skills_context,
     _extract_reasoning_content,
     _format_reasoning_for_display,
     _format_sse,
@@ -197,22 +196,6 @@ def test_reasoning_and_thinking_helper_branches():
         {"id": "reasoning-0", "content": "ab", "tool_call_count": 0},
         {"id": "reasoning-1", "content": "c调用 搜索指标集", "tool_call_count": 1},
     ]
-
-
-def test_build_query_skills_context_appends_requested_skills(monkeypatch):
-    import asyncio
-
-    context = asyncio.run(_build_query_skills_context("u1", ["custom-query-skill", "custom-query-skill", "risk-query-skill"]))
-
-    assert "## 本轮指定业务知识技能" in context
-    assert "`custom-query-skill`、`risk-query-skill`" in context
-    assert "不要读取未指定技能" in context
-
-
-def test_build_query_skills_context_empty_without_requested_skills():
-    import asyncio
-
-    assert asyncio.run(_build_query_skills_context("u1", [])) == ""
 
 
 def test_normalize_enable_thinking_branches():

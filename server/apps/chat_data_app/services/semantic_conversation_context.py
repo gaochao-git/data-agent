@@ -50,7 +50,6 @@ class AgentPromptContext(TypedDict):
     """Shared prompt inputs derived from one semantic conversation context."""
 
     datasource: dict[str, Any] | None
-    execution_targets: list[dict[str, Any]]
     datasource_group_context: str
     semantic_config_directory_info: str
     selected_semantic_config: dict[str, str] | None
@@ -62,31 +61,17 @@ def build_agent_prompt_context(context: SemanticConversationContext) -> AgentPro
     datasource: dict[str, Any] | None = None
     if context.datasource_id:
         if context.datasource_meta is None:
-            datasource = {"id": context.datasource_id, "missing": True}
+            datasource = {"missing": True}
         else:
             datasource = {
-                "id": context.datasource_id,
-                "name": datasource_meta.get("group_name") or datasource_meta.get("name") or "",
-                "description": datasource_meta.get("ds_description") or datasource_meta.get("description") or "",
                 "source_type": datasource_meta.get("source_type") or "",
             }
 
     return {
         "datasource": datasource,
-        "execution_targets": [_prompt_execution_target(target) for target in context.execution_targets],
         "datasource_group_context": context.datasource_group_context,
         "semantic_config_directory_info": context.semantic_config_directory_info,
         "selected_semantic_config": _selected_semantic_config_prompt_ref(context),
-    }
-
-
-def _prompt_execution_target(target: dict[str, Any]) -> dict[str, Any]:
-    """Reduce an execution target to the fields that may enter a model prompt."""
-    source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
-    return {
-        "member_datasource_id": str(target.get("member_datasource_id") or "").strip(),
-        "member_name": target.get("member_name") or target.get("name") or target.get("org_name") or "",
-        "org_code": target.get("org_code") or source_config.get("org_code") or "",
     }
 
 

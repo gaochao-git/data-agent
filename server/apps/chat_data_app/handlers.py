@@ -822,23 +822,6 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
     return True
 
 
-async def _build_query_skills_context(user_id: str | None = None, skill_names: list[str] | None = None) -> str:
-    """构造智能问数业务知识技能上下文，显式指定的技能必须让模型稳定可见。"""
-    _ = user_id
-    normalized_skill_names = [
-        str(item or "").strip()
-        for item in skill_names or []
-        if str(item or "").strip()
-    ]
-    if not normalized_skill_names:
-        return ""
-    requested = "、".join(f"`{name}`" for name in dict.fromkeys(normalized_skill_names))
-    return (
-        "## 本轮指定业务知识技能\n"
-        f"用户本轮明确指定以下业务知识技能：{requested}。确定唯一指标集后，只读取这些指定技能，再继续查询规划；不要读取未指定技能。"
-    )
-
-
 async def _generate_chat_data_stream(
     thread_id: str,
     user_query: str,
