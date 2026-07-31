@@ -1421,3 +1421,58 @@ async def test_skill_load_uses_file_read_budget_and_exposes_continuation_path(mo
     assert len(result) <= 200
     assert "[skill_load 内容已截断" in result
     assert "file_path=/mnt/skills/large-skill/SKILL.md" in result
+
+
+@pytest.mark.asyncio
+async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
+    """file_grep on a single file must return matches, not silently drop them."""
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    paths = ensure_conversation_workspace("conv_grep_file", "user_a")
+    target = Path(paths["outputs"]) / "order.dashboard.json"
+    target.write_text(
+        json.dumps({"title": "订单核心指标", "metrics": ["订单数量", "销售额"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=paths["root"], user_id="user_a", backend="local",
+    )
+    result = await runtime.grep_text(
+        path="/mnt/user-data/outputs/order.dashboard.json",
+        patterns=["订单数量", "销售额"],
+        glob="**/*",
+        max_results=200,
+        max_chars=50000,
+    )
+    matches = result["matches"]
+    assert len(matches) == 1
+    assert matches[0]["path"] == "/outputs/order.dashboard.json"
+    assert "订单数量" in matches[0]["line"]
+    assert "销售额" in matches[0]["line"]
+
+
+@pytest.mark.asyncio
+async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp_path):
+    """file_grep on a single skill file must return the /mnt/skills visible path."""
+    workspace_root = tmp_path / "threads" / "u1" / "conv_grep_skill" / "user-data"
+    workspace_root.mkdir(parents=True)
+    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    guide = skill_dir / "references" / "guide.md"
+    guide.parent.mkdir(parents=True)
+    guide.write_text("# Demo\n关键词：订单数量\n", encoding="utf-8")
+
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+    result = await runtime.grep_text(
+        path="/mnt/skills/demo-skill/references/guide.md",
+        patterns=["订单数量"],
+        glob="**/*",
+        max_results=200,
+        max_chars=50000,
+    )
+    matches = result["matches"]
+    assert len(matches) == 1
+    assert matches[0]["path"] == "/mnt/skills/demo-skill/references/guide.md"
+    assert "订单数量" in matches[0]["line"]

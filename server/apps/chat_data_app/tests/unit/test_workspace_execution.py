@@ -643,3 +643,54 @@ def test_path_mapping_skill_translate_and_mask_roundtrip(tmp_path):
     assert translated == f"cat {snapshot_dir}/references/guide.md"
     # 反向遮蔽后应还原为原始虚拟路径
     assert mapping.mask(translated) == cmd
+
+
+def _rg_match_line(file_path: str, text: str, line_no: int) -> str:
+    """Build a single rg --json match line for testing."""
+    import json
+
+    return json.dumps({
+        "type": "match",
+        "data": {
+            "path": {"text": file_path},
+            "lines": {"text": text + "\n"},
+            "line_number": line_no,
+            "absolute_offset": 0,
+            "submatches": [{"match": {"text": "keyword"}}],
+        },
+    })
+
+
+def test_parse_rg_output_single_file_target():
+    """file_grep on a single file must not discard matches.
+
+    Regression: parse_rg_output stripped a ``target + '/'`` prefix from
+    each match path.  When target was a file (not a directory) the prefix
+    had a trailing slash that rg's path.text never includes, so every
+    match was silently filtered out.
+    """
+    from apps.chat_data_app.services.workspace_execution import parse_rg_output
+
+    target = "/mnt/user-data/outputs/dashboard.dashboard.json"
+    stdout = _rg_match_line(target, '{"metric": "订单数量"}', 1)
+    matches, has_more = parse_rg_output(stdout, target, max_results=200, max_chars=50000)
+    assert len(matches) == 1
+    assert matches[0]["file"] == ""
+    assert matches[0]["line_number"] == 1
+    assert "订单数量" in matches[0]["content"]
+    assert not has_more
+
+
+def test_parse_rg_output_directory_target():
+    """file_grep on a directory still strips the prefix correctly."""
+    from apps.chat_data_app.services.workspace_execution import parse_rg_output
+
+    target = "/mnt/user-data/outputs"
+    file_path = f"{target}/dashboard.dashboard.json"
+    stdout = _rg_match_line(file_path, '{"metric": "销售额"}', 3)
+    matches, has_more = parse_rg_output(stdout, target, max_results=200, max_chars=50000)
+    assert len(matches) == 1
+    assert matches[0]["file"] == "dashboard.dashboard.json"
+    assert matches[0]["line_number"] == 3
+    assert "销售额" in matches[0]["content"]
+    assert not has_more

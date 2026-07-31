@@ -1248,8 +1248,8 @@ def _grep_local_workspace_text(
     matches: list[dict[str, Any]] = []
     for m in raw_matches:
         file_rel = m["file"]
-        if is_skill and target.is_dir():
-            visible_path = visible_root.rstrip("/") + "/" + file_rel
+        if is_skill:
+            visible_path = visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
         else:
             resolved = (target / file_rel).resolve()
             visible_path = to_visible_path(runtime.workspace_root, resolved)

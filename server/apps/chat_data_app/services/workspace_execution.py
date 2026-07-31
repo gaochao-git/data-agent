@@ -1526,7 +1526,8 @@ def parse_rg_output(
     The ``target`` prefix is stripped from the file path so that ``file``
     in each match is relative to the search root.
     """
-    prefix = target.rstrip("/") + "/"
+    normalized_target = target.rstrip("/")
+    prefix = normalized_target + "/"
     prefix_len = len(prefix)
     matches: list[dict[str, Any]] = []
     body_chars = 0
@@ -1543,9 +1544,12 @@ def parse_rg_output(
             continue
         pdata = data.get("data") or {}
         file_path = (pdata.get("path") or {}).get("text") or ""
-        if not file_path.startswith(prefix):
+        if file_path == normalized_target:
+            file_rel = ""
+        elif file_path.startswith(prefix):
+            file_rel = file_path[prefix_len:]
+        else:
             continue
-        file_rel = file_path[prefix_len:]
         line_no = pdata.get("line_number")
         if line_no is None:
             continue
@@ -1591,9 +1595,12 @@ async def sandbox_grep_text(
         raw_matches, has_more = parse_rg_output(
             stdout, target, max_results=max_results, max_chars=max_chars,
         )
+        stripped_target = target.rstrip("/")
         matches = [
             {
-                "path": sandbox_path_to_visible(f"{target.rstrip('/')}/{m['file']}"),
+                "path": sandbox_path_to_visible(
+                    f"{stripped_target}/{m['file']}" if m["file"] else stripped_target
+                ),
                 "line_number": m["line_number"],
                 "line": m["content"],
             }
