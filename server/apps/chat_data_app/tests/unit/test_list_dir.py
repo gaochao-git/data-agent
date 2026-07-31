@@ -69,14 +69,14 @@ def test_dir_list_outputs_and_uploads(tmp_path):
 
 def test_dir_list_hides_tool_results(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
-    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}')
     _, tools = _build_tools(paths)
 
     output = _call(tools["dir_list"], path="outputs", max_depth=3)
-    direct = _call(tools["dir_list"], path="outputs/.tool-results")
+    direct = _call(tools["dir_list"], path="outputs/.tool-offload")
 
-    assert ".tool-results" not in output
+    assert ".tool-offload" not in output
     assert "result_1.json" not in output
     assert "隐藏的工具结果缓存，不能列出" in direct
 

@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import semantic_conversation_context
+from apps.chat_data_app.services import conversation_context, semantic_conversation_context
 from apps.chat_data_app.services.execution_target_context import append_selected_execution_targets_to_context
 
 
@@ -108,11 +108,11 @@ async def test_build_agent_prompt_context_reuses_semantic_context_without_loadin
     ]
     assert prompt_context["datasource_group_context"] == context.datasource_group_context
     assert prompt_context["semantic_config_directory_info"] == context.semantic_config_directory_info
-    assert prompt_context["semantic_config"] is None
+    assert prompt_context["selected_semantic_config"] is None
 
 
 @pytest.mark.asyncio
-async def test_prepare_context_loads_selected_config_without_directory(monkeypatch):
+async def test_prepare_context_loads_selected_config_and_keeps_directory_for_prompt(monkeypatch):
     manager = _FakeDatasourceManager()
     calls = {"config": [], "directory": 0}
 
@@ -120,13 +120,13 @@ async def test_prepare_context_loads_selected_config_without_directory(monkeypat
         calls["config"].append((datasource_id, semantic_config_id, user_id))
         return {"id": "cfg_1", "name": "订单指标集", "enabled": True, "metrics": [], "dimensions": []}
 
-    async def fail_directory(*_args):
+    async def fake_directory(*_args):
         calls["directory"] += 1
-        raise AssertionError("selected config must not load the directory")
+        return [{"id": "cfg_1", "name": "订单指标集", "description": "订单分析", "metrics_total": 2, "dimensions_total": 3}]
 
     monkeypatch.setattr(semantic_conversation_context, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_conversation_context, "load_runtime_semantic_config", fake_config)
-    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fail_directory)
+    monkeypatch.setattr(semantic_conversation_context, "list_runtime_semantic_config_directory", fake_directory)
 
     context = await semantic_conversation_context.prepare_semantic_conversation_context(
         datasource_id="ds_1",
@@ -138,11 +138,22 @@ async def test_prepare_context_loads_selected_config_without_directory(monkeypat
     )
 
     assert calls["config"] == [("ds_1", "cfg_1", "u_1")]
-    assert calls["directory"] == 0
+    assert calls["directory"] == 1
     assert context.semantic_config_id == "cfg_1"
     assert context.semantic_config["name"] == "订单指标集"
-    assert context.semantic_config_directory_info == ""
+    assert "订单指标集" in context.semantic_config_directory_info
     assert context.matched_member_datasource_ids == ["m_hz"]
+
+    data_context = await conversation_context.build_conversation_prompt_context(
+        semantic_conversation_context.build_agent_prompt_context(context),
+    )
+
+    assert data_context["tables"] == []
+    assert data_context["semantic_configs"] == [{
+        "id": "cfg_1",
+        "name": "订单指标集",
+        "selected": True,
+    }]
 
 
 @pytest.mark.asyncio

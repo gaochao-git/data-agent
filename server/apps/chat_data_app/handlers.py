@@ -117,7 +117,6 @@ def _build_user_message(content: str, semantic_selection_event: dict[str, Any] |
 def _build_agent_context_state(
     *,
     datasource_id: str | None,
-    semantic_config_id: str | None,
     user_id: str | None,
     operator_name: str | None,
     conversation_id: str,
@@ -126,7 +125,6 @@ def _build_agent_context_state(
     """构造单一 Agent 的状态字段。"""
     state = {
         "conversation_datasource_id": datasource_id,
-        "semantic_config_id": semantic_config_id,
         "user_id": user_id,
         "operator_name": operator_name or "",
         "conversation_id": conversation_id,
@@ -849,7 +847,6 @@ async def _generate_chat_data_stream(
     username: str | None = None,
     member_datasource_ids: list[str] | None = None,
     semantic_config_id: str | None = None,
-    temp_semantic_config: dict | None = None,
     request: Request | None = None,
     model_id: str | None = None,
     semantic_config_selection: dict | None = None,
@@ -880,7 +877,7 @@ async def _generate_chat_data_stream(
         skill_name = str(item or "").strip()
         if skill_name and skill_name not in normalized_skill_names:
             normalized_skill_names.append(skill_name)
-    logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}, temp_config: {bool(temp_semantic_config)}")
+    logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
     semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
     semantic_context = await prepare_semantic_conversation_context(
@@ -890,7 +887,6 @@ async def _generate_chat_data_stream(
         user_id=user_id,
         username=username,
         user_query=user_query,
-        semantic_config=temp_semantic_config,
     )
     if semantic_context.semantic_config_error:
         logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
@@ -899,9 +895,11 @@ async def _generate_chat_data_stream(
         return
     datasource_id = semantic_context.datasource_id
     semantic_config_id = semantic_context.semantic_config_id
-    semantic_config = semantic_context.semantic_config
-    if semantic_config:
-        logger.info("智能问数使用手选指标集: %s", semantic_config.get("name") or semantic_config.get("id"))
+    if semantic_context.semantic_config:
+        logger.info(
+            "智能问数使用手选指标集: %s",
+            semantic_context.semantic_config.get("name") or semantic_context.semantic_config.get("id"),
+        )
     else:
         logger.info("智能问数未手动选择指标集，将由模型按需调用选择工具")
     prompt_context = build_agent_prompt_context(semantic_context)
@@ -953,7 +951,6 @@ async def _generate_chat_data_stream(
 
             initial_state = _build_agent_context_state(
                 datasource_id=datasource_id,
-                semantic_config_id=semantic_config_id,
                 user_id=user_id,
                 operator_name=username,
                 conversation_id=thread_id,
@@ -963,7 +960,6 @@ async def _generate_chat_data_stream(
                     "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
                     "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
                 },
-                semantic_config=semantic_config,
                 workspace={
                     "workspace_root": workspace_paths["root"],
                     "workspace_backend": runtime_options.workspace_backend,
@@ -971,7 +967,6 @@ async def _generate_chat_data_stream(
             )
             system_prompt = build_unified_system_prompt(
                 runtime_options,
-                semantic_config=semantic_config,
                 data_context=data_context,
                 workspace_root=workspace_paths["root"],
                 datasource_group_context=prompt_context["datasource_group_context"],
@@ -984,8 +979,6 @@ async def _generate_chat_data_stream(
                 runtime_options,
                 checkpointer=checkpointer,
                 datasource_id=datasource_id,
-                semantic_config=semantic_config,
-                semantic_config_id=semantic_config_id,
                 system_prompt=system_prompt,
                 model_id=model_id,
                 enable_thinking=enable_thinking,

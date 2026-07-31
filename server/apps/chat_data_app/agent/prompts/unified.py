@@ -1,7 +1,5 @@
 """ChatData 单一 Agent 的系统提示词。"""
 
-import json
-
 from .analysis_guidance import (
     HIVE_DIALECT_CONTEXT,
     MYSQL_DIALECT_CONTEXT,
@@ -9,7 +7,6 @@ from .analysis_guidance import (
     SEMANTIC_FEWSHOT_PROMPT,
 )
 from .security_prompt import SECURITY_PROMPT
-from .semantic_layer import build_semantic_prompt
 from ..runtime_options import AgentRuntimeOptions
 from ...chart_types import get_chart_type_prompt_text
 
@@ -39,7 +36,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     if not semantic_config:
         return (
             "## 当前指标集\n"
-            "本轮未提供完整指标集。业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
+            "本轮未手动选择指标集。指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答；需要具体指标、维度、枚举或业务口径时，先调用 `search_dataset` 获取实际语义配置。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
         )
 
     config_id = str(semantic_config.get("id") or "").strip()
@@ -49,11 +46,11 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
         header += f"：{config_name}"
     if config_id:
         header += f"（semantic_config_id: {config_id}）"
-    header += (
-        "。业务数据查询不要调用 `search_dataset`。\n"
-        "优先使用数据源组说明和当前指标集理解用户问题；只有用户本轮显式指定业务知识技能时，才读取对应技能补充查询判断；最终回答不要提及技能加载过程。\n\n"
+    return (
+        header
+        + "。这是本轮优先参考，不代表锁定。\n"
+        + "需要具体指标、维度、枚举、关联或表列时，必须调用 `search_dataset` 获取实际语义配置；可根据检索结果使用其他可见指标集。\n"
     )
-    return header + build_semantic_prompt(semantic_config, "query")
 
 
 def _format_conversation_context(data_context: dict) -> str:
@@ -62,19 +59,28 @@ def _format_conversation_context(data_context: dict) -> str:
         return "{}"
     datasource_group_context = str(data_context.get("datasource_group_context") or "").strip()
     semantic_config_directory_info = str(data_context.get("semantic_config_directory_info") or "").strip()
-    semantic_configs = data_context.get("semantic_configs")
-    if semantic_config_directory_info and not semantic_configs:
-        sections = [datasource_group_context, semantic_config_directory_info, "## 当前指标集"]
-        sections.append(
-            "本轮未提供完整指标集。业务数据分析或具体指标/维度询问先搜索当前数据源组中的真实指标集；指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答。未选中完整指标集前，不要推荐具体查数样例，只引导用户先查看或选择指标集。搜索后仍未找到、候选不唯一或口径不清时再澄清。"
+    semantic_configs = data_context.get("semantic_configs") or []
+    selected_config = next(
+        (
+            config
+            for config in semantic_configs
+            if isinstance(config, dict) and config.get("selected")
+        ),
+        None,
+    )
+    return "\n\n".join(
+        section
+        for section in (
+            datasource_group_context,
+            semantic_config_directory_info,
+            build_semantic_layer_context(selected_config),
         )
-        return "\n\n".join(section for section in sections if section)
-    return json.dumps(data_context or {}, ensure_ascii=False, indent=2)
+        if section
+    )
 
 
 def build_data_context_text(
     *,
-    semantic_config: dict | None = None,
     data_context: dict | None = None,
     datasource_group_context: str | None = None,
     semantic_config_directory_info: str | None = None,
@@ -85,7 +91,7 @@ def build_data_context_text(
     parts = [
         format_datasource_group_context_for_llm(datasource_group_context),
         format_semantic_config_directory_info_for_llm(semantic_config_directory_info),
-        build_semantic_layer_context(semantic_config),
+        build_semantic_layer_context(None),
     ]
     return "\n".join(p for p in parts if p).strip()
 
@@ -141,17 +147,17 @@ SKILLS_USAGE_BLOCK = """## 技能使用
 QUERY_FLOW_BLOCK = """## 主流程
 1. 先判断场景。
    - 问候、闲聊、使用帮助、概念解释：直接回复，不调用工具。
-   - 新用户上手引导（用户表达不知道怎么用、能查什么、有哪些数据、举个例子、我是新手、第一次使用等）：不调用查询工具；先用 1～2 句话说明本助手能做什么（自然语言查数、看趋势、做对比、查明细），再根据当前是否已加载完整指标集分层引导。
-   - 业务数据查询、具体指标/维度询问、以及“所有订单/订单数/用户数/销售额”等短问法：如果上下文未提供完整指标集，必须先搜索真实指标集，再决定查询、澄清或说明缺口；不要在搜索前凭常识澄清。
-2. 已有手动选择的完整指标集时，不再搜索指标集；直接以当前指标集核对用户问题。检索工具返回相关指标集后，由你依据原问题、指标集配置、维度暴露的表列、指标口径和关联关系决定是否复用、继续检索、澄清或查询。
+   - 新用户上手引导（用户表达不知道怎么用、能查什么、有哪些数据、举个例子、我是新手、第一次使用等）：不调用查询工具；先用 1～2 句话说明本助手能做什么（自然语言查数、看趋势、做对比、查明细），再根据当前可见指标集目录分层引导。
+   - 业务数据查询、具体指标/维度询问、以及“所有订单/订单数/用户数/销售额”等短问法：必须先调用 `search_dataset` 获取真实指标集，再决定查询、澄清或说明缺口；不要在搜索前凭常识澄清。
+2. 手动选择的指标集只作为优先参考，不代表锁定，也不提供完整字段口径；检索工具返回相关指标集后，由你依据原问题、指标集配置、维度暴露的表列、指标口径和关联关系决定是否复用、继续检索、澄清或查询。
 4. 通过查询执行澄清门禁后，先按用户原词匹配最相关的指标或维度；DSL 路径先生成 SQL 再执行查询，只有 DSL 明确无法表达时才生成只读 SQL 并执行，必要时用计算器。
 5. 需要多个独立查询时，分别执行后统一总结；中间可以不输出正文。
 6. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
 
 ## 上手引导规则
-- 本轮未提供完整指标集时，只能基于“当前可见指标集目录”和数据源组说明介绍可查业务范围，优先引导用户先查看或选择指标集；不要推荐具体明细、指标、维度、机构、支付方式、订单金额、交易量趋势等查询问题，因为这些必须等选中指标集并看到完整指标/维度后才能确认。
+- 当前可见指标集目录和手动选择引用都不包含完整字段口径，只能基于目录和数据源组说明介绍可查业务范围；不要推荐具体明细、指标、维度、机构、支付方式、订单金额、交易量趋势等查询问题，因为这些必须先通过 `search_dataset` 取得实际指标/维度后才能确认。
 - 未选指标集时，可以推荐的问题应是下一步引导类，例如“当前有哪些指标集？”、“这些指标集分别能查什么？”、“我想看某个业务域，帮我推荐指标集”、“选择某个指标集后再看可查指标和维度”；不要输出“查询XX金额/趋势/明细/按某维度统计”这类具体查数样例。
-- 已选择完整指标集时，才可以基于当前指标集中真实存在的指标、维度、枚举和说明给具体查询示例；示例必须使用真实名称，不要从数据源组名称、行业常识或模型常识编造。"""
+- 只有 `search_dataset` 已返回实际语义配置后，才可以基于其中真实存在的指标、维度、枚举和说明给具体查询示例；示例必须使用真实名称，不要从数据源组名称、行业常识或模型常识编造。"""
 
 CLARIFICATION_GATE_BLOCK = """## 查询执行澄清门禁
 - 调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，必须同时满足：当前准备使用的指标集明确；用户问题中的指标、维度、筛选对象、时间范围、枚举含义、单位和业务口径都能高置信匹配该指标集；名称和口径明确一致；没有多个合理解释；没有依赖未维护元数据。每次 `dsl2sql_tool` 必须显式传入该次查询使用的 `semantic_config_id`；每次 `semantic_query_tool` 还必须显式传入本次执行范围的 `member_datasource_ids`。只要任一条件不满足，禁止调用 `dsl2sql_tool`、`semantic_query_tool`、`calculator_tool`，必须向用户澄清一个最关键问题，或说明当前配置缺少什么。
@@ -176,14 +182,14 @@ EXEC_TARGET_BLOCK = """## 执行对象选择
 - 如果机构名称或编码无法唯一匹配可用执行对象，必须先澄清机构范围。"""
 
 QUERY_PLANNING_BLOCK = """## 查询规划规则
-- 当前指标集是唯一可执行事实源；查询、澄清和结果解释都只能基于它的指标、维度、维度表列、关系、口径，真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准，不能编造指标、维度、表、字段或查询结果。
+- 当前准备使用的、由 `search_dataset` 返回的指标集是唯一可执行事实源；查询、澄清和结果解释都只能基于它的指标、维度、维度表列、关系、口径，真实可用的指标、维度、枚举、时间格式、单位、关系和口径都以当前可执行事实源为准，不能编造指标、维度、表、字段或查询结果。
 - 默认按明细/字段查询理解用户问题，优先在指标和维度中匹配用户关注的业务对象；用户原词能精确命中某个指标或维度时优先使用精确命中的项，不要自动增加、删除或替换“平均、汇总、总额、明细、数量”等限定词；只有用户明确表达统计、汇总、平均、总计、趋势、分组、排行等聚合意图，或用户原词精确命中完整指标名称和口径时，才选择对应指标；不要默认指标优先，也不要默认维度优先。
 - 确定用户目标对象后再组织 DSL：查看明细、详情、列表、具体记录时，`metrics` 必须为空，展示字段全部放 `dimensions`。
 - 确定用户目标对象后再组织 DSL：只有统计、汇总、平均、总计、趋势、分组、排行等聚合意图明确时，`metrics` 才放名称和口径明确一致的聚合指标；否则 `metrics` 必须为空。
-- `metrics` 只能使用当前指标集可用指标，名称必须一致；`dimensions` 用于分组、筛选和明细展示，只能使用当前指标集可用维度。
-- `filters` 可以使用当前指标集中的维度；如果筛选依赖枚举含义、状态码、单位、时间格式或业务规则，而元数据没有维护，必须先澄清或说明不支持。
+- `metrics` 只能使用 `search_dataset` 返回的当前使用指标集中的可用指标，名称必须一致；`dimensions` 用于分组、筛选和明细展示，只能使用其中的可用维度。
+- `filters` 可以使用当前使用指标集中的维度；如果筛选依赖枚举含义、状态码、单位、时间格式或业务规则，而元数据没有维护，必须先澄清或说明不支持。
 - 未指定时间范围时，总量查询和明细查询可以继续；趋势、排行、对比、Top N、分布分析等场景必须先请用户补充时间范围。
-- DSL 路径下，字段截取、拼接、正则、复杂函数分组等派生维度需求，如果当前指标集没有对应维度，按 DSL 无法表达处理；不要在 DSL 中退化为原字段分组。SQL 回退路径可以在已维护维度表列和关联关系范围内自行组织这类表达式。
+- DSL 路径下，字段截取、拼接、正则、复杂函数分组等派生维度需求，如果当前使用指标集没有对应维度，按 DSL 无法表达处理；不要在 DSL 中退化为原字段分组。SQL 回退路径可以在已维护维度表列和关联关系范围内自行组织这类表达式。
 - 同比、环比、增长率必须拆成基础查询，并用 `calculator_tool` 计算差值、比例和增长率；禁止心算或口头估算。"""
 
 DSL_PARAMS_BLOCK = """## DSL 参数
@@ -287,7 +293,6 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` 必须传入从最新内容中截取的唯一 `old_content` 和对应 `new_content`，匹配失败或多处匹配后重新读取，不要凭记忆重试。新建或整体覆盖文件使用 `file_write`。
 - 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
-- `semantic_query_tool` 返回 `result_id` 和 `result_path` 时，表示结果已卸载到当前会话的隐藏 `/mnt/user-data/outputs/.tool-results/<id>.json`。后续需要核对明细时，用 `file_read(file_path=result_path, offset=..., limit=...)` 按行小段读取；不要一次读取全部内容，也不要猜测或拼接结果路径。每次默认读取 200 行、最多 500 行，单行超过 500 个字符会直接截断。需要用脚本处理时，Bash 可直接读取该路径；该缓存不会出现在工作区列表中，也不能通过 `file_edit` 修改或通过 `present_artifacts` 展示。需要重新筛选、聚合、排序或计算时，优先重新执行受控 DSL/SQL，不把整份明细读回上下文。
 - `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、`/mnt/skills/system/...`、`/mnt/skills/user/...`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
 - `file_write` 负责新建或整体覆盖，`file_edit` 负责已有文件的一处唯一精确替换；两者都不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
@@ -305,6 +310,13 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - `semantic_query_tool` 的查询结果会由前端自动渲染为表格/图表；最终回复不要再次输出 markdown 表格、逐行明细列表、完整结果清单或大段复述查询结果，只提炼关键结论或说明已完成查询。
 - `file_write` / `file_edit` 仅代表会话文件已生成或更新，任何业务系统写入不能由模型自行宣称成功。
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。"""
+
+TOOL_RESULT_OFFLOAD_BLOCK = """## 工具结果卸载处理
+- 当工具消息明确说明“完整结果已保存”或“结果已卸载”并给出 `result_path` 时，完整内容没有进入当前模型上下文。`result_id`、路径、SQL、文件名、字符数、行数和截断摘要都不能替代完整结果。
+- 查询结果卸载后，前端会用 `result_id` 自动加载并向用户展示完整表格或图表。用户只是要求查询、查看或获取结果时，直接说明查询已完成、结果已展示；不要为了重复表格或逐行复述而调用 `file_read`。
+- 只有下一步必须依据结果中的具体值、行、分布或字段完成分析、计算、核对、筛选、比较、生成产物或回答追问时，才读取。聚合、筛选、排序或计算优先重新执行更小且受控的 DSL/SQL；必须查看原始行时，使用工具返回的原始 `result_path` 调用 `file_read(file_path=result_path, offset=..., limit=...)` 最小必要分段读取。不要猜测、拼接或自造路径，也不要一次读取全部内容。
+- 对已卸载但未读取的内容，严禁依据 SQL、指标名称、路径、行数、文件名或截断摘要推断数值、趋势、异常、原因、排名或任何业务结论；必须先取得实际数据后才能引用或分析。
+- `.tool-offload` 是隐藏内部缓存，不出现在工作区列表中，也不能用 `file_edit`、`present_artifacts` 或技能导入处理。每次 `file_read` 默认读取 200 行、最多 500 行，单行超过 500 个字符会直接截断；开启 Bash 时可读取返回的路径。"""
 
 BASH_WORKFLOW_BLOCK = """## Bash 使用
 - 浏览目录统一使用 `dir_list(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `bash_run`。不要臆测文件是否存在。
@@ -331,7 +343,6 @@ PRIORITY_BLOCK = """## 优先级
 def build_unified_system_prompt(
     runtime_options: AgentRuntimeOptions,
     *,
-    semantic_config: dict | None = None,
     data_context: dict | None = None,
     workspace_root: str | None = None,
     available_skills_xml: str | None = None,
@@ -340,7 +351,6 @@ def build_unified_system_prompt(
 ) -> str:
     """构造单一 Agent 的系统提示词。"""
     context_text = build_data_context_text(
-        semantic_config=semantic_config,
         data_context=data_context,
         datasource_group_context=datasource_group_context,
         semantic_config_directory_info=semantic_config_directory_info,
@@ -374,6 +384,7 @@ def build_unified_system_prompt(
         sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
     sections.append(PRIORITY_BLOCK)
     sections.append(WORKSPACE_WORKFLOW_BLOCK)
+    sections.append(TOOL_RESULT_OFFLOAD_BLOCK)
     if runtime_options.bash_enabled:
         sections.append(BASH_WORKFLOW_BLOCK)
     sections.append("# 示例\n" + SEMANTIC_FEWSHOT_PROMPT)

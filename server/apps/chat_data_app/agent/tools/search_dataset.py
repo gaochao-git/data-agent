@@ -9,7 +9,6 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from ...schema import SelectSemanticConfigInput
-from ...services.context_budget import ToolResultBudget, estimate_text_tokens
 from ...services import semantic_tools
 from ...services.semantic_config_selector import select_semantic_config_for_query
 from utils.logger import get_logger
@@ -27,7 +26,6 @@ def create_search_dataset_tool(
     model_id: str | None = None,
     datasource_id: str | None = None,
     user_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
     datasource_group_context: str | None = None,
 ):
     """Create the model-visible dataset search tool for one conversation."""
@@ -65,13 +63,6 @@ def create_search_dataset_tool(
                 if str(config_id).strip()
             ]
             semantic_configs: dict[str, dict[str, Any]] = {}
-            omitted_ids: list[str] = []
-            first_config_exceeds_budget = False
-            remaining_tokens = (
-                tool_result_budget.remaining_for_tool_result(list((state or {}).get("messages") or []))
-                if tool_result_budget is not None
-                else None
-            )
             for config_id in selected_ids:
                 config = await semantic_tools._load_runtime_semantic_config_for_user(
                     current_datasource_id,
@@ -79,46 +70,10 @@ def create_search_dataset_tool(
                     bound_user_id,
                 )
                 if not config:
-                    omitted_ids.append(config_id)
                     continue
-                tool_config = semantic_tools._semantic_config_for_selection_tool(config)
-                candidate_payload = semantic_tools._selection_to_tool_payload(
-                    selection,
-                    {**semantic_configs, config_id: tool_config},
-                )
-                if (
-                    remaining_tokens is not None
-                    and estimate_text_tokens(_serialize_result(candidate_payload)) > remaining_tokens
-                ):
-                    omitted_ids.append(config_id)
-                    first_config_exceeds_budget = not semantic_configs
-                    if first_config_exceeds_budget:
-                        break
-                    continue
-                semantic_configs[config_id] = tool_config
+                semantic_configs[config_id] = semantic_tools._semantic_config_for_selection_tool(config)
 
             payload = semantic_tools._selection_to_tool_payload(selection, semantic_configs)
-            if first_config_exceeds_budget or (
-                selected_ids and not semantic_configs and remaining_tokens is not None
-            ):
-                payload = {
-                    "success": False,
-                    "semantic_config_ids": [],
-                    "semantic_configs": {},
-                    "message": "相关指标集的运行时配置超过当前模型可用上下文，请缩小指标集或手动选择指标集后重试。",
-                }
-            if remaining_tokens is not None:
-                logger.info(
-                    "指标集运行时配置上下文预算: model=%s hard_input_limit=%s static_tokens=%s message_tokens=%s available_tokens=%s candidates=%s kept=%s omitted=%s",
-                    model_id or "-",
-                    tool_result_budget.budget.hard_input_limit_tokens,
-                    tool_result_budget.static_input_tokens,
-                    tool_result_budget.budget.hard_input_limit_tokens - tool_result_budget.static_input_tokens - remaining_tokens,
-                    remaining_tokens,
-                    len(selected_ids),
-                    len(semantic_configs),
-                    omitted_ids,
-                )
             return _serialize_result(payload)
         except Exception as exc:
             logger.error("search_dataset 执行失败: %s", exc, exc_info=True)

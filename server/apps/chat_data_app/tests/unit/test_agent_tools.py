@@ -1068,10 +1068,6 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
-    assert agent_tools._state_semantic_config_matches({}, "cfg_a") is False
-    assert agent_tools._state_semantic_config_matches({"id": "cfg_a"}, None) is True
-    assert agent_tools._state_semantic_config_matches({"id": ""}, "cfg_a") is True
-    assert agent_tools._state_semantic_config_matches({"id": "other"}, "cfg_a") is False
     assert agent_tools._latest_human_query([type("Msg", (), {"type": "human", "content": "伪用户消息"})()]) == "伪用户消息"
 
     missing_config = asyncio.run(agent_tools.semantic_query_tool.coroutine(
@@ -1131,19 +1127,31 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
     assert empty_sql == "semantic_query_tool 执行失败: DSL2SQL 未生成 SQL"
 
 
-def test_resolve_semantic_query_config_injects_missing_state_config_id(monkeypatch):
-    async def fail_load_config(*_args, **_kwargs):
-        raise AssertionError("state semantic_config should be reused")
+def test_resolve_semantic_query_config_loads_explicit_config_id(monkeypatch):
+    captured = {}
 
-    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
+    async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
+        captured.update({
+            "datasource_id": datasource_id,
+            "semantic_config_id": semantic_config_id,
+            "user_id": user_id,
+        })
+        return {"id": semantic_config_id, "metrics": [], "dimensions": []}
+
+    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
 
     config = asyncio.run(agent_tools._resolve_semantic_query_config(
-        {"semantic_config": {"metrics": [], "dimensions": []}},
+        {"user_id": "user_a"},
         datasource_id="ds_a",
         semantic_config_id="cfg_a",
     ))
 
     assert config["id"] == "cfg_a"
+    assert captured == {
+        "datasource_id": "ds_a",
+        "semantic_config_id": "cfg_a",
+        "user_id": "user_a",
+    }
 
 
 def test_semantic_query_tool_leaves_large_result_for_result_middleware(monkeypatch):
@@ -1245,77 +1253,6 @@ def test_semantic_query_tool_returns_large_internal_result_for_middleware(monkey
     payload = _internal_query_payload(result)
     assert payload["sql"] == "select content from big_table"
     assert payload["data"][0]["content"] == "x" * 200
-
-
-def test_semantic_query_tool_uses_state_semantic_config_for_internal_result(monkeypatch):
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["id"] == "cfg_temp"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select compiled from temp_config"}
-
-    async def fake_execute_sql_real(*_args, **_kwargs):
-        return {
-            "success": True,
-            "columns": ["content"],
-            "data": [{"content": "x" * 200}],
-            "total_count": 1,
-            "execution_time_ms": 12,
-        }
-
-    async def fail_load_config(*_args, **_kwargs):
-        raise AssertionError("state semantic_config should be used before runtime loading")
-
-    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
-    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-    state = _semantic_query_state(
-        available_member_datasource_ids=["m1"],
-        semantic_config_id="cfg_temp",
-        semantic_config={"id": "cfg_temp", "metrics": [], "dimensions": []},
-    )
-    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
-        "dsl": {"metrics": ["临时指标"]},
-        "semantic_config_id": "cfg_temp",
-        "member_datasource_ids": ["m1"],
-        "state": state,
-    }))
-
-    payload = _internal_query_payload(result)
-    assert payload["sql"] == "select compiled from temp_config"
-
-
-def test_semantic_query_tool_injects_explicit_id_into_temp_semantic_config(monkeypatch):
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["metrics"] == []
-            assert config["id"] == "cfg_temp"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select temp"}
-
-    async def fail_load_config(*_args, **_kwargs):
-        raise AssertionError("temp semantic_config should not require runtime loading")
-
-    async def fake_execute_sql_real(sql, *_args, **_kwargs):
-        return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
-
-    monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fail_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
-    monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
-
-    result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
-        "dsl": {"metrics": ["临时指标"]},
-        "semantic_config_id": "cfg_temp",
-        "member_datasource_ids": ["m1"],
-        "state": _semantic_query_state(
-            available_member_datasource_ids=["m1"],
-            semantic_config={"metrics": [], "dimensions": []},
-        ),
-    }))
-
-    assert '"sql": "select temp"' in result
 
 
 def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):

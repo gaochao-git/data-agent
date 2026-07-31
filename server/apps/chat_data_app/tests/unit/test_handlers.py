@@ -47,8 +47,7 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         for member_id in kwargs.get("member_datasource_ids") or []
         if str(member_id).strip()
     ))
-    supplied_config = kwargs.get("semantic_config")
-    semantic_config = supplied_config or (
+    semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
         if semantic_config_id else None
     )
@@ -381,7 +380,6 @@ def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selecte
 
     joined = "".join(events)
     assert "5+5=10" in joined
-    assert fake_graph.initial_state["semantic_config_id"] is None
     assert "prompt_context" not in fake_graph.initial_state
     assert "## 当前可见指标集目录\n1. 名称：订单分析" in captured_agent_kwargs["system_prompt"]
     human_message = fake_graph.initial_state["messages"][0]
@@ -513,7 +511,6 @@ def test_generate_chat_data_stream_keeps_user_selected_semantic_config_selection
 
     joined = "".join(events)
     assert "商品数量为 10" in joined
-    assert fake_graph.initial_state["semantic_config_id"] == "cfg_test"
     human_message = fake_graph.initial_state["messages"][0]
     selection = human_message.additional_kwargs["semantic_config_selection"]
     assert selection["semantic_config_id"] == "cfg_test"
@@ -681,7 +678,6 @@ def test_generate_chat_data_stream_uses_selected_config_without_precheck(monkeyp
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
     assert "已进入当前指标集链路" in joined
-    assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
     assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
@@ -706,7 +702,6 @@ def test_generate_chat_data_stream_keeps_supported_selected_config(monkeypatch):
     joined = "".join(events)
     assert "event: semantic_config_selected" not in joined
     assert "已查询订单数据" in joined
-    assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
     assert "semantic_config_selection" not in fake_graph.initial_state["messages"][0].additional_kwargs
 
 
@@ -731,7 +726,6 @@ def test_generate_chat_data_stream_runs_after_user_selects_ambiguous_candidate(m
     joined = "".join(events)
     assert "event: semantic_config_select_required" not in joined
     assert "商品数量为 10" in joined
-    assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
 
 
 def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch):
@@ -755,7 +749,6 @@ def test_generate_chat_data_stream_does_not_preblock_selected_config(monkeypatch
     joined = "".join(events)
     assert "当前选择的指标集不支持该问题：缺少退款金额指标" not in joined
     assert "原始链路返回当前指标集不支持" in joined
-    assert fake_graph.initial_state["semantic_config_id"] == "cfg_order"
 
 
 def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monkeypatch):
@@ -792,7 +785,6 @@ def test_generate_chat_data_stream_does_not_block_multiple_semantic_configs(monk
     assert "event: semantic_config_select_required" not in joined
     assert "订单分析" in joined
     assert "支付汇总" in joined
-    assert fake_graph.initial_state["semantic_config_id"] is None
 
 
 def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeypatch):
@@ -829,7 +821,6 @@ def test_generate_chat_data_stream_does_not_block_cross_config_retrieval(monkeyp
     assert "event: semantic_config_select_required" not in joined
     assert "订单分析" in joined
     assert "商品分析" in joined
-    assert fake_graph.initial_state["semantic_config_id"] is None
 
 
 def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch):
@@ -1015,7 +1006,7 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     assert events[-1] == "event: done\ndata: [DONE]\n\n"
 
 
-def test_generate_chat_data_stream_semantic_config_missing_and_temp_mode(monkeypatch):
+def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
     import asyncio
 
     _override_semantic_context(
@@ -1031,21 +1022,6 @@ def test_generate_chat_data_stream_semantic_config_missing_and_temp_mode(monkeyp
     )))
     assert "未找到可用指标集: cfg_missing" in "".join(missing_events)
 
-    fake_graph = _FakeGraph(events=[(_FakeMessageChunk(content="语义查询完成"), {"langgraph_node": "model"})])
-    monkeypatch.setattr("apps.chat_data_app.handlers.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.handlers.create_data_agent", lambda *_args, **_kwargs: fake_graph)
-    _override_semantic_context(monkeypatch)
-    temp_events = asyncio.run(_collect_async_iter(_generate_chat_data_stream(
-        thread_id="conv_temp",
-        user_query="查订单",
-        datasource_id="ds_a",
-        semantic_config_id="cfg_temp",
-        temp_semantic_config={"id": "cfg_temp"},
-    )))
-    joined = "".join(temp_events)
-    assert "语义查询完成" in joined
-    assert fake_graph.initial_state["semantic_config"] == {"id": "cfg_temp"}
-    assert "prompt_context" not in fake_graph.initial_state
 
 
 def test_generate_chat_data_stream_handles_disconnect_and_cached_tables(monkeypatch):

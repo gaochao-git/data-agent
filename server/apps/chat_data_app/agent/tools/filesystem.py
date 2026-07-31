@@ -69,7 +69,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         默认读取 200 个源行，最多读取 500 行。每行正文最多返回 500 个字符，整页正文受
         CHAT_DATA_FILE_READ_MAX_CHARS 限制；超出的行内容直接截断，不支持续读。
 
-        outputs/.tool-results/<id>.json 或 .txt 是当前会话已卸载的工具结果缓存；它不会出现在工作区文件列表中，也不可通过其它文件工具修改、搜索或呈现。
+        outputs/.tool-offload/<id>.json 或 .txt 是当前会话已卸载的工具结果缓存；它不会出现在工作区文件列表中，也不可通过其它文件工具修改、搜索或呈现。
         """
         try:
             if offset < 0:
@@ -274,7 +274,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         """
         列出当前会话 workspace、outputs、uploads 目录，或有权访问的技能只读 /mnt/skills 目录内容。
 
-        max_depth 默认 2，范围 1-5；隐藏的 outputs/.tool-results 不会出现在结果中。
+        max_depth 默认 2，范围 1-5；隐藏的 outputs/.tool-offload 不会出现在结果中。
         """
         try:
             if max_depth < 1 or max_depth > 5:

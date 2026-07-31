@@ -56,16 +56,6 @@ def _tool_error(message: str) -> str:
     return f"{TOOL_ERROR_PREFIX}: {message}"
 
 
-def _state_semantic_config_matches(config: dict[str, Any], semantic_config_id: str | None) -> bool:
-    """判断 state 中预加载的语义配置是否可用于本次工具调用。"""
-    if not config:
-        return False
-    if not semantic_config_id:
-        return True
-    config_id = str(config.get("id") or "").strip()
-    return not config_id or config_id == semantic_config_id
-
-
 def _latest_human_query(messages: list[Any] | None) -> str:
     """提取最近一条用户消息，保持 DSL 校验和执行阶段的意图判定一致。"""
     for message in reversed(messages or []):
@@ -81,13 +71,7 @@ async def _resolve_semantic_query_config(
     datasource_id: str | None,
     semantic_config_id: str | None,
 ) -> dict[str, Any] | None:
-    """优先复用图状态里的临时配置，否则按数据源和指标集 ID 读取运行时配置。"""
-    state_config = state.get("semantic_config")
-    if isinstance(state_config, dict) and _state_semantic_config_matches(state_config, semantic_config_id):
-        config = dict(state_config)
-        if semantic_config_id and not config.get("id"):
-            config["id"] = semantic_config_id
-        return config
+    """按模型显式传入的指标集 ID读取当前用户可用的运行时配置。"""
     user_id = str(state.get("user_id") or "").strip() or None
     return await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id)
 
@@ -180,16 +164,6 @@ async def _resolve_tool_context(
         return _tool_error("缺少指标集ID，请先调用 search_dataset 后显式传入 semantic_config_id")
     if not datasource_id:
         return _tool_error("当前会话未绑定数据源")
-
-    selected_semantic_config_id = str(
-        state.get("semantic_config_id")
-        or (state.get("semantic_config") or {}).get("id")
-        or ""
-    ).strip()
-    if selected_semantic_config_id and normalized_semantic_config_id != selected_semantic_config_id:
-        return _tool_error(
-            f"当前会话已选择指标集 {selected_semantic_config_id}，请在 semantic_config_id 中传入该 ID"
-        )
 
     query_text = _latest_human_query(state.get("messages") or [])
     requested_member_datasource_ids = _normalize_member_datasource_ids(member_datasource_ids)

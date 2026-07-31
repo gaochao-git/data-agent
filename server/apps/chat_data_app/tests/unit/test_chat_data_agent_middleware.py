@@ -1,6 +1,5 @@
 import os
 import sys
-from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,13 +14,12 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent import data_agent, sql_assist_agent
-from apps.chat_data_app.agent.agent_runtime import format_current_time_for_prompt, normalize_response_tool_call_names
+from apps.chat_data_app.agent.agent_runtime import normalize_response_tool_call_names
 from apps.chat_data_app.agent.middleware import context_compression, context_usage
 from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
 from apps.chat_data_app.agent.middleware import tool_error
-from apps.chat_data_app.agent.prompts import unified
 from apps.chat_data_app.services.context_budget import (
     ContextBudget,
     build_runtime_context_summary_message,
@@ -45,56 +43,6 @@ class FakeLLM:
     async def ainvoke(self, messages):
         self.messages = messages
         return AIMessage(content=self.content)
-
-
-def test_prompt_formatters(monkeypatch):
-    assert unified.format_semantic_config_directory_info_for_llm("  ## 当前可见指标集目录  ") == "\n## 当前可见指标集目录\n"
-    assert unified.format_semantic_config_directory_info_for_llm("") == ""
-    assert unified.format_datasource_group_context_for_llm("  规则说明  ") == "\n## 数据源组智能问数说明\n规则说明\n"
-    assert unified.format_datasource_group_context_for_llm("") == ""
-    assert format_current_time_for_prompt(datetime(2026, 6, 24, 10, 0, 0)) == "2026-06-24 10:00:00（周三）"
-    assert "本轮未提供完整指标集" in unified.build_semantic_layer_context(None)
-    assert "业务数据查询或具体指标/维度询问先搜索当前数据源组中的真实指标集" in unified.build_semantic_layer_context(None)
-    assert "指标集目录或业务范围概览可直接基于“当前可见指标集目录”回答" in unified.build_semantic_layer_context(None)
-    assert "未选中完整指标集前，不要推荐具体查数样例" in unified.build_semantic_layer_context(None)
-    assert "搜索后仍未找到、候选不唯一或口径不清时再澄清" in unified.build_semantic_layer_context(None)
-
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
-    semantic_context = unified.build_semantic_layer_context({"id": "sc_a", "name": "订单分析"})
-    assert "订单分析" in semantic_context
-    assert "semantic_config_id: sc_a" in semantic_context
-    assert "只有用户本轮显式指定业务知识技能时，才读取对应技能" in semantic_context
-    assert "语义配置内容" in semantic_context
-    assert "本轮未提供完整指标集" in unified.build_semantic_layer_context({})
-    assert "semantic_config_id" not in unified.build_semantic_layer_context({"name": "订单分析"})
-    assert "当前已选择指标集。" in unified.build_semantic_layer_context({"id": "", "name": ""})
-
-
-def test_build_unified_system_prompt_uses_shared_prompt_context(monkeypatch):
-    from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
-
-    system_prompt = unified.build_unified_system_prompt(
-        AgentRuntimeOptions(workspace_backend="local", bash_enabled=False),
-        semantic_config={"id": "sc_a"},
-        available_skills_xml="## 可用业务知识技能\n- custom-query-skill: 自定义问数技能",
-        datasource_group_context="当前数据源组按执行对象数据源分库\n当前机构A",
-        semantic_config_directory_info="## 当前可见指标集目录\n1. 名称：订单分析",
-    )
-
-    assert "语义配置内容" in system_prompt
-    assert "当前已选择指标集" in system_prompt
-    assert "semantic_config_id: sc_a" in system_prompt
-    assert "当前机构A" in system_prompt
-    assert "数据源组智能问数说明" in system_prompt
-    assert "当前可见指标集目录" in system_prompt
-    assert "custom-query-skill" in system_prompt
-    assert "当前指标集是唯一可执行事实源" in system_prompt
-    assert "未选指标集时，可以推荐的问题应是下一步引导类" in system_prompt
-    assert "最终回答不要提及技能加载过程" in system_prompt
-    # Bash 关闭时，提示词不应暴露该工具。
-    assert "`bash_run`" not in system_prompt
 
 
 def test_normalize_response_tool_call_names_does_not_guess_unknown_tool():
@@ -634,8 +582,6 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
     )
     monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
-    monkeypatch.setattr("apps.chat_data_app.agent.prompts.unified.build_semantic_prompt", lambda semantic_config, mode: "语义配置内容")
-
     middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")
     captured = {}
 
@@ -824,7 +770,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
 
     agent = data_agent.create_data_agent(
         checkpointer="ckpt",
-        semantic_config={"id": "sc_a"},
         datasource_id="ds_a",
         system_prompt="智能问数系统提示词",
         model_id="m1",
@@ -835,7 +780,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert selection_tool_kwargs["model_id"] == "m1"
     assert selection_tool_kwargs["datasource_id"] == "ds_a"
     assert selection_tool_kwargs["user_id"] == "u1"
-    assert selection_tool_kwargs["tool_result_budget"] is not None
     assert selection_tool_kwargs["datasource_group_context"] is None
     assert model_kwargs["model_id"] == "m1"
     assert model_kwargs["stream_usage"] is True

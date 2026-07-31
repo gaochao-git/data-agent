@@ -73,10 +73,6 @@ class NL2SQLRequest(BaseModel):
         default=None,
         description="语义配置ID（指定使用哪个语义配置）"
     )
-    semantic_config: Optional[dict] = Field(
-        default=None,
-        description="临时语义配置（用于测试，不会保存到数据库）"
-    )
 
 # ============ SQL 编辑器相关模型 ============
 
@@ -617,7 +613,7 @@ class ExecuteSemanticInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次 DSL 使用的指标集 ID，必须来自当前已选择指标集或 search_dataset 返回结果",
+        description="本次 DSL 使用的指标集 ID，必须来自本轮 search_dataset 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -652,7 +648,7 @@ class SemanticQueryInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次查询使用的指标集 ID，必须来自当前已选择指标集或 search_dataset 返回结果",
+        description="本次查询使用的指标集 ID，必须来自本轮 search_dataset 返回结果",
     )
     member_datasource_ids: List[str] = Field(
         ...,

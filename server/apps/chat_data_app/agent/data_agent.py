@@ -34,7 +34,6 @@ def assemble_tools(
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
     datasource_id: str | None = None,
-    semantic_config_id: str | None = None,
     user_id: str = "system",
     operator_name: str | None = None,
     model_id: str | None = None,
@@ -46,7 +45,6 @@ def assemble_tools(
         model_id=model_id,
         datasource_id=datasource_id,
         user_id=user_id,
-        tool_result_budget=tool_result_budget,
         datasource_group_context=datasource_group_context,
     )
     tools = [
@@ -57,7 +55,6 @@ def assemble_tools(
         search_dataset_tool,
         create_dsl2sql_tool(
             datasource_id,
-            semantic_config_id,
             user_id=user_id,
             operator_name=operator_name,
         ),
@@ -73,9 +70,7 @@ def create_data_agent(
     runtime_options: AgentRuntimeOptions | None = None,
     *,
     checkpointer=None,
-    semantic_config: dict | None = None,
     datasource_id: str | None = None,
-    semantic_config_id: str | None = None,
     system_prompt: str | None = None,
     model_id: str | None = None,
     enable_thinking: bool | None = None,
@@ -99,7 +94,6 @@ def create_data_agent(
         options,
         runtime,
         datasource_id=datasource_id,
-        semantic_config_id=semantic_config_id,
         user_id=user_id or "",
         operator_name=operator_name,
         model_id=model_id,
@@ -108,7 +102,6 @@ def create_data_agent(
     )
     effective_system_prompt = system_prompt or build_unified_system_prompt(
         options,
-        semantic_config=semantic_config,
         workspace_root=runtime.workspace_root,
     )
     context_usage_middleware = create_request_context_usage_middleware(

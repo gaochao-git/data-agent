@@ -400,7 +400,7 @@ async def _initialize_sandbox_filesystem(
     user_data_directories.extend([
         sandbox_workspace_dir(),
         sandbox_outputs_dir(),
-        f"{sandbox_outputs_dir()}/.tool-results",
+        f"{sandbox_outputs_dir()}/.tool-offload",
         sandbox_uploads_dir(),
     ])
     await _create_sandbox_directories(
@@ -617,7 +617,7 @@ def _application_directory_for_sandbox_path(session: SandboxExecutionSession, sa
 
 
 def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bool:
-    hidden_root = application_root / "outputs" / ".tool-results"
+    hidden_root = application_root / "outputs" / ".tool-offload"
     return path == hidden_root or hidden_root in path.parents
 
 
@@ -904,7 +904,7 @@ def sandbox_visible_path(
         if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in writable_roots):
             raise ValueError("只允许写入 workspace/ 或 outputs/")
         if _is_tool_results_sandbox_path(sandbox_path):
-            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-results/")
+            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
     return sandbox_path
 
 
@@ -929,7 +929,7 @@ def _is_outputs_sandbox_path(path: str) -> bool:
 
 
 def _is_tool_results_sandbox_path(path: str) -> bool:
-    root = f"{sandbox_outputs_dir()}/.tool-results"
+    root = f"{sandbox_outputs_dir()}/.tool-offload"
     return path == root or path.startswith(f"{root}/")
 
 
@@ -1279,10 +1279,10 @@ async def sandbox_list_dir(
         await _recover_pending_persistence(session)
         lexical_target = sandbox_visible_path(path)
         if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
         if _is_tool_results_sandbox_path(target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         if await _sandbox_path_kind(session=session, path=target) != "dir":
             raise ValueError(f"路径不是目录: {path}")
         files = getattr(session.sandbox, "files", None)
@@ -1450,7 +1450,7 @@ async def sandbox_search_files(
         await _recover_pending_persistence(session)
         lexical_target = sandbox_visible_path(path)
         if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
         files = getattr(session.sandbox, "files", None)
         searcher = getattr(files, "search", None)
@@ -1505,7 +1505,7 @@ async def sandbox_grep_text(
         await _recover_pending_persistence(session)
         lexical_target = sandbox_visible_path(path)
         if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
         path_type = await _sandbox_path_kind(session=session, path=target)
         if path_type == "file":
@@ -1655,7 +1655,7 @@ async def sandbox_write_tool_result(
             allow_tool_result_write=True,
         )
         if not _is_tool_results_sandbox_path(target):
-            raise ValueError("内部工具结果只能写入 outputs/.tool-results/")
+            raise ValueError("内部工具结果只能写入 outputs/.tool-offload/")
         try:
             await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
         except Exception as exc:

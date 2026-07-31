@@ -53,7 +53,6 @@ def _analysis_query_state(
     paths,
     *,
     datasource_id: str | None = "ds_1",
-    semantic_config_id: str | None = "sc_1",
     member_datasource_ids: list[str] | None = None,
     conversation_id: str | None = None,
     user_query: str = "统计销售额",
@@ -64,7 +63,6 @@ def _analysis_query_state(
             "available_member_datasource_ids": member_datasource_ids or ["m1"],
             "matched_member_datasource_ids": [],
         },
-        "semantic_config_id": semantic_config_id,
         "user_id": "system",
         "conversation_id": conversation_id,
         "workspace": {"workspace_root": paths["root"], "workspace_backend": "local"},
@@ -80,7 +78,7 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
-    assert (Path(paths["outputs"]) / ".tool-results").exists()
+    assert (Path(paths["outputs"]) / ".tool-offload").exists()
     # 运行域技能快照目录随工作区一并创建（扁平 /mnt/skills/<name> 快照），但不进入 paths 字典
     assert (Path(paths["root"]).parent / "runtime-skills").is_dir()
     assert "runtime_skills" not in paths
@@ -116,7 +114,7 @@ def test_resolve_workspace_path_restricts_writes():
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "other-files/demo/SKILL.md", writable=True)
     with pytest.raises(ValueError):
-        resolve_workspace_path(paths["root"], "outputs/.tool-results/private.json", writable=True)
+        resolve_workspace_path(paths["root"], "outputs/.tool-offload/private.json", writable=True)
 
 
 @pytest.mark.asyncio
@@ -125,22 +123,22 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
     monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
     monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
     paths = ensure_conversation_workspace("conv_private", "user_a")
-    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
     with pytest.raises(ValueError):
-        read_workspace_text_file("conv_private", "outputs/.tool-results/result_1.json", user_id="user_a")
+        read_workspace_text_file("conv_private", "outputs/.tool-offload/result_1.json", user_id="user_a")
     result = await runtime.read_text_file(
-        file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
+        file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
         offset=0,
         limit=10,
         max_chars=100,
     )
     assert result["lines"] == ['{"rows":[1]}']
     with pytest.raises(ValueError):
-        resolve_workspace_path(paths["root"], "outputs/.tool-results/result_1.json", writable=True)
+        resolve_workspace_path(paths["root"], "outputs/.tool-offload/result_1.json", writable=True)
 
 
 def test_resolve_workspace_path_accepts_short_absolute_aliases():
@@ -164,7 +162,7 @@ def test_workspace_json_list_read_and_visible_paths():
     assert resolve_workspace_path(paths["root"], "././workspace/context.json") == Path(paths["workspace"]) / "context.json"
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "")
-    (Path(paths["outputs"]) / ".tool-results").rmdir()
+    (Path(paths["outputs"]) / ".tool-offload").rmdir()
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
     files = list_workspace_files(conversation_id)
@@ -498,19 +496,19 @@ async def test_present_artifacts_rejects_non_artifact(monkeypatch):
 @pytest.mark.asyncio
 async def test_present_artifacts_rejects_hidden_tool_result(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_present_private_{uuid.uuid4().hex}")
-    private_file = Path(paths["outputs"]) / ".tool-results" / "result_1.json"
+    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["present_artifacts"].ainvoke({
-        "files": ["outputs/.tool-results/result_1.json"],
+        "files": ["outputs/.tool-offload/result_1.json"],
     })
 
     payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
     assert payload["artifact_count"] == 0
     assert payload["artifacts"] == []
     assert payload["errors"] == [{
-        "file_path": "outputs/.tool-results/result_1.json",
+        "file_path": "outputs/.tool-offload/result_1.json",
         "error": "文件不是可展示的 outputs 产物",
     }]
 
@@ -808,7 +806,7 @@ async def test_file_glob_recursively_matches_filenames_and_hides_tool_results(mo
     (Path(paths["workspace"]) / "reports" / "daily").mkdir(parents=True)
     (Path(paths["workspace"]) / "reports" / "daily" / "sales.json").write_text("{}", encoding="utf-8")
     (Path(paths["workspace"]) / "summary.json").write_text("{}", encoding="utf-8")
-    hidden = Path(paths["outputs"]) / ".tool-results" / "query.json"
+    hidden = Path(paths["outputs"]) / ".tool-offload" / "query.json"
     hidden.write_text("{}", encoding="utf-8")
 
     result = await tools["file_glob"].ainvoke({
@@ -1061,7 +1059,6 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths, user_query="统计销售额")
 
@@ -1124,7 +1121,6 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths, user_query="查询订单数")
 
@@ -1189,7 +1185,6 @@ async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middl
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths, conversation_id="conv_large")
 
@@ -1208,7 +1203,7 @@ async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middl
 @pytest.mark.asyncio
 async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
-    tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths, semantic_config_id="sc_1")
+    tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths)
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
 
     assert await tools_without_datasource["semantic_query_tool"].ainvoke({
@@ -1237,7 +1232,6 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
                 "available_member_datasource_ids": ["m1"],
                 "matched_member_datasource_ids": [],
             },
-            "semantic_config_id": "sc_1",
             "workspace": {},
         },
     }) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
@@ -1246,7 +1240,6 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths)
     assert await tools["semantic_query_tool"].ainvoke({
@@ -1314,7 +1307,6 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths)
 
@@ -1350,7 +1342,6 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
         monkeypatch,
         paths,
         datasource_id="ds_1",
-        semantic_config_id="sc_1",
     )
     state = _analysis_query_state(paths)
 

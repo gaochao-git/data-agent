@@ -53,7 +53,7 @@ class AgentPromptContext(TypedDict):
     execution_targets: list[dict[str, Any]]
     datasource_group_context: str
     semantic_config_directory_info: str
-    semantic_config: dict[str, Any] | None
+    selected_semantic_config: dict[str, str] | None
 
 
 def build_agent_prompt_context(context: SemanticConversationContext) -> AgentPromptContext:
@@ -76,7 +76,7 @@ def build_agent_prompt_context(context: SemanticConversationContext) -> AgentPro
         "execution_targets": [_prompt_execution_target(target) for target in context.execution_targets],
         "datasource_group_context": context.datasource_group_context,
         "semantic_config_directory_info": context.semantic_config_directory_info,
-        "semantic_config": dict(context.semantic_config) if context.semantic_config else None,
+        "selected_semantic_config": _selected_semantic_config_prompt_ref(context),
     }
 
 
@@ -90,6 +90,21 @@ def _prompt_execution_target(target: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _selected_semantic_config_prompt_ref(
+    context: SemanticConversationContext,
+) -> dict[str, str] | None:
+    """Expose only a selected-config reference to the system prompt layer."""
+    if context.semantic_config is None:
+        return None
+    config_id = str(context.semantic_config_id or context.semantic_config.get("id") or "").strip()
+    config_name = str(
+        context.semantic_config.get("name")
+        or context.semantic_config.get("semantic_config_name")
+        or config_id
+    ).strip()
+    return {"id": config_id, "name": config_name}
+
+
 async def prepare_semantic_conversation_context(
     *,
     datasource_id: str | None,
@@ -98,7 +113,6 @@ async def prepare_semantic_conversation_context(
     user_id: str | None,
     username: str | None,
     user_query: str | None,
-    semantic_config: dict[str, Any] | None = None,
 ) -> SemanticConversationContext:
     """Prepare the single semantic context contract used by both conversation agents."""
     normalized_datasource_id = str(datasource_id or "").strip() or None
@@ -111,27 +125,20 @@ async def prepare_semantic_conversation_context(
         return _empty_context(
             semantic_config_id=normalized_config_id,
             selected_member_datasource_ids=selected_member_ids,
-            semantic_config=semantic_config,
-            semantic_config_error=(
-                f"未找到可用指标集: {normalized_config_id}"
-                if normalized_config_id and semantic_config is None
-                else ""
-            ),
+            semantic_config_error=f"未找到可用指标集: {normalized_config_id}" if normalized_config_id else "",
         )
 
     manager = get_datasource_manager()
     datasource_meta_task = manager.get_datasource_meta_async(normalized_datasource_id)
     selected_config_task = None
-    directory_task = None
-    if semantic_config is None and normalized_config_id:
+    directory_task = list_runtime_semantic_config_directory(
+        normalized_datasource_id,
+        normalized_user_id,
+    )
+    if normalized_config_id:
         selected_config_task = load_runtime_semantic_config(
             normalized_datasource_id,
             normalized_config_id,
-            normalized_user_id,
-        )
-    elif semantic_config is None:
-        directory_task = list_runtime_semantic_config_directory(
-            normalized_datasource_id,
             normalized_user_id,
         )
 
@@ -139,11 +146,9 @@ async def prepare_semantic_conversation_context(
         datasource_meta_task=datasource_meta_task,
         selected_config_task=selected_config_task,
         directory_task=directory_task,
-        supplied_config=semantic_config,
     )
     semantic_error = _semantic_config_error(
         semantic_config_id=normalized_config_id,
-        supplied_config=semantic_config,
         resolved_config=resolved_config,
     )
     if resolved_config and not normalized_config_id:
@@ -171,9 +176,7 @@ async def prepare_semantic_conversation_context(
         datasource_meta=datasource_meta,
         semantic_config_id=normalized_config_id,
         semantic_config=resolved_config,
-        semantic_config_directory_info=(
-            "" if resolved_config is not None else format_semantic_config_directory_for_prompt(directory)
-        ),
+        semantic_config_directory_info=format_semantic_config_directory_for_prompt(directory),
         execution_targets=execution_targets,
         available_member_datasource_ids=available_member_ids,
         matched_member_datasource_ids=matched_member_ids,
@@ -188,7 +191,6 @@ async def _load_semantic_inputs(
     datasource_meta_task,
     selected_config_task,
     directory_task,
-    supplied_config: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
     tasks = [datasource_meta_task]
     if selected_config_task is not None:
@@ -197,7 +199,7 @@ async def _load_semantic_inputs(
         tasks.append(directory_task)
     results = await asyncio.gather(*tasks, return_exceptions=True)
     datasource_meta = _result_or_none(results[0], "读取数据源组元信息失败")
-    resolved_config = supplied_config
+    resolved_config = None
     directory: list[dict[str, Any]] = []
     result_index = 1
     if selected_config_task is not None:
@@ -219,13 +221,8 @@ def _result_or_none(result: Any, failure_message: str) -> Any | None:
 def _semantic_config_error(
     *,
     semantic_config_id: str | None,
-    supplied_config: dict[str, Any] | None,
     resolved_config: dict[str, Any] | None,
 ) -> str:
-    if supplied_config is not None:
-        if supplied_config.get("enabled", True):
-            return ""
-        return "当前指标集未启用"
     if not semantic_config_id:
         return ""
     if resolved_config is None:
@@ -271,17 +268,13 @@ def _empty_context(
     *,
     semantic_config_id: str | None,
     selected_member_datasource_ids: list[str],
-    semantic_config: dict[str, Any] | None,
     semantic_config_error: str,
 ) -> SemanticConversationContext:
-    normalized_config_id = semantic_config_id or str(
-        (semantic_config or {}).get("id") or (semantic_config or {}).get("semantic_config_id") or ""
-    ).strip() or None
     return SemanticConversationContext(
         datasource_id=None,
         datasource_meta=None,
-        semantic_config_id=normalized_config_id,
-        semantic_config=semantic_config,
+        semantic_config_id=semantic_config_id,
+        semantic_config=None,
         semantic_config_directory_info="",
         execution_targets=[],
         available_member_datasource_ids=[],

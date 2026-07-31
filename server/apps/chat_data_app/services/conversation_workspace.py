@@ -18,7 +18,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
-from utils.tool_result_store import TOOL_RESULTS_DIR_NAME, ToolResultStore
+from utils.tool_result_store import TOOL_OFFLOAD_DIR_NAME, ToolResultStore
 
 from ..daos.conversation_dao import ConversationDao
 from .artifact_registry import parse_output_artifact
@@ -417,7 +417,7 @@ def ensure_conversation_workspace(conversation_id: str, user_id: str = "system")
         path = root / name
         path.mkdir(parents=True, exist_ok=True)
         paths[name.replace("-", "_")] = str(path)
-    (root / "outputs" / TOOL_RESULTS_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (root / "outputs" / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -459,13 +459,13 @@ def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = F
         if not any(target == item or item in target.parents for item in writable_roots):
             raise ValueError("只允许写入 workspace/ 或 outputs/")
         if is_tool_result_workspace_path(str(root), target):
-            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-results/")
+            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
     return target
 
 
 def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a resolved path belongs to hidden tool-result storage."""
-    results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_RESULTS_DIR_NAME).resolve()
+    results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_OFFLOAD_DIR_NAME).resolve()
     target = path.resolve()
     return target == results_root or results_root in target.parents
 
@@ -485,7 +485,7 @@ def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     """Return a generated skill directory that is eligible for user import."""
     skill_dir = resolve_workspace_path(workspace_root, path)
     if is_tool_result_workspace_path(workspace_root, skill_dir):
-        raise ValueError("不允许导入 outputs/.tool-results/ 下的内容")
+        raise ValueError("不允许导入 outputs/.tool-offload/ 下的内容")
     outputs_root = resolve_workspace_path(workspace_root, "outputs")
     try:
         relative = skill_dir.relative_to(outputs_root)
@@ -958,7 +958,7 @@ def _write_local_tool_result(workspace_root: str, file_path: str, content: str) 
     """Write a private result once; this path is never exposed to file_edit."""
     target = resolve_workspace_path(workspace_root, file_path)
     if not is_tool_result_workspace_path(workspace_root, target):
-        raise ValueError("内部工具结果只能写入 outputs/.tool-results/")
+        raise ValueError("内部工具结果只能写入 outputs/.tool-offload/")
     target.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     with target.open("xb") as file_obj:
@@ -1043,7 +1043,7 @@ def _list_local_workspace_dir(
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
         if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能列出")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         visible_root = ""
         is_skill = False
     if not target.exists():
@@ -1170,7 +1170,7 @@ def _search_local_workspace_files(
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
         if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         visible_root = to_visible_path(runtime.workspace_root, target)
         is_skill = False
     if not target.is_dir() or target.is_symlink():
@@ -1207,7 +1207,7 @@ def _grep_local_workspace_text(
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
         if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-results/ 是隐藏的工具结果缓存，不能搜索")
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         visible_root = to_visible_path(runtime.workspace_root, target)
         is_skill = False
     if target.is_symlink() or not target.exists():

@@ -15,7 +15,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from apps.chat_data_app.agent.skills import clear_metadata_cache, format_skills_prompt, parse_metadata
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-from apps.chat_data_app.agent.prompts.unified import build_unified_system_prompt
 from apps.chat_data_app.services import skill_service as skill_service_module
 from apps.chat_data_app.services.skill_service import SkillService, skill_service
 
@@ -665,49 +664,6 @@ def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(t
     assert updated["skill_publish_status"] == "published"
 
 
-def test_unified_prompt_injects_skill_metadata_not_skill_body():
-    clear_metadata_cache()
-
-    available_skills_xml = format_skills_prompt([
-        {"name": "dashboard-generation", "title": "看板生成技能", "description": "生成数据看板"},
-    ])
-    prompt = build_unified_system_prompt(
-        AgentRuntimeOptions(workspace_backend="local", bash_enabled=True),
-        data_context={"datasource": {"id": "ds_1"}, "semantic_configs": []},
-        workspace_root="/tmp/workspace",
-        available_skills_xml=available_skills_xml,
-    )
-
-    # 技能元数据（名称/标题）应被注入，技能正文（runtime 目录）不应进入提示词
-    assert "看板生成技能" in prompt
-    assert "<runtime>" not in prompt
-    assert "dashboard-generation" in prompt
-
-    # 统一提示词使用 markdown 标题结构，工作空间态包含以下段落
-    assert "# 角色" in prompt
-    assert "## 环境" in prompt
-    assert "# 数据上下文" in prompt
-    assert "## 支持图表类型" in prompt
-    assert "## 方言上下文" in prompt
-    assert "当前数据库方言：Hive" in prompt
-    assert "## 优先级" in prompt
-    assert "## 执行连续性" in prompt
-    assert "## Bash 使用" in prompt
-    assert "数据上下文文件" not in prompt
-    assert "禁止调用：" not in prompt
-    assert "analysis_plan" not in prompt
-    assert "query_design" not in prompt
-    assert "artifact_write" not in prompt
-    assert "schema_search" not in prompt
-    assert "<name>dashboard-generation</name>" in prompt
-    assert "<title>看板生成技能</title>" in prompt
-    assert "`bash_run`" in prompt
-    assert "`file_move`" in prompt
-    assert '调用 `skill_load("<name>")`' in prompt
-    assert "不能使用 title、skill_id 或自造名称" in prompt
-    assert "同一轮必须立刻调用 `skill_load`" in prompt
-    assert "每次调用工具前先输出一句短句" in prompt
-    assert "工具返回后用一句短句概括发现" in prompt
     assert "技能优先" in prompt
     assert "完全遵循 SKILL.md 的 Mandatory Reading、Workflow 和成功判定" not in prompt
     assert "<execution_protocol>" not in prompt

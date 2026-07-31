@@ -242,7 +242,7 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板卡片的 `dsl` 使用与智能问数一致的语义层规则，由平台工具转换为 SQL。不要手写 SQL，除非用户明确要求并且工具支持。
 
-可用指标、维度、数据源和表结构已经在系统提示词 `<data_context>` 中注入。生成 DSL 前必须先确定唯一指标集：优先使用已手动选择的指标集；否则先调用 `search_dataset`，再从工具返回的 `semantic_config_ids` 中根据用户的业务目标选择一个指标集。
+系统提示词只提供可见指标集目录和手动选择的轻量引用，不包含完整指标、维度、表结构或关联关系。生成 DSL 前必须调用 `search_dataset` 获取实际语义配置；手动选择只作为优先参考，不锁定指标集。再从工具返回的 `semantic_config_ids` 中根据用户的业务目标确定唯一指标集。
 
 看板只能使用一个指标集。多个返回项都可能符合、但无法判断用户要哪个业务口径时，必须先向用户澄清；不得混用多个 `semantic_configs` 的指标或维度，不得生成看板 DSL，不得调用 `dsl2sql_tool`。
 
@@ -265,7 +265,7 @@ DSL 字段：
 
 指标规则：
 
-- `metrics` 必须来自当前注入的语义指标。
+- `metrics` 必须来自 `search_dataset` 返回的实际语义指标。
 - `metrics` 必须是字符串数组，例如 `["订单金额"]`；不要写成对象数组，例如 `[{"name":"订单金额","aggregate":"SUM"}]`。
 - 聚合卡片优先使用聚合指标，例如数量、金额、均值、占比。
 - 不要在同一聚合卡片中混用原始值指标和聚合指标。
@@ -274,7 +274,7 @@ DSL 字段：
 
 维度规则：
 
-- `dimensions` 必须来自当前注入的语义维度。
+- `dimensions` 必须来自 `search_dataset` 返回的实际语义维度。
 - 趋势卡片使用时间维度，建议写成 `{"name": "时间维度", "time_grain": "month"}` 这类对象。
 - 排行卡片使用对象维度、机构维度、区域维度、产品维度等。
 - 没有维度时返回总体聚合结果。
@@ -304,7 +304,7 @@ DSL 字段：
 ## 校验流程
 
 1. 先确定唯一指标集，再生成完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`。
-2. `dashboard_spec.semantic_config_id` 必须取已手动选择的指标集 ID，或 `search_dataset` 返回的 `semantic_config_ids` 之一。
+2. `dashboard_spec.semantic_config_id` 必须取 `search_dataset` 返回的 `semantic_config_ids` 之一。
 3. 调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`。
 4. 根据返回 warnings 和错误修正 DSL。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
@@ -315,9 +315,9 @@ DSL 字段：
 
 ## 失败处理
 
-- `dsl2sql_tool` 返回指标不存在：回到当前注入指标体系，替换为真实存在的指标，不要编造指标。
-- `dsl2sql_tool` 返回维度不可用：检查该指标可用维度，移除或替换不可用维度。
-- 趋势卡片校验失败：优先改用当前指标体系中真实存在的时间维度，并设置合适的 `time_grain`。
+- `dsl2sql_tool` 返回指标不存在：回到 `search_dataset` 返回的指标体系，替换为真实存在的指标，不要编造指标。
+- `dsl2sql_tool` 返回维度不可用：检查工具返回的该指标可用维度，移除或替换不可用维度。
+- 趋势卡片校验失败：优先改用工具返回指标体系中真实存在的时间维度，并设置合适的 `time_grain`。
 - 排行卡片校验失败：确认 `order_by.field` 使用指标名，`dimensions` 使用对象、商品、机构、区域等真实维度。
 - 过滤条件失败：只使用当前存在的维度作为 `filters.dimension`，不要使用物理字段名或自由文本字段。
 - 有卡片长期无法通过校验：删除该卡片或改成可通过校验的替代视角，不要反复使用同一错误 DSL。

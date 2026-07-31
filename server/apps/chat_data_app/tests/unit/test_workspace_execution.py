@@ -52,9 +52,9 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
         "/mnt/skills/dashboard-generation/references/guide.md"
     ) == "/mnt/skills/dashboard-generation/references/guide.md"
     assert sandbox_visible_path("outputs%2Fdashboard.dashboard.json") == "/mnt/user-data/outputs/dashboard.dashboard.json"
-    assert sandbox_visible_path("outputs/.tool-results/result_1.json") == "/mnt/user-data/outputs/.tool-results/result_1.json"
+    assert sandbox_visible_path("outputs/.tool-offload/result_1.json") == "/mnt/user-data/outputs/.tool-offload/result_1.json"
     with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
-        sandbox_visible_path("outputs/.tool-results/result_1.json", writable=True)
+        sandbox_visible_path("outputs/.tool-offload/result_1.json", writable=True)
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
     with pytest.raises(ValueError, match="路径越界"):
@@ -77,7 +77,7 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
 
     payload = asyncio.run(workspace_execution.sandbox_artifact_payload(
         session_ref=session_ref,
-        file_path="/mnt/user-data/outputs/.tool-results/result_1.json",
+        file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
     ))
 
     assert payload == {}
@@ -248,7 +248,7 @@ def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(mon
             captured["entry"] = entry
             return [
                 SimpleNamespace(path="/mnt/user-data/workspace/z-last.json"),
-                SimpleNamespace(path="/mnt/user-data/outputs/.tool-results/query.json"),
+                SimpleNamespace(path="/mnt/user-data/outputs/.tool-offload/query.json"),
                 SimpleNamespace(path="/mnt/user-data/workspace/a-first.json"),
                 SimpleNamespace(path="/tmp/outside.json"),
             ]
@@ -328,7 +328,7 @@ def test_sandbox_load_skill_and_list_dir_delegate_through_real_path(monkeypatch)
                 ],
                 "/mnt/user-data/workspace": [
                     "/mnt/user-data/workspace/a.txt",
-                    "/mnt/user-data/outputs/.tool-results/query.json",
+                    "/mnt/user-data/outputs/.tool-offload/query.json",
                 ],
             }
             return [
@@ -414,7 +414,7 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
 
 def test_local_bash_can_read_hidden_tool_result(tmp_path):
     workspace_root = _workspace_root(tmp_path)
-    result_file = workspace_root / "outputs" / ".tool-results" / "result_1.json"
+    result_file = workspace_root / "outputs" / ".tool-offload" / "result_1.json"
     result_file.parent.mkdir(parents=True)
     result_file.write_text('{"rows":[1]}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(
@@ -425,7 +425,7 @@ def test_local_bash_can_read_hidden_tool_result(tmp_path):
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/user-data/outputs/.tool-results/result_1.json",
+            command="cat /mnt/user-data/outputs/.tool-offload/result_1.json",
             workspace_runtime=runtime,
         )
     )

@@ -18,7 +18,7 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         for item in kwargs.get("member_datasource_ids") or []
         if str(item).strip()
     ))
-    semantic_config = kwargs.get("semantic_config") or (
+    semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
         if semantic_config_id else None
     )

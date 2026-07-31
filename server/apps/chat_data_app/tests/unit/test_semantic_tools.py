@@ -385,14 +385,7 @@ def test_search_dataset_keeps_loaded_configs_when_a_retrieved_config_cannot_load
     assert list(payload["semantic_configs"]) == ["sc_order"]
 
 
-def test_search_dataset_keeps_only_complete_configs_within_context_budget(monkeypatch):
-    class FixedToolResultBudget:
-        static_input_tokens = 10
-        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
-
-        def remaining_for_tool_result(self, _messages):
-            return 200
-
+def test_search_dataset_returns_all_selected_configs_without_own_context_budget(monkeypatch):
     async def fake_select_semantic_config_for_query(**_kwargs):
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
 
@@ -407,74 +400,12 @@ def test_search_dataset_keeps_only_complete_configs_within_context_budget(monkey
     monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
     monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
 
-    tool = create_search_dataset_tool(
-        datasource_id="ds_bound",
-        tool_result_budget=FixedToolResultBudget(),
-    )
+    tool = create_search_dataset_tool(datasource_id="ds_bound")
     result = asyncio.run(tool.ainvoke({"query": "查询订单和用户", "state": {"messages": []}}))
     payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
 
-    assert payload["semantic_config_ids"] == ["sc_order"]
-    assert list(payload["semantic_configs"]) == ["sc_order"]
-
-
-def test_search_dataset_returns_controlled_error_when_first_config_exceeds_budget(monkeypatch):
-    class FixedToolResultBudget:
-        static_input_tokens = 10
-        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
-
-        def remaining_for_tool_result(self, _messages):
-            return 1
-
-    async def fake_select_semantic_config_for_query(**_kwargs):
-        return {"semantic_config_ids": ["sc_order"]}
-
-    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
-        return {"id": semantic_config_id, "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []}
-
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
-
-    tool = create_search_dataset_tool(
-        datasource_id="ds_bound",
-        tool_result_budget=FixedToolResultBudget(),
-    )
-    result = asyncio.run(tool.ainvoke({"query": "查询订单", "state": {"messages": []}}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
-
-    assert payload["success"] is False
-    assert payload["semantic_config_ids"] == []
-    assert "超过当前模型可用上下文" in payload["message"]
-
-
-def test_search_dataset_does_not_skip_an_oversized_top_ranked_config(monkeypatch):
-    class FixedToolResultBudget:
-        static_input_tokens = 10
-        budget = type("Budget", (), {"hard_input_limit_tokens": 1000})()
-
-        def remaining_for_tool_result(self, _messages):
-            return 180
-
-    async def fake_select_semantic_config_for_query(**_kwargs):
-        return {"semantic_config_ids": ["sc_large", "sc_small"]}
-
-    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
-        if semantic_config_id == "sc_large":
-            return {"id": semantic_config_id, "metrics": [{"name": "指标", "description": "说明" * 100}], "dimensions": []}
-        return {"id": semantic_config_id, "metrics": [], "dimensions": []}
-
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
-
-    tool = create_search_dataset_tool(
-        datasource_id="ds_bound",
-        tool_result_budget=FixedToolResultBudget(),
-    )
-    result = asyncio.run(tool.ainvoke({"query": "查询", "state": {"messages": []}}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
-
-    assert payload["success"] is False
-    assert payload["semantic_config_ids"] == []
+    assert payload["semantic_config_ids"] == ["sc_order", "sc_user"]
+    assert list(payload["semantic_configs"]) == ["sc_order", "sc_user"]
 
 
 def test_search_dataset_error_branches(monkeypatch):

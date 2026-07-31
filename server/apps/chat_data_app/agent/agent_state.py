@@ -57,9 +57,6 @@ class ChatDataAgentState(AgentState, total=False):
     conversation_id: str | None
     conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     execution_context: ExecutionContext
-    semantic_config_id: str | None
-    # 临时指标集不一定持久化到业务库，语义查询工具需要从状态读取它。
-    semantic_config: dict[str, Any] | None
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None
     context_summary: str | None

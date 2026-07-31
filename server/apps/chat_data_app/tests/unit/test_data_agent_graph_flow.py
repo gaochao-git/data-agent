@@ -15,11 +15,6 @@ from apps.chat_data_app.agent import data_agent
 from apps.chat_data_app.agent.agent_state import ChatDataAgentState
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
-from apps.chat_data_app.agent.prompts.unified import (
-    _extract_source_type,
-    build_dialect_prompt_context,
-    build_unified_system_prompt,
-)
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
 
@@ -32,51 +27,16 @@ def _runtime(tmp_path, *, bash_enabled=False):
     ), AgentRuntimeOptions(workspace_backend="local", bash_enabled=bash_enabled)
 
 
-def test_dialect_context_selection():
-    assert "Hive" in build_dialect_prompt_context({"datasource": {"source_type": "hive"}})
-    assert "MySQL" in build_dialect_prompt_context({"semantic_configs": [{"source_type": "mysql"}]})
-    assert "Hive" in build_dialect_prompt_context({"semantic_configs": ["bad", {"source_type": "hive"}]})
-    assert "Hive" in build_dialect_prompt_context({})
-
-
 def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     annotations = ChatDataAgentState.__annotations__
 
     assert "execution_context" in annotations
     assert "workspace" in annotations
-    assert "semantic_config_id" in annotations
+    assert "semantic_config_id" not in annotations
     assert "conversation_id" in annotations
     assert "reasoning_segments" in annotations
     assert "token_usage" in annotations
     assert "conversation_datasource_id" in annotations
-
-
-def test_unified_prompt_uses_empty_skills_without_runtime_snapshot(tmp_path):
-    prompt = build_unified_system_prompt(
-        AgentRuntimeOptions(bash_enabled=False),
-        data_context={},
-        workspace_root=str(tmp_path),
-        available_skills_xml=None,
-    )
-
-    assert "<available_skills>\n</available_skills>" in prompt
-    assert "/mnt/user-data/workspace" in prompt
-    assert str(tmp_path) not in prompt  # 物理路径不得泄漏到提示词
-    assert "## Bash 使用" not in prompt
-
-
-def test_unified_prompt_includes_bash_only_when_enabled(tmp_path):
-    assert _extract_source_type({"semantic_configs": ["bad", {}]}) == ""
-
-    prompt = build_unified_system_prompt(
-        AgentRuntimeOptions(workspace_backend="sandbox", bash_enabled=True),
-        data_context={},
-        workspace_root=str(tmp_path),
-        available_skills_xml=None,
-    )
-
-    assert "<available_skills>\n</available_skills>" in prompt
-    assert "## Bash 使用" in prompt
 
 
 def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
@@ -84,10 +44,10 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
     _, with_bash = _runtime(tmp_path, bash_enabled=True)
 
     tool_names = [tool.name for tool in assemble_tools(
-        without_bash, runtime, datasource_id="ds_a", semantic_config_id="cfg_a", user_id="u1", operator_name="测试用户",
+        without_bash, runtime, datasource_id="ds_a", user_id="u1", operator_name="测试用户",
     )]
     bash_tool_names = [tool.name for tool in assemble_tools(
-        with_bash, runtime, datasource_id="ds_a", semantic_config_id="cfg_a", user_id="u1", operator_name="测试用户",
+        with_bash, runtime, datasource_id="ds_a", user_id="u1", operator_name="测试用户",
     )]
 
     assert tool_names == [
@@ -128,7 +88,6 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
         system_prompt="system",
         model_id="primary-model",
         datasource_id="ds_a",
-        semantic_config_id="sc_a",
     )
 
     assert agent.name == "agent"
