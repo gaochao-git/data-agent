@@ -234,7 +234,6 @@ DSL_PARAMS_BLOCK = """## DSL 参数
   ```"""
 
 NL2SQL_BLOCK = """## NL2SQL 回退规则
-- 如果用户目标能通过当前指标集中名称和口径明确一致的指标、维度、过滤、having、排序、分页表达，必须优先使用 DSL 路径：先调用 `dsl2sql_tool(semantic_config_id=..., dsl={...})`，再调用 `semantic_query_tool(semantic_config_id=..., member_datasource_ids=[...], dsl={...})`；只能通过相近指标或相近维度表达时，不算 DSL 已明确可表达。
 - 只有 DSL 明确无法表达查询结构时，才允许使用 SQL 路径：调用 `semantic_query_tool(semantic_config_id=..., member_datasource_ids=[...], sql="...")`。典型场景包括子查询、CTE、窗口函数、多阶段聚合、自连接、UNION/EXISTS、复杂 CASE WHEN、当前 DSL 无法表达的中间结果计算。
 - SQL 路径仍然必须受当前指标集和执行对象数据源约束，只能引用当前指标集维度中已维护的原始表名、原始列名，以及 `relationships` 中的关联关系；关联字段仅用于连接路径，不能当作未维护业务字段随意查询或过滤。不能使用当前指标集外的表或未暴露字段。
 - SQL 路径不要求照搬维度 `expression`，可以在已维护维度表列和关联关系范围内自行组织只读 SQL 表达式、函数、CASE、窗口、CTE 或中间计算；使用已维护指标时，其 `expression` 代表聚合口径，不能擅自改写业务口径。
@@ -247,7 +246,6 @@ SQL_DB_BOUNDARY_BLOCK = """## SQL 与数据库边界
 - `dsl2sql_tool` 参数必须包含 `semantic_config_id` 和同一份 DSL。`semantic_query_tool` 参数必须包含 `semantic_config_id`、`member_datasource_ids` 和同一份 DSL；需要保存中间结果时使用 `semantic_query_tool(semantic_config_id=..., member_datasource_ids=[...], dsl=同一份DSL, save_as="<工作目录>/name.json")`。
 - 如果 `dsl2sql_tool` 报参数错误，只能修正 DSL 字段后重试；如果生成 SQL 方言不符合 `source_type`，停止该分支并说明方言上下文异常，禁止手工把 MySQL SQL 改成 Hive SQL 或反向改写。
 - 聚合查询里，`ORDER BY` 只能按当前 SELECT 输出的分组维度或聚合指标排序。指标排序由 DSL 写指标名，例如 `{"field":"订单数量","direction":"DESC"}`，由 DSL2SQL 编译成 `ORDER BY COUNT(...)`；模型不要手写聚合函数。
-- 时间格式化规则只以 `dialect_context` 为准。模型不得把方言格式错误解释为 URL 编码或前端编码问题，也不得因此手写 SQL。
 - DSL2SQL 不支持 `compare` 同比/环比参数；同比/环比只能拆成基础 DSL 查询，再由智能体脚本对结果做对齐、补齐、差值和增长率计算。"""
 
 YOY_MOM_BLOCK = """## 同比 / 环比边界
@@ -256,7 +254,6 @@ YOY_MOM_BLOCK = """## 同比 / 环比边界
 - 环比必须有一个当前周期和上一个相邻周期：月环比按月、季度环比按季度、年环比按年；不要把“2024年 vs 2025年”称为环比。"""
 
 FINAL_ANSWER_BLOCK = """## 最终回答
-- 查询结果明细已经由 `semantic_query_tool` 返回并由前端表格/图表展示，最终回复不要重复输出结果表格。
 - 禁止在最终回复中使用 markdown 表格、逐行明细列表、完整结果清单或大段复述 SQL 返回数据；只提炼关键结论。
 - 第一句直接回答问题；单指标单值查询只输出一句结果。
 - 多指标或多执行对象查询，提炼最有价值的 2-3 个关键数据点；如果部分执行对象失败或无数据，必须说明对应执行对象状态。
@@ -382,8 +379,8 @@ def build_unified_system_prompt(
     sections.append(TOOL_RESULT_OFFLOAD_BLOCK)
     if runtime_options.bash_enabled:
         sections.append(BASH_WORKFLOW_BLOCK)
-    sections.append("# 示例\n" + SEMANTIC_FEWSHOT_PROMPT)
-    sections.append("# 多步分析示例\n" + MULTI_STEP_FEWSHOT_PROMPT)
+    sections.append(SEMANTIC_FEWSHOT_PROMPT)
+    sections.append(MULTI_STEP_FEWSHOT_PROMPT)
 
     sections.extend([FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
     return "\n\n".join(sections)
