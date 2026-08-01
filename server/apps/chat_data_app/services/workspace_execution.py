@@ -29,7 +29,7 @@ OPENSANDBOX_BACKEND = "opensandbox"
 MAX_OUTPUT_CHARS = 12000
 MAX_FILE_READ_LINE_CHARS = 500
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_OFFICE_HTML_CHARS = 4 * 1024 * 1024
+MAX_OFFICE_HTML_CHARS = 12 * 1024 * 1024
 # OpenSandbox execd parses permission values as base-8 *strings*.  These must
 # therefore be decimal integers whose digits are the intended Unix mode.
 _SANDBOX_WRITABLE_FILE_MODE = 666
@@ -1151,13 +1151,13 @@ async def sandbox_render_office_html(
     file_path: str,
     max_chars: int,
 ) -> dict[str, Any]:
-    """Render a DOCX into an isolated, temporary HTML preview via OfficeCLI."""
+    """Render an Office Open XML file into an isolated HTML preview."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
         target = await _resolve_sandbox_real_path(session=session, file_path=file_path)
-        if not target.lower().endswith(".docx"):
-            raise ValueError("OfficeCLI HTML 预览仅支持 .docx 文件")
+        if Path(target).suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+            raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
         preview_path = f"/tmp/chat-data-office-preview-{uuid4().hex}.html"
         command = "officecli view {source} html --out {preview}".format(
             source=shlex.quote(target),
@@ -1171,6 +1171,16 @@ async def sandbox_render_office_html(
             )
             if exit_code != 0:
                 raise RuntimeError(stderr or "OfficeCLI HTML 预览失败")
+            limit = max(1, min(int(max_chars), MAX_OFFICE_HTML_CHARS))
+            preview_entry = await _sandbox_path_info(session=session, path=preview_path)
+            preview_size = int(getattr(preview_entry, "size", 0) or 0)
+            if preview_size > limit:
+                return {
+                    "renderer": "officecli-html",
+                    "source_path": sandbox_path_to_visible(target),
+                    "html": "",
+                    "truncated": True,
+                }
             html = (await _read_sandbox_file_bytes(
                 sandbox=session.sandbox,
                 path=preview_path,
@@ -1187,7 +1197,6 @@ async def sandbox_render_office_html(
                         preview_path,
                         exc,
                     )
-        limit = max(1, min(int(max_chars), MAX_OFFICE_HTML_CHARS))
         truncated = len(html) > limit
         return {
             "renderer": "officecli-html",

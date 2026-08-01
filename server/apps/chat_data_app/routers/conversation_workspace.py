@@ -20,7 +20,7 @@ from ..services.conversation_workspace import (
     read_conversation_query_result,
     read_conversation_workspace_file as read_workspace_file_for_conversation,
     read_conversation_workspace_raw_file,
-    render_conversation_workspace_docx_preview,
+    render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
 )
 from ..agent.data_agent import get_data_agent_graph
@@ -135,8 +135,8 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
 
 
 @router.get("/conversations/{conversation_id}/workspace-files/office-html")
-async def render_conversation_workspace_docx_preview_api(conversation_id: str, path: str, request: Request):
-    """渲染当前会话 Word 文件的受控 OfficeCLI HTML 预览。"""
+async def render_conversation_workspace_office_preview_api(conversation_id: str, path: str, request: Request):
+    """渲染当前会话 Office 文件的受控 OfficeCLI HTML 预览。"""
     try:
         current_user = _get_current_user(request)
         user_id = str(current_user.user_id)
@@ -151,7 +151,7 @@ async def render_conversation_workspace_docx_preview_api(conversation_id: str, p
         )
         if backend != "sandbox":
             return business_response(data={"available": False, "reason": "workspace_backend_local"}, msg="当前会话未启用沙箱预览")
-        preview = await render_conversation_workspace_docx_preview(
+        preview = await render_conversation_workspace_office_preview(
             conversation_id,
             user_id=user_id,
             path=path,

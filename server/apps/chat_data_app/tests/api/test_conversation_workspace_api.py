@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import conversation_workspace as workspace_routes
 
@@ -83,22 +85,23 @@ def test_conversation_workspace_raw_route_hides_internal_context_file(client, mo
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_conversation_workspace_office_html_uses_sandbox_preview(client, monkeypatch):
+@pytest.mark.parametrize("path", ["outputs/report.docx", "outputs/data.xlsx", "outputs/briefing.pptx"])
+def test_conversation_workspace_office_html_uses_sandbox_preview(client, monkeypatch, path):
     _install_accessible_workspace(monkeypatch)
 
     async def sandbox_backend(*_args, **_kwargs):
         return "sandbox"
 
     async def render_preview(conversation_id, *, user_id, path):
-        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "outputs/report.docx")
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", path)
         return {"available": True, "renderer": "officecli-html", "html": "<main>report</main>", "truncated": False}
 
     monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", sandbox_backend)
-    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_docx_preview", render_preview)
+    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_office_preview", render_preview)
 
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/office-html",
-        params={"path": "outputs/report.docx"},
+        params={"path": path},
     )
 
     assert response.status_code == 200
@@ -115,7 +118,7 @@ def test_conversation_workspace_office_html_skips_local_backend(client, monkeypa
         raise AssertionError("local backend must not invoke OfficeCLI")
 
     monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", local_backend)
-    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_docx_preview", render_preview)
+    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_office_preview", render_preview)
 
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/office-html",
@@ -124,6 +127,27 @@ def test_conversation_workspace_office_html_skips_local_backend(client, monkeypa
 
     assert response.status_code == 200
     assert response.json()["data"] == {"available": False, "reason": "workspace_backend_local"}
+
+
+def test_conversation_workspace_office_html_reports_oversized_preview(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def sandbox_backend(*_args, **_kwargs):
+        return "sandbox"
+
+    async def render_preview(**_kwargs):
+        return {"available": False, "reason": "preview_too_large"}
+
+    monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", sandbox_backend)
+    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_office_preview", render_preview)
+
+    response = client.get(
+        "/api/chatdata/conversations/conv_a/workspace-files/office-html",
+        params={"path": "outputs/large-report.docx"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"available": False, "reason": "preview_too_large"}
 
 
 def test_conversation_workspace_rejects_inaccessible_conversation(client, monkeypatch):

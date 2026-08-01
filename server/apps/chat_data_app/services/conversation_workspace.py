@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 
 THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
-OFFICE_PREVIEW_MAX_CHARS = 4 * 1024 * 1024
+OFFICE_PREVIEW_MAX_CHARS = 12 * 1024 * 1024
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
@@ -718,21 +718,21 @@ def _validate_office_preview_source(workspace_root: str, path: str) -> None:
     target = resolve_workspace_path(workspace_root, path)
     if is_tool_result_workspace_path(workspace_root, target):
         raise ValueError("工具结果缓存不支持 Office 预览")
-    if target.suffix.lower() != ".docx":
-        raise ValueError("OfficeCLI HTML 预览仅支持 .docx 文件")
+    if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+        raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
     if not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     if target.stat().st_size > 50 * 1024 * 1024:
-        raise ValueError("文件过大，暂不支持预览超过 50MB 的 Word 文件")
+        raise ValueError("文件过大，暂不支持预览超过 50MB 的 Office 文件")
 
 
-async def render_conversation_workspace_docx_preview(
+async def render_conversation_workspace_office_preview(
     conversation_id: str,
     *,
     user_id: str,
     path: str,
 ) -> dict[str, Any]:
-    """Render an owned DOCX through OfficeCLI without persisting a preview copy."""
+    """Render an owned Office Open XML file through OfficeCLI."""
     workspace = ensure_conversation_workspace(conversation_id, user_id)
     workspace_root = workspace["root"]
     await asyncio.to_thread(
@@ -750,13 +750,15 @@ async def render_conversation_workspace_docx_preview(
         max_chars=OFFICE_PREVIEW_MAX_CHARS,
     )
     html = str(preview.get("html") or "")
+    if bool(preview.get("truncated")):
+        return {"available": False, "reason": "preview_too_large"}
     if not html:
         raise RuntimeError("OfficeCLI 未返回 HTML 预览内容")
     return {
         "available": True,
         "renderer": "officecli-html",
         "html": html,
-        "truncated": bool(preview.get("truncated")),
+        "truncated": False,
     }
 
 

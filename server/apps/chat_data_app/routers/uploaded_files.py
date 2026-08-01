@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/uploaded-files", tags=["uploaded-files"])
 
 # 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）
-ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pdf"}
+ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf"}
 
 
 @router.post("/upload")
@@ -213,5 +213,6 @@ def _get_content_type(file_type: str) -> str:
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xls": "application/vnd.ms-excel",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
     return type_map.get(file_type, "application/octet-stream")
