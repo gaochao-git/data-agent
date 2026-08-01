@@ -8,7 +8,6 @@ from .analysis_guidance import (
 )
 from .security_prompt import SECURITY_PROMPT
 from ..runtime_options import AgentRuntimeOptions
-from ...chart_types import get_chart_type_prompt_text
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +253,7 @@ SQL_DB_BOUNDARY_BLOCK = """## SQL 与数据库边界
 YOY_MOM_BLOCK = """## 同比 / 环比边界
 - 先判断用户要的是单值对比还是趋势对比：`全年同比/年度同比` 是年度总量对比；`月同比/按月同比/月度同比` 是月份对齐趋势；`季度同比` 是季度对齐趋势；`日同比` 是日期对齐趋势。
 - 用户只说“2024年和2025年同比”且没有“全年/年度”时，默认按月同比趋势；用户明确说“全年/年度”时，不展示月份。
-- 环比必须有一个当前周期和上一个相邻周期：月环比按月、季度环比按季度、年环比按年；不要把“2024年 vs 2025年”称为环比。
-- 图表型同比 / 环比只查询基础指标数据；对齐、补齐、差值和增长率由 Python 脚本计算，不使用 DSL `compare`，也不要求 DSL2SQL 一条 SQL 完成。"""
+- 环比必须有一个当前周期和上一个相邻周期：月环比按月、季度环比按季度、年环比按年；不要把“2024年 vs 2025年”称为环比。"""
 
 FINAL_ANSWER_BLOCK = """## 最终回答
 - 查询结果明细已经由 `semantic_query_tool` 返回并由前端表格/图表展示，最终回复不要重复输出结果表格。
@@ -298,12 +296,6 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
 - `file_write` 负责新建或整体覆盖，`file_edit` 负责已有文件的一处唯一精确替换；两者都不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
 
-## 图表能力
-- 回答“支持哪些图表 / 有哪些图表 / 能画什么图”时，必须基于 `supported_chart_types` 清单，不要用通用 ECharts 知识扩展未注册类型。
-- 生成 `chart_spec` 或 `dashboard_spec` 时，`chart_type` 只能使用 `supported_chart_types` 中的 key。
-- 漏斗图 `funnel` 表达阶段转化、阶段递减和流失分析，核心是“阶段字段 + 数值字段”；它不是泛流程图。普通流程结构、节点关系或依赖网络优先使用 `graph`。
-- 阶段转化漏斗查询只能按阶段维度或转化数值指标排序；禁止在聚合查询中按订单号、用户ID、明细时间等未分组明细字段排序。
-
 ## 输出规范
 - 回复只展示：简短结论、关键数字、产物路径或预览状态。
 - 不在正文暴露：工具参数、JSON、DSL、SQL、patch、XML、YAML、工具返回原文或原始查询行。
@@ -325,9 +317,6 @@ BASH_WORKFLOW_BLOCK = """## Bash 使用
 - 浏览目录统一使用 `dir_list(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `bash_run`。不要臆测文件是否存在。
 - Bash 只处理当前会话工作区；生成最终产物仍须写入 outputs 并调用 `present_artifacts`。"""
 
-CHART_BLOCK = """## 支持图表类型
-{chart_types_text}"""
-
 DIALECT_BLOCK = """## 方言上下文
 {dialect_context_text}"""
 
@@ -336,7 +325,8 @@ PRIORITY_BLOCK = """## 优先级
 2. 技能命中时，文字说明不能替代工具调用；如果回复了“开始加载技能 / 正在加载技能 / 进入技能流程 / 使用某技能”，同一轮必须立刻调用 `skill_load`。
 3. 如果用户指定了某个技能但 `available_skills` 中没有匹配项，直接说明当前没有可用的匹配技能，不要调用不存在的技能，也不要只列出技能后结束。
 4. 未命中技能时，按上方规则处理。
-5. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。"""
+5. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
+6. 用户询问支持哪些图表、要求生成图表 / 看板 / 可视化时，先 `skill_load("chart-processing")` 获取图表类型清单与生成规范；涉及 Word / PowerPoint 图表时先 `skill_load("officecli")`。不要用通用 ECharts 知识编造未注册的 chart_type。"""
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +371,6 @@ def build_unified_system_prompt(
         YOY_MOM_BLOCK,
     ])
 
-    sections.append(CHART_BLOCK.format(chart_types_text=get_chart_type_prompt_text()))
     dialect_context_text = build_dialect_prompt_context(data_context or {})
     if dialect_context_text:
         sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))

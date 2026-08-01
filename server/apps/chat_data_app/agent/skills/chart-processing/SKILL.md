@@ -154,6 +154,24 @@ metadata:
 11. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])` 展示最终图表预览；多图一次传入多个 outputs 文件
 12. 简短总结图表预览状态
 
+## 支持图表类型
+
+生成 `chart_spec` 或 `dashboard_spec` 时，`chart_type` 只能使用下表注册的 key；未注册类型会被工具层 `is_supported_chart_type` 拒绝，不要用通用 ECharts 知识扩展。
+
+| chart_type | 中文名 | 适用场景 | 数据形态 |
+|---|---|---|---|
+| `table` | 表格 | 明细数据、多字段精确查看 | 多列明细或聚合结果 |
+| `kpi` | 指标卡 | 单个或少量核心指标 | 单行单值或少量指标值 |
+| `bar` | 柱状图 | 分类对比、排行 | 分类字段 + 数值字段 |
+| `horizontal_bar` | 条形图 | 名称较长的分类对比或 TopN 排行 | 分类字段 + 数值字段 |
+| `line` | 折线图 | 时间趋势、连续变化 | 时间字段 + 一个或多个数值字段 |
+| `area` | 面积图 | 趋势规模和累计感 | 时间字段 + 数值字段 |
+| `pie` | 饼图 | 占比分布，分类不宜过多 | 分类字段 + 正数值字段 |
+| `map` | 地图 | 地区、城市、省份等空间分布 | 地区字段 + 数值字段 |
+| `combo` | 柱线组合图 | 同一维度下两个量纲指标柱线组合展示 | 维度字段 + 2个数值字段 |
+| `funnel` | 漏斗图 | 阶段转化、阶段递减、流程流失分析 | 阶段字段 + 数值字段，通常按阶段顺序递减 |
+| `graph` | 关系图 | 实体关系、依赖网络、起点终点连接 | 起点字段 + 终点字段，可选关系强度数值字段 |
+
 ## 图表选择
 
 | 场景 | 图表类型 | 数据形态 |
@@ -173,6 +191,54 @@ metadata:
 漏斗图查询是聚合查询，排序只能使用阶段维度或聚合指标。不要按订单号、用户ID、明细时间等未分组明细字段排序，否则 Hive 会拒绝执行。
 
 所有图表 DSL 的 `order_by.field` 都只能来自当前查询输出字段，也就是 `metrics` 中的指标或 `dimensions` 中的维度。聚合指标排序只写指标名，由 DSL2SQL 生成 `ORDER BY COUNT(...)` / `ORDER BY SUM(...)`，不要手写聚合函数。
+
+## 图表示例（few-shot）
+
+以下示例只用于学习图表内部语义参数选择和工具调用顺序。语义参数、DSL、SQL、脚本和工具参数不得输出到用户消息正文；需要使用时直接作为工具参数传入。进入本技能后按上方「工具流程」执行，下面示例省略 `skill_load` 与 `file_read` 指南步骤。
+
+### 示例1：阶段转化漏斗图
+用户：用漏斗图看线索到成交的转化
+内部语义判断：
+- chart_type: funnel
+- dimensions: 阶段字段，例如“线索阶段”或“订单阶段”
+- metrics: 阶段人数、订单数、用户数等数值指标
+- order_by: 按阶段业务顺序、阶段维度或指标排序；不要按订单号、用户ID、明细时间等未分组明细字段排序
+工具顺序：
+→ `dsl2sql_tool` 构造阶段聚合 DSL（维度=阶段字段、指标=数值字段、order_by 按阶段顺序或指标，不要手写聚合函数）。
+→ `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/funnel_stage.json")` 获取阶段数据。
+→ 单 SQL 用 `file_write` 写 `/mnt/user-data/workspace/chart_spec_draft.json`，`chart_type=funnel`、`encoding.x=阶段字段`、`encoding.y=[数值字段]`；阶段多或需补零/排序复杂时写 `build_chart_spec.py` 并在可用 `bash_run` 时执行。
+→ `file_write` 将草稿整体写入 `/mnt/user-data/outputs/<业务名>.chart.json`。
+→ `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])`。
+回复示例：阶段转化漏斗图已生成。
+
+### 示例2：关系图
+用户：画出服务之间的调用关系
+内部语义判断：
+- chart_type: graph
+- dimensions: 起点实体、终点实体
+- metrics: 可选调用次数、流量、权重等关系强度
+工具顺序：
+→ `dsl2sql_tool` 构造关系边查询 DSL（维度=起点字段、终点字段，指标=可选关系强度）。
+→ `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/graph_edges.json")` 获取关系边数据。
+→ `file_write` 写 `/mnt/user-data/workspace/chart_spec_draft.json`，`chart_type=graph`、`encoding.x=起点字段`、`encoding.y=[终点字段]`，保留关系强度字段。
+→ `file_write` 写入 `/mnt/user-data/outputs/<业务名>.chart.json`。
+→ `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])`。
+回复示例：服务调用关系图已生成。
+
+### 示例3：柱线组合图
+用户：查看订单数量和销售额趋势
+内部语义判断：
+- chart_type: combo
+- dimensions: 时间字段
+- metrics: ["订单数量", "销售额"]
+- encoding.y 只放两个指标，第一个画柱、第二个画线
+工具顺序：
+→ `dsl2sql_tool` 构造时间维度双指标 DSL（dimensions=时间字段、metrics=[订单数量, 销售额]）。
+→ `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/combo_data.json")` 获取查询结果。
+→ `file_write` 写 `/mnt/user-data/workspace/chart_spec_draft.json`，`chart_type=combo`、`encoding.x=时间字段`、`encoding.y=[订单数量, 销售额]`（第一个画柱、第二个画线）。
+→ `file_write` 写入 `/mnt/user-data/outputs/<业务名>.chart.json`。
+→ `present_artifacts(files=["/mnt/user-data/outputs/<业务名>.chart.json"])`。
+回复示例：柱线组合图已生成。
 
 ## 完成判定
 

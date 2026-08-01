@@ -104,41 +104,6 @@ SEMANTIC_FEWSHOT_PROMPT = """# 示例
 5. 调用 `semantic_query_tool(dsl=同一份正式DSL)` 获取正式分析结果。
 回复示例：已根据原始明细确认状态取值和时间格式，并完成本月订单金额趋势分析。
 
-## 示例11：阶段转化漏斗图
-用户：用漏斗图看线索到成交的转化
-内部语义判断：
-- chart_type: funnel
-- dimensions: 阶段字段，例如“线索阶段”或“订单阶段”
-- metrics: 阶段人数、订单数、用户数等数值指标
-- order_by: 按阶段业务顺序、阶段维度或指标排序；不要按订单号、用户ID、明细时间等未分组明细字段排序
-工具顺序：
-→ 如用户要求生成图表，先加载 `chart-processing` 技能。
-→ 查询基础阶段数据后，由脚本或 chart_spec 生成 `encoding.x=阶段字段`、`encoding.y=[数值字段]`。
-回复示例：阶段转化漏斗图已生成。
-
-## 示例12：关系图
-用户：画出服务之间的调用关系
-内部语义判断：
-- chart_type: graph
-- dimensions: 起点实体、终点实体
-- metrics: 可选调用次数、流量、权重等关系强度
-工具顺序：
-→ 如用户要求生成图表，先加载 `chart-processing` 技能。
-→ 查询关系边数据后，生成 `encoding.x=起点字段`、`encoding.y=[终点字段]`，可保留关系强度字段。
-回复示例：服务调用关系图已生成。
-
-## 示例13：柱线组合图
-用户：查看订单数量和销售额趋势
-内部语义判断：
-- chart_type: combo
-- dimensions: 时间字段
-- metrics: ["订单数量", "销售额"]
-- encoding.y 只放两个指标，第一个画柱、第二个画线
-工具顺序：
-→ 如用户要求生成图表，先加载 `chart-processing` 技能。
-→ 查询完成后生成 `encoding.x=时间字段`、`encoding.y=[订单数量, 销售额]`。
-回复示例：柱线组合图已生成。
-
 """
 
 HIVE_DIALECT_CONTEXT = """当前数据库方言：Hive。
