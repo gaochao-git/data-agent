@@ -17,6 +17,7 @@ from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from ...services.context_budget import (
     ContextBudget,
+    HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
     SYSTEM_PROMPT_PLACEHOLDER,
     ToolResultBudget,
@@ -27,6 +28,7 @@ from ...services.context_budget import (
     estimate_text_tokens,
     estimate_tokens,
     get_model_context_budget,
+    hard_input_guard_tokens,
     sanitize_context_usage_for_response,
 )
 from ...services.runtime_config import get_context_compression_config
@@ -355,7 +357,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
         compression_trigger_ratio=1.0,
         hard_input_limit_tokens=max(int(budget), 1),
         compression_trigger_tokens=max(int(budget), 1),
-        compression_keep_tokens=max(int(budget), 1),
+        compression_target_tokens=max(int(budget), 1),
     )
     payload = build_context_usage_payload(context_budget, current_input_tokens)
     payload.update({
@@ -445,7 +447,9 @@ def _empty_context_compression_report(*, budget: ContextBudget, static_input_tok
         "threshold_tokens": budget.compression_trigger_tokens,
         "trigger_ratio": budget.compression_trigger_ratio,
         "hard_input_limit_tokens": budget.hard_input_limit_tokens,
-        "compression_keep_tokens": budget.compression_keep_tokens,
+        "hard_input_guard_ratio": HARD_INPUT_GUARD_RATIO,
+        "hard_input_guard_tokens": hard_input_guard_tokens(budget.hard_input_limit_tokens),
+        "compression_target_tokens": budget.compression_target_tokens,
         "static_input_tokens": max(int(static_input_tokens), 0),
         "compressed_messages": 0,
         "summary_chars": 0,

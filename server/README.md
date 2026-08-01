@@ -96,7 +96,7 @@ kill -9 $(lsof -ti :5001)
 - `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：工具结果卸载阈值，默认 32000 字符；查询结果保存为私有 JSON，其他工具结果保存为私有文本
 - `CHAT_DATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 25000 字符；按请求源行分页，单行最多返回 500 字符
 - `CHAT_DATA_CONTEXT_COMPRESSION_ENABLED`：智能问数上下文压缩总开关，仅影响发给大模型的上下文，不影响页面历史、checkpoint 和审计记录
-- `CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`、最大 `0.80`；实际触发点同时受 `CHAT_DATA_OUTPUT_MAX_TOKENS` 输出预留约束
+- `CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`，必须大于 `0` 且不超过 `0.95`；非法配置会阻止服务启动，实际触发点同时受 `CHAT_DATA_OUTPUT_MAX_TOKENS` 输出预留和 `95%` 输入安全水位约束
 - `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`：上下文压缩摘要调用的最大输出 token，默认 `2000`；独立于主模型调用的 `CHAT_DATA_OUTPUT_MAX_TOKENS`
 
 ## 运行时存储

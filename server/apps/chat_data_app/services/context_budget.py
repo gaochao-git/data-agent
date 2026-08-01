@@ -11,16 +11,32 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from .llm_config import get_chat_data_output_max_tokens
-from .runtime_config import get_context_compression_config, get_context_window, is_context_usage_system_prompt_visible
+from .llm_config import (
+    get_chat_data_model_configs,
+    get_chat_data_output_max_tokens,
+    get_context_compression_summary_output_max_tokens,
+)
+from .runtime_config import (
+    get_context_compression_config,
+    get_context_window,
+    is_context_usage_system_prompt_visible,
+    read_compression_trigger_ratio_env,
+)
 
 
 REQUEST_OVERHEAD_TOKENS = 3
 SYSTEM_PROMPT_PLACEHOLDER = "[系统提示词已隐藏]"
+HARD_INPUT_GUARD_RATIO = 0.95
 
 
 class ContextInputLimitExceededError(ValueError):
     """当前请求无法压缩到模型可接受的输入容量。"""
+
+
+def hard_input_guard_tokens(hard_input_limit_tokens: int) -> int:
+    """Reserve 5% inside the provider input limit for estimation drift."""
+    hard_limit = max(int(hard_input_limit_tokens), 1)
+    return max(min(int(hard_limit * HARD_INPUT_GUARD_RATIO), hard_limit), 1)
 
 
 def estimate_tokens(text: str) -> int:
@@ -98,19 +114,11 @@ class ContextBudget:
     compression_trigger_ratio: float
     hard_input_limit_tokens: int
     compression_trigger_tokens: int
-    compression_keep_tokens: int
+    compression_target_tokens: int
 
     def remaining_for_messages(self, static_input_tokens: int) -> int:
         """扣除固定输入后，留给消息的硬容量。"""
         return max(self.hard_input_limit_tokens - max(int(static_input_tokens), 0), 1)
-
-    def remaining_for_tool_result(self, static_input_tokens: int, message_tokens: int) -> int:
-        """扣除下一次请求已知输入后，留给当前工具结果的硬容量。"""
-        return max(
-            self.hard_input_limit_tokens - max(int(static_input_tokens), 0) - max(int(message_tokens), 0),
-            0,
-        )
-
 
 def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | None = None) -> ContextBudget:
     """按模型窗口、输出预留和质量阈值构造统一预算。"""
@@ -119,15 +127,41 @@ def get_model_context_budget(model_id: str | None, *, max_output_tokens: int | N
     reserved_output = min(requested_output, max(context_window - 1, 0))
     hard_input_limit = max(context_window - reserved_output, 1)
     trigger_ratio = float(get_context_compression_config().get("trigger_ratio", 0.70))
-    compression_trigger = min(max(int(context_window * trigger_ratio), 1), hard_input_limit)
+    compression_trigger = min(
+        max(int(context_window * trigger_ratio), 1),
+        hard_input_guard_tokens(hard_input_limit),
+    )
     return ContextBudget(
         context_window=context_window,
         max_output_tokens=requested_output,
         compression_trigger_ratio=trigger_ratio,
         hard_input_limit_tokens=hard_input_limit,
         compression_trigger_tokens=compression_trigger,
-        compression_keep_tokens=max(int(compression_trigger * 0.30), 1),
+        compression_target_tokens=max(int(compression_trigger * 0.30), 1),
     )
+
+
+def validate_context_budget_startup_config() -> None:
+    """Validate model-level budgets that are fully known when the service starts."""
+    read_compression_trigger_ratio_env()
+    output_tokens = get_chat_data_output_max_tokens()
+    summary_output_tokens = get_context_compression_summary_output_max_tokens()
+    errors: list[str] = []
+    for config in get_chat_data_model_configs():
+        model_id = str(config.get("id") or "")
+        context_window = max(int(config.get("context_window") or 0), 1)
+        if output_tokens >= context_window:
+            errors.append(
+                f"模型 {model_id} 的 CHAT_DATA_OUTPUT_MAX_TOKENS={output_tokens} "
+                f"必须小于上下文窗口 {context_window}"
+            )
+        if summary_output_tokens >= context_window:
+            errors.append(
+                f"模型 {model_id} 的 CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS="
+                f"{summary_output_tokens} 必须小于上下文窗口 {context_window}"
+            )
+    if errors:
+        raise RuntimeError("ChatData 上下文预算配置无效: " + "; ".join(errors))
 
 
 def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, Any]:
@@ -142,9 +176,11 @@ def build_context_usage_payload(budget: ContextBudget, used: int) -> dict[str, A
         "context_window": budget.context_window,
         "max_output_tokens": budget.max_output_tokens,
         "hard_input_limit_tokens": budget.hard_input_limit_tokens,
+        "hard_input_guard_ratio": HARD_INPUT_GUARD_RATIO,
+        "hard_input_guard_tokens": hard_input_guard_tokens(budget.hard_input_limit_tokens),
         "compression_trigger_tokens": budget.compression_trigger_tokens,
         "compression_trigger_ratio": budget.compression_trigger_ratio,
-        "compression_keep_tokens": budget.compression_keep_tokens,
+        "compression_target_tokens": budget.compression_target_tokens,
     }
 
 
@@ -177,7 +213,7 @@ def _sanitize_breakdown(items: Any) -> None:
 
 
 class ToolResultBudget:
-    """同一次 Agent 执行中供工具结果使用的共享预算。"""
+    """共享模型请求预算；工具结果自身只遵守固定卸载阈值。"""
 
     def __init__(self, model_id: str | None, *, max_output_tokens: int | None = None):
         self._model_id = model_id
@@ -213,8 +249,11 @@ class ToolResultBudget:
     def remaining_for_messages(self) -> int:
         return self._budget.remaining_for_messages(self._static_input_tokens)
 
-    def remaining_for_tool_result(self, messages: list[BaseMessage]) -> int:
-        return self._budget.remaining_for_tool_result(
-            self._static_input_tokens,
-            count_messages_tokens(messages),
-        )
+    def validate_static_input(self) -> None:
+        """Fail early only when no message trimming could make requests fit."""
+        minimum_message_tokens = count_messages_tokens([HumanMessage(content="")])
+        guard_tokens = hard_input_guard_tokens(self._budget.hard_input_limit_tokens)
+        if self._static_input_tokens + minimum_message_tokens > guard_tokens:
+            raise ContextInputLimitExceededError(
+                "模型固定输入超过上下文安全水位，请缩短系统提示词或工具描述，并检查输出预留配置。"
+            )

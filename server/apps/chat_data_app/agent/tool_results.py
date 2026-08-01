@@ -7,6 +7,8 @@ from typing import Any
 
 INTERNAL_TOOL_RESULT_TYPE = "chatdata_internal_tool_result"
 QUERY_RESULT_TYPE = "query_result"
+TOOL_RESULT_RECOVERY_KEY = "chatdata_tool_result_recovery"
+TOOL_RESULT_RECOVERY_VERSION = 1
 
 
 def build_internal_query_result(
@@ -71,3 +73,55 @@ def build_query_result_response(
         },
         ensure_ascii=False,
     )
+
+
+def build_tool_result_recovery(
+    *,
+    source_tool: str,
+    result_path: str,
+    result_size_chars: int | None = None,
+    result_id: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Build checkpoint-only metadata for reconstructing a tool result."""
+    recovery: dict[str, Any] = {
+        "version": TOOL_RESULT_RECOVERY_VERSION,
+        "source_tool": str(source_tool or "").strip(),
+        "result_path": str(result_path or "").strip(),
+    }
+    if result_size_chars is not None:
+        recovery["result_size_chars"] = max(int(result_size_chars), 0)
+    if result_id:
+        recovery["result_id"] = str(result_id).strip()
+    if offset is not None:
+        recovery["offset"] = max(int(offset), 0)
+    if limit is not None:
+        recovery["limit"] = max(int(limit), 1)
+    return recovery
+
+
+def tool_result_recovery(artifact: Any) -> dict[str, Any] | None:
+    """Read a valid recovery descriptor from a ToolMessage artifact."""
+    if not isinstance(artifact, dict):
+        return None
+    recovery = artifact.get(TOOL_RESULT_RECOVERY_KEY)
+    if not isinstance(recovery, dict):
+        return None
+    if recovery.get("version") != TOOL_RESULT_RECOVERY_VERSION:
+        return None
+    if not str(recovery.get("result_path") or "").strip():
+        return None
+    return recovery
+
+
+def merge_tool_result_recovery_artifact(artifact: Any, recovery: dict[str, Any]) -> dict[str, Any]:
+    """Attach recovery metadata without discarding an existing tool artifact."""
+    if isinstance(artifact, dict):
+        merged = dict(artifact)
+    elif artifact is None:
+        merged = {}
+    else:
+        merged = {"source_artifact": artifact}
+    merged[TOOL_RESULT_RECOVERY_KEY] = dict(recovery)
+    return merged

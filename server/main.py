@@ -21,6 +21,7 @@ from middleware.api_logging import APIAccessLogMiddleware
 from utils.logger import get_logger
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler
 from apps.chat_data_app import router as chat_data_router  # noqa: E402
+from apps.chat_data_app.services.context_budget import validate_context_budget_startup_config  # noqa: E402
 from utils.checkpoint import setup_checkpointer  # noqa: E402
 
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     from utils.database import close_database
 
+    validate_context_budget_startup_config()
     await setup_checkpointer()
     yield
     await close_database()

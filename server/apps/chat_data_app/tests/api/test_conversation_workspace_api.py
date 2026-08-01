@@ -114,7 +114,7 @@ def test_conversation_workspace_office_html_skips_local_backend(client, monkeypa
     async def local_backend(*_args, **_kwargs):
         return "local"
 
-    async def render_preview(**_kwargs):
+    async def render_preview(*_args, **_kwargs):
         raise AssertionError("local backend must not invoke OfficeCLI")
 
     monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", local_backend)
@@ -135,7 +135,7 @@ def test_conversation_workspace_office_html_reports_oversized_preview(client, mo
     async def sandbox_backend(*_args, **_kwargs):
         return "sandbox"
 
-    async def render_preview(**_kwargs):
+    async def render_preview(*_args, **_kwargs):
         return {"available": False, "reason": "preview_too_large"}
 
     monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", sandbox_backend)

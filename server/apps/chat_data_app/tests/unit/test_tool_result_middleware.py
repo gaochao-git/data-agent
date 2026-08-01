@@ -20,11 +20,8 @@ from apps.chat_data_app.services.context_budget import estimate_text_tokens
 
 
 class _Budget:
-    def __init__(self, remaining: int = 100000):
-        self.remaining = remaining
-
-    def remaining_for_tool_result(self, _messages):
-        return self.remaining
+    def __init__(self, **_kwargs):
+        pass
 
 
 def _request(
@@ -173,14 +170,15 @@ async def test_paginated_read_tools_are_not_offloaded(monkeypatch, tmp_path, too
 
 
 @pytest.mark.asyncio
-async def test_remaining_context_budget_triggers_offload_below_static_threshold(monkeypatch, tmp_path):
+async def test_remaining_context_budget_does_not_change_per_result_threshold(monkeypatch, tmp_path):
     request, _paths = _workspace_request(monkeypatch, tmp_path)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 10000)
     message = ToolMessage(content="结果内容 " * 20, name="calculator_tool", tool_call_id="call_budget")
 
     result = await tool_result._finalize_tool_message(message, request, _Budget(remaining=520))
 
-    assert "/mnt/user-data/outputs/.tool-offload/" in result.content
+    assert result.content == message.content
+    assert not list((Path(_paths["outputs"]) / ".tool-offload").glob("*"))
 
 
 @pytest.mark.asyncio

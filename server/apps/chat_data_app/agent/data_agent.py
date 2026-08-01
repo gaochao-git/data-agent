@@ -104,6 +104,8 @@ def create_data_agent(
         options,
         workspace_root=runtime.workspace_root,
     )
+    tool_result_budget.configure(effective_system_prompt, tools, model_id=model_id)
+    tool_result_budget.validate_static_input()
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,

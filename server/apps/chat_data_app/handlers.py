@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
@@ -329,9 +329,14 @@ async def _persist_agent_turn_history(
 ) -> None:
     """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
     values = getattr(getattr(stream_adapter, "state", None), "values", None)
-    messages = values.get("messages") if isinstance(values, dict) else []
-    if not isinstance(messages, list):
+    state_messages = values.get("messages") if isinstance(values, dict) else []
+    if not isinstance(state_messages, list):
         return
+    messages = _merge_archived_turn_messages(
+        getattr(stream_adapter, "archived_turn_messages", []),
+        state_messages,
+        turn_id=turn_id,
+    )
     await conversation_event_service.persist_turn(
         conversation_id=conversation_id,
         user_id=user_id,
@@ -339,8 +344,75 @@ async def _persist_agent_turn_history(
         turn_id=turn_id,
         messages=messages,
         reasoning_segments=stream_adapter.reasoning_segments,
-        context_compression_events=values.get("context_compression_events") or [],
+        context_compression_events=(values or {}).get("context_compression_events") or [],
     )
+
+
+def _merge_archived_turn_messages(
+    archived_messages: list[BaseMessage],
+    state_messages: list[BaseMessage],
+    *,
+    turn_id: str,
+) -> list[BaseMessage]:
+    """Merge pre-compression snapshots with the final checkpoint turn."""
+    current_state_turn = _messages_from_turn(state_messages, turn_id)
+    if not archived_messages:
+        return current_state_turn or state_messages
+    return _merge_message_snapshots(archived_messages, current_state_turn)
+
+
+def _messages_from_turn(messages: list[BaseMessage], turn_id: str) -> list[BaseMessage]:
+    for index, message in enumerate(messages):
+        if isinstance(message, HumanMessage) and _stream_message_id(message) == turn_id:
+            return list(messages[index:])
+    return []
+
+
+def _merge_message_snapshots(
+    existing: list[BaseMessage],
+    incoming: list[BaseMessage],
+) -> list[BaseMessage]:
+    """Merge monotonic turn snapshots while retaining original full payloads."""
+    merged = list(existing)
+    seen = {
+        key
+        for index, message in enumerate(merged)
+        if (key := _stream_message_key(message, index)) is not None
+    }
+    for index, message in enumerate(incoming):
+        key = _stream_message_key(message, index)
+        if key is not None and key in seen:
+            continue
+        merged.append(message)
+        if key is not None:
+            seen.add(key)
+    return merged
+
+
+def _stream_message_key(message: BaseMessage, index: int) -> tuple[Any, ...] | None:
+    message_id = _stream_message_id(message)
+    if message_id:
+        return ("id", message_id)
+    if isinstance(message, ToolMessage):
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
+        return ("tool", tool_call_id) if tool_call_id else None
+    if isinstance(message, AIMessage):
+        tool_call_ids = tuple(
+            str((tool_call or {}).get("id") or "").strip()
+            for tool_call in getattr(message, "tool_calls", None) or []
+            if str((tool_call or {}).get("id") or "").strip()
+        )
+        if tool_call_ids:
+            return ("ai_tools", *tool_call_ids)
+    if isinstance(message, HumanMessage):
+        return ("human", str(message.content or ""))
+    if isinstance(message, AIMessage):
+        return ("ai", str(message.content or ""))
+    return (message.type, str(getattr(message, "content", "") or ""), index)
+
+
+def _stream_message_id(message: BaseMessage) -> str:
+    return str(getattr(message, "id", "") or "").strip()
 
 
 async def _persist_partial_agent_turn_history(
@@ -643,6 +715,7 @@ class _AgentSseStreamAdapter:
         self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
+        self.archived_turn_messages: list[Any] = []
         self.persisted_reasoning_count = 0
         self.latest_token_usage: dict[str, Any] | None = None
         self.state: Any | None = None
@@ -729,6 +802,12 @@ class _AgentSseStreamAdapter:
             self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
             return [_format_sse("token_usage", self.latest_token_usage)]
         if payload.get("type") == "context_compression" and isinstance(payload.get("event"), dict):
+            archived_messages = payload.get("archived_turn_messages")
+            if isinstance(archived_messages, list):
+                self.archived_turn_messages = _merge_message_snapshots(
+                    self.archived_turn_messages,
+                    archived_messages,
+                )
             return [_format_sse("context_compression", payload["event"])]
         return []
 

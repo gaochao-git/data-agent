@@ -11,19 +11,20 @@ from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
 from utils.tool_result_store import ToolResultRecord
-from ...services.context_budget import ToolResultBudget, estimate_text_tokens
+from ...services.context_budget import ToolResultBudget
 from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..tool_results import (
     build_query_result_response,
+    build_tool_result_recovery,
+    merge_tool_result_recovery_artifact,
     parse_internal_tool_result,
 )
 
 logger = get_logger(__name__)
 
 _READ_PAGINATED_TOOLS = frozenset({"file_read", "skill_load"})
-_RESULT_SAFETY_MARGIN_TOKENS = 512
 
 
 def create_tool_result_middleware(tool_result_budget: ToolResultBudget):
@@ -44,25 +45,37 @@ async def _finalize_tool_message(
     request: Any,
     tool_result_budget: ToolResultBudget,
 ) -> ToolMessage:
+    # The budget object is retained in the factory API because it is shared by
+    # request-level middleware; per-tool decisions intentionally use fixed limits.
+    _ = tool_result_budget
     tool_name = str(message.name or "").strip()
     internal = parse_internal_tool_result(message.content)
     if internal is not None:
-        content = await _finalize_query_result(internal, request, tool_result_budget)
-        return _replace_tool_message_content(message, content)
+        content, recovery = await _finalize_query_result(internal, request)
+        return _replace_tool_message(message, content=content, recovery=recovery)
     if tool_name in _READ_PAGINATED_TOOLS:
-        return message
+        recovery = _read_tool_recovery(tool_name, request, message.content)
+        return _replace_tool_message(message, recovery=recovery) if recovery else message
     content = _tool_message_text(message.content)
-    if content is None or not _requires_externalization(content, request, tool_result_budget):
+    if content is None:
         return message
-    externalized = await _externalize_generic_text(content, tool_name, request, tool_result_budget)
-    return _replace_tool_message_content(message, externalized)
+    if tool_name == "search_dataset":
+        externalized, recovery = await _persist_search_dataset_result(content, request)
+        if recovery is None:
+            return message
+        if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
+            return _replace_tool_message(message, recovery=recovery)
+        return _replace_tool_message(message, content=externalized, recovery=recovery)
+    if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
+        return message
+    externalized, recovery = await _externalize_generic_text(content, tool_name, request)
+    return _replace_tool_message(message, content=externalized, recovery=recovery)
 
 
 async def _finalize_query_result(
     internal: dict[str, Any],
     request: Any,
-    tool_result_budget: ToolResultBudget,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     query_result = dict(internal["payload"])
     meta = dict(internal["meta"])
     status = query_result_status(query_result)
@@ -77,7 +90,7 @@ async def _finalize_query_result(
             status=status,
             error=str(query_result.get("error") or "未知错误"),
             meta=public_meta,
-        )
+        ), None
 
     save_as = str(meta.get("save_as") or "").strip()
     if save_as:
@@ -89,9 +102,6 @@ async def _finalize_query_result(
         )
 
     raw_result = json.dumps(query_result, ensure_ascii=False)
-    if not _requires_externalization(raw_result, request, tool_result_budget):
-        return build_query_result_response(status=status, data=query_result, meta=public_meta)
-
     try:
         record = await _write_private_tool_result(
             content=json.dumps(query_result, ensure_ascii=False, indent=2),
@@ -99,14 +109,19 @@ async def _finalize_query_result(
             request=request,
         )
     except Exception as exc:
-        logger.error("卸载查询工具结果失败: %s", exc, exc_info=True)
-        return _query_result_fallback(
-            query_result,
-            public_meta=public_meta,
-            raw_result=raw_result,
-            request=request,
-            tool_result_budget=tool_result_budget,
-        )
+        logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
+        if len(raw_result) <= TOOL_RESULT_OFFLOAD_SIZE:
+            return build_query_result_response(status=status, data=query_result, meta=public_meta), None
+        return _query_result_fallback(query_result, public_meta=public_meta, raw_result=raw_result), None
+
+    recovery = build_tool_result_recovery(
+        source_tool="semantic_query_tool",
+        result_path=record.virtual_path,
+        result_size_chars=len(raw_result),
+        result_id=record.result_id,
+    )
+    if len(raw_result) <= TOOL_RESULT_OFFLOAD_SIZE:
+        return build_query_result_response(status=status, data=query_result, meta=public_meta), recovery
 
     public_meta.update({
         "result_id": record.result_id,
@@ -125,7 +140,7 @@ async def _finalize_query_result(
         len(raw_result),
         query_result.get("total_count", 0),
     )
-    return build_query_result_response(status=status, data=None, meta=public_meta)
+    return build_query_result_response(status=status, data=None, meta=public_meta), recovery
 
 
 async def _save_query_result_to_workspace(
@@ -134,7 +149,7 @@ async def _save_query_result_to_workspace(
     public_meta: dict[str, Any],
     save_as: str,
     request: Any,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     state = _request_state(request)
     workspace = state.get("workspace") if isinstance(state.get("workspace"), dict) else {}
     workspace_root = str(workspace.get("workspace_root") or "").strip()
@@ -143,7 +158,7 @@ async def _save_query_result_to_workspace(
             status=query_result_status(query_result),
             error="当前会话未初始化工作目录，无法保存结果",
             meta=public_meta,
-        )
+        ), None
     runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
         user_id=str(state.get("user_id") or "system"),
@@ -161,7 +176,7 @@ async def _save_query_result_to_workspace(
             status=query_result_status(query_result),
             error="保存查询结果失败，请检查目标路径后重试",
             meta=public_meta,
-        )
+        ), None
     public_meta.update({
         "result_path": write_result.get("file_path") or save_as,
         "total_count": query_result.get("total_count"),
@@ -169,12 +184,18 @@ async def _save_query_result_to_workspace(
         "sql": query_result.get("sql") or "",
         "next_required_action": "使用 file_read 抽查文件，或用 bash_run 读取 result_path 生成后续产物。",
     })
-    return build_query_result_response(
+    content = build_query_result_response(
         status=query_result_status(query_result),
         data=None,
         error=query_result.get("error"),
         meta=public_meta,
     )
+    recovery = build_tool_result_recovery(
+        source_tool="semantic_query_tool",
+        result_path=str(public_meta["result_path"]),
+        result_size_chars=len(json.dumps(query_result, ensure_ascii=False)),
+    )
+    return content, recovery
 
 
 def _query_result_fallback(
@@ -182,10 +203,8 @@ def _query_result_fallback(
     *,
     public_meta: dict[str, Any],
     raw_result: str,
-    request: Any,
-    tool_result_budget: ToolResultBudget,
 ) -> str:
-    clipped = _clip_text_to_budget(raw_result, _inline_token_limit(request, tool_result_budget))
+    clipped = _clip_text_to_chars(raw_result, TOOL_RESULT_OFFLOAD_SIZE)
     public_meta.update({
         "sql": query_result.get("sql") or "",
         "total_count": query_result.get("total_count", 0),
@@ -205,8 +224,7 @@ async def _externalize_generic_text(
     content: str,
     tool_name: str,
     request: Any,
-    tool_result_budget: ToolResultBudget,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     try:
         record = await _write_private_tool_result(
             content=content,
@@ -215,16 +233,43 @@ async def _externalize_generic_text(
         )
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
-        return _clip_text_to_budget(content, _inline_token_limit(request, tool_result_budget))
+        return _clip_text_to_chars(content, TOOL_RESULT_OFFLOAD_SIZE), None
+    recovery = build_tool_result_recovery(
+        source_tool=tool_name,
+        result_path=record.virtual_path,
+        result_size_chars=len(content),
+        result_id=record.result_id,
+    )
     return _build_offloaded_tool_result_message(
         tool_name=tool_name,
         result_path=record.virtual_path,
         result_size_chars=len(content),
-        preview=None if tool_name == "search_dataset" else _clip_text_to_budget(
-            content,
-            min(512, _inline_token_limit(request, tool_result_budget)),
-        ),
+        preview=_clip_text_to_chars(content, 512),
+    ), recovery
+
+
+async def _persist_search_dataset_result(
+    content: str,
+    request: Any,
+) -> tuple[str, dict[str, Any] | None]:
+    """Persist exact semantic config data so later compaction can reference it."""
+    try:
+        record = await _write_private_tool_result(content=content, suffix=".txt", request=request)
+    except Exception as exc:
+        logger.error("保存指标集搜索结果恢复副本失败: %s", exc, exc_info=True)
+        return _clip_text_to_chars(content, TOOL_RESULT_OFFLOAD_SIZE), None
+    recovery = build_tool_result_recovery(
+        source_tool="search_dataset",
+        result_path=record.virtual_path,
+        result_size_chars=len(content),
+        result_id=record.result_id,
     )
+    return _build_offloaded_tool_result_message(
+        tool_name="search_dataset",
+        result_path=record.virtual_path,
+        result_size_chars=len(content),
+        preview=None,
+    ), recovery
 
 
 def _build_offloaded_tool_result_message(
@@ -281,40 +326,19 @@ async def _write_private_tool_result(
     return record
 
 
-def _requires_externalization(content: str, request: Any, tool_result_budget: ToolResultBudget) -> bool:
-    if len(content) > TOOL_RESULT_OFFLOAD_SIZE:
-        return True
-    return estimate_text_tokens(content) > _inline_token_limit(request, tool_result_budget)
-
-
-def _inline_token_limit(request: Any, tool_result_budget: ToolResultBudget) -> int:
-    messages = list(_request_state(request).get("messages") or [])
-    remaining = tool_result_budget.remaining_for_tool_result(messages)
-    return max(0, remaining - _RESULT_SAFETY_MARGIN_TOKENS)
-
-
-def _clip_text_to_budget(content: str, token_limit: int) -> str:
+def _clip_text_to_chars(content: str, char_limit: int) -> str:
     if not content:
         return content
-    if token_limit <= 0:
+    if char_limit <= 0:
         return ""
-    if estimate_text_tokens(content) <= token_limit:
+    if len(content) <= char_limit:
         return content
     marker = "\n\n[... 工具结果已截断 ...]\n\n"
-    char_limit = min(len(content), max(1, token_limit * 4))
-    while char_limit > 0:
-        if char_limit >= len(content):
-            candidate = content
-        elif char_limit > len(marker) + 2:
-            head_size = max(1, (char_limit - len(marker)) * 2 // 3)
-            tail_size = max(1, char_limit - len(marker) - head_size)
-            candidate = f"{content[:head_size]}{marker}{content[-tail_size:]}"
-        else:
-            candidate = content[:char_limit]
-        if estimate_text_tokens(candidate) <= token_limit:
-            return candidate
-        char_limit -= max(1, char_limit // 8)
-    return ""
+    if char_limit <= len(marker) + 2:
+        return content[:char_limit]
+    head_size = max(1, (char_limit - len(marker)) * 2 // 3)
+    tail_size = max(1, char_limit - len(marker) - head_size)
+    return f"{content[:head_size]}{marker}{content[-tail_size:]}"
 
 
 def _request_state(request: Any) -> dict[str, Any]:
@@ -343,5 +367,73 @@ def _tool_message_text(content: Any) -> str | None:
     return None
 
 
-def _replace_tool_message_content(message: ToolMessage, content: str) -> ToolMessage:
-    return message.model_copy(update={"content": content})
+def _read_tool_recovery(tool_name: str, request: Any, content: Any) -> dict[str, Any] | None:
+    args = _request_tool_args(request)
+    if tool_name == "file_read":
+        result_path = str(args.get("file_path") or "").strip()
+        if not result_path:
+            return None
+        return build_tool_result_recovery(
+            source_tool=tool_name,
+            result_path=result_path,
+            result_size_chars=len(_tool_message_text(content) or ""),
+            offset=_non_negative_int(args.get("offset"), default=0),
+            limit=_positive_int(args.get("limit"), default=200),
+        )
+    if tool_name == "skill_load":
+        result_path = _skill_markdown_path(content)
+        if not result_path:
+            return None
+        return build_tool_result_recovery(
+            source_tool=tool_name,
+            result_path=result_path,
+            result_size_chars=len(_tool_message_text(content) or ""),
+            offset=0,
+            limit=200,
+        )
+    return None
+
+
+def _request_tool_args(request: Any) -> dict[str, Any]:
+    tool_call = getattr(request, "tool_call", None)
+    if not isinstance(tool_call, dict):
+        return {}
+    args = tool_call.get("args")
+    return args if isinstance(args, dict) else {}
+
+
+def _skill_markdown_path(content: Any) -> str:
+    text = _tool_message_text(content) or ""
+    for line in text.splitlines():
+        if line.startswith("runtime_path="):
+            runtime_path = line.partition("=")[2].strip().rstrip("/")
+            return f"{runtime_path}/SKILL.md" if runtime_path else ""
+    return ""
+
+
+def _non_negative_int(value: Any, *, default: int) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return default
+
+
+def _replace_tool_message(
+    message: ToolMessage,
+    *,
+    content: str | None = None,
+    recovery: dict[str, Any] | None = None,
+) -> ToolMessage:
+    update: dict[str, Any] = {}
+    if content is not None:
+        update["content"] = content
+    if recovery is not None:
+        update["artifact"] = merge_tool_result_recovery_artifact(message.artifact, recovery)
+    return message.model_copy(update=update) if update else message

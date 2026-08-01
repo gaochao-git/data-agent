@@ -51,6 +51,19 @@ def test_read_bounded_float_env_clamps_compression_ratio(monkeypatch):
     assert runtime_config.read_bounded_float_env("CHATDATA_TEST_RATIO", 0.70, minimum=0.01, maximum=0.80) == 0.70
 
 
+def test_compression_trigger_ratio_rejects_invalid_startup_config(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", raising=False)
+    assert runtime_config.read_compression_trigger_ratio_env() == 0.70
+
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", "0.95")
+    assert runtime_config.read_compression_trigger_ratio_env() == 0.95
+
+    for invalid in ("0", "-0.1", "0.951", "nan", "inf", "bad"):
+        monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", invalid)
+        with pytest.raises(RuntimeError, match="CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO"):
+            runtime_config.read_compression_trigger_ratio_env()
+
+
 def test_context_window_reads_chat_data_model_config(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_MODEL", "glm-5.1;0.2;128000,kimi-k2.5;0.1;256000")
     assert runtime_config.get_context_window("") == 128000
@@ -61,6 +74,7 @@ def test_context_window_reads_chat_data_model_config(monkeypatch):
 
 def test_get_context_compression_config_returns_runtime_values(monkeypatch):
     monkeypatch.setattr(runtime_config, "CONTEXT_COMPRESSION_ENABLED", False)
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", "0.70")
 
     config = runtime_config.get_context_compression_config()
 

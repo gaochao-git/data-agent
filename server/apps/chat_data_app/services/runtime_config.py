@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 
 from utils.logger import get_logger
@@ -65,11 +66,11 @@ CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED",
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHAT_DATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
-CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.80
+CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
 
 
 def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum: float) -> float:
-    """读取并限制浮点环境变量，避免压缩阈值侵占输出预留。"""
+    """读取并限制浮点环境变量。"""
     raw = str(os.getenv(name) or "").strip()
     if not raw:
         return default
@@ -80,12 +81,23 @@ def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum
     return min(max(value, minimum), maximum)
 
 
-CONTEXT_COMPRESSION_TRIGGER_RATIO = read_bounded_float_env(
-    "CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO",
-    CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO,
-    minimum=0.01,
-    maximum=CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO,
-)
+def read_compression_trigger_ratio_env() -> float:
+    """Read the compression ratio strictly so invalid config cannot start the service."""
+    name = "CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO"
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必须是 0 到 {CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO} 之间的数字") from exc
+    if not math.isfinite(value) or value <= 0 or value > CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO:
+        raise RuntimeError(
+            f"{name} 必须大于 0 且不超过 {CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO}，当前值: {value}"
+        )
+    return value
+
+
 CONTEXT_USAGE_SHOW_SYSTEM_PROMPT = read_bool_env("CHAT_DATA_CONTEXT_USAGE_SHOW_SYSTEM_PROMPT", False)
 LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_LLM_FIRST_TOKEN_TIMEOUT_SECONDS", 60)
 
@@ -101,7 +113,7 @@ def get_context_compression_config() -> dict:
     """读取智能问数上下文压缩配置。"""
     return {
         "enabled": CONTEXT_COMPRESSION_ENABLED,
-        "trigger_ratio": CONTEXT_COMPRESSION_TRIGGER_RATIO,
+        "trigger_ratio": read_compression_trigger_ratio_env(),
     }
 
 

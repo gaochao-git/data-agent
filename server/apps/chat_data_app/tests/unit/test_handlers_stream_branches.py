@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from apps.chat_data_app import handlers
 from apps.chat_data_app.services.semantic_conversation_context import SemanticConversationContext
@@ -293,6 +293,67 @@ async def test_partial_turn_history_persists_checkpoint_state_without_masking_er
         username="用户一",
         turn_id="turn-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_history_merges_pre_compression_tools_with_final_state(monkeypatch):
+    persisted = []
+    user = HumanMessage(content="生成报告", id="turn-archive")
+    first_ai = AIMessage(
+        content="",
+        id="assistant-1",
+        tool_calls=[{"id": "call-1", "name": "file_read", "args": {}}],
+    )
+    first_tool = ToolMessage(
+        content="第一份完整结果",
+        id="tool-1",
+        name="file_read",
+        tool_call_id="call-1",
+    )
+    second_ai = AIMessage(
+        content="",
+        id="assistant-2",
+        tool_calls=[{"id": "call-2", "name": "calculator_tool", "args": {}}],
+    )
+    second_tool = ToolMessage(
+        content="第二份结果",
+        id="tool-2",
+        name="calculator_tool",
+        tool_call_id="call-2",
+    )
+    final_ai = AIMessage(content="报告已完成", id="assistant-final")
+    adapter = SimpleNamespace(
+        state=SimpleNamespace(values={
+            "messages": [user, second_ai, second_tool, final_ai],
+            "context_compression_events": [],
+        }),
+        archived_turn_messages=[user, first_ai, first_tool, second_ai, second_tool],
+        reasoning_segments=[],
+    )
+
+    async def persist_turn(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(handlers.conversation_event_service, "persist_turn", persist_turn)
+
+    await handlers._persist_agent_turn_history(
+        adapter,
+        conversation_id="conv-archive",
+        user_id="user-1",
+        username="用户一",
+        turn_id="turn-archive",
+    )
+
+    messages = persisted[0]["messages"]
+    assert [message.id for message in messages] == [
+        "turn-archive",
+        "assistant-1",
+        "tool-1",
+        "assistant-2",
+        "tool-2",
+        "assistant-final",
+    ]
+    assert messages[2].content == "第一份完整结果"
 
 
 @pytest.mark.asyncio

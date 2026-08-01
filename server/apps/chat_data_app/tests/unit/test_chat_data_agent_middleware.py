@@ -19,6 +19,7 @@ from apps.chat_data_app.agent.middleware import context_compression, context_usa
 from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
+from apps.chat_data_app.agent.tool_results import build_tool_result_recovery, merge_tool_result_recovery_artifact
 from apps.chat_data_app.agent.middleware import tool_error
 from apps.chat_data_app.services.context_budget import (
     ContextBudget,
@@ -109,7 +110,7 @@ async def test_context_compression_compresses_completed_old_rounds_and_logs_toke
         static_input_tokens=0,
         compression_trigger_tokens=10,
         hard_input_limit_tokens=90,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=lambda _messages: _fake_summary("订单历史摘要"),
     )
@@ -139,7 +140,7 @@ async def test_context_compression_update_replaces_persisted_messages():
         static_input_tokens=0,
         compression_trigger_tokens=10,
         hard_input_limit_tokens=90,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=lambda _messages: _fake_summary("订单历史摘要"),
     )
@@ -172,7 +173,7 @@ async def test_context_compression_replaces_history_even_when_summary_does_not_r
         static_input_tokens=0,
         compression_trigger_tokens=1,
         hard_input_limit_tokens=12_000,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=lambda _messages: _fake_summary("历史问题 历史回答"),
     )
@@ -182,6 +183,200 @@ async def test_context_compression_replaces_history_even_when_summary_does_not_r
     assert report["triggered"] is True
     assert report["estimated_cleared_tokens"] == 0
     assert "上下文压缩已执行" in logs[0][0]
+
+
+@pytest.mark.asyncio
+async def test_context_compression_compacts_earlier_tools_in_current_turn():
+    first_tool_result = "第一份查询结果 " * 1200
+    second_tool_result = "第二份查询结果 " * 1200
+    messages = [
+        HumanMessage(content="生成完整数据分析报告", id="turn-current"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "call-1", "name": "file_read", "args": {}}],
+            id="assistant-1",
+        ),
+        ToolMessage(content=first_tool_result, tool_call_id="call-1", name="file_read", id="tool-1"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "call-2", "name": "bash_run", "args": {}}],
+            id="assistant-2",
+        ),
+        ToolMessage(content=second_tool_result, tool_call_id="call-2", name="bash_run", id="tool-2"),
+    ]
+    captured = {}
+
+    async def summarize(summary_messages):
+        captured["messages"] = summary_messages
+        return "已读取查询结果并完成脚本分析"
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        static_input_tokens=0,
+        compression_trigger_tokens=10,
+        hard_input_limit_tokens=10_000,
+        compression_target_tokens=count_messages_tokens([messages[0], *messages[3:]]),
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=summarize,
+    )
+
+    assert report["triggered"] is True
+    assert summary == "已读取查询结果并完成脚本分析"
+    assert compressed == [messages[0], messages[3], messages[4]]
+    assert captured["messages"] == [messages[1], messages[2]]
+    assert report["compressed_messages"] == 2
+
+
+@pytest.mark.asyncio
+async def test_context_compression_references_parallel_tool_results_without_breaking_pairs():
+    recovery_a = build_tool_result_recovery(
+        source_tool="file_read",
+        result_path="/mnt/user-data/workspace/a.json",
+        result_size_chars=5000,
+        offset=0,
+        limit=200,
+    )
+    recovery_b = build_tool_result_recovery(
+        source_tool="semantic_query_tool",
+        result_path="/mnt/user-data/outputs/.tool-offload/result-b.json",
+        result_size_chars=6000,
+        result_id="result-b",
+    )
+    messages = [
+        HumanMessage(content="并行核对两个结果", id="turn-parallel"),
+        AIMessage(
+            content="",
+            id="assistant-parallel",
+            tool_calls=[
+                {"id": "call-a", "name": "file_read", "args": {}},
+                {"id": "call-b", "name": "semantic_query_tool", "args": {}},
+            ],
+        ),
+        ToolMessage(
+            content="甲" * 5000,
+            id="tool-a",
+            name="file_read",
+            tool_call_id="call-a",
+            artifact=merge_tool_result_recovery_artifact(None, recovery_a),
+        ),
+        ToolMessage(
+            content="乙" * 6000,
+            id="tool-b",
+            name="semantic_query_tool",
+            tool_call_id="call-b",
+            artifact=merge_tool_result_recovery_artifact(None, recovery_b),
+        ),
+    ]
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        static_input_tokens=0,
+        compression_trigger_tokens=10,
+        hard_input_limit_tokens=20_000,
+        compression_target_tokens=1000,
+        config={"enabled": True, "trigger_ratio": 0.10},
+    )
+
+    assert summary is None
+    assert report["referenced_tool_results"] == 2
+    assert report["target_reached"] is True
+    assert compressed[1].tool_calls[0]["id"] == "call-a"
+    assert compressed[1].tool_calls[1]["id"] == "call-b"
+    assert [message.tool_call_id for message in compressed[2:]] == ["call-a", "call-b"]
+    assert all("[tool_result_referenced]" in message.content for message in compressed[2:])
+
+    referenced_again, referenced_count = context_compression._reference_tool_results_to_target(
+        compressed,
+        static_input_tokens=0,
+        summary_text=None,
+        target_tokens=1,
+    )
+    assert referenced_again == compressed
+    assert referenced_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hard_guard_drops_latest_unrecoverable_tool_batch_and_continues():
+    current_user = HumanMessage(content="继续完成分析", id="turn-hard-guard")
+    messages = [
+        HumanMessage(content="旧问题" + "旧内容" * 500, id="turn-old"),
+        AIMessage(content="旧回答" + "旧内容" * 500, id="assistant-old"),
+        current_user,
+        AIMessage(
+            content="",
+            id="assistant-tool",
+            tool_calls=[{"id": "call-large", "name": "unknown_tool", "args": {}}],
+        ),
+        ToolMessage(
+            content="不可恢复结果" * 2000,
+            id="tool-large",
+            name="unknown_tool",
+            tool_call_id="call-large",
+        ),
+    ]
+
+    compressed, summary, report = await compress_messages_for_state(
+        messages,
+        static_input_tokens=50,
+        compression_trigger_tokens=100_000,
+        hard_input_limit_tokens=500,
+        compression_target_tokens=100,
+        config={"enabled": False, "trigger_ratio": 0.70},
+    )
+
+    assert compressed == [current_user]
+    assert summary is None
+    assert report["hard_limit_enforced"] is True
+    assert report["estimated_tokens_after"] <= 475
+    assert report["hard_limit_dropped_messages"] == 4
+
+
+@pytest.mark.asyncio
+async def test_hard_guard_truncates_only_current_user_when_it_alone_is_too_large():
+    original = HumanMessage(content="当前问题" * 3000, id="turn-large-user")
+
+    compressed, summary, report = await compress_messages_for_state(
+        [original],
+        static_input_tokens=50,
+        compression_trigger_tokens=100_000,
+        hard_input_limit_tokens=500,
+        compression_target_tokens=100,
+        config={"enabled": False, "trigger_ratio": 0.70},
+    )
+
+    assert summary is None
+    assert len(compressed) == 1
+    assert compressed[0].id == original.id
+    assert compressed[0].content.startswith("[当前用户输入已按上下文安全水位截取")
+    assert report["hard_limit_user_message_truncated"] is True
+    assert report["estimated_tokens_after"] <= 475
+
+
+@pytest.mark.asyncio
+async def test_summary_failure_falls_back_to_hard_guard_without_failing():
+    async def fail_summary(_messages):
+        raise RuntimeError("summary unavailable")
+
+    current_user = HumanMessage(content="当前问题", id="turn-summary-fallback")
+    compressed, summary, report = await compress_messages_for_state(
+        [
+            HumanMessage(content="旧问题" + "历史" * 1000, id="turn-old"),
+            AIMessage(content="旧回答" + "历史" * 1000, id="assistant-old"),
+            current_user,
+        ],
+        static_input_tokens=50,
+        compression_trigger_tokens=10,
+        hard_input_limit_tokens=500,
+        compression_target_tokens=100,
+        config={"enabled": True, "trigger_ratio": 0.10},
+        summarizer=fail_summary,
+    )
+
+    assert compressed == [current_user]
+    assert summary is None
+    assert report["summary_generation_failed"] is True
+    assert report["hard_limit_enforced"] is True
+    assert report["estimated_tokens_after"] <= 475
 
 
 @pytest.mark.asyncio
@@ -207,7 +402,7 @@ async def test_context_compression_uses_configured_summary_output_budget(monkeyp
 
     monkeypatch.setattr(context_compression, "get_chat_data_llm", fake_get_chat_data_llm)
 
-    assert context_compression._get_summary_input_limit_tokens("summary-model") == 9_999
+    assert context_compression._get_summary_input_limit_tokens("summary-model") == context_compression.hard_input_guard_tokens(9_999)
     summary = await context_compression._summarize_messages_with_llm(
         [HumanMessage(content="待摘要历史")],
         model_id="summary-model",
@@ -237,7 +432,7 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
             compression_trigger_ratio=0.70,
             hard_input_limit_tokens=800,
             compression_trigger_tokens=10,
-            compression_keep_tokens=1,
+            compression_target_tokens=1,
         ),
     )
     monkeypatch.setattr(context_compression, "get_context_compression_config", lambda: {"enabled": True, "trigger_ratio": 0.10})
@@ -260,7 +455,11 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
     assert update["context_compression"]["triggered"] is True
     assert event["turn_id"] == "turn-current"
     assert event["anchor_message_id"] == "turn-current"
-    assert streamed_events == [{"type": "context_compression", "event": event}]
+    assert streamed_events == [{
+        "type": "context_compression",
+        "event": event,
+        "archived_turn_messages": [messages[-1]],
+    }]
 
 
 def test_context_compression_event_excludes_summary_and_anchors_current_message():
@@ -302,7 +501,7 @@ async def test_context_compression_merges_existing_summary_when_threshold_exceed
         static_input_tokens=0,
         compression_trigger_tokens=1,
         hard_input_limit_tokens=90,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=lambda _messages: _fake_summary("订单历史摘要"),
     )
@@ -328,7 +527,7 @@ async def test_context_compression_migrates_legacy_summary_without_triggering_co
         static_input_tokens=0,
         compression_trigger_tokens=9000,
         hard_input_limit_tokens=9500,
-        compression_keep_tokens=2100,
+        compression_target_tokens=2100,
         config={"enabled": True, "trigger_ratio": 0.70},
     )
 
@@ -359,7 +558,7 @@ async def test_context_compression_counts_runtime_summary_wrapper_in_trigger_bud
         static_input_tokens=0,
         compression_trigger_tokens=count_messages_tokens(messages) + raw_summary_tokens,
         hard_input_limit_tokens=100,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         previous_summary=previous_summary,
         summarizer=lambda _messages: _fake_summary("新的完整摘要"),
@@ -396,7 +595,7 @@ async def test_context_compression_preserves_all_completed_content_when_summary_
         static_input_tokens=0,
         compression_trigger_tokens=1,
         hard_input_limit_tokens=90,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=summarize,
         summary_input_limit_tokens=1_000_000,
@@ -437,7 +636,7 @@ async def test_context_compression_compacts_summary_input_without_mutating_runti
         static_input_tokens=0,
         compression_trigger_tokens=1,
         hard_input_limit_tokens=100_000,
-        compression_keep_tokens=1,
+        compression_target_tokens=1,
         config={"enabled": True, "trigger_ratio": 0.10},
         summarizer=summarize,
         summary_input_limit_tokens=summary_limit,
@@ -528,7 +727,7 @@ async def test_context_compression_keeps_two_recent_completed_rounds_together():
         HumanMessage(content="当前问题"),
     ]
     captured = {}
-    keep_tokens = count_messages_tokens(messages[2:])
+    keep_tokens = count_messages_tokens(messages[2:]) + context_compression._summary_tokens("第一轮摘要")
 
     async def summarize(compressible_messages):
         captured["messages"] = compressible_messages
@@ -539,7 +738,7 @@ async def test_context_compression_keeps_two_recent_completed_rounds_together():
         static_input_tokens=0,
         compression_trigger_tokens=1,
         hard_input_limit_tokens=1000,
-        compression_keep_tokens=keep_tokens,
+        compression_target_tokens=keep_tokens,
         config={"enabled": True, "trigger_ratio": 0.70},
         summarizer=summarize,
     )
@@ -577,7 +776,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
             compression_trigger_ratio=0.70,
             hard_input_limit_tokens=8000,
             compression_trigger_tokens=7000,
-            compression_keep_tokens=2100,
+            compression_target_tokens=2100,
         ),
     )
     monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
@@ -628,7 +827,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
             compression_trigger_ratio=0.70,
             hard_input_limit_tokens=800,
             compression_trigger_tokens=700,
-            compression_keep_tokens=210,
+            compression_target_tokens=210,
         ),
     )
     monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 100)

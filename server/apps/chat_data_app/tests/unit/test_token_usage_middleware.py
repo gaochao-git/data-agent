@@ -3,6 +3,8 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
@@ -30,10 +32,14 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     _request_model_name,
 )
 from apps.chat_data_app.services.context_budget import (
+    ContextInputLimitExceededError,
     ContextBudget,
+    ToolResultBudget,
     build_context_usage_payload,
     get_model_context_budget,
+    hard_input_guard_tokens,
     sanitize_context_usage_for_response,
+    validate_context_budget_startup_config,
 )
 from apps.chat_data_app.services.runtime_config import get_context_window
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -56,7 +62,7 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
             compression_trigger_ratio=1.0,
             hard_input_limit_tokens=1,
             compression_trigger_tokens=1,
-            compression_keep_tokens=1,
+            compression_target_tokens=1,
         ),
         used=-10,
     )
@@ -64,6 +70,8 @@ def test_context_and_payload_helpers_handle_empty_and_unknown_values():
     assert payload["total"] == 1
     assert payload["percentage"] == 0.0
     assert payload["remaining"] == 1
+    assert payload["hard_input_guard_ratio"] == 0.95
+    assert payload["hard_input_guard_tokens"] == 1
 
 
 def test_sanitize_context_usage_for_response_redacts_legacy_breakdown_without_mutation():
@@ -147,6 +155,7 @@ def test_estimate_prompt_usage_marks_estimated(monkeypatch):
     assert usage["context_window"] == budget.context_window
     assert usage["max_output_tokens"] == budget.max_output_tokens
     assert usage["hard_input_limit_tokens"] == budget.hard_input_limit_tokens
+    assert usage["hard_input_guard_tokens"] == hard_input_guard_tokens(budget.hard_input_limit_tokens)
     assert usage["compression_trigger_tokens"] == budget.compression_trigger_tokens
     assert usage["estimated"] is True
 
@@ -158,8 +167,9 @@ def test_model_context_budget_separates_output_reserve_from_compression_trigger(
     budget = get_model_context_budget("budget-model")
 
     assert budget.hard_input_limit_tokens == 80000
+    assert hard_input_guard_tokens(budget.hard_input_limit_tokens) == 76000
     assert budget.compression_trigger_tokens == 70000
-    assert budget.compression_keep_tokens == 21000
+    assert budget.compression_target_tokens == 21000
 
 
 def test_model_context_budget_never_delays_compression_past_output_reserve(monkeypatch):
@@ -173,7 +183,51 @@ def test_model_context_budget_never_delays_compression_past_output_reserve(monke
     budget = get_model_context_budget("budget-model")
 
     assert budget.hard_input_limit_tokens == 70000
-    assert budget.compression_trigger_tokens == 70000
+    assert budget.compression_trigger_tokens == 66500
+
+
+def test_context_budget_startup_validation_rejects_output_reserve_without_input_space(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_chat_data_model_configs",
+        lambda: [{"id": "tiny", "context_window": 1000}],
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_chat_data_output_max_tokens",
+        lambda: 1000,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_context_compression_summary_output_max_tokens",
+        lambda: 200,
+    )
+
+    with pytest.raises(RuntimeError, match="CHAT_DATA_OUTPUT_MAX_TOKENS=1000"):
+        validate_context_budget_startup_config()
+
+
+def test_context_budget_startup_validation_rejects_trigger_ratio_above_guard(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO", "0.951")
+
+    with pytest.raises(RuntimeError, match="CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO"):
+        validate_context_budget_startup_config()
+
+
+def test_tool_result_budget_rejects_dynamic_static_input_above_guard(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.context_budget.get_model_context_budget",
+        lambda *_args, **_kwargs: ContextBudget(
+            context_window=100,
+            max_output_tokens=20,
+            compression_trigger_ratio=0.70,
+            hard_input_limit_tokens=80,
+            compression_trigger_tokens=56,
+            compression_target_tokens=16,
+        ),
+    )
+    budget = ToolResultBudget("tiny")
+    budget.configure("系统提示词" * 200, [])
+
+    with pytest.raises(ContextInputLimitExceededError, match="固定输入超过上下文安全水位"):
+        budget.validate_static_input()
 
 
 def test_build_message_breakdown_includes_message_metadata_and_content():
@@ -583,7 +637,7 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
                 compression_trigger_ratio=0.70,
                 hard_input_limit_tokens=8000,
                 compression_trigger_tokens=7000,
-                compression_keep_tokens=2100,
+                compression_target_tokens=2100,
             ),
         )
         monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)

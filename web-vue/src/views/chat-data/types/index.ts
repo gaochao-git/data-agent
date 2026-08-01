@@ -190,9 +190,11 @@ export interface ChatDataTokenUsage {
   context_window?: number
   max_output_tokens?: number
   hard_input_limit_tokens?: number
+  hard_input_guard_ratio?: number
+  hard_input_guard_tokens?: number
   compression_trigger_tokens?: number
   compression_trigger_ratio?: number
-  compression_keep_tokens?: number
+  compression_target_tokens?: number
   estimated?: boolean
   context_compression?: ChatDataContextCompressionInfo | null
   llm_calls?: Array<{
@@ -224,10 +226,16 @@ export interface ChatDataContextCompressionInfo {
   threshold_tokens?: number
   trigger_ratio?: number
   hard_input_limit_tokens?: number
-  compression_keep_tokens?: number
+  hard_input_guard_ratio?: number
+  hard_input_guard_tokens?: number
+  compression_target_tokens?: number
   static_input_tokens?: number
   compressed_messages?: number
   summary_chars?: number
+  hard_limit_enforced?: boolean
+  hard_limit_dropped_messages?: number
+  hard_limit_summary_dropped?: boolean
+  hard_limit_user_message_truncated?: boolean
   compression_skipped_reason?: string
   legacy_summary_migrated?: boolean
 }
