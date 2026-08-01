@@ -805,6 +805,16 @@ export function getConversationWorkspaceFileContent(conversationId: string, path
   })
 }
 
+/** 读取工作区原始字节文件（PDF/Word 等二进制预览，返回 Blob） */
+export function getConversationWorkspaceRawFile(conversationId: string, path: string): Promise<Blob> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/raw`,
+    method: 'get',
+    params: { path },
+    responseType: 'blob',
+  }) as unknown as Promise<Blob>
+}
+
 export function importConversationWorkspaceSkill(conversationId: string, data: { skill_dir_path: string }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-skills/import`,
@@ -817,24 +827,14 @@ export function importConversationWorkspaceSkill(conversationId: string, data: {
 
 export interface UploadedFileInfo {
   file_id: string
-  status: 'parsing' | 'completed' | 'failed'
   original_filename: string
   file_type: string
   file_size: number
-  parse_filename?: string
-  storage_dir?: string
+  // 上传后实际存储文件名（去重后可能与 original_filename 不同），用于拼装可访问路径
+  storage_dir: string
 }
 
-export interface LinkedFileInfo {
-  file_id: string
-  original_filename: string
-  file_type: string
-  file_size: number
-  original_path: string
-  parsed_path: string
-}
-
-/** 上传文件（触发异步解析） */
+/** 上传文件（落盘到会话工作区 uploads，解析由 agent 按需进行） */
 export function uploadFile(conversationId: string, file: File): Promise<ApiResponse<UploadedFileInfo>> {
   const formData = new FormData()
   formData.append('file', file)
@@ -844,23 +844,6 @@ export function uploadFile(conversationId: string, file: File): Promise<ApiRespo
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' }
-  })
-}
-
-/** 轮询文件解析状态 */
-export function getUploadedFileInfo(fileId: string): Promise<ApiResponse<UploadedFileInfo>> {
-  return request({
-    url: `/agents/api/chatdata/uploaded-files/${fileId}`,
-    method: 'get'
-  })
-}
-
-/** 将已解析完成的文件链接到会话工作区 outputs 目录 */
-export function linkFileToWorkspace(conversationId: string, fileId: string): Promise<ApiResponse<LinkedFileInfo>> {
-  return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/link`,
-    method: 'post',
-    data: { file_id: fileId }
   })
 }
 

@@ -12,7 +12,6 @@ from fastapi import UploadFile
 from utils.logger import get_logger
 
 from ..daos.uploaded_file_dao import UploadedFileDao
-from .uploaded_file_parser import parse_file
 from .conversation_workspace import resolve_uploads_root
 
 logger = get_logger(__name__)
@@ -92,20 +91,11 @@ class UploadedFileService:
         logger.info("文件上传成功: %s, %s", file_id, original_filename)
         return {
             "file_id": file_id,
-            "status": "parsing",
             "original_filename": original_filename,
             "file_type": file_type,
             "file_size": file_size,
+            "storage_dir": storage_name,
         }
-
-    async def parse_file_async(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> None:
-        try:
-            await parse_file(file_id, self.dao, user_id=user_id, thread_id=thread_id)
-        except Exception as exc:
-            logger.error("文件解析失败: %s, %s", file_id, exc, exc_info=True)
-            await self.dao.update_parse_status(file_id=file_id, status="failed")
 
     async def get_file_info(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
         row = await self.dao.get_file(file_id)
@@ -139,16 +129,6 @@ class UploadedFileService:
         uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
         file_path = uploads_root / info["storage_dir"]
         return file_path.read_bytes() if file_path.exists() else None
-
-    async def get_parsed_content(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> Optional[str]:
-        info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
-        if not info or info["status"] != "completed" or not info["parse_filename"]:
-            return None
-        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
-        parsed_path = uploads_root / info["parse_filename"]
-        return parsed_path.read_text(encoding="utf-8") if parsed_path.exists() else None
 
     async def list_files_by_thread(
         self, thread_id: str, user_id: str = "system"
@@ -213,10 +193,6 @@ async def delete_file(file_id: str, user_id: str = "system", thread_id: str = ""
 
 async def get_file_content(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[bytes]:
     return await get_uploaded_file_service().get_file_content(file_id, user_id=user_id, thread_id=thread_id)
-
-
-async def get_parsed_content(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
-    return await get_uploaded_file_service().get_parsed_content(file_id, user_id=user_id, thread_id=thread_id)
 
 
 async def list_files_by_thread(thread_id: str, user_id: str = "system") -> list:

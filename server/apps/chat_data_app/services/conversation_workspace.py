@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import fnmatch
+import mimetypes
 import os
 import re
 import shlex
@@ -43,7 +44,6 @@ from .workspace_execution import (
     sandbox_list_dir,
     sandbox_load_skill_payload,
     sandbox_move_path,
-    sandbox_outputs_dir,
     sandbox_path_to_visible,
     sandbox_read_text_file,
     sandbox_write_tool_result,
@@ -684,6 +684,44 @@ async def read_conversation_workspace_file(
 ) -> dict[str, Any]:
     """读取当前用户会话持久化工作区中的文本文件。"""
     return await asyncio.to_thread(read_workspace_text_file, conversation_id, path, max_bytes, user_id)
+
+
+async def read_conversation_workspace_raw_file(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+    max_bytes: int = 20 * 1024 * 1024,
+) -> dict[str, Any]:
+    """读取会话工作区中的原始字节文件（用于 PDF/Word 等二进制预览/下载）。"""
+    return await asyncio.to_thread(read_workspace_raw_file, conversation_id, path, max_bytes, user_id)
+
+
+def read_workspace_raw_file(
+    conversation_id: str,
+    path: str,
+    max_bytes: int = 20 * 1024 * 1024,
+    user_id: str = "system",
+) -> dict[str, Any]:
+    """读取会话工作区中的原始字节文件，返回 bytes 与 mime 类型。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id)
+    root = paths["root"]
+    target = resolve_workspace_path(root, path)
+    if is_tool_result_workspace_path(root, target):
+        raise ValueError("工具结果缓存不在工作区文件预览范围内")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    size = target.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
+    mime, _ = mimetypes.guess_type(str(target))
+    return {
+        "path": to_visible_path(root, target),
+        "relative_path": target.relative_to(Path(root).resolve()).as_posix(),
+        "data": target.read_bytes(),
+        "size": size,
+        "mime": mime or "application/octet-stream",
+    }
 
 
 async def read_conversation_query_result(

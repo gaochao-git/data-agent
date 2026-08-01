@@ -197,6 +197,7 @@ const getFileIconClass = (fileType?: string): string => {
   const ext = String(fileType || '').toLowerCase()
   if (['md', 'txt'].includes(ext)) return 'fa-regular fa-file-lines'
   if (['sql'].includes(ext)) return 'fa-solid fa-database'
+  if (['pdf'].includes(ext)) return 'fa-solid fa-file-pdf'
   if (['doc', 'docx'].includes(ext)) return 'fa-regular fa-file-word'
   if (['xls', 'xlsx'].includes(ext)) return 'fa-regular fa-file-excel'
   return 'fa-regular fa-file'

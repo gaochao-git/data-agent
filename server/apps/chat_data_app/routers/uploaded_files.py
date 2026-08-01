@@ -2,7 +2,10 @@
 文件上传API路由
 """
 
-from fastapi import APIRouter, UploadFile, File, Form, Request
+from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import Response
 
 from utils.error_codes import ErrorCode
@@ -20,6 +23,9 @@ from .dependencies import _get_current_user
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/uploaded-files", tags=["uploaded-files"])
+
+# 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）
+ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pdf"}
 
 
 @router.post("/upload")
@@ -52,6 +58,16 @@ async def upload_file_api(
     if not file.filename:
         return business_response(
             msg="文件名不能为空",
+            code=ErrorCode.HTTP_BAD_REQUEST,
+            status="error",
+            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
+        )
+
+    # 限制文件类型（与前端白名单一致，防止绕过）
+    ext = Path(file.filename).suffix.lower().lstrip(".")
+    if ext not in ALLOWED_FILE_EXTENSIONS:
+        return business_response(
+            msg=f"不支持的文件类型: .{ext}，仅支持 {', '.join(sorted(ALLOWED_FILE_EXTENSIONS))}",
             code=ErrorCode.HTTP_BAD_REQUEST,
             status="error",
             http_status_code=ErrorCode.HTTP_BAD_REQUEST,
@@ -177,12 +193,13 @@ async def get_file_content_api(file_id: str, req: Request = None):
     file_type = info["file_type"]
     content_type = _get_content_type(file_type)
 
+    original_filename = info["original_filename"]
+    ascii_fallback = original_filename.encode("ascii", "ignore").decode("ascii") or "file"
+    disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(original_filename)}"
     return Response(
         content=content,
         media_type=content_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{info["original_filename"]}"'
-        }
+        headers={"Content-Disposition": disposition}
     )
 
 

@@ -10,8 +10,8 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, importConversationWorkspaceSkill, uploadFile } from '../api'
-import type { LinkedFileInfo } from '../api'
+import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, uploadFile } from '../api'
+import { renderAsync as renderDocxAsync } from 'docx-preview'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -89,7 +89,7 @@ onMounted(focusInput)
 const isNearBottom = ref(true)
 
 // ---- 文件上传 ----
-const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.doc', '.xlsx', '.xls']
+const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.xlsx', '.pdf']
 const MAX_FILE_SIZE = 50 * 1024 * 1024
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
 const MAX_INPUT_CHARS = 4000
@@ -99,7 +99,8 @@ interface PendingFile {
   status: 'uploading' | 'uploaded' | 'failed'
   file_type?: string
   file_size?: number
-  linkedInfo?: LinkedFileInfo
+  // 上传后实际存储文件名（去重后可能与 filename 不同），用于拼装可访问路径
+  storage_dir?: string
 }
 const pendingFiles = ref<PendingFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -150,8 +151,10 @@ const handleFileSelected = async (event: Event) => {
       status: 'uploaded',
       file_type: res.data.file_type,
       file_size: res.data.file_size,
+      storage_dir: res.data.storage_dir,
     }
     pendingFiles.value.push(pending)
+    scheduleWorkspaceFilesRefresh()
     // 上传即登记：不再预解析/链接到工作区，agent 在需要时通过 parse_document 工具按需解析
   } catch {
     ElMessage.error('文件上传失败')
@@ -204,7 +207,9 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     placeholder.filename = res.data.original_filename
     placeholder.file_type = res.data.file_type
     placeholder.file_size = res.data.file_size
+    placeholder.storage_dir = res.data.storage_dir
     placeholder.status = 'uploaded'
+    scheduleWorkspaceFilesRefresh()
     return true
   } catch {
     pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
@@ -265,6 +270,8 @@ const collapsedConsoleDirectories = ref<Set<string>>(new Set(['uploads']))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
+const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
+const docxPreviewContainerRef = ref<HTMLElement | null>(null)
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
 const presentedArtifactContents = ref<Record<string, string>>({})
@@ -891,6 +898,8 @@ const handleImportWorkspaceSkill = async (path: string) => {
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
   if (!conversationId) {
     workspaceFiles.value = []
+    Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
+    workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
     return
   }
@@ -921,8 +930,19 @@ const scheduleWorkspaceFilesRefresh = () => {
   }, 500)
 }
 
+const BINARY_PREVIEW_EXTENSIONS = new Set(['pdf', 'docx'])
+const isBinaryPreviewPath = (path: string) => {
+  const ext = path.split('.').pop()?.toLowerCase() || ''
+  return BINARY_PREVIEW_EXTENSIONS.has(ext)
+}
+
 const loadWorkspaceFileContent = async (conversationId: string | null | undefined, path: string | null) => {
-  if (!conversationId || !path || workspaceFileContents.value[path] !== undefined) return
+  if (!conversationId || !path) return
+  if (isBinaryPreviewPath(path)) {
+    await loadWorkspaceBinaryFile(conversationId, path)
+    return
+  }
+  if (workspaceFileContents.value[path] !== undefined) return
   loadingWorkspaceFilePath.value = path
   try {
     const response = await getConversationWorkspaceFileContent(conversationId, path)
@@ -938,6 +958,34 @@ const loadWorkspaceFileContent = async (conversationId: string | null | undefine
       [path]: '文件内容加载失败。',
     }
     console.error('加载智能分析工作区文件内容失败:', err)
+  } finally {
+    if (loadingWorkspaceFilePath.value === path) {
+      loadingWorkspaceFilePath.value = null
+    }
+  }
+}
+
+const loadWorkspaceBinaryFile = async (conversationId: string, path: string) => {
+  if (workspaceFileBlobs.value[path] !== undefined) return
+  loadingWorkspaceFilePath.value = path
+  try {
+    const blob = await getConversationWorkspaceRawFile(conversationId, path)
+    if (conversationId !== localConversationId.value) return
+    const arrayBuffer = await blob.arrayBuffer()
+    const ext = path.split('.').pop()?.toLowerCase() || ''
+    const mime = blob.type || 'application/octet-stream'
+    const url = URL.createObjectURL(new Blob([arrayBuffer], { type: mime }))
+    workspaceFileBlobs.value = {
+      ...workspaceFileBlobs.value,
+      [path]: { url, arrayBuffer, ext, mime },
+    }
+  } catch (err) {
+    if (conversationId !== localConversationId.value) return
+    workspaceFileBlobs.value = {
+      ...workspaceFileBlobs.value,
+      [path]: { url: '', arrayBuffer: new ArrayBuffer(0), ext: '', mime: '', error: true },
+    }
+    console.error('加载工作区二进制文件失败:', err)
   } finally {
     if (loadingWorkspaceFilePath.value === path) {
       loadingWorkspaceFilePath.value = null
@@ -1000,6 +1048,18 @@ const loadPresentedArtifacts = (conversationId: string | null | undefined) => {
     }
   }
 }
+
+const selectedConsoleFileExt = computed(() => {
+  const p = selectedConsoleFilePath.value || ''
+  return p.split('.').pop()?.toLowerCase() || ''
+})
+const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pdf')
+const selectedConsoleIsDocx = computed(() => selectedConsoleFileExt.value === 'docx')
+const selectedConsoleBinaryBlob = computed(() => {
+  const p = selectedConsoleFilePath.value
+  if (!p) return null
+  return workspaceFileBlobs.value[p] || null
+})
 
 const selectedConsoleFileText = computed(() => {
   const selectedPath = selectedConsoleFilePath.value
@@ -1322,6 +1382,8 @@ watch(
       messages.value = []
       toolCallsMap.value.clear()
       workspaceFiles.value = []
+      Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
+      workspaceFileBlobs.value = {}
       workspaceFileContents.value = {}
       presentedArtifactContents.value = {}
       loadedPresentedArtifactKeys.value = new Set()
@@ -1336,6 +1398,28 @@ watch(
     }
   }
 )
+
+watch([selectedConsoleFilePath, selectedConsoleBinaryBlob], async () => {
+  if (!selectedConsoleIsDocx.value) return
+  const blob = selectedConsoleBinaryBlob.value
+  if (!blob || blob.error || !blob.arrayBuffer || !blob.arrayBuffer.byteLength) return
+  await nextTick()
+  const container = docxPreviewContainerRef.value
+  if (!container) return
+  container.innerHTML = ''
+  try {
+    await renderDocxAsync(blob.arrayBuffer, container, null, {
+      breakPages: false,
+    } as any)
+    // 保持 docx 原页面宽度（保真不变形），左对齐并去页面阴影，靠容器横向滚动查看完整内容
+    const fitStyle = document.createElement('style')
+    fitStyle.textContent = '.docx-wrapper{align-items:flex-start!important;padding:0!important;margin:0!important}.docx-wrapper>section{box-shadow:none!important;margin:4px 0!important}'
+    container.appendChild(fitStyle)
+  } catch (e) {
+    console.error('docx 渲染失败:', e)
+    container.innerHTML = '<div class="text-xs text-red-400">Word 渲染失败，请下载查看。</div>'
+  }
+})
 
 watch(
   () => localConversationId.value,
@@ -1794,7 +1878,7 @@ const handleSubmit = async () => {
         filename: f.filename,
         file_type: f.file_type,
         file_size: f.file_size,
-        original_path: `/mnt/user-data/uploads/${f.filename}`,
+        original_path: `/mnt/user-data/uploads/${f.storage_dir || f.filename}`,
       })
     }
   }
@@ -2258,6 +2342,25 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 </tbody>
               </table>
             </div>
+            <iframe
+              v-else-if="selectedConsoleIsPdf && selectedConsoleBinaryBlob?.url"
+              :src="selectedConsoleBinaryBlob.url"
+              class="m-0 h-[46vh] min-w-0 w-full rounded-md border border-slate-100 bg-white"
+            ></iframe>
+            <div
+              v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
+              class="flex h-[46vh] items-center justify-center text-xs text-slate-400"
+            >PDF 加载中...</div>
+            <div
+              v-else-if="selectedConsoleIsDocx && selectedConsoleBinaryBlob && !selectedConsoleBinaryBlob.error"
+              ref="docxPreviewContainerRef"
+              class="max-h-[46vh] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white text-sm"
+            ></div>
+            <div
+              v-else-if="selectedConsoleIsDocx && loadingWorkspaceFilePath === selectedConsoleFilePath"
+              class="flex h-[46vh] items-center justify-center text-xs text-slate-400"
+            >Word 加载中...</div>
+            <div v-else-if="selectedConsoleBinaryBlob?.error" class="flex h-[46vh] items-center justify-center text-xs text-red-400">文件加载失败，请重试或下载查看。</div>
             <pre v-else class="m-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
           </div>
           <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">

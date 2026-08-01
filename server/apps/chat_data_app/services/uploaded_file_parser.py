@@ -11,44 +11,14 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Optional
 
 from utils.logger import get_logger
 
-from ..daos.uploaded_file_dao import UploadedFileDao
-from .conversation_workspace import resolve_uploads_root
-
 logger = get_logger(__name__)
 
 IMAGE_TYPES = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
-
-
-async def parse_file(file_id: str, dao: Optional[UploadedFileDao] = None, user_id: str = "system", thread_id: str = "") -> bool:
-    """解析文件并生成 Markdown。"""
-    file_dao = dao or UploadedFileDao()
-    row = await file_dao.get_file(file_id)
-    if not row:
-        logger.error("文件不存在: %s", file_id)
-        return False
-
-    uploads_root = resolve_uploads_root(user_id, thread_id)
-    original_path = uploads_root / row.storage_dir
-    if not original_path.exists():
-        logger.error("原始文件不存在: %s", original_path)
-        return False
-
-    try:
-        parse_filename = await _parse_by_type(uploads_root, original_path, row.file_type, row.original_filename)
-        status = "completed" if parse_filename else "failed"
-        await file_dao.update_parse_status(file_id=file_id, status=status, parse_filename=parse_filename)
-        logger.info("文件解析完成: %s, status=%s", file_id, status)
-        return parse_filename is not None
-    except Exception as exc:
-        logger.error("文件解析异常: %s, %s", file_id, exc, exc_info=True)
-        await file_dao.update_parse_status(file_id=file_id, status="failed")
-        return False
 
 
 async def _parse_by_type(uploads_root: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
@@ -99,7 +69,7 @@ async def _parse_pdf(uploads_root: Path, original_path: Path, original_filename:
     except Exception as exc:
         logger.error("PDF解析失败: %s", exc)
         md_lines.append(f"\n> PDF解析失败: {str(exc)}\n")
-    return _write_markdown(file_dir, "\n".join(md_lines))
+    return _write_markdown(uploads_root, original_path, "\n".join(md_lines))
 
 
 async def _parse_text(uploads_root: Path, original_path: Path, original_filename: str) -> Optional[str]:
@@ -222,20 +192,6 @@ def _markdown_cell(value: object) -> str:
 
 def _markdown_text_cell(value: str) -> str:
     return str(value or "").strip().replace("|", "\\|").replace("\n", " ")
-
-
-def get_image_base64(file_id: str, storage_dir: str, file_type: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
-    """获取图片的 Base64 编码，用于发送给多模态 LLM。"""
-    if file_type not in IMAGE_TYPES:
-        return None
-
-    file_path = resolve_uploads_root(user_id, thread_id) / storage_dir
-    if not file_path.exists():
-        return None
-
-    data = base64.b64encode(file_path.read_bytes()).decode("utf-8")
-    mime_type = "image/jpeg" if file_type == "jpg" else f"image/{file_type}"
-    return f"data:{mime_type};base64,{data}"
 
 
 def _write_markdown(uploads_root: Path, original_path: Path, content: str) -> str:

@@ -1002,8 +1002,6 @@ async def _generate_chat_data_stream(
             message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
                 message_kwargs["skill_names"] = normalized_skill_names
-            if file_attachments:
-                message_kwargs["file_ids"] = file_attachments
             user_message = _build_user_message(
                 message_content,
                 semantic_selection_event,
@@ -1127,7 +1125,7 @@ async def _generate_chat_data_stream(
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
         yield _format_sse("error", {"error": str(exc)})
         yield _format_sse("done", "[DONE]")
-    except Exception as exc:
+    except Exception:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
         yield _format_sse("done", "[DONE]")
