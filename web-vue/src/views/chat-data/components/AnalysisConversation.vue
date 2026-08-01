@@ -3,15 +3,14 @@
  * ChatData 会话页。
  * 左侧展示流式消息与工具调用，右侧展示当前工具结果和工作区产物预览。
  */
-import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, uploadFile } from '../api'
-import { renderAsync as renderDocxAsync } from 'docx-preview'
+import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -85,7 +84,14 @@ const focusInput = () => {
   inputBarRef.value?.focus()
 }
 
-onMounted(focusInput)
+onMounted(() => {
+  focusInput()
+  document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
+})
 const isNearBottom = ref(true)
 
 // ---- 文件上传 ----
@@ -271,7 +277,11 @@ const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
-const docxPreviewContainerRef = ref<HTMLElement | null>(null)
+const workspaceFilePreviewRef = ref<HTMLElement | null>(null)
+const isWorkspaceFilePreviewFullscreen = ref(false)
+const selectedConsoleDocxOfficeHtml = ref<string | null>(null)
+const selectedConsoleDocxPreviewUnavailable = ref(false)
+const loadingDocxOfficePreviewKey = ref<string | null>(null)
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
 const presentedArtifactContents = ref<Record<string, string>>({})
@@ -554,6 +564,9 @@ const isFileTreeNodeCollapsed = (path: string): boolean => collapsedConsoleDirec
 const selectConsoleDirectory = (path: string) => {
   selectedConsoleDirectoryPath.value = normalizeVisiblePath(path)
   selectedConsoleFilePath.value = null
+  selectedConsoleDocxOfficeHtml.value = null
+  selectedConsoleDocxPreviewUnavailable.value = false
+  loadingDocxOfficePreviewKey.value = null
 }
 
 const selectConsoleDirectoryAndToggle = (path: string) => {
@@ -565,7 +578,24 @@ const selectConsoleDirectoryAndToggle = (path: string) => {
 const selectConsoleFile = (path: string) => {
   selectedConsoleFilePath.value = normalizeVisiblePath(path)
   selectedConsoleDirectoryPath.value = null
+  selectedConsoleDocxOfficeHtml.value = null
+  selectedConsoleDocxPreviewUnavailable.value = false
+  loadingDocxOfficePreviewKey.value = null
   consoleFilePreviewMode.value = 'render'
+}
+
+const syncWorkspaceFilePreviewFullscreen = () => {
+  isWorkspaceFilePreviewFullscreen.value = document.fullscreenElement === workspaceFilePreviewRef.value
+}
+
+const toggleWorkspaceFilePreviewFullscreen = async () => {
+  const preview = workspaceFilePreviewRef.value
+  if (!preview) return
+  if (document.fullscreenElement === preview) {
+    await document.exitFullscreen()
+    return
+  }
+  await preview.requestFullscreen()
 }
 
 const toggleFileTreeNode = (path: string) => {
@@ -901,6 +931,9 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
+    selectedConsoleDocxOfficeHtml.value = null
+    selectedConsoleDocxPreviewUnavailable.value = false
+    loadingDocxOfficePreviewKey.value = null
     return
   }
   isWorkspaceFilesLoading.value = true
@@ -939,7 +972,11 @@ const isBinaryPreviewPath = (path: string) => {
 const loadWorkspaceFileContent = async (conversationId: string | null | undefined, path: string | null) => {
   if (!conversationId || !path) return
   if (isBinaryPreviewPath(path)) {
-    await loadWorkspaceBinaryFile(conversationId, path)
+    if (path.toLowerCase().endsWith('.docx')) {
+      await loadWorkspaceOfficeHtmlPreview(conversationId, path)
+    } else {
+      await loadWorkspaceBinaryFile(conversationId, path)
+    }
     return
   }
   if (workspaceFileContents.value[path] !== undefined) return
@@ -961,6 +998,30 @@ const loadWorkspaceFileContent = async (conversationId: string | null | undefine
   } finally {
     if (loadingWorkspaceFilePath.value === path) {
       loadingWorkspaceFilePath.value = null
+    }
+  }
+}
+
+const loadWorkspaceOfficeHtmlPreview = async (conversationId: string, path: string) => {
+  const requestKey = `${conversationId}:${path}`
+  if (loadingDocxOfficePreviewKey.value === requestKey) return
+  loadingDocxOfficePreviewKey.value = requestKey
+  try {
+    const response = await getConversationWorkspaceOfficeHtmlPreview(conversationId, path)
+    if (conversationId !== localConversationId.value || path !== selectedConsoleFilePath.value) return
+    const preview = response.data
+    selectedConsoleDocxOfficeHtml.value = preview?.available && !preview.truncated && preview.html
+      ? preview.html
+      : null
+    selectedConsoleDocxPreviewUnavailable.value = !selectedConsoleDocxOfficeHtml.value
+  } catch (err) {
+    if (conversationId !== localConversationId.value || path !== selectedConsoleFilePath.value) return
+    selectedConsoleDocxOfficeHtml.value = null
+    selectedConsoleDocxPreviewUnavailable.value = true
+    console.warn('OfficeCLI Word 预览不可用:', err)
+  } finally {
+    if (loadingDocxOfficePreviewKey.value === requestKey) {
+      loadingDocxOfficePreviewKey.value = null
     }
   }
 }
@@ -1055,6 +1116,9 @@ const selectedConsoleFileExt = computed(() => {
 })
 const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pdf')
 const selectedConsoleIsDocx = computed(() => selectedConsoleFileExt.value === 'docx')
+const workspaceFilePreviewHeightClass = computed(() => (
+  isWorkspaceFilePreviewFullscreen.value ? 'h-[calc(100vh-48px)]' : 'h-[46vh]'
+))
 const selectedConsoleBinaryBlob = computed(() => {
   const p = selectedConsoleFilePath.value
   if (!p) return null
@@ -1385,6 +1449,9 @@ watch(
       Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
       workspaceFileBlobs.value = {}
       workspaceFileContents.value = {}
+      selectedConsoleDocxOfficeHtml.value = null
+      selectedConsoleDocxPreviewUnavailable.value = false
+      loadingDocxOfficePreviewKey.value = null
       presentedArtifactContents.value = {}
       loadedPresentedArtifactKeys.value = new Set()
       loadingPresentedArtifactKeys.value = new Set()
@@ -1398,28 +1465,6 @@ watch(
     }
   }
 )
-
-watch([selectedConsoleFilePath, selectedConsoleBinaryBlob], async () => {
-  if (!selectedConsoleIsDocx.value) return
-  const blob = selectedConsoleBinaryBlob.value
-  if (!blob || blob.error || !blob.arrayBuffer || !blob.arrayBuffer.byteLength) return
-  await nextTick()
-  const container = docxPreviewContainerRef.value
-  if (!container) return
-  container.innerHTML = ''
-  try {
-    await renderDocxAsync(blob.arrayBuffer, container, null, {
-      breakPages: false,
-    } as any)
-    // 保持 docx 原页面宽度（保真不变形），左对齐并去页面阴影，靠容器横向滚动查看完整内容
-    const fitStyle = document.createElement('style')
-    fitStyle.textContent = '.docx-wrapper{align-items:flex-start!important;padding:0!important;margin:0!important}.docx-wrapper>section{box-shadow:none!important;margin:4px 0!important}'
-    container.appendChild(fitStyle)
-  } catch (e) {
-    console.error('docx 渲染失败:', e)
-    container.innerHTML = '<div class="text-xs text-red-400">Word 渲染失败，请下载查看。</div>'
-  }
-})
 
 watch(
   () => localConversationId.value,
@@ -2306,17 +2351,36 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </button>
                 </div>
                 <div v-if="selectedConsoleFile" class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ selectedConsoleFile.source }}</div>
+                <button
+                  v-if="selectedConsoleFile"
+                  type="button"
+                  class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                  title="放大预览"
+                  @click="toggleWorkspaceFilePreviewFullscreen"
+                >
+                  <i class="fa-solid fa-expand"></i>
+                </button>
               </div>
             </div>
-            <div v-if="!selectedConsoleFile" class="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-slate-500">
-              请选择文件查看内容。
-            </div>
-            <ChartSpecRenderer
-              v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
-              :spec="selectedConsoleChartSpec"
-            />
-            <div v-else-if="hasSelectedConsoleTable && consoleFilePreviewMode === 'table'" class="max-h-[46vh] overflow-auto rounded-md border border-slate-100 bg-white">
-              <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
+            <div ref="workspaceFilePreviewRef" class="workspace-file-preview relative bg-white" :class="isWorkspaceFilePreviewFullscreen ? 'h-screen w-screen overflow-auto p-6' : ''">
+              <button
+                v-if="isWorkspaceFilePreviewFullscreen"
+                type="button"
+                class="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-xs text-slate-600 shadow-sm hover:bg-slate-50"
+                title="退出放大预览"
+                @click="toggleWorkspaceFilePreviewFullscreen"
+              >
+                <i class="fa-solid fa-compress"></i>
+              </button>
+              <div v-if="!selectedConsoleFile" class="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-slate-500">
+                请选择文件查看内容。
+              </div>
+              <ChartSpecRenderer
+                v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
+                :spec="selectedConsoleChartSpec"
+              />
+              <div v-else-if="hasSelectedConsoleTable && consoleFilePreviewMode === 'table'" :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] overflow-auto rounded-md border border-slate-100 bg-white' : 'max-h-[46vh] overflow-auto rounded-md border border-slate-100 bg-white'">
+                <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
                 <thead class="sticky top-0 z-10 bg-slate-50">
                   <tr>
                     <th
@@ -2341,27 +2405,40 @@ const handleKeyDown = (event: KeyboardEvent) => {
                   </tr>
                 </tbody>
               </table>
+              </div>
+              <iframe
+                v-else-if="selectedConsoleIsPdf && selectedConsoleBinaryBlob?.url"
+                :src="selectedConsoleBinaryBlob.url"
+                :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] min-w-0 w-full rounded-md border border-slate-100 bg-white' : 'm-0 h-[46vh] min-w-0 w-full rounded-md border border-slate-100 bg-white'"
+              ></iframe>
+              <div
+                v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
+                :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
+              >PDF 加载中...</div>
+              <div
+                v-else-if="selectedConsoleIsDocx && selectedConsoleDocxOfficeHtml"
+                :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white' : 'h-[46vh] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white'"
+              >
+                <iframe
+                  :srcdoc="selectedConsoleDocxOfficeHtml"
+                  sandbox
+                  class="h-full min-w-0 w-full border-0 bg-white"
+                  title="Word 文件预览"
+                ></iframe>
+              </div>
+              <div
+                v-else-if="selectedConsoleIsDocx && loadingDocxOfficePreviewKey === `${localConversationId}:${selectedConsoleFilePath}`"
+                :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
+              >Word 加载中...</div>
+              <div
+                v-else-if="selectedConsoleIsDocx && selectedConsoleDocxPreviewUnavailable"
+                :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] flex-col items-center justify-center gap-2 text-xs text-slate-400' : 'flex h-[46vh] flex-col items-center justify-center gap-2 text-xs text-slate-400'"
+              >
+                <span>当前环境不能预览 Word 文件，请下载查看。</span>
+              </div>
+              <div v-else-if="selectedConsoleBinaryBlob?.error" :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-red-400' : 'flex h-[46vh] items-center justify-center text-xs text-red-400'">文件加载失败，请重试。</div>
+              <pre v-else :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700' : 'm-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700'">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
             </div>
-            <iframe
-              v-else-if="selectedConsoleIsPdf && selectedConsoleBinaryBlob?.url"
-              :src="selectedConsoleBinaryBlob.url"
-              class="m-0 h-[46vh] min-w-0 w-full rounded-md border border-slate-100 bg-white"
-            ></iframe>
-            <div
-              v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
-              class="flex h-[46vh] items-center justify-center text-xs text-slate-400"
-            >PDF 加载中...</div>
-            <div
-              v-else-if="selectedConsoleIsDocx && selectedConsoleBinaryBlob && !selectedConsoleBinaryBlob.error"
-              ref="docxPreviewContainerRef"
-              class="max-h-[46vh] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white text-sm"
-            ></div>
-            <div
-              v-else-if="selectedConsoleIsDocx && loadingWorkspaceFilePath === selectedConsoleFilePath"
-              class="flex h-[46vh] items-center justify-center text-xs text-slate-400"
-            >Word 加载中...</div>
-            <div v-else-if="selectedConsoleBinaryBlob?.error" class="flex h-[46vh] items-center justify-center text-xs text-red-400">文件加载失败，请重试或下载查看。</div>
-            <pre v-else class="m-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
           </div>
           <div v-else class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
             点击工作区文件查看内容。

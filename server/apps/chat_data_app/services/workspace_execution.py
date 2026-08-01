@@ -29,6 +29,7 @@ OPENSANDBOX_BACKEND = "opensandbox"
 MAX_OUTPUT_CHARS = 12000
 MAX_FILE_READ_LINE_CHARS = 500
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_OFFICE_HTML_CHARS = 4 * 1024 * 1024
 # OpenSandbox execd parses permission values as base-8 *strings*.  These must
 # therefore be decimal integers whose digits are the intended Unix mode.
 _SANDBOX_WRITABLE_FILE_MODE = 666
@@ -73,6 +74,7 @@ class SandboxExecutionSession:
     runtime_skills_dir: Path | None = None
     cache_key: str = ""
     application_manifest: dict[str, tuple[int, int, str]] | None = None
+    uploads_manifest: dict[str, tuple[int, int, str]] | None = None
     pending_persistence: bool = False
     operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -438,6 +440,75 @@ async def _initialize_sandbox_filesystem(
         skill_bytes,
     )
     session.application_manifest = await asyncio.to_thread(_mutable_application_manifest, application_root)
+    session.uploads_manifest = await asyncio.to_thread(
+        _tree_manifest,
+        application_root / "uploads",
+        "uploads",
+    )
+
+
+def _tree_manifest(root: Path, prefix: str) -> dict[str, tuple[int, int, str]]:
+    return {
+        f"{prefix}/{relative}": _file_fingerprint(path)
+        for relative, path in _iter_application_files(root)
+    }
+
+
+async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
+    """Reconcile later application uploads into a cached sandbox session."""
+    application_root = _application_workspace_root(session.workspace_root)
+    uploads_root = application_root / "uploads"
+    current_manifest = await asyncio.to_thread(_tree_manifest, uploads_root, "uploads")
+    if session.uploads_manifest == current_manifest:
+        return
+
+    local_files = {
+        relative: path for relative, path in _iter_application_files(uploads_root)
+    }
+    await _create_sandbox_directories(
+        sandbox=session.sandbox,
+        paths=_sandbox_tree_directories(uploads_root, sandbox_uploads_dir()),
+        mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+    )
+    previous_manifest = session.uploads_manifest or {}
+    changed_files = sorted(
+        relative for relative, fingerprint in current_manifest.items()
+        if previous_manifest.get(relative) != fingerprint
+    )
+    for relative in changed_files:
+        path = local_files[relative.removeprefix("uploads/")]
+        await _write_sandbox_file(
+            sandbox=session.sandbox,
+            path=f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}",
+            data=await asyncio.to_thread(path.read_bytes),
+            mode=_SANDBOX_WRITABLE_FILE_MODE,
+        )
+
+    remote_files, _ = await _walk_sandbox_tree(
+        session=session,
+        root=sandbox_uploads_dir(),
+    )
+    expected_remote_paths = {
+        f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}"
+        for relative in current_manifest
+    }
+    stale_remote_paths = sorted(
+        str(getattr(entry, "path", "") or "")
+        for entry in remote_files
+        if str(getattr(entry, "path", "") or "") not in expected_remote_paths
+    )
+    if stale_remote_paths:
+        deleter = getattr(getattr(session.sandbox, "files", None), "delete_files", None)
+        if not callable(deleter):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_files")
+        await deleter(stale_remote_paths)
+    session.uploads_manifest = current_manifest
+    logger.info(
+        "OpenSandbox uploads 增量同步完成: sandbox_id=%s changed_files=%s deleted_files=%s",
+        session.sandbox_id,
+        len(changed_files),
+        len(stale_remote_paths),
+    )
 
 
 def _application_path_for_sandbox_path(session: SandboxExecutionSession, sandbox_path: str) -> Path:
@@ -709,7 +780,7 @@ async def run_command_in_sandbox(
     command: str,
     timeout_seconds: int = 30,
 ) -> tuple[int, str, str]:
-    """Run the one Commands API operation used by the registered Bash tool."""
+    """Run a controlled OpenSandbox Commands API operation."""
     _, _, RunCommandOpts, _ = _import_opensandbox_sdk()
     options: dict[str, Any] = {"timeout": timedelta(seconds=max(1, timeout_seconds))}
     execution = await session.sandbox.commands.run(command, opts=RunCommandOpts(**options))
@@ -774,12 +845,16 @@ async def get_workspace_execution_session(
     now = time.monotonic()
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
+        async with cached.session.operation_lock:
+            await _sync_sandbox_uploads(cached.session)
         return cached.session
 
     async with _workspace_session_lock(cache_key):
         now = time.monotonic()
         cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
         if cached is not None and cached.expires_at > now:
+            async with cached.session.operation_lock:
+                await _sync_sandbox_uploads(cached.session)
             return cached.session
         if cached is not None:
             _WORKSPACE_EXECUTION_SESSION_CACHE.pop(cache_key, None)
@@ -1068,6 +1143,58 @@ async def sandbox_artifact_payload(*, session_ref: SandboxExecutionSessionRef, f
             return {}
         visible_path = sandbox_path_to_visible(target)
         return _artifact_payload_from_bytes(visible_path=visible_path, data=data)
+
+
+async def sandbox_render_office_html(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    file_path: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    """Render a DOCX into an isolated, temporary HTML preview via OfficeCLI."""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        target = await _resolve_sandbox_real_path(session=session, file_path=file_path)
+        if not target.lower().endswith(".docx"):
+            raise ValueError("OfficeCLI HTML 预览仅支持 .docx 文件")
+        preview_path = f"/tmp/chat-data-office-preview-{uuid4().hex}.html"
+        command = "officecli view {source} html --out {preview}".format(
+            source=shlex.quote(target),
+            preview=shlex.quote(preview_path),
+        )
+        try:
+            exit_code, _stdout, stderr = await run_command_in_sandbox(
+                session=session,
+                command=command,
+                timeout_seconds=60,
+            )
+            if exit_code != 0:
+                raise RuntimeError(stderr or "OfficeCLI HTML 预览失败")
+            html = (await _read_sandbox_file_bytes(
+                sandbox=session.sandbox,
+                path=preview_path,
+            )).decode("utf-8", errors="replace")
+        finally:
+            deleter = getattr(getattr(session.sandbox, "files", None), "delete_files", None)
+            if callable(deleter):
+                try:
+                    await deleter([preview_path])
+                except Exception as exc:
+                    logger.warning(
+                        "清理 OfficeCLI 临时预览失败: sandbox_id=%s path=%s error=%s",
+                        session.sandbox_id,
+                        preview_path,
+                        exc,
+                    )
+        limit = max(1, min(int(max_chars), MAX_OFFICE_HTML_CHARS))
+        truncated = len(html) > limit
+        return {
+            "renderer": "officecli-html",
+            "source_path": sandbox_path_to_visible(target),
+            "html": html[:limit],
+            "truncated": truncated,
+        }
 
 
 async def sandbox_read_text_file(

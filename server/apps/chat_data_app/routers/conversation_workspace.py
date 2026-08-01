@@ -7,6 +7,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from utils import conversation
+from utils.checkpoint import get_checkpointer
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -18,8 +20,10 @@ from ..services.conversation_workspace import (
     read_conversation_query_result,
     read_conversation_workspace_file as read_workspace_file_for_conversation,
     read_conversation_workspace_raw_file,
+    render_conversation_workspace_docx_preview,
     resolve_output_skill_directory,
 )
+from ..agent.data_agent import get_data_agent_graph
 from ..services.skill_service import skill_service
 from .dependencies import _get_current_user
 
@@ -101,6 +105,13 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
         current_user = _get_current_user(request)
         if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if _is_internal_workspace_file(path):
+            return business_response(
+                msg="文件不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=ErrorCode.HTTP_NOT_FOUND,
+            )
         payload = await read_conversation_workspace_raw_file(
             conversation_id, user_id=str(current_user.user_id), path=path
         )
@@ -121,6 +132,48 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
     except Exception as e:
         logger.error("读取工作区原始文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
         return business_response(msg="读取文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error", http_status_code=ErrorCode.HTTP_INTERNAL_SERVER_ERROR)
+
+
+@router.get("/conversations/{conversation_id}/workspace-files/office-html")
+async def render_conversation_workspace_docx_preview_api(conversation_id: str, path: str, request: Request):
+    """渲染当前会话 Word 文件的受控 OfficeCLI HTML 预览。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        if not await can_access_conversation_workspace(conversation_id, user_id):
+            return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if _is_internal_workspace_file(path):
+            return business_response(msg="文件不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        backend = await conversation.get_checkpoint_workspace_backend(
+            conversation_id,
+            get_data_agent_graph,
+            get_checkpointer,
+        )
+        if backend != "sandbox":
+            return business_response(data={"available": False, "reason": "workspace_backend_local"}, msg="当前会话未启用沙箱预览")
+        preview = await render_conversation_workspace_docx_preview(
+            conversation_id,
+            user_id=user_id,
+            path=path,
+        )
+        return business_response(data=preview, msg="获取成功")
+    except (FileNotFoundError, ValueError) as exc:
+        logger.info(
+            "OfficeCLI Word 预览不可用，回退前端渲染: conversation_id=%s path=%s error=%s",
+            conversation_id,
+            path,
+            exc,
+        )
+        return business_response(data={"available": False, "reason": "preview_unavailable"}, msg="Office 预览不可用")
+    except Exception as exc:
+        logger.warning(
+            "OfficeCLI Word 预览失败，回退前端渲染: conversation_id=%s path=%s error=%s",
+            conversation_id,
+            path,
+            exc,
+            exc_info=True,
+        )
+        return business_response(data={"available": False, "reason": "preview_failed"}, msg="Office 预览暂不可用")
 
 
 @router.get("/conversations/{conversation_id}/query-results/{result_id}")

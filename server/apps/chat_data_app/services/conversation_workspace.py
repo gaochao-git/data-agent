@@ -46,6 +46,7 @@ from .workspace_execution import (
     sandbox_move_path,
     sandbox_path_to_visible,
     sandbox_read_text_file,
+    sandbox_render_office_html,
     sandbox_write_tool_result,
     sync_sandbox_working_trees,
     sandbox_search_files,
@@ -59,6 +60,7 @@ logger = get_logger(__name__)
 
 THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
+OFFICE_PREVIEW_MAX_CHARS = 4 * 1024 * 1024
 conversation_dao = ConversationDao(session_context=lambda: get_session())
 
 
@@ -109,6 +111,14 @@ class WorkspaceBackend(Protocol):
         runtime: "ConversationWorkspaceRuntime",
         *,
         file_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def render_office_html(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        max_chars: int,
     ) -> dict[str, Any]: ...
 
     async def load_skill_payload(
@@ -315,6 +325,13 @@ class ConversationWorkspaceRuntime:
 
     async def artifact_payload(self, *, file_path: str) -> dict[str, Any]:
         return await self.backend.artifact_payload(self, file_path=file_path)
+
+    async def render_office_html(self, *, file_path: str, max_chars: int) -> dict[str, Any]:
+        return await self.backend.render_office_html(
+            self,
+            file_path=file_path,
+            max_chars=max_chars,
+        )
 
     async def load_skill_payload(self, *, skill_name: str, max_chars: int) -> dict[str, Any]:
         return await self.backend.load_skill_payload(self, skill_name=skill_name, max_chars=max_chars)
@@ -695,6 +712,52 @@ async def read_conversation_workspace_raw_file(
 ) -> dict[str, Any]:
     """读取会话工作区中的原始字节文件（用于 PDF/Word 等二进制预览/下载）。"""
     return await asyncio.to_thread(read_workspace_raw_file, conversation_id, path, max_bytes, user_id)
+
+
+def _validate_office_preview_source(workspace_root: str, path: str) -> None:
+    target = resolve_workspace_path(workspace_root, path)
+    if is_tool_result_workspace_path(workspace_root, target):
+        raise ValueError("工具结果缓存不支持 Office 预览")
+    if target.suffix.lower() != ".docx":
+        raise ValueError("OfficeCLI HTML 预览仅支持 .docx 文件")
+    if not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    if target.stat().st_size > 50 * 1024 * 1024:
+        raise ValueError("文件过大，暂不支持预览超过 50MB 的 Word 文件")
+
+
+async def render_conversation_workspace_docx_preview(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Render an owned DOCX through OfficeCLI without persisting a preview copy."""
+    workspace = ensure_conversation_workspace(conversation_id, user_id)
+    workspace_root = workspace["root"]
+    await asyncio.to_thread(
+        _validate_office_preview_source,
+        workspace_root,
+        path,
+    )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=user_id,
+        backend="sandbox",
+    )
+    preview = await runtime.render_office_html(
+        file_path=path,
+        max_chars=OFFICE_PREVIEW_MAX_CHARS,
+    )
+    html = str(preview.get("html") or "")
+    if not html:
+        raise RuntimeError("OfficeCLI 未返回 HTML 预览内容")
+    return {
+        "available": True,
+        "renderer": "officecli-html",
+        "html": html,
+        "truncated": bool(preview.get("truncated")),
+    }
 
 
 def read_workspace_raw_file(
@@ -1427,6 +1490,15 @@ class LocalWorkspaceBackend:
     ) -> dict[str, Any]:
         return await asyncio.to_thread(_load_local_artifact_payload, runtime.workspace_root, file_path)
 
+    async def render_office_html(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        raise ValueError("OfficeCLI HTML 预览仅支持 sandbox 工作区后端")
+
     async def load_skill_payload(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -1690,6 +1762,19 @@ class SandboxWorkspaceBackend:
     ) -> dict[str, Any]:
         return await sandbox_artifact_payload(
             session_ref=await self._session_ref(runtime), file_path=file_path
+        )
+
+    async def render_office_html(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_render_office_html(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            max_chars=max_chars,
         )
 
     async def load_skill_payload(

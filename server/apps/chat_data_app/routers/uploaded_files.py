@@ -73,20 +73,6 @@ async def upload_file_api(
             http_status_code=ErrorCode.HTTP_BAD_REQUEST,
         )
 
-    # 限制文件大小 (50MB)
-    MAX_SIZE = 50 * 1024 * 1024
-    content = await file.read()
-    if len(content) > MAX_SIZE:
-        return business_response(
-            msg="文件大小不能超过50MB",
-            code=ErrorCode.HTTP_BAD_REQUEST,
-            status="error",
-            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
-        )
-
-    # 重置文件指针
-    await file.seek(0)
-
     try:
         user = _get_current_user(req)
         user_id = str(user.user_id)
@@ -94,6 +80,13 @@ async def upload_file_api(
         return business_response(data=result, msg="文件上传成功")
     except HTTPException:
         raise
+    except ValueError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.HTTP_BAD_REQUEST,
+            status="error",
+            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
+        )
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
         return business_response(
@@ -105,16 +98,17 @@ async def upload_file_api(
 
 
 @router.get("/thread/{thread_id}")
-async def list_thread_files_api(thread_id: str):
+async def list_thread_files_api(thread_id: str, req: Request = None):
     """
     获取会话下的所有文件
     """
-    files = await list_files_by_thread(thread_id)
+    user = _get_current_user(req)
+    files = await list_files_by_thread(thread_id, user_id=str(user.user_id))
     return business_response(data={"files": files}, msg="获取成功")
 
 
 @router.get("/{file_id}")
-async def get_file_info_api(file_id: str):
+async def get_file_info_api(file_id: str, req: Request = None):
     """
     获取文件信息（用于轮询状态）
 
@@ -133,7 +127,8 @@ async def get_file_info_api(file_id: str):
             }
         }
     """
-    info = await get_file_info(file_id)
+    user = _get_current_user(req)
+    info = await get_file_info(file_id, user_id=str(user.user_id))
     if not info:
         return business_response(
             msg="文件不存在",
@@ -171,7 +166,7 @@ async def get_file_content_api(file_id: str, req: Request = None):
     """
     user = _get_current_user(req)
     user_id = str(user.user_id)
-    info = await get_file_info(file_id)
+    info = await get_file_info(file_id, user_id=user_id)
     if not info:
         return business_response(
             msg="文件不存在",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,9 @@ from ..daos.uploaded_file_dao import UploadedFileDao
 from .conversation_workspace import resolve_uploads_root
 
 logger = get_logger(__name__)
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def _unique_storage_name(uploads_root: Path, original_filename: str) -> str:
@@ -69,25 +73,41 @@ class UploadedFileService:
     async def upload_file(
         self, file: UploadFile, thread_id: str, user_id: str = "system"
     ) -> Dict[str, Any]:
+        if not await self.dao.thread_belongs_to_user(thread_id, user_id=user_id):
+            raise ValueError("会话不存在或无权访问")
         file_id = str(uuid.uuid4())
         original_filename = file.filename or "unknown"
         file_type = _get_file_extension(original_filename)
         uploads_root = resolve_uploads_root(user_id, thread_id)
         storage_name = _unique_storage_name(uploads_root, original_filename)
         full_path = uploads_root / storage_name
-        content = await file.read()
-        file_size = len(content)
-        full_path.write_bytes(content)
-
-        await self.dao.create_file(
-            file_id=file_id,
-            thread_id=thread_id,
-            original_filename=original_filename,
-            file_type=file_type,
-            file_size=file_size,
-            storage_dir=storage_name,
-            now=datetime.now(),
-        )
+        temporary_path = uploads_root / f".{storage_name}.{uuid.uuid4().hex}.upload"
+        file_size = 0
+        try:
+            with temporary_path.open("xb") as output:
+                while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                    file_size += len(chunk)
+                    if file_size > MAX_UPLOAD_SIZE:
+                        raise ValueError("文件大小不能超过50MB")
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, full_path)
+            try:
+                await self.dao.create_file(
+                    file_id=file_id,
+                    thread_id=thread_id,
+                    original_filename=original_filename,
+                    file_type=file_type,
+                    file_size=file_size,
+                    storage_dir=storage_name,
+                    now=datetime.now(),
+                )
+            except Exception:
+                full_path.unlink(missing_ok=True)
+                raise
+        finally:
+            temporary_path.unlink(missing_ok=True)
         logger.info("文件上传成功: %s, %s", file_id, original_filename)
         return {
             "file_id": file_id,
@@ -98,7 +118,9 @@ class UploadedFileService:
         }
 
     async def get_file_info(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
-        row = await self.dao.get_file(file_id)
+        row = await self.dao.get_file(file_id, user_id=user_id)
+        if row and thread_id and row.thread_id != thread_id:
+            return None
         return _file_info(row) if row else None
 
     async def delete_file(
@@ -116,7 +138,7 @@ class UploadedFileService:
                     target.unlink()
                 except OSError:
                     logger.warning("删除上传文件失败: %s", target)
-        await self.dao.delete_file(file_id)
+        await self.dao.delete_file(file_id, user_id=user_id)
         logger.info("文件删除成功: %s", file_id)
         return True
 
@@ -133,15 +155,13 @@ class UploadedFileService:
     async def list_files_by_thread(
         self, thread_id: str, user_id: str = "system"
     ) -> list:
-        del user_id
-        rows = await self.dao.list_files_by_thread(thread_id)
+        rows = await self.dao.list_files_by_thread(thread_id, user_id=user_id)
         return [_file_summary(row) for row in rows]
 
     async def get_files_by_thread(
         self, thread_id: str, user_id: str = "system"
     ) -> list:
-        del user_id
-        rows = await self.dao.list_files_by_thread(thread_id, ascending=True)
+        rows = await self.dao.list_files_by_thread(thread_id, user_id=user_id, ascending=True)
         return [
             {
                 "id": row.file_id,

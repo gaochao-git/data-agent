@@ -815,6 +815,26 @@ export function getConversationWorkspaceRawFile(conversationId: string, path: st
   }) as unknown as Promise<Blob>
 }
 
+export interface ConversationWorkspaceOfficeHtmlPreview {
+  available: boolean
+  reason?: string
+  renderer?: 'officecli-html'
+  html?: string
+  truncated?: boolean
+}
+
+/** 获取沙箱 OfficeCLI 生成的 Word HTML 预览；不可用时由调用方回退本地渲染。 */
+export function getConversationWorkspaceOfficeHtmlPreview(
+  conversationId: string,
+  path: string,
+): Promise<ApiResponse<ConversationWorkspaceOfficeHtmlPreview>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/office-html`,
+    method: 'get',
+    params: { path },
+  })
+}
+
 export function importConversationWorkspaceSkill(conversationId: string, data: { skill_dir_path: string }): Promise<ApiResponse<SkillInfo & { content?: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-skills/import`,

@@ -66,6 +66,66 @@ def test_conversation_workspace_hides_internal_context_file(client, monkeypatch)
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
+def test_conversation_workspace_raw_route_hides_internal_context_file(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def read_raw_file(**_kwargs):
+        raise AssertionError("internal context file must not be read through raw endpoint")
+
+    monkeypatch.setattr(workspace_routes, "read_conversation_workspace_raw_file", read_raw_file)
+
+    response = client.get(
+        "/api/chatdata/conversations/conv_a/workspace-files/raw",
+        params={"path": "/mnt/user-data/workspace/data_context.json"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+def test_conversation_workspace_office_html_uses_sandbox_preview(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def sandbox_backend(*_args, **_kwargs):
+        return "sandbox"
+
+    async def render_preview(conversation_id, *, user_id, path):
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "outputs/report.docx")
+        return {"available": True, "renderer": "officecli-html", "html": "<main>report</main>", "truncated": False}
+
+    monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", sandbox_backend)
+    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_docx_preview", render_preview)
+
+    response = client.get(
+        "/api/chatdata/conversations/conv_a/workspace-files/office-html",
+        params={"path": "outputs/report.docx"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["html"] == "<main>report</main>"
+
+
+def test_conversation_workspace_office_html_skips_local_backend(client, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def local_backend(*_args, **_kwargs):
+        return "local"
+
+    async def render_preview(**_kwargs):
+        raise AssertionError("local backend must not invoke OfficeCLI")
+
+    monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", local_backend)
+    monkeypatch.setattr(workspace_routes, "render_conversation_workspace_docx_preview", render_preview)
+
+    response = client.get(
+        "/api/chatdata/conversations/conv_a/workspace-files/office-html",
+        params={"path": "outputs/report.docx"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"available": False, "reason": "workspace_backend_local"}
+
+
 def test_conversation_workspace_rejects_inaccessible_conversation(client, monkeypatch):
     monkeypatch.setattr(
         workspace_routes,

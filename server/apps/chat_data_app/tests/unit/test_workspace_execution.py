@@ -536,6 +536,40 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     assert permission_modes.isdisjoint({292, 365, 438, 511})
 
 
+def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypatch):
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
+    initial_upload = workspace_root / "uploads" / "old.txt"
+    initial_upload.write_text("old", encoding="utf-8")
+    uploaded_paths = []
+
+    class FakeFiles:
+        async def write_file(self, path, data, *, mode):
+            uploaded_paths.append((path, bytes(data), mode))
+
+    session = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=FakeFiles()),
+        sandbox_id="sbx_1",
+        workspace_root=str(workspace_root),
+        uploads_manifest=workspace_execution._tree_manifest(workspace_root / "uploads", "uploads"),
+    )
+    (workspace_root / "workspace" / "unchanged.txt").write_text("workspace", encoding="utf-8")
+    (workspace_root / "uploads" / "new.txt").write_text("new", encoding="utf-8")
+
+    async def skip_create_directories(**_kwargs):
+        return None
+
+    async def no_remote_files(**_kwargs):
+        return [], []
+
+    monkeypatch.setattr(workspace_execution, "_create_sandbox_directories", skip_create_directories)
+    monkeypatch.setattr(workspace_execution, "_walk_sandbox_tree", no_remote_files)
+
+    asyncio.run(workspace_execution._sync_sandbox_uploads(session))
+
+    assert uploaded_paths == [("/mnt/user-data/uploads/new.txt", b"new", 666)]
+
+
 def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
     # sandbox 模式下 CHAT_DATA_HOME 为绝对路径时应通过后端校验
     monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")
