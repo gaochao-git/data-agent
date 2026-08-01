@@ -1307,7 +1307,10 @@ async def sandbox_load_skill_payload(
     async with session.operation_lock:
         await _recover_pending_persistence(session)
         normalized_name = str(skill_name or "").strip()
-        if not re.fullmatch(r"[a-z]+(?:-[a-z]+)+", normalized_name):
+        # 运行时快照既允许 ``officecli`` 这类单词技能名，也允许
+        # ``dashboard-generation`` 这类连字符技能名。实际可访问性仍由
+        # 下方快照目录存在性校验决定，不能仅以命名规则作为权限判断。
+        if not re.fullmatch(r"[a-z]+(?:-[a-z]+)*", normalized_name):
             raise ValueError(f"技能名无效: {skill_name}")
         skill_root = await _resolve_sandbox_real_path(
             session=session,

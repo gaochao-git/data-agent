@@ -22,7 +22,7 @@ def test_system_skills_do_not_reference_removed_patch_tool_contract():
         "*** End Patch",
     )
 
-    for name in ("chart-processing", "dashboard-generation", "skill-creator"):
+    for name in ("chart-processing", "dashboard-generation", "officecli", "skill-creator"):
         text = _skill_text(name)
         assert all(marker not in text for marker in legacy_markers)
 
@@ -39,3 +39,14 @@ def test_system_skills_describe_current_filesystem_tools():
     assert "file_edit(file_path, old_content, new_content)" in dashboard
     assert "dir_create" in creator
     assert "present_artifacts" in creator
+
+
+def test_officecli_system_skill_uses_chatdata_runtime_contract():
+    office = _skill_text("officecli")
+
+    assert "bash_run" in office
+    assert "present_artifacts" in office
+    assert "officecli load_skill" not in office
+    assert "officecli plugins" not in office
+    assert "officecli watch" not in office
+    assert "curl -fsSL" not in office

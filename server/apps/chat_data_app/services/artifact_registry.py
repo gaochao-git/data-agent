@@ -129,6 +129,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
     ArtifactDefinition("table", "table", _matches_suffixes(".table.json", ".table.csv"), _generic_artifact),
     ArtifactDefinition("document", "document", _matches_suffixes(".docx"), _generic_artifact),
     ArtifactDefinition("spreadsheet", "spreadsheet", _matches_suffixes(".xlsx"), _generic_artifact),
+    ArtifactDefinition("presentation", "presentation", _matches_suffixes(".pptx"), _generic_artifact),
     ArtifactDefinition("pdf", "pdf", _matches_suffixes(".pdf"), _generic_artifact),
     ArtifactDefinition("image", "image", _matches_suffixes(".png", ".jpg", ".jpeg", ".gif", ".webp"), _generic_artifact),
     ArtifactDefinition("dashboard_spec", "dashboard", _matches_json, _dashboard_artifact),

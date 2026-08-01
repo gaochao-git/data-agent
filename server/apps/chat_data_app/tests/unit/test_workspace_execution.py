@@ -18,6 +18,7 @@ from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
     WorkspacePathMapping,
+    _absolute_command_path_tokens,
 )
 from apps.chat_data_app.services.workspace_execution import (
     SandboxExecutionSession,
@@ -86,6 +87,53 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
 def test_sandbox_path_requires_a_skill_name():
     with pytest.raises(ValueError, match="技能路径必须包含技能名"):
         sandbox_visible_path("/mnt/skills")
+
+
+def test_bash_path_validation_allows_officecli_dom_selectors():
+    command = (
+        "officecli get '/mnt/user-data/workspace/报告.docx' /body/p[1] "
+        "--depth 2 --json"
+    )
+    assert _absolute_command_path_tokens(command) == ["/mnt/user-data/workspace/报告.docx"]
+    assert _absolute_command_path_tokens(
+        "officecli get '/mnt/user-data/workspace/销售.xlsx' '/Sheet1/A1:D20' --json"
+    ) == ["/mnt/user-data/workspace/销售.xlsx"]
+    assert _absolute_command_path_tokens(
+        "officecli add '/mnt/user-data/workspace/报告.docx' /body --type paragraph"
+    ) == ["/mnt/user-data/workspace/报告.docx"]
+
+
+def test_bash_path_validation_still_rejects_real_absolute_paths():
+    assert _absolute_command_path_tokens("cat /etc/passwd") == ["/etc/passwd"]
+
+
+def test_sandbox_load_skill_accepts_single_word_skill_name(monkeypatch):
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    async def fake_resolve(**kwargs):
+        return kwargs["file_path"]
+
+    async def fake_path_info(**_kwargs):
+        return SimpleNamespace(entry_type="dir")
+
+    async def fake_path_kind(**_kwargs):
+        return "dir"
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_info", fake_path_info)
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_path_kind)
+
+    with pytest.raises(ValueError, match="技能文件不存在: officecli"):
+        asyncio.run(workspace_execution.sandbox_load_skill_payload(
+            session_ref=session_ref,
+            skill_name="officecli",
+            max_chars=100,
+        ))
 
 
 def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monkeypatch):

@@ -1941,9 +1941,12 @@ def _absolute_command_path_tokens(command: str) -> list[str]:
         tokens = shlex.split(command)
     except ValueError as exc:
         raise ValueError(f"command 解析失败: {exc}") from exc
+    officecli_selector_indices = _officecli_selector_token_indices(tokens)
     invalid = []
     paths: list[str] = []
-    for token in tokens:
+    for index, token in enumerate(tokens):
+        if index in officecli_selector_indices:
+            continue
         normalized = token.lstrip("<>")
         if ".." in PurePosixPath(normalized).parts:
             invalid.append(token)
@@ -1952,3 +1955,37 @@ def _absolute_command_path_tokens(command: str) -> list[str]:
     if invalid:
         raise ValueError("bash_run 不允许路径越界: " + ", ".join(invalid[:3]))
     return paths
+
+
+def _officecli_selector_token_indices(tokens: list[str]) -> set[int]:
+    """Exclude OfficeCLI DOM selectors from host-path validation."""
+    selector_indices: set[int] = set()
+    selector_commands = {"get", "query", "set", "add", "remove"}
+    for officecli_index, token in enumerate(tokens):
+        if Path(token).name not in {"officecli", "officecli.exe"}:
+            continue
+        verb_index = next(
+            (
+                index
+                for index in range(officecli_index + 1, len(tokens))
+                if tokens[index] in selector_commands | {"move", "swap"}
+            ),
+            None,
+        )
+        if verb_index is None:
+            continue
+        verb = tokens[verb_index]
+        if verb in selector_commands and verb_index + 2 < len(tokens):
+            selector_indices.add(verb_index + 2)
+        elif verb == "move":
+            if verb_index + 2 < len(tokens):
+                selector_indices.add(verb_index + 2)
+            for option in ("--to", "--after", "--before"):
+                for index in range(verb_index + 3, len(tokens) - 1):
+                    if tokens[index] == option:
+                        selector_indices.add(index + 1)
+        elif verb == "swap":
+            selector_indices.update(
+                index for index in (verb_index + 2, verb_index + 3) if index < len(tokens)
+            )
+    return selector_indices

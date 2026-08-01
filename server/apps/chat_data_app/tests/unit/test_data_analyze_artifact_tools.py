@@ -83,6 +83,20 @@ def test_output_artifact_registry_accepts_only_direct_output_skill():
     ) == {}
 
 
+def test_output_artifact_registry_accepts_office_presentation():
+    artifact = parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/经营汇报.pptx",
+        data=b"pptx",
+    )
+
+    assert artifact == {
+        "file_path": "/mnt/user-data/outputs/经营汇报.pptx",
+        "artifact_type": "presentation",
+        "renderer": "presentation",
+        "artifact_version": "v1",
+    }
+
+
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
     root = tmp_path
     output = root / "outputs" / "chart.json"

@@ -23,6 +23,7 @@ import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
+import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -667,6 +668,36 @@ const getPresentedArtifactTools = (message: Message, artifactType: string): Tool
   return tools
 }
 
+type PresentedOfficeArtifactType = 'document' | 'spreadsheet' | 'presentation'
+
+interface PresentedOfficeArtifact {
+  path: string
+  name: string
+  artifactType: PresentedOfficeArtifactType
+}
+
+const PRESENTED_OFFICE_ARTIFACT_TYPES = new Set<PresentedOfficeArtifactType>([
+  'document',
+  'spreadsheet',
+  'presentation',
+])
+
+const getPresentedOfficeArtifacts = (message: Message): PresentedOfficeArtifact[] => {
+  const artifacts = new Map<string, PresentedOfficeArtifact>()
+  for (const tool of message.toolCalls || []) {
+    for (const artifact of getPresentedArtifacts(tool)) {
+      const artifactType = String(artifact.artifact_type || '').trim() as PresentedOfficeArtifactType
+      if (!PRESENTED_OFFICE_ARTIFACT_TYPES.has(artifactType)) continue
+      const path = normalizeVisiblePath(artifact.file_path)
+      if (!path.startsWith('outputs/')) continue
+      const name = path.split('/').pop() || ''
+      if (!name) continue
+      artifacts.set(path, { path, name, artifactType })
+    }
+  }
+  return Array.from(artifacts.values())
+}
+
 const parseDashboardSpecValue = (value: unknown): Record<string, unknown> | null => {
   let parsed = value
   if (typeof parsed === 'string') {
@@ -1284,6 +1315,37 @@ const handleOpenAttachment = async (attachment: MessageAttachment) => {
   sidePanelOpen.value = true
   // 直接加载文件内容（不依赖 watch 中的 selectedWorkspaceFile 判断）
   await loadWorkspaceFileContent(conversationId, relativePath)
+}
+
+const handleOpenPresentedOfficeArtifact = async (artifact: PresentedOfficeArtifact) => {
+  await handleOpenAttachment({
+    file_id: `presented:${artifact.path}`,
+    filename: artifact.name,
+    file_type: artifact.name.split('.').pop()?.toLowerCase(),
+    original_path: artifact.path,
+  })
+}
+
+const handleDownloadPresentedOfficeArtifact = async (artifact: PresentedOfficeArtifact) => {
+  const conversationId = localConversationId.value
+  if (!conversationId) {
+    ElMessage.warning('会话未就绪，无法下载文件')
+    return
+  }
+  try {
+    const blob = await getConversationWorkspaceRawFile(conversationId, artifact.path)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = artifact.name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    console.error('下载交付文件失败:', err)
+    ElMessage.error('文件下载失败，请稍后重试')
+  }
 }
 
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
@@ -2038,6 +2100,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
           @open-attachment="handleOpenAttachment"
         >
           <template #assistant-extra="{ message: msg }">
+            <PresentedFileArtifacts
+              v-if="getPresentedOfficeArtifacts(msg).length && !msg.isStreaming"
+              :artifacts="getPresentedOfficeArtifacts(msg)"
+              @preview="handleOpenPresentedOfficeArtifact"
+              @download="handleDownloadPresentedOfficeArtifact"
+            />
             <div v-if="getPresentedSkillArtifacts(msg).length && !msg.isStreaming" class="mt-3 space-y-2">
               <div
                 v-for="skill in getPresentedSkillArtifacts(msg)"
