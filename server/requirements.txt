@@ -8,6 +8,8 @@ Pillow
 pdf2image
 requests
 pytest
+pytest-asyncio
+pytest-cov
 python-dotenv
 openpyxl
 xlrd

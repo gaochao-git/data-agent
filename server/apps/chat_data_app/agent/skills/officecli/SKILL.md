@@ -29,6 +29,7 @@ OfficeCLI 已预装在 ChatData 的 OpenSandbox 镜像中。它是 Office Open X
 1. 调用 `skill_load("officecli")`，确认当前有 `bash_run`，再执行 `bash_run(command="officecli --version")` 验证 OfficeCLI 可用。
 2. 根据文件类型按需用 `file_read` 读取一份参考文档：
    - Word：`/mnt/skills/officecli/references/word.md`
+   - Word 原生图表：`/mnt/skills/officecli/references/word-charts.md`
    - Excel：`/mnt/skills/officecli/references/excel.md`
    - PowerPoint：`/mnt/skills/officecli/references/powerpoint.md`
 3. 编辑已有上传文件时，先复制到 workspace，例如：`cp '/mnt/user-data/uploads/原文件.docx' '/mnt/user-data/workspace/修订稿.docx'`。不要覆盖 uploads 中的原文件。

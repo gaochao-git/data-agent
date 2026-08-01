@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from typing import Any
@@ -17,7 +16,6 @@ from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..tool_results import (
-    QUERY_RESULT_TYPE,
     build_query_result_response,
     parse_internal_tool_result,
 )
