@@ -8,7 +8,7 @@ import weakref
 
 from langchain.agents.middleware import wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -20,7 +20,7 @@ from ...services.context_budget import (
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
     SYSTEM_PROMPT_PLACEHOLDER,
-    ToolResultBudget,
+    ContextRequestBudget,
     build_runtime_context_summary_message,
     build_context_usage_payload,
     count_messages_tokens,
@@ -42,13 +42,13 @@ def create_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
     """创建统一的上下文裁剪和 token usage middleware。"""
     records: list[dict[str, Any]] = []
-    request_budget = tool_result_budget or ToolResultBudget(model_id)
+    request_budget = context_request_budget or ContextRequestBudget(model_id)
 
     @wrap_model_call(name=name, state_schema=state_schema)
     async def context_usage_middleware(request, handler):
@@ -104,14 +104,14 @@ def create_request_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
 ):
     """创建每次模型请求前的当前上下文裁剪和 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
         tools=tools,
-        tool_result_budget=tool_result_budget,
+        context_request_budget=context_request_budget,
         state_schema=state_schema,
     )
 
@@ -145,14 +145,14 @@ def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None,
 def create_chat_data_context_usage_middleware(
     tools: list,
     model_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
 ) -> Any:
     """创建智能问数上下文裁剪和 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
         tools=tools,
-        tool_result_budget=tool_result_budget,
+        context_request_budget=context_request_budget,
         state_schema=state_schema,
     )
 
@@ -395,7 +395,7 @@ def _build_agent_context_usage(
     messages: list[Any],
     tools: list[Any],
     model_id: str | None,
-    request_budget: ToolResultBudget,
+    request_budget: ContextRequestBudget,
     context_compression: dict[str, Any] | None = None,
     context_summary: str | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:

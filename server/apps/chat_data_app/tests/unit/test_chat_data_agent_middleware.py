@@ -353,6 +353,27 @@ async def test_hard_guard_truncates_only_current_user_when_it_alone_is_too_large
 
 
 @pytest.mark.asyncio
+async def test_hard_guard_truncates_unbroken_ascii_user_input():
+    original = HumanMessage(content="x" * 5000, id="turn-large-ascii")
+
+    compressed, summary, report = await compress_messages_for_state(
+        [original],
+        static_input_tokens=50,
+        compression_trigger_tokens=100_000,
+        hard_input_limit_tokens=500,
+        compression_target_tokens=100,
+        config={"enabled": False, "trigger_ratio": 0.70},
+    )
+
+    assert summary is None
+    assert len(compressed) == 1
+    assert compressed[0].id == original.id
+    assert len(compressed[0].content) < len(original.content)
+    assert report["hard_limit_user_message_truncated"] is True
+    assert report["estimated_tokens_after"] <= 475
+
+
+@pytest.mark.asyncio
 async def test_summary_failure_falls_back_to_hard_guard_without_failing():
     async def fail_summary(_messages):
         raise RuntimeError("summary unavailable")
@@ -424,7 +445,7 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
         ])
     messages.append(HumanMessage(content="当前问题", id="turn-current"))
     monkeypatch.setattr(
-        context_compression.ToolResultBudget,
+        context_compression.ContextRequestBudget,
         "configure",
         lambda self, system_prompt, tools, model_id=None: ContextBudget(
             context_window=1000,
@@ -482,6 +503,15 @@ def test_context_compression_event_excludes_summary_and_anchors_current_message(
     assert event["anchor_message_id"] == "turn-current"
     assert event["estimated_cleared_tokens"] == 49_000
     assert "summary" not in event
+
+    retried_event = context_compression._build_context_compression_event(messages, {
+        "triggered": True,
+        "estimated_tokens_before": 70_000,
+        "estimated_tokens_after": 21_000,
+        "estimated_cleared_tokens": 49_000,
+        "compressed_messages": 2,
+    })
+    assert retried_event["id"] == event["id"]
 
 
 @pytest.mark.asyncio
@@ -768,7 +798,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
         HumanMessage(content="当前问题"),
     ]
     monkeypatch.setattr(
-        context_usage.ToolResultBudget,
+        context_usage.ContextRequestBudget,
         "configure",
         lambda self, system_prompt, tools, model_id=None: ContextBudget(
             context_window=10000,
@@ -779,7 +809,7 @@ async def test_chat_data_context_usage_middleware_keeps_tool_messages(monkeypatc
             compression_target_tokens=2100,
         ),
     )
-    monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
+    monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 7000)
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
     middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")
     captured = {}
@@ -819,7 +849,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
     ))
     messages.append(HumanMessage(content="当前问题"))
     monkeypatch.setattr(
-        context_usage.ToolResultBudget,
+        context_usage.ContextRequestBudget,
         "configure",
         lambda self, system_prompt, tools, model_id=None: ContextBudget(
             context_window=1000,
@@ -830,7 +860,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
             compression_target_tokens=210,
         ),
     )
-    monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 100)
+    monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 100)
     monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
 
     middleware = context_usage.create_chat_data_context_usage_middleware([], model_id="qwen-test")

@@ -34,7 +34,7 @@ from apps.chat_data_app.agent.middleware.context_usage import (
 from apps.chat_data_app.services.context_budget import (
     ContextInputLimitExceededError,
     ContextBudget,
-    ToolResultBudget,
+    ContextRequestBudget,
     build_context_usage_payload,
     get_model_context_budget,
     hard_input_guard_tokens,
@@ -47,6 +47,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 def test_estimate_tokens_uses_project_formula():
     assert estimate_tokens("你好 abc!") == int(2 * 0.7 + 1 * 1.3 + 1 * 0.5)
+
+
+def test_estimate_tokens_applies_byte_floor_to_unbroken_ascii():
+    assert estimate_tokens("x" * 5000) >= 1250
 
 
 def test_context_and_payload_helpers_handle_empty_and_unknown_values():
@@ -211,7 +215,7 @@ def test_context_budget_startup_validation_rejects_trigger_ratio_above_guard(mon
         validate_context_budget_startup_config()
 
 
-def test_tool_result_budget_rejects_dynamic_static_input_above_guard(monkeypatch):
+def test_context_request_budget_rejects_dynamic_static_input_above_guard(monkeypatch):
     monkeypatch.setattr(
         "apps.chat_data_app.services.context_budget.get_model_context_budget",
         lambda *_args, **_kwargs: ContextBudget(
@@ -223,7 +227,7 @@ def test_tool_result_budget_rejects_dynamic_static_input_above_guard(monkeypatch
             compression_target_tokens=16,
         ),
     )
-    budget = ToolResultBudget("tiny")
+    budget = ContextRequestBudget("tiny")
     budget.configure("系统提示词" * 200, [])
 
     with pytest.raises(ContextInputLimitExceededError, match="固定输入超过上下文安全水位"):
@@ -307,6 +311,23 @@ def test_message_tokens_handle_structured_content_and_raw_tool_calls():
     assert count_messages_tokens([message]) > 4
     rows = build_message_breakdown([message])
     assert "raw_tool_calls" in rows[0]["content"]
+
+
+def test_message_tokens_do_not_double_count_normalized_and_raw_tool_calls():
+    normalized = [{"id": "call_1", "name": "run_sql", "args": {"sql": "select 1"}}]
+    raw = [{
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "run_sql", "arguments": '{"sql":"select 1"}'},
+    }]
+    normalized_only = AIMessage(content="", tool_calls=normalized)
+    normalized_and_raw = AIMessage(
+        content="",
+        tool_calls=normalized,
+        additional_kwargs={"tool_calls": raw},
+    )
+
+    assert count_messages_tokens([normalized_and_raw]) == count_messages_tokens([normalized_only])
 
 
 def test_build_message_breakdown_includes_tool_output_content():
@@ -629,7 +650,7 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
         from apps.chat_data_app.agent.middleware import context_usage
 
         monkeypatch.setattr(
-            context_usage.ToolResultBudget,
+            context_usage.ContextRequestBudget,
             "configure",
             lambda self, system_prompt, tools, model_id=None: ContextBudget(
                 context_window=10000,
@@ -640,7 +661,7 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
                 compression_target_tokens=2100,
             ),
         )
-        monkeypatch.setattr(context_usage.ToolResultBudget, "remaining_for_messages", lambda self: 7000)
+        monkeypatch.setattr(context_usage.ContextRequestBudget, "remaining_for_messages", lambda self: 7000)
         monkeypatch.setattr(context_usage, "_emit_context_usage", lambda _usage: None)
         middleware = create_request_context_usage_middleware("qwen-test", state_schema=dict)
         captured = {}

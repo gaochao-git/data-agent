@@ -2,7 +2,7 @@
 
 from langchain.agents import create_agent
 
-from ..services.context_budget import ToolResultBudget
+from ..services.context_budget import ContextRequestBudget
 from ..services.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
 from ..services.llm_config import get_chat_data_llm
 from .agent_runtime import (
@@ -90,7 +90,7 @@ def create_data_agent(
             user_id=user_id or "system",
             backend=options.workspace_backend,
         )
-    tool_result_budget = ToolResultBudget(model_id)
+    context_request_budget = ContextRequestBudget(model_id)
     tools = assemble_tools(
         options,
         runtime,
@@ -104,22 +104,22 @@ def create_data_agent(
         options,
         workspace_root=runtime.workspace_root,
     )
-    tool_result_budget.configure(effective_system_prompt, tools, model_id=model_id)
-    tool_result_budget.validate_static_input()
+    context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
+    context_request_budget.validate_static_input()
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,
-        tool_result_budget=tool_result_budget,
+        context_request_budget=context_request_budget,
         state_schema=ChatDataAgentState,
     )
     context_compression_middleware = create_context_compression_middleware(
         system_prompt=effective_system_prompt,
         tools=tools,
         model_id=model_id,
-        tool_result_budget=tool_result_budget,
+        context_request_budget=context_request_budget,
         state_schema=ChatDataAgentState,
     )
-    tool_result_middleware = create_tool_result_middleware(tool_result_budget)
+    tool_result_middleware = create_tool_result_middleware()
     middleware = build_standard_agent_middleware(
         tools,
         context_compression_middleware=context_compression_middleware,

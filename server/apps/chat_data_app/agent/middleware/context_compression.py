@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
-from uuid import uuid4
 
 from langchain.agents.middleware import before_model
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -18,7 +18,7 @@ from ...services.context_budget import (
     ContextInputLimitExceededError,
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,
-    ToolResultBudget,
+    ContextRequestBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,
     get_model_context_budget,
@@ -257,11 +257,11 @@ def create_context_compression_middleware(
     system_prompt: str,
     tools: list[Any] | None = None,
     model_id: str | None = None,
-    tool_result_budget: ToolResultBudget | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
 ) -> Any:
     """创建模型调用前的状态级上下文压缩 middleware。"""
-    compression_budget = tool_result_budget or ToolResultBudget(model_id)
+    compression_budget = context_request_budget or ContextRequestBudget(model_id)
     request_tools = list(tools or [])
 
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
@@ -636,8 +636,16 @@ def _build_context_compression_event(
             if turn_id:
                 break
     anchor_message_id = _message_id(messages[-1]) if messages else ""
+    event_fingerprint = "|".join([
+        turn_id,
+        anchor_message_id,
+        str(_non_negative_int(report.get("estimated_tokens_before"))),
+        str(_non_negative_int(report.get("estimated_tokens_after"))),
+        str(_non_negative_int(report.get("compressed_messages"))),
+    ])
+    event_id = hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:20]
     return {
-        "id": f"context-compression-{uuid4()}",
+        "id": f"context-compression-{event_id}",
         "turn_id": turn_id,
         "anchor_message_id": anchor_message_id,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

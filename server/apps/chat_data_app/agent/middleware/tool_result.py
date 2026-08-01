@@ -11,7 +11,6 @@ from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
 from utils.tool_result_store import ToolResultRecord
-from ...services.context_budget import ToolResultBudget
 from ...services.conversation_workspace import ConversationWorkspaceRuntime
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
@@ -27,7 +26,7 @@ logger = get_logger(__name__)
 _READ_PAGINATED_TOOLS = frozenset({"file_read", "skill_load"})
 
 
-def create_tool_result_middleware(tool_result_budget: ToolResultBudget):
+def create_tool_result_middleware():
     """Create the sole boundary that turns raw tool output into model output."""
 
     @wrap_tool_call(name="ToolResultMiddleware")
@@ -35,7 +34,7 @@ def create_tool_result_middleware(tool_result_budget: ToolResultBudget):
         result = await handler(request)
         if not isinstance(result, ToolMessage) or result.status == "error":
             return result
-        return await _finalize_tool_message(result, request, tool_result_budget)
+        return await _finalize_tool_message(result, request)
 
     return tool_result_middleware
 
@@ -43,11 +42,7 @@ def create_tool_result_middleware(tool_result_budget: ToolResultBudget):
 async def _finalize_tool_message(
     message: ToolMessage,
     request: Any,
-    tool_result_budget: ToolResultBudget,
 ) -> ToolMessage:
-    # The budget object is retained in the factory API because it is shared by
-    # request-level middleware; per-tool decisions intentionally use fixed limits.
-    _ = tool_result_budget
     tool_name = str(message.name or "").strip()
     internal = parse_internal_tool_result(message.content)
     if internal is not None:
@@ -62,7 +57,12 @@ async def _finalize_tool_message(
     if tool_name == "search_dataset":
         externalized, recovery = await _persist_search_dataset_result(content, request)
         if recovery is None:
-            return message
+            if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
+                return message
+            return _replace_tool_message(
+                message,
+                content=_build_truncated_tool_result_message(tool_name, len(content)),
+            )
         if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
             return _replace_tool_message(message, recovery=recovery)
         return _replace_tool_message(message, content=externalized, recovery=recovery)
@@ -112,7 +112,7 @@ async def _finalize_query_result(
         logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
         if len(raw_result) <= TOOL_RESULT_OFFLOAD_SIZE:
             return build_query_result_response(status=status, data=query_result, meta=public_meta), None
-        return _query_result_fallback(query_result, public_meta=public_meta, raw_result=raw_result), None
+        return _build_truncated_tool_result_message("semantic_query_tool", len(raw_result)), None
 
     recovery = build_tool_result_recovery(
         source_tool="semantic_query_tool",
@@ -198,28 +198,6 @@ async def _save_query_result_to_workspace(
     return content, recovery
 
 
-def _query_result_fallback(
-    query_result: dict[str, Any],
-    *,
-    public_meta: dict[str, Any],
-    raw_result: str,
-) -> str:
-    clipped = _clip_text_to_chars(raw_result, TOOL_RESULT_OFFLOAD_SIZE)
-    public_meta.update({
-        "sql": query_result.get("sql") or "",
-        "total_count": query_result.get("total_count", 0),
-        "result_size_chars": len(raw_result),
-        "result_externalization_failed": True,
-        "message": "查询结果过大且暂时无法保存完整结果；模型仅收到受限摘要，请缩小查询范围后重试。",
-        "preview": clipped,
-    })
-    return build_query_result_response(
-        status=query_result_status(query_result),
-        data=None,
-        meta=public_meta,
-    )
-
-
 async def _externalize_generic_text(
     content: str,
     tool_name: str,
@@ -233,7 +211,7 @@ async def _externalize_generic_text(
         )
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
-        return _clip_text_to_chars(content, TOOL_RESULT_OFFLOAD_SIZE), None
+        return _build_truncated_tool_result_message(tool_name, len(content)), None
     recovery = build_tool_result_recovery(
         source_tool=tool_name,
         result_path=record.virtual_path,
@@ -257,7 +235,7 @@ async def _persist_search_dataset_result(
         record = await _write_private_tool_result(content=content, suffix=".txt", request=request)
     except Exception as exc:
         logger.error("保存指标集搜索结果恢复副本失败: %s", exc, exc_info=True)
-        return _clip_text_to_chars(content, TOOL_RESULT_OFFLOAD_SIZE), None
+        return content, None
     recovery = build_tool_result_recovery(
         source_tool="search_dataset",
         result_path=record.virtual_path,
@@ -289,6 +267,26 @@ def _build_offloaded_tool_result_message(
     ]
     if preview:
         lines.extend(["", "preview:", preview])
+    return "\n".join(lines)
+
+
+def _build_truncated_tool_result_message(tool_name: str, result_size_chars: int) -> str:
+    """Return facts only when an oversized result cannot be persisted."""
+    required_lines = [
+        "[tool_result_truncated]",
+        "content_complete=false",
+    ]
+    required_content = "\n".join(required_lines)
+    message_limit = max(TOOL_RESULT_OFFLOAD_SIZE, len(required_content))
+    optional_lines = [
+        f"source_tool={tool_name or '-'}",
+        f"original_size_chars={max(int(result_size_chars), 0)}",
+    ]
+    lines = list(required_lines)
+    for line in optional_lines:
+        candidate = "\n".join([*lines, line])
+        if len(candidate) <= message_limit:
+            lines.append(line)
     return "\n".join(lines)
 
 

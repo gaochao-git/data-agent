@@ -45,7 +45,9 @@ def estimate_tokens(text: str) -> int:
     zh_chars = len(re.findall(r"[\u4e00-\u9fff]", normalized))
     en_words = len(re.findall(r"[a-zA-Z0-9]+", re.sub(r"[\u4e00-\u9fff]", " ", normalized)))
     other_chars = len(re.findall(r"[^\w\s\u4e00-\u9fff]", normalized))
-    return int(zh_chars * 0.7 + en_words * 1.3 + other_chars * 0.5)
+    heuristic = int(zh_chars * 0.7 + en_words * 1.3 + other_chars * 0.5)
+    byte_floor = (len(normalized.encode("utf-8")) + 3) // 4
+    return max(heuristic, byte_floor)
 
 
 def count_messages_tokens(messages: list[BaseMessage]) -> int:
@@ -98,10 +100,11 @@ def _message_tokens(message: BaseMessage) -> int:
     tool_calls = getattr(message, "tool_calls", None)
     if tool_calls:
         total += estimate_tokens(json.dumps(tool_calls, ensure_ascii=False, default=str))
-    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-    raw_tool_calls = additional_kwargs.get("tool_calls")
-    if raw_tool_calls:
-        total += estimate_tokens(json.dumps(raw_tool_calls, ensure_ascii=False, default=str))
+    else:
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        raw_tool_calls = additional_kwargs.get("tool_calls")
+        if raw_tool_calls:
+            total += estimate_tokens(json.dumps(raw_tool_calls, ensure_ascii=False, default=str))
     return int(total)
 
 
@@ -212,8 +215,8 @@ def _sanitize_breakdown(items: Any) -> None:
         _sanitize_breakdown(item.get("children"))
 
 
-class ToolResultBudget:
-    """共享模型请求预算；工具结果自身只遵守固定卸载阈值。"""
+class ContextRequestBudget:
+    """共享模型请求预算，统一管理固定输入和消息剩余容量。"""
 
     def __init__(self, model_id: str | None, *, max_output_tokens: int | None = None):
         self._model_id = model_id
@@ -228,7 +231,7 @@ class ToolResultBudget:
         *,
         model_id: str | None = None,
     ) -> ContextBudget:
-        """记录当前 Agent 固定输入部分，供工具在返回前计算剩余空间。"""
+        """记录当前 Agent 固定输入，供压缩与用量中间件共享。"""
         effective_model_id = self._model_id if model_id is None else model_id
         self._budget = get_model_context_budget(effective_model_id, max_output_tokens=self._max_output_tokens)
         self._static_input_tokens = (

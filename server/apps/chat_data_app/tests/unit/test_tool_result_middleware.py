@@ -16,12 +16,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.middleware import tool_result
 from apps.chat_data_app.services import conversation_workspace
-from apps.chat_data_app.services.context_budget import estimate_text_tokens
-
-
-class _Budget:
-    def __init__(self, **_kwargs):
-        pass
 
 
 def _request(
@@ -69,7 +63,7 @@ async def test_query_result_is_inlined_as_public_envelope(monkeypatch, tmp_path)
         "total_count": 1,
     })
 
-    result = await tool_result._finalize_tool_message(message, _request(), _Budget())
+    result = await tool_result._finalize_tool_message(message, _request())
     payload = json.loads(result.content)
 
     assert payload["type"] == "query_result"
@@ -91,7 +85,7 @@ async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tm
         "execution_time_ms": 12,
     })
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget())
+    result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
     result_id = payload["meta"]["result_id"]
 
@@ -110,7 +104,7 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = ToolMessage(content="x" * 200, name="calculator_tool", tool_call_id="call_calculator")
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget())
+    result = await tool_result._finalize_tool_message(message, request)
 
     assert result.content.startswith("[tool_result_offloaded]\n")
     assert "source_tool=calculator_tool" in result.content
@@ -129,7 +123,7 @@ async def test_large_search_dataset_result_is_offloaded_by_shared_middleware(mon
     content = '[search_dataset]\n{"semantic_config_ids":["cfg_order"],"semantic_configs":{"cfg_order":{"metrics":"' + "x" * 200 + '"}}}'
     message = ToolMessage(content=content, name="search_dataset", tool_call_id="call_dataset")
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget())
+    result = await tool_result._finalize_tool_message(message, request)
 
     assert result.content.startswith("[tool_result_offloaded]\n")
     assert "source_tool=search_dataset" in result.content
@@ -149,7 +143,7 @@ async def test_structured_generic_tool_result_is_serialized_before_offload(monke
     content = [{"value": "x" * 200}]
     message = ToolMessage(content=content, name="calculator_tool", tool_call_id="call_structured")
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget())
+    result = await tool_result._finalize_tool_message(message, request)
 
     assert "/mnt/user-data/outputs/.tool-offload/" in result.content
     files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
@@ -163,7 +157,7 @@ async def test_paginated_read_tools_are_not_offloaded(monkeypatch, tmp_path, too
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = ToolMessage(content="x" * 200, name=tool_name, tool_call_id="call_read")
 
-    result = await tool_result._finalize_tool_message(message, _request(), _Budget())
+    result = await tool_result._finalize_tool_message(message, _request())
 
     assert result is message
     assert not list(tmp_path.rglob("*.txt"))
@@ -175,14 +169,14 @@ async def test_remaining_context_budget_does_not_change_per_result_threshold(mon
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 10000)
     message = ToolMessage(content="结果内容 " * 20, name="calculator_tool", tool_call_id="call_budget")
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget(remaining=520))
+    result = await tool_result._finalize_tool_message(message, request)
 
     assert result.content == message.content
     assert not list((Path(_paths["outputs"]) / ".tool-offload").glob("*"))
 
 
 @pytest.mark.asyncio
-async def test_storage_failure_returns_bounded_query_preview(monkeypatch, tmp_path):
+async def test_storage_failure_returns_incomplete_query_result_marker(monkeypatch, tmp_path):
     request, _paths = _workspace_request(monkeypatch, tmp_path)
 
     async def fail_write_tool_result(self, **_kwargs):
@@ -196,9 +190,59 @@ async def test_storage_failure_returns_bounded_query_preview(monkeypatch, tmp_pa
         "results": [{"status": "succeeded", "data": [{"content": "x" * 200}]}],
     })
 
-    result = await tool_result._finalize_tool_message(message, request, _Budget(remaining=550))
-    payload = json.loads(result.content)
+    result = await tool_result._finalize_tool_message(message, request)
 
-    assert payload["data"] is None
-    assert payload["meta"]["result_externalization_failed"] is True
-    assert estimate_text_tokens(payload["meta"]["preview"]) <= 38
+    assert result.content.startswith("[tool_result_truncated]\n")
+    assert "source_tool=semantic_query_tool" in result.content
+    assert "content_complete=false" in result.content
+    assert len(result.content) <= 100
+    assert result.artifact is None
+
+
+@pytest.mark.asyncio
+async def test_search_dataset_storage_failure_returns_bounded_content(monkeypatch, tmp_path):
+    request, _paths = _workspace_request(monkeypatch, tmp_path)
+
+    async def fail_write_tool_result(self, **_kwargs):
+        raise OSError("storage unavailable")
+
+    monkeypatch.setattr(tool_result.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
+    content = '[search_dataset]\n{"metrics":"' + "x" * 200 + '"}'
+    message = ToolMessage(content=content, name="search_dataset", tool_call_id="call_dataset")
+
+    result = await tool_result._finalize_tool_message(message, request)
+
+    assert len(result.content) <= 100
+    assert result.content.startswith("[tool_result_truncated]\n")
+    assert "source_tool=search_dataset" in result.content
+    assert "content_complete=false" in result.content
+    assert result.artifact is None
+
+
+@pytest.mark.asyncio
+async def test_generic_storage_failure_returns_incomplete_result_marker(monkeypatch, tmp_path):
+    request, _paths = _workspace_request(monkeypatch, tmp_path)
+
+    async def fail_write_tool_result(self, **_kwargs):
+        raise OSError("storage unavailable")
+
+    monkeypatch.setattr(tool_result.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
+    message = ToolMessage(content="x" * 200, name="calculator_tool", tool_call_id="call_generic")
+
+    result = await tool_result._finalize_tool_message(message, request)
+
+    assert result.content.startswith("[tool_result_truncated]\n")
+    assert "source_tool=calculator_tool" in result.content
+    assert "content_complete=false" in result.content
+    assert "x" * 20 not in result.content
+    assert result.artifact is None
+
+
+def test_incomplete_result_marker_survives_tiny_configured_threshold(monkeypatch):
+    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 1)
+
+    content = tool_result._build_truncated_tool_result_message("semantic_query_tool", 1000)
+
+    assert content == "[tool_result_truncated]\ncontent_complete=false"
