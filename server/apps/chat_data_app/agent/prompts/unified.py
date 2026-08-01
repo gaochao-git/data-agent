@@ -278,8 +278,11 @@ ERROR_HANDLING_BLOCK = """## 错误处理
 # ---------------------------------------------------------------------------
 
 ENVIRONMENT_BLOCK = """## 环境
-当前时间不在系统提示词中提供；需要解析今天、昨天、本周、本月、当前或最近等相对时间时，必须调用 `get_current_time`。
-工作目录：/mnt/user-data/workspace（主工作区）、/mnt/user-data/outputs（最终产物）、/mnt/user-data/uploads（用户上传）"""
+工作目录：
+/mnt/user-data/
+├── workspace/   主工作区（agent可读写，脚本、草稿、中间文件）
+├── outputs/     最终产物（agent可读写，最终产物）
+└── uploads/     用户上传（agent只读，不可写）"""
 
 WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 上下文足够时直接执行，不向用户请求确认。
