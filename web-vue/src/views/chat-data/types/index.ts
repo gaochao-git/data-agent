@@ -323,10 +323,23 @@ export interface Message {
   dashboardSpec?: DashboardSpecPayload
   semanticConfigSelection?: SemanticConfigSelectionInfo
   skill?: Pick<SkillInfo, 'name' | 'title' | 'description'>
+  // 用户消息附带的文件信息（上传文件或超长输入转文件）
+  attachments?: MessageAttachment[]
   // tool 消息专用字段
   toolCallId?: string
   toolName?: string
   contextCompression?: ChatDataContextCompressionEvent
+}
+
+// 用户消息附件（文件卡片展示用）
+export interface MessageAttachment {
+  file_id: string
+  filename: string
+  file_type?: string
+  file_size?: number
+  // 已链接到工作区后的可访问路径（用于点击查看）
+  parsed_path?: string
+  original_path?: string
 }
 
 export interface DashboardSpecPayload {

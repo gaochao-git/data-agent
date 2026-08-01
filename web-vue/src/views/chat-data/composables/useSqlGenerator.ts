@@ -91,6 +91,7 @@ export function useSqlGenerator() {
     enableThinking?: boolean,
     runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null,
     onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
+    fileIds?: string[],
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -142,6 +143,7 @@ export function useSqlGenerator() {
         query,
         agent_id: agentId,
         options,
+        file_ids: fileIds,
       }, currentController.signal)
 
       if (!response.ok) {

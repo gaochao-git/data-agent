@@ -5,12 +5,13 @@
  */
 import { computed, nextTick, onMounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, importConversationWorkspaceSkill } from '../api'
+import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, importConversationWorkspaceSkill, uploadFile } from '../api'
+import type { LinkedFileInfo } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -23,7 +24,7 @@ import ConversationInputBar from './ConversationInputBar.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
-import { parseDateTimeValue, hideSemanticConfigSelectionPayloads } from '../utils'
+import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
@@ -87,11 +88,162 @@ const focusInput = () => {
 onMounted(focusInput)
 const isNearBottom = ref(true)
 
+// ---- 文件上传 ----
+const ACCEPTED_FILE_TYPES = ['.txt', '.md', '.sql', '.docx', '.doc', '.xlsx', '.xls']
+const MAX_FILE_SIZE = 50 * 1024 * 1024
+// 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
+const MAX_INPUT_CHARS = 4000
+interface PendingFile {
+  file_id: string
+  filename: string
+  status: 'uploading' | 'uploaded' | 'failed'
+  file_type?: string
+  file_size?: number
+  linkedInfo?: LinkedFileInfo
+}
+const pendingFiles = ref<PendingFile[]>([])
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
+const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
+
+const handleUploadFile = () => {
+  fileInputRef.value?.click()
+}
+
+const handleFileSelected = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  if (!ACCEPTED_FILE_TYPES.includes(ext)) {
+    ElMessage.warning(`仅支持 ${ACCEPTED_FILE_TYPES.join('、')} 格式`)
+    return
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    ElMessage.warning('文件大小不能超过 50MB')
+    return
+  }
+
+  try {
+    let convId = props.conversationId || localConversationId.value
+    if (!convId) {
+      convId = (await props.ensureConversationId?.()) ?? null
+      if (!convId) {
+        ElMessage.error('创建会话失败，请稍后重试')
+        return
+      }
+      localConversationId.value = convId
+      // 刚创建的新会话无历史，标记已加载，避免触发历史加载导致 isLoadingHistory 闪烁
+      loadedConversationId.value = convId
+    }
+    const res = await uploadFile(convId, file)
+    if (res.status !== 'success') {
+      ElMessage.error(res.msg || '上传失败')
+      return
+    }
+    const pending: PendingFile = {
+      file_id: res.data.file_id,
+      filename: res.data.original_filename,
+      status: 'uploaded',
+      file_type: res.data.file_type,
+      file_size: res.data.file_size,
+    }
+    pendingFiles.value.push(pending)
+    // 上传即登记：不再预解析/链接到工作区，agent 在需要时通过 parse_document 工具按需解析
+  } catch {
+    ElMessage.error('文件上传失败')
+  }
+}
+
+const removePendingFile = (fileId: string) => {
+  pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
+}
+
+// 超长用户输入在前端转为 .md 文件，走与手动上传一致的流程
+const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
+  const timestamp = formatLocalDateTime(new Date()).replace(/[/\\: ]/g, '-')
+  const filename = `用户输入-${timestamp}.md`
+  const file = new File([text], filename, { type: 'text/markdown' })
+
+  // 立即在 pendingFiles 中显示占位卡片，让用户看到转换效果
+  const placeholderId = `temp-${Date.now()}`
+  const placeholder: PendingFile = {
+    file_id: placeholderId,
+    filename,
+    status: 'uploading',
+  }
+  pendingFiles.value.push(placeholder)
+
+  let convId = props.conversationId || localConversationId.value
+  if (!convId && props.ensureConversationId) {
+    convId = await props.ensureConversationId()
+    if (convId) {
+      // 新会话无历史，标记已加载，避免历史加载闪烁
+      loadedConversationId.value = convId
+    }
+  }
+  if (!convId) {
+    // 移除占位卡片
+    pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
+    ElMessage.error('无法创建会话')
+    return false
+  }
+
+  try {
+    const res = await uploadFile(convId, file)
+    if (res.status !== 'success') {
+      pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
+      ElMessage.error(res.msg || '超长输入上传失败')
+      return false
+    }
+    // 用真实的 file_id 替换占位 id，标记已登记（不再等待预解析）
+    placeholder.file_id = res.data.file_id
+    placeholder.filename = res.data.original_filename
+    placeholder.file_type = res.data.file_type
+    placeholder.file_size = res.data.file_size
+    placeholder.status = 'uploaded'
+    return true
+  } catch {
+    pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
+    ElMessage.error('超长输入上传失败')
+    return false
+  }
+}
+
+// 实时检测：输入超长时自动转为文件附件
+const isProcessingOversizedInput = ref(false)
+
+const checkOversizedInput = (text: string) => {
+  if (text.length <= MAX_INPUT_CHARS) return
+  if (isProcessingOversizedInput.value) return
+  handleOversizedInputAuto(text)
+}
+
+const handleOversizedInputAuto = async (text: string) => {
+  if (isProcessingOversizedInput.value) return
+  if (text.length <= MAX_INPUT_CHARS) return
+  isProcessingOversizedInput.value = true
+  try {
+    const success = await convertOversizedInputToFile(text)
+    if (success) {
+      // 清空输入框，内容已转为文件
+      input.value = ''
+    }
+  } finally {
+    isProcessingOversizedInput.value = false
+  }
+}
+
 type AnalysisSubmitOptions = {
   semanticConfigIdOverride?: string | null
   semanticConfigSelection?: SemanticConfigSelectionInfo | null
   assistantMessageId?: string
   appendUserMessage?: boolean
+  fileIds?: string[]
+  attachments?: MessageAttachment[]
 }
 
 const resetTokenUsagePanel = (clearUsage = true) => {
@@ -983,6 +1135,29 @@ const openConsolePanel = () => {
   sidePanelOpen.value = true
 }
 
+const handleOpenAttachment = async (attachment: MessageAttachment) => {
+  const conversationId = localConversationId.value
+  if (!conversationId) {
+    ElMessage.warning('会话未就绪，无法查看文件')
+    return
+  }
+  const rawPath = attachment.parsed_path || attachment.original_path || ''
+  const relativePath = normalizeVisiblePath(rawPath)
+  if (!relativePath) {
+    ElMessage.warning('文件路径无效')
+    return
+  }
+  // 如果工作区文件列表中还没有该文件，先刷新一次
+  if (!workspaceFiles.value.some(f => normalizeVisiblePath(f.relative_path || f.path) === relativePath)) {
+    await loadWorkspaceFiles(conversationId)
+  }
+  selectConsoleFile(relativePath)
+  sidePanelTab.value = 'console'
+  sidePanelOpen.value = true
+  // 直接加载文件内容（不依赖 watch 中的 selectedWorkspaceFile 判断）
+  await loadWorkspaceFileContent(conversationId, relativePath)
+}
+
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
   const fieldName = String(payload?.fieldName || '').trim()
   if (!fieldName) return
@@ -1010,7 +1185,7 @@ const syncHistoryToolCalls = () => {
   toolCallsMap.value = nextMap
 }
 
-const { isLoadingHistory, resetHistory } = useConversationHistory({
+const { isLoadingHistory, loadedConversationId, resetHistory } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
   tokenUsage,
@@ -1114,8 +1289,9 @@ const clearSelectedSkill = () => {
   inputBarRef.value?.focus()
 }
 
-watch(input, () => {
+watch(input, (value) => {
   nextTick(() => inputBarRef.value?.resizeTextarea())
+  checkOversizedInput(value)
 })
 
 watch(
@@ -1131,9 +1307,17 @@ watch(
 watch(
   () => props.conversationId,
   (nextId, prevId) => {
+    if (nextId === prevId) return
     if (nextId && nextId === localConversationId.value) return
-    if (nextId !== prevId && !isGenerating.value) {
+    // 首次创建会话（null -> id，上传第一个附件或发送首条消息时触发）或“新建会话”清空
+    // （id -> null）时，不重置已上传文件/输入等状态；仅在切换到另一个已有会话时才重置。
+    // 注意：会话实际切换由父组件 conversationKey 强制重挂载处理，此处只兜底创建/清空场景。
+    if (!prevId || !nextId) {
       localConversationId.value = nextId || null
+      return
+    }
+    if (!isGenerating.value) {
+      localConversationId.value = nextId
       hasLocalConversationStarted.value = false
       messages.value = []
       toolCallsMap.value.clear()
@@ -1427,7 +1611,7 @@ const submitAnalysisQuery = async (
   requestText: string,
   options: AnalysisSubmitOptions & { skillName?: string | null; messageSkill?: Message['skill']; restoreInputText?: string } = {}
 ) => {
-  if (!requestText.trim() || isGenerating.value) return
+  if ((!requestText.trim() && !options.fileIds?.length) || isGenerating.value) return
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
     : (props.semanticConfigSelection || null)
@@ -1437,6 +1621,7 @@ const submitAnalysisQuery = async (
     content: requestText,
     timestamp: new Date(),
     skill: options.messageSkill,
+    attachments: options.attachments,
   }
   if (options.appendUserMessage !== false) {
     messages.value.push(userMessage)
@@ -1471,6 +1656,10 @@ const submitAnalysisQuery = async (
     let convId = props.conversationId
     if (!convId && props.ensureConversationId) {
       convId = await props.ensureConversationId()
+      if (convId) {
+        // 新会话无历史，标记已加载，避免历史加载闪烁
+        loadedConversationId.value = convId
+      }
     }
     if (!convId) {
       ElMessage.error('无法创建会话')
@@ -1539,7 +1728,8 @@ const submitAnalysisQuery = async (
       effectiveSemanticConfigSelection,
       enableDeepThinking.value,
       selectedRuntimeOptions.value,
-      (event) => appendContextCompressionEvent(event)
+      (event) => appendContextCompressionEvent(event),
+      options.fileIds
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
@@ -1550,7 +1740,10 @@ const submitAnalysisQuery = async (
 }
 
 const handleSubmit = async () => {
-  if (!input.value.trim() || isGenerating.value) return
+  const hasUploadedFiles = pendingFiles.value.some(
+    f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'),
+  )
+  if ((!input.value.trim() && !hasUploadedFiles) || isGenerating.value) return
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -1559,10 +1752,13 @@ const handleSubmit = async () => {
     ElMessage.warning('请选择执行对象')
     return
   }
+  if (hasParsingFiles.value) {
+    ElMessage.warning('请等待文件上传完成')
+    return
+  }
 
   const queryText = input.value.trim()
   const skillName = selectedSkill.value?.name || null
-  const requestText = buildSkillRequestText(queryText, skillName || '')
   const manualSemanticConfigId = props.semanticConfigSelection?.user_selected
     ? props.semanticConfigSelection.semantic_config_id
     : null
@@ -1573,11 +1769,52 @@ const handleSubmit = async () => {
         description: selectedSkill.value.description,
       }
     : undefined
+
+  // 超长输入兜底：转文件（带真实 file_id 进入 pendingFiles），成功后继续发送
+  let effectiveQueryText = queryText
+  if (queryText.length > MAX_INPUT_CHARS && !isProcessingOversizedInput.value) {
+    const success = await convertOversizedInputToFile(queryText)
+    if (success) {
+      input.value = ''
+      ElMessage.info('已转为文件附件并发送')
+      effectiveQueryText = '请查看附件内容并进行分析'
+    } else {
+      return
+    }
+  }
+
+  // 收集本轮消息关联的已上传文件（手动上传 + 超长转文件）；不再要求预解析/链接完成
+  const completedFileIds: string[] = []
+  const attachments: MessageAttachment[] = []
+  for (const f of pendingFiles.value) {
+    if (f.file_id && !f.file_id.startsWith('temp-') && f.status === 'uploaded') {
+      completedFileIds.push(f.file_id)
+      attachments.push({
+        file_id: f.file_id,
+        filename: f.filename,
+        file_type: f.file_type,
+        file_size: f.file_size,
+        original_path: `/mnt/user-data/uploads/${f.filename}`,
+      })
+    }
+  }
+
+  // 如果只有文件没有文本，使用占位提示
+  if (!effectiveQueryText.trim() && completedFileIds.length > 0) {
+    effectiveQueryText = '请查看附件内容并进行分析'
+  }
+
+  const requestText = buildSkillRequestText(effectiveQueryText, skillName || '')
+  // 附件已捕获进 completedFileIds/attachments，发送瞬间即清空输入框附件卡片，
+  // 并避免后续消息重复附带历史上传文件
+  pendingFiles.value = []
   await submitAnalysisQuery(requestText, {
     skillName,
     messageSkill,
     restoreInputText: queryText,
     semanticConfigIdOverride: manualSemanticConfigId,
+    fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
+    attachments: attachments.length > 0 ? attachments : undefined,
   })
 }
 
@@ -1665,6 +1902,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
           @select-tool="selectToolCall"
+          @open-attachment="handleOpenAttachment"
         >
           <template #assistant-extra="{ message: msg }">
             <div v-if="getPresentedSkillArtifacts(msg).length && !msg.isStreaming" class="mt-3 space-y-2">
@@ -1778,8 +2016,29 @@ const handleKeyDown = (event: KeyboardEvent) => {
         </ConversationMessageList>
       </div>
 
-      <div v-if="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
+      <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
+          <div v-if="pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
+            <div
+              v-for="f in pendingFiles"
+              :key="f.file_id"
+              class="group flex items-center gap-1.5 rounded-full border border-[#1677FF]/30 bg-white px-2.5 py-1 text-[11px] text-[#1F3A56] shadow-sm transition-colors hover:border-[#1677FF]/50"
+            >
+              <i class="fa-solid fa-spinner fa-spin text-[9px] text-amber-500" v-if="f.status === 'uploading'"></i>
+              <i class="fa-regular fa-file-lines text-[11px] text-[#1677FF]" v-else></i>
+              <span class="max-w-[160px] truncate">{{ f.filename }}</span>
+              <span v-if="f.status === 'uploading'" class="text-amber-500">上传中</span>
+              <span v-else-if="f.status === 'failed'" class="text-red-400">失败</span>
+              <button
+                type="button"
+                class="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                @click="removePendingFile(f.file_id)"
+                title="移除"
+              >
+                <i class="fa-solid fa-xmark text-[8px]"></i>
+              </button>
+            </div>
+          </div>
           <ConversationInputBar
             ref="inputBarRef"
             v-model:input="input"
@@ -1791,13 +2050,14 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :user-overridable="userOverridable"
             :model-options="modelOptions"
             :is-generating="isGenerating"
-            :can-submit="Boolean(input.trim() && selectedDatasource)"
+            :can-submit="Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
             :input-focused="inputFocused"
             show-skill-button
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
+            @upload-file="handleUploadFile"
             @open-skill-manager="isSkillManagerOpen = true"
             @update:runtime-options="onRuntimeOptionsChange"
             @keydown="handleKeyDown"
@@ -1825,6 +2085,13 @@ const handleKeyDown = (event: KeyboardEvent) => {
           </ConversationInputBar>
         </div>
       </div>
+      <input
+        ref="fileInputRef"
+        type="file"
+        class="hidden"
+        :accept="ACCEPTED_FILE_TYPES.join(',')"
+        @change="handleFileSelected"
+      />
       <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
     </div>
 

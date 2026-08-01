@@ -41,12 +41,15 @@ const modelMenuRef = ref<HTMLElement | null>(null)
 const modelMenuOpen = ref(false)
 const sandboxMenuRef = ref<HTMLElement | null>(null)
 const sandboxMenuOpen = ref(false)
+const plusMenuRef = ref<HTMLElement | null>(null)
+const plusMenuOpen = ref(false)
 
 const emit = defineEmits<{
   submit: []
   stop: []
   clearSkill: []
   openSkillManager: []
+  uploadFile: []
   keydown: [event: KeyboardEvent]
   focus: []
   blur: []
@@ -142,8 +145,10 @@ const handleDocumentClick = (event: MouseEvent) => {
   if (!(target instanceof Node)) return
   if (modelMenuRef.value?.contains(target)) return
   if (sandboxMenuRef.value?.contains(target)) return
+  if (plusMenuRef.value?.contains(target)) return
   modelMenuOpen.value = false
   sandboxMenuOpen.value = false
+  plusMenuOpen.value = false
 }
 
 const focus = () => {
@@ -255,16 +260,38 @@ onBeforeUnmount(() => {
           </template>
           <!-- userOverridable=false 时完全隐藏隔离模式选择器 -->
 
-          <button
-            v-if="showSkillButton"
-            type="button"
-            class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            title="技能管理"
-            @click="emit('openSkillManager')"
-          >
-            <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i>
-            <span class="toolbar-label">技能</span>
-          </button>
+          <div v-if="showSkillButton" ref="plusMenuRef" class="relative">
+            <button
+              type="button"
+              class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+              title="更多操作"
+              @click="plusMenuOpen = !plusMenuOpen"
+            >
+              <i class="fa-solid fa-plus text-[10px]"></i>
+            </button>
+            <div
+              v-if="plusMenuOpen"
+              class="absolute left-0 bottom-8 z-50 w-[160px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+            >
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+                @click="emit('uploadFile'); plusMenuOpen = false"
+              >
+                <i class="fa-solid fa-paperclip text-[11px] text-gray-400"></i>
+                <span>上传文件</span>
+              </button>
+              <div class="border-t border-gray-100"></div>
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
+                @click="emit('openSkillManager'); plusMenuOpen = false"
+              >
+                <i class="fa-solid fa-wand-magic-sparkles text-[11px] text-gray-400"></i>
+                <span>技能管理</span>
+              </button>
+            </div>
+          </div>
           <slot name="toolbar-extra" />
         </div>
 

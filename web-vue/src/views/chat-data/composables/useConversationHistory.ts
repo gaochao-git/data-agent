@@ -507,12 +507,19 @@ export function useConversationHistory({
   }
 
   // 监听 conversationId 变化
+  // - immediate（组件挂载/重挂载）：从侧边栏选中历史会话后经 conversationKey 重挂载，正常加载历史。
+  // - 非 immediate 的变化（conversationId 在不重挂载情况下变化）：只发生在"上传/发首条消息
+  //   时本地新建会话"。新会话无历史，直接标记已加载，避免触发 isLoadingHistory 闪烁导致
+  //   输入区"刷新"。选历史会话走父组件 conversationKey 重挂载，不会进入此分支。
   watch(
     conversationId,
     (newId, oldId) => {
-      if (newId && newId !== oldId) {
+      if (!newId || newId === oldId) return
+      if (oldId === undefined) {
         loadHistory(newId)
+        return
       }
+      loadedConversationId.value = newId
     },
     { immediate: true }
   )

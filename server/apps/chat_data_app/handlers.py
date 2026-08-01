@@ -34,6 +34,7 @@ from .services.conversation_event_service import conversation_event_service
 from .services.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
+from .services.uploaded_file_service import get_file_info
 from .services.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
@@ -46,6 +47,11 @@ from .services.semantic_conversation_context import (
 logger = get_logger(__name__)
 
 AGENT_ID = "chat_data"
+
+# 用户输入超长时自动转为文件，阈值单位：字符数
+USER_INPUT_OFFLOAD_THRESHOLD = 4000
+USER_INPUT_PREVIEW_CHARS = 200
+
 REASONING_TOOL_DISPLAY_NAMES = {
     "search_dataset": "搜索指标集",
     "dsl2sql_tool": "生成 SQL",
@@ -99,6 +105,25 @@ def _format_sse(event: str, data: dict | str) -> str:
     else:
         data_str = data
     return f"event: {event}\ndata: {data_str}\n\n"
+
+
+def _build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
+    """构造追加到用户消息末尾的附件路径占位。
+
+    仅输出短占位 ``[attachment] /mnt/user-data/uploads/<原始文件>`` 或
+    ``[attachment] /mnt/user-data/outputs/<已转文件>``，不再附加大段说明；
+    agent 处理用户附件的策略（先 file_read，读不了再 parse_document）由
+    ``agent/prompts/unified.py`` 的工作区流程块统一提供，重复说明反而冗余。
+    前端识别该占位并在消息气泡中隐藏，避免查看历史会话时再次渲染冗长文本。
+    """
+    if not file_attachments:
+        return ""
+    lines = [""]
+    for item in file_attachments:
+        path = item.get("virtual_path") or item.get("parsed_path")
+        if path:
+            lines.append(f"[attachment] {path}")
+    return "\n".join(lines)
 
 
 def _build_user_message(content: str, semantic_selection_event: dict[str, Any] | None = None, **extra_kwargs: Any) -> HumanMessage:
@@ -836,6 +861,7 @@ async def _generate_chat_data_stream(
     enable_thinking: bool | None = None,
     skill_names: list[str] | None = None,
     options: Optional[Dict[str, Any]] = None,
+    file_ids: list[str] | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -920,17 +946,69 @@ async def _generate_chat_data_stream(
 
     stream_adapter: _AgentSseStreamAdapter | None = None
     user_message: HumanMessage | None = None
+
+    # 解析 file_ids 对应的文件信息，用于追加到用户消息。
+    # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
+    file_attachments: list[dict[str, Any]] = []
+    if file_ids:
+        for fid in file_ids:
+            info = await get_file_info(fid, user_id=user_id or "system", thread_id=thread_id)
+            if not info:
+                logger.warning("关联文件不存在或无权限，已忽略: file_id=%s thread_id=%s", fid, thread_id)
+                continue
+            if info.get("thread_id") and thread_id and info["thread_id"] != thread_id:
+                logger.warning("关联文件会话归属不匹配，已忽略: file_id=%s", fid)
+                continue
+            file_attachments.append({
+                "file_id": fid,
+                "original_filename": info["original_filename"],
+                "file_type": info["file_type"],
+                "file_size": info["file_size"],
+                "virtual_path": f"/mnt/user-data/uploads/{info['storage_dir']}",
+            })
+
+    # 用户输入超长时自动转为文件写入 workspace outputs
+    user_message_content = user_query
+    if len(user_query) > USER_INPUT_OFFLOAD_THRESHOLD:
+        offload_name = f"input-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+        offload_path = f"outputs/{offload_name}"
+        await workspace_runtime.write_text_file(
+            file_path=offload_path,
+            content=user_query,
+            mode="overwrite",
+        )
+        visible_path = f"/mnt/user-data/outputs/{offload_name}"
+        preview = user_query[:USER_INPUT_PREVIEW_CHARS]
+        user_message_content = (
+            f"{preview}...\n\n"
+            f"[用户输入较长（共 {len(user_query)} 字符），完整内容已保存到 {visible_path}，"
+            "请用 file_read 分批读取后再回答。]"
+        )
+        file_attachments.append({
+            "original_filename": offload_name,
+            "parsed_path": visible_path,
+        })
+        logger.info("用户输入超长已转文件: conversation_id=%s chars=%d path=%s", thread_id, len(user_query), visible_path)
+
     try:
         async with get_checkpointer() as checkpointer:
             log_phase("open_checkpointer")
+            # 构造用户消息内容：原始内容 + 文件引用
+            message_content = user_message_content
+            if file_attachments:
+                attachment_text = _build_file_attachment_text(file_attachments)
+                message_content = f"{message_content}{attachment_text}"
+
+            message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
-                user_message = _build_user_message(
-                    user_query,
-                    semantic_selection_event,
-                    skill_names=normalized_skill_names,
-                )
-            else:
-                user_message = _build_user_message(user_query, semantic_selection_event)
+                message_kwargs["skill_names"] = normalized_skill_names
+            if file_attachments:
+                message_kwargs["file_ids"] = file_attachments
+            user_message = _build_user_message(
+                message_content,
+                semantic_selection_event,
+                **message_kwargs,
+            )
 
             initial_state = _build_agent_context_state(
                 datasource_id=datasource_id,
@@ -1061,7 +1139,8 @@ async def sql_completion_handler(
     options: Optional[Dict[str, Any]] = None,
     user_id: str = "system",
     username: str | None = None,
-    request: Request | None = None
+    request: Request | None = None,
+    file_ids: list[str] | None = None,
 ) -> StreamingResponse:
     """
     智能问数 completion 处理器。
@@ -1099,6 +1178,7 @@ async def sql_completion_handler(
             enable_thinking=enable_thinking,
             skill_names=skill_names,
             options=options,
+            file_ids=file_ids,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}

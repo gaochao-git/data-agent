@@ -22,6 +22,7 @@ from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool
 from .tools.filesystem import create_filesystem_tools
+from .tools.parse_document import create_parse_document_tool
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.bash_run import create_bash_run_tool
 from .tools.semantic_query import semantic_query_tool
@@ -49,6 +50,7 @@ def assemble_tools(
     tools = [
         create_skill_load_tool(workspace_runtime, user_id=user_id),
         *create_filesystem_tools(workspace_runtime),
+        *create_parse_document_tool(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),
         get_current_time_tool,
         search_dataset_tool,

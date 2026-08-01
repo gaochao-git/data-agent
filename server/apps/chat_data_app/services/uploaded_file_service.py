@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import shutil
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -16,15 +13,22 @@ from utils.logger import get_logger
 
 from ..daos.uploaded_file_dao import UploadedFileDao
 from .uploaded_file_parser import parse_file
+from .conversation_workspace import resolve_uploads_root
 
 logger = get_logger(__name__)
 
-UPLOADS_ROOT = Path(__file__).resolve().parents[3] / "uploads"
 
-
-def _get_storage_dir(thread_id: str, file_id: str) -> str:
-    """生成相对 uploads 根目录的存储目录。"""
-    return f"{time.strftime('%Y-%m-%d')}/{thread_id}/{file_id}"
+def _unique_storage_name(uploads_root: Path, original_filename: str) -> str:
+    """生成 uploads 根目录下不重名的存储文件名（保留原始文件名，重名加 -N 后缀）。"""
+    base = Path(original_filename).name or "unknown"
+    candidate = base
+    counter = 1
+    while (uploads_root / candidate).exists():
+        stem = Path(base).stem
+        suffix = Path(base).suffix
+        candidate = f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
 
 
 def _get_file_extension(filename: str) -> str:
@@ -63,17 +67,18 @@ class UploadedFileService:
     def __init__(self, dao: Optional[UploadedFileDao] = None):
         self.dao = dao or UploadedFileDao()
 
-    async def upload_file(self, file: UploadFile, thread_id: str) -> Dict[str, Any]:
+    async def upload_file(
+        self, file: UploadFile, thread_id: str, user_id: str = "system"
+    ) -> Dict[str, Any]:
         file_id = str(uuid.uuid4())
         original_filename = file.filename or "unknown"
         file_type = _get_file_extension(original_filename)
-        storage_dir = _get_storage_dir(thread_id, file_id)
-        full_dir = UPLOADS_ROOT / storage_dir
-        full_dir.mkdir(parents=True, exist_ok=True)
-
+        uploads_root = resolve_uploads_root(user_id, thread_id)
+        storage_name = _unique_storage_name(uploads_root, original_filename)
+        full_path = uploads_root / storage_name
         content = await file.read()
         file_size = len(content)
-        (full_dir / f"original.{file_type}").write_bytes(content)
+        full_path.write_bytes(content)
 
         await self.dao.create_file(
             file_id=file_id,
@@ -81,11 +86,10 @@ class UploadedFileService:
             original_filename=original_filename,
             file_type=file_type,
             file_size=file_size,
-            storage_dir=storage_dir,
+            storage_dir=storage_name,
             now=datetime.now(),
         )
         logger.info("文件上传成功: %s, %s", file_id, original_filename)
-        asyncio.create_task(self.parse_file_async(file_id))
         return {
             "file_id": file_id,
             "status": "parsing",
@@ -94,47 +98,69 @@ class UploadedFileService:
             "file_size": file_size,
         }
 
-    async def parse_file_async(self, file_id: str) -> None:
+    async def parse_file_async(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> None:
         try:
-            await parse_file(file_id, self.dao)
+            await parse_file(file_id, self.dao, user_id=user_id, thread_id=thread_id)
         except Exception as exc:
             logger.error("文件解析失败: %s, %s", file_id, exc, exc_info=True)
             await self.dao.update_parse_status(file_id=file_id, status="failed")
 
-    async def get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
+    async def get_file_info(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
         row = await self.dao.get_file(file_id)
         return _file_info(row) if row else None
 
-    async def delete_file(self, file_id: str) -> bool:
-        info = await self.get_file_info(file_id)
+    async def delete_file(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> bool:
+        info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return False
-        storage_dir = UPLOADS_ROOT / info["storage_dir"]
-        if storage_dir.exists():
-            shutil.rmtree(storage_dir)
+        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        original_path = uploads_root / info["storage_dir"]
+        parsed_path = uploads_root / info["parse_filename"] if info.get("parse_filename") else None
+        for target in (original_path, parsed_path):
+            if target and target.exists():
+                try:
+                    target.unlink()
+                except OSError:
+                    logger.warning("删除上传文件失败: %s", target)
         await self.dao.delete_file(file_id)
         logger.info("文件删除成功: %s", file_id)
         return True
 
-    async def get_file_content(self, file_id: str) -> Optional[bytes]:
-        info = await self.get_file_info(file_id)
+    async def get_file_content(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> Optional[bytes]:
+        info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
-        file_path = UPLOADS_ROOT / info["storage_dir"] / f"original.{info['file_type']}"
+        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        file_path = uploads_root / info["storage_dir"]
         return file_path.read_bytes() if file_path.exists() else None
 
-    async def get_parsed_content(self, file_id: str) -> Optional[str]:
-        info = await self.get_file_info(file_id)
+    async def get_parsed_content(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> Optional[str]:
+        info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info or info["status"] != "completed" or not info["parse_filename"]:
             return None
-        parsed_path = UPLOADS_ROOT / info["storage_dir"] / info["parse_filename"]
+        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        parsed_path = uploads_root / info["parse_filename"]
         return parsed_path.read_text(encoding="utf-8") if parsed_path.exists() else None
 
-    async def list_files_by_thread(self, thread_id: str) -> list:
+    async def list_files_by_thread(
+        self, thread_id: str, user_id: str = "system"
+    ) -> list:
+        del user_id
         rows = await self.dao.list_files_by_thread(thread_id)
         return [_file_summary(row) for row in rows]
 
-    async def get_files_by_thread(self, thread_id: str) -> list:
+    async def get_files_by_thread(
+        self, thread_id: str, user_id: str = "system"
+    ) -> list:
+        del user_id
         rows = await self.dao.list_files_by_thread(thread_id, ascending=True)
         return [
             {
@@ -151,11 +177,14 @@ class UploadedFileService:
             for row in rows
         ]
 
-    async def get_file_path_by_id(self, file_id: str) -> Optional[str]:
-        info = await self.get_file_info(file_id)
+    async def get_file_path_by_id(
+        self, file_id: str, user_id: str = "system", thread_id: str = ""
+    ) -> Optional[str]:
+        info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
-        file_path = UPLOADS_ROOT / info["storage_dir"] / f"original.{info['file_type']}"
+        uploads_root = resolve_uploads_root(user_id, thread_id or info["thread_id"])
+        file_path = uploads_root / info["storage_dir"]
         return str(file_path) if file_path.exists() else None
 
 
@@ -170,33 +199,33 @@ def get_uploaded_file_service() -> UploadedFileService:
     return _uploaded_file_service
 
 
-async def upload_file(file: UploadFile, thread_id: str) -> Dict[str, Any]:
-    return await get_uploaded_file_service().upload_file(file, thread_id)
+async def upload_file(file: UploadFile, thread_id: str, user_id: str = "system") -> Dict[str, Any]:
+    return await get_uploaded_file_service().upload_file(file, thread_id, user_id=user_id)
 
 
-async def get_file_info(file_id: str) -> Optional[Dict[str, Any]]:
-    return await get_uploaded_file_service().get_file_info(file_id)
+async def get_file_info(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
+    return await get_uploaded_file_service().get_file_info(file_id, user_id=user_id, thread_id=thread_id)
 
 
-async def delete_file(file_id: str) -> bool:
-    return await get_uploaded_file_service().delete_file(file_id)
+async def delete_file(file_id: str, user_id: str = "system", thread_id: str = "") -> bool:
+    return await get_uploaded_file_service().delete_file(file_id, user_id=user_id, thread_id=thread_id)
 
 
-async def get_file_content(file_id: str) -> Optional[bytes]:
-    return await get_uploaded_file_service().get_file_content(file_id)
+async def get_file_content(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[bytes]:
+    return await get_uploaded_file_service().get_file_content(file_id, user_id=user_id, thread_id=thread_id)
 
 
-async def get_parsed_content(file_id: str) -> Optional[str]:
-    return await get_uploaded_file_service().get_parsed_content(file_id)
+async def get_parsed_content(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
+    return await get_uploaded_file_service().get_parsed_content(file_id, user_id=user_id, thread_id=thread_id)
 
 
-async def list_files_by_thread(thread_id: str) -> list:
-    return await get_uploaded_file_service().list_files_by_thread(thread_id)
+async def list_files_by_thread(thread_id: str, user_id: str = "system") -> list:
+    return await get_uploaded_file_service().list_files_by_thread(thread_id, user_id=user_id)
 
 
-async def get_files_by_thread(thread_id: str) -> list:
-    return await get_uploaded_file_service().get_files_by_thread(thread_id)
+async def get_files_by_thread(thread_id: str, user_id: str = "system") -> list:
+    return await get_uploaded_file_service().get_files_by_thread(thread_id, user_id=user_id)
 
 
-async def get_file_path_by_id(file_id: str) -> Optional[str]:
-    return await get_uploaded_file_service().get_file_path_by_id(file_id)
+async def get_file_path_by_id(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
+    return await get_uploaded_file_service().get_file_path_by_id(file_id, user_id=user_id, thread_id=thread_id)

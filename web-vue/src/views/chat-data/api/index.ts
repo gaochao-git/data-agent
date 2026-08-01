@@ -813,6 +813,57 @@ export function importConversationWorkspaceSkill(conversationId: string, data: {
   })
 }
 
+// ============ 文件上传 ============
+
+export interface UploadedFileInfo {
+  file_id: string
+  status: 'parsing' | 'completed' | 'failed'
+  original_filename: string
+  file_type: string
+  file_size: number
+  parse_filename?: string
+  storage_dir?: string
+}
+
+export interface LinkedFileInfo {
+  file_id: string
+  original_filename: string
+  file_type: string
+  file_size: number
+  original_path: string
+  parsed_path: string
+}
+
+/** 上传文件（触发异步解析） */
+export function uploadFile(conversationId: string, file: File): Promise<ApiResponse<UploadedFileInfo>> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('thread_id', conversationId)
+  return request({
+    url: '/agents/api/chatdata/uploaded-files/upload',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/** 轮询文件解析状态 */
+export function getUploadedFileInfo(fileId: string): Promise<ApiResponse<UploadedFileInfo>> {
+  return request({
+    url: `/agents/api/chatdata/uploaded-files/${fileId}`,
+    method: 'get'
+  })
+}
+
+/** 将已解析完成的文件链接到会话工作区 outputs 目录 */
+export function linkFileToWorkspace(conversationId: string, fileId: string): Promise<ApiResponse<LinkedFileInfo>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/link`,
+    method: 'post',
+    data: { file_id: fileId }
+  })
+}
+
 /** 更新会话 */
 export function updateConversation(conversationId: string, data: { title?: string }): Promise<ApiResponse<null>> {
   return request({
@@ -1175,6 +1226,7 @@ export function streamCompletion(conversationId: string, data: {
   query: string
   agent_id: string
   options?: Record<string, unknown>
+  file_ids?: string[]
 }, signal?: AbortSignal): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}/completion`,

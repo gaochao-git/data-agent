@@ -423,6 +423,16 @@ def ensure_conversation_workspace(conversation_id: str, user_id: str = "system")
     return paths
 
 
+def resolve_uploads_root(user_id: str, thread_id: str) -> Path:
+    """返回当前会话工作区 uploads 目录（上传文件权威存储根）。
+
+    不再回退到历史 ``server/uploads`` 目录；会话工作区未初始化时由
+    ``ensure_conversation_workspace`` 直接抛错，由调用方处理。
+    """
+    paths = ensure_conversation_workspace(thread_id, user_id)
+    return Path(paths["uploads"])
+
+
 def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = False) -> Path:
     """解析模型可见路径并按解析后的真实路径实施目录边界。"""
     root = Path(workspace_root).resolve()

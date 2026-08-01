@@ -18,14 +18,14 @@ from typing import Optional
 from utils.logger import get_logger
 
 from ..daos.uploaded_file_dao import UploadedFileDao
+from .conversation_workspace import resolve_uploads_root
 
 logger = get_logger(__name__)
 
-UPLOADS_ROOT = Path(__file__).resolve().parents[3] / "uploads"
 IMAGE_TYPES = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
 
-async def parse_file(file_id: str, dao: Optional[UploadedFileDao] = None) -> bool:
+async def parse_file(file_id: str, dao: Optional[UploadedFileDao] = None, user_id: str = "system", thread_id: str = "") -> bool:
     """解析文件并生成 Markdown。"""
     file_dao = dao or UploadedFileDao()
     row = await file_dao.get_file(file_id)
@@ -33,14 +33,14 @@ async def parse_file(file_id: str, dao: Optional[UploadedFileDao] = None) -> boo
         logger.error("文件不存在: %s", file_id)
         return False
 
-    file_dir = UPLOADS_ROOT / row.storage_dir
-    original_path = file_dir / f"original.{row.file_type}"
+    uploads_root = resolve_uploads_root(user_id, thread_id)
+    original_path = uploads_root / row.storage_dir
     if not original_path.exists():
         logger.error("原始文件不存在: %s", original_path)
         return False
 
     try:
-        parse_filename = await _parse_by_type(file_dir, original_path, row.file_type, row.original_filename)
+        parse_filename = await _parse_by_type(uploads_root, original_path, row.file_type, row.original_filename)
         status = "completed" if parse_filename else "failed"
         await file_dao.update_parse_status(file_id=file_id, status=status, parse_filename=parse_filename)
         logger.info("文件解析完成: %s, status=%s", file_id, status)
@@ -51,36 +51,36 @@ async def parse_file(file_id: str, dao: Optional[UploadedFileDao] = None) -> boo
         return False
 
 
-async def _parse_by_type(file_dir: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
+async def _parse_by_type(uploads_root: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
     if file_type in IMAGE_TYPES:
-        return await _parse_image(file_dir, original_path, file_type, original_filename)
+        return await _parse_image(uploads_root, original_path, file_type, original_filename)
     if file_type == "pdf":
-        return await _parse_pdf(file_dir, original_path, original_filename)
-    if file_type in {"txt", "md"}:
-        return await _parse_text(file_dir, original_path, original_filename)
+        return await _parse_pdf(uploads_root, original_path, original_filename)
+    if file_type in {"txt", "md", "sql"}:
+        return await _parse_text(uploads_root, original_path, original_filename)
     if file_type in {"xls", "xlsx"}:
-        return await _parse_excel(file_dir, original_path, original_filename)
+        return await _parse_excel(uploads_root, original_path, original_filename)
     if file_type in {"doc", "docx"}:
-        return await _parse_word(file_dir, original_path, original_filename)
+        return await _parse_word(uploads_root, original_path, original_filename)
     logger.warning("不支持的文件类型: %s", file_type)
     return None
 
 
-async def _parse_image(file_dir: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
+async def _parse_image(uploads_root: Path, original_path: Path, file_type: str, original_filename: str) -> Optional[str]:
     try:
         md_content = f"""# {original_filename}
 
-![{original_filename}](original.{file_type})
+![{original_filename}]({original_path.name})
 
 > 当前服务未启用图片 OCR，请直接查看原图。
 """
-        return _write_markdown(file_dir, md_content)
+        return _write_markdown(uploads_root, original_path, md_content)
     except Exception as exc:
         logger.error("图片解析失败: %s", exc, exc_info=True)
         return None
 
 
-async def _parse_pdf(file_dir: Path, original_path: Path, original_filename: str) -> Optional[str]:
+async def _parse_pdf(uploads_root: Path, original_path: Path, original_filename: str) -> Optional[str]:
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -102,7 +102,7 @@ async def _parse_pdf(file_dir: Path, original_path: Path, original_filename: str
     return _write_markdown(file_dir, "\n".join(md_lines))
 
 
-async def _parse_text(file_dir: Path, original_path: Path, original_filename: str) -> Optional[str]:
+async def _parse_text(uploads_root: Path, original_path: Path, original_filename: str) -> Optional[str]:
     try:
         content = original_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -111,11 +111,11 @@ async def _parse_text(file_dir: Path, original_path: Path, original_filename: st
         except Exception:
             return None
     if original_path.suffix.lower() == ".md":
-        return _write_markdown(file_dir, content)
-    return _write_markdown(file_dir, f"# {original_filename}\n\n{content}")
+        return _write_markdown(uploads_root, original_path, content)
+    return _write_markdown(uploads_root, original_path, f"# {original_filename}\n\n{content}")
 
 
-async def _parse_excel(file_dir: Path, original_path: Path, original_filename: str) -> Optional[str]:
+async def _parse_excel(uploads_root: Path, original_path: Path, original_filename: str) -> Optional[str]:
     try:
         import openpyxl
     except ImportError:
@@ -146,13 +146,13 @@ async def _parse_excel(file_dir: Path, original_path: Path, original_filename: s
                     md_lines.append("| " + " | ".join(["---"] * max_cols) + " |")
             md_lines.append("")
         workbook.close()
-        return _write_markdown(file_dir, "\n".join(md_lines))
+        return _write_markdown(uploads_root, original_path, "\n".join(md_lines))
     except Exception as exc:
         logger.error("Excel解析失败: %s", exc, exc_info=True)
         return None
 
 
-async def _parse_word(file_dir: Path, original_path: Path, original_filename: str) -> Optional[str]:
+async def _parse_word(uploads_root: Path, original_path: Path, original_filename: str) -> Optional[str]:
     try:
         from docx import Document
     except ImportError:
@@ -167,7 +167,7 @@ async def _parse_word(file_dir: Path, original_path: Path, original_filename: st
                 _append_matching_paragraph(md_lines, document, element)
             elif element.tag.endswith("tbl"):
                 _append_matching_table(md_lines, document, element)
-        return _write_markdown(file_dir, "\n".join(md_lines))
+        return _write_markdown(uploads_root, original_path, "\n".join(md_lines))
     except Exception as exc:
         logger.error("Word解析失败: %s", exc, exc_info=True)
         return None
@@ -224,12 +224,12 @@ def _markdown_text_cell(value: str) -> str:
     return str(value or "").strip().replace("|", "\\|").replace("\n", " ")
 
 
-def get_image_base64(file_id: str, storage_dir: str, file_type: str) -> Optional[str]:
+def get_image_base64(file_id: str, storage_dir: str, file_type: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
     """获取图片的 Base64 编码，用于发送给多模态 LLM。"""
     if file_type not in IMAGE_TYPES:
         return None
 
-    file_path = UPLOADS_ROOT / storage_dir / f"original.{file_type}"
+    file_path = resolve_uploads_root(user_id, thread_id) / storage_dir
     if not file_path.exists():
         return None
 
@@ -238,7 +238,12 @@ def get_image_base64(file_id: str, storage_dir: str, file_type: str) -> Optional
     return f"data:{mime_type};base64,{data}"
 
 
-def _write_markdown(file_dir: Path, content: str) -> str:
-    parse_filename = "parsed.md"
-    (file_dir / parse_filename).write_text(content, encoding="utf-8")
+def _write_markdown(uploads_root: Path, original_path: Path, content: str) -> str:
+    stem = original_path.stem
+    parse_filename = f"{stem}.md"
+    counter = 1
+    while (uploads_root / parse_filename).exists():
+        parse_filename = f"{stem}-{counter}.md"
+        counter += 1
+    (uploads_root / parse_filename).write_text(content, encoding="utf-8")
     return parse_filename

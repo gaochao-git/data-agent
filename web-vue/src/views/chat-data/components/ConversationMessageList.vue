@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { ElMessage, ElTooltip } from 'element-plus'
-import type { ExecutionTargetOption, Message, MessageSegment, ToolCallInfo } from '../types'
+import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../types'
 import { extractGeneratedSqlFromToolCall } from '../utils/semanticTool'
 import { formatDateTimeValue } from '../utils'
 import AssistantMessageFooter from './AssistantMessageFooter.vue'
@@ -36,6 +36,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   selectTool: [toolCall: ToolCallInfo]
+  openAttachment: [attachment: MessageAttachment]
 }>()
 
 const markdown = new MarkdownIt({ breaks: true, html: false, linkify: true })
@@ -122,6 +123,32 @@ const getRenderableQueryResultToolCall = (message: Message, toolCallId: string):
 
 const getDisplayContent = (content: string): string => props.displayContent(content)
 
+// 隐藏用户消息中的附件路径占位（[attachment] /mnt/...），附件由 message.attachments 卡片渲染
+const ATTACHMENT_PLACEHOLDER_RE = /^\[attachment\].*$/gm
+const stripAttachmentPlaceholders = (content: string): string =>
+  content.replace(ATTACHMENT_PLACEHOLDER_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd()
+
+// 从用户消息内容解析 [attachment] /path 占位，合成附件卡片（历史会话无 message.attachments 时兜底）
+const ATTACHMENT_PATH_RE = /^\[attachment\]\s+(.+)$/gm
+const parseAttachmentPlaceholders = (content: string): MessageAttachment[] => {
+  if (!content) return []
+  const attachments: MessageAttachment[] = []
+  let match: RegExpExecArray | null
+  while ((match = ATTACHMENT_PATH_RE.exec(content)) !== null) {
+    const path = match[1]!.trim()
+    const filename = path.split('/').pop() || path
+    const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : ''
+    attachments.push({ file_id: path, filename, file_type: ext, original_path: path })
+  }
+  return attachments
+}
+
+// 当前消息优先用结构化 message.attachments（含完整元数据）；历史会话无 attachments 时回退到内容占位解析
+const getEffectiveAttachments = (message: Message): MessageAttachment[] =>
+  message.attachments && message.attachments.length > 0
+    ? message.attachments
+    : parseAttachmentPlaceholders(message.content)
+
 const formatCompressionTokens = (value?: number): string => new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0))
 
 const hasVisibleAssistantContent = (content: string): boolean => {
@@ -149,6 +176,36 @@ const getCopyableAssistantContent = (message: Message): string => {
 
 const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
 
+const USER_MESSAGE_SCROLL_LINE_THRESHOLD = 10
+const USER_MESSAGE_SCROLL_MAX_HEIGHT = '240px'
+
+const isLongUserMessage = (content: string): boolean => {
+  const text = String(content || '')
+  if (!text) return false
+  const lineCount = text.split('\n').length
+  return lineCount > USER_MESSAGE_SCROLL_LINE_THRESHOLD
+}
+
+const formatFileSize = (bytes?: number): string => {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const getFileIconClass = (fileType?: string): string => {
+  const ext = String(fileType || '').toLowerCase()
+  if (['md', 'txt'].includes(ext)) return 'fa-regular fa-file-lines'
+  if (['sql'].includes(ext)) return 'fa-solid fa-database'
+  if (['doc', 'docx'].includes(ext)) return 'fa-regular fa-file-word'
+  if (['xls', 'xlsx'].includes(ext)) return 'fa-regular fa-file-excel'
+  return 'fa-regular fa-file'
+}
+
+const handleAttachmentClick = (attachment: MessageAttachment) => {
+  emit('openAttachment', attachment)
+}
+
 const handleCopyAssistantMessage = async (message: Message) => {
   const text = getCopyableAssistantContent(message)
   if (!text) return
@@ -174,8 +231,25 @@ const handleCopyAssistantMessage = async (message: Message) => {
     >
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
         <template v-if="message.role === 'user'">
-          <div class="rounded-2xl rounded-br-md bg-[#1677FF]/10 px-4 py-2.5 text-sm leading-relaxed text-[#1F3A56] shadow-[0_2px_8px_rgba(59,130,246,0.12)]">
-            <div class="whitespace-pre-wrap">{{ message.content }}</div>
+          <div v-if="getEffectiveAttachments(message).length" class="flex w-full flex-col gap-1.5">
+            <button
+              v-for="attachment in getEffectiveAttachments(message)"
+              :key="attachment.file_id"
+              type="button"
+              class="flex items-center gap-2 rounded-lg border border-[#1677FF]/20 bg-white/80 px-2.5 py-1.5 text-left text-xs text-[#1F3A56] transition-colors duration-150 hover:bg-white hover:border-[#1677FF]/40"
+              @click="handleAttachmentClick(attachment)"
+            >
+              <i :class="['text-[13px] text-[#1677FF]', getFileIconClass(attachment.file_type)]"></i>
+              <span class="min-w-0 flex-1 truncate">{{ attachment.filename }}</span>
+              <span v-if="formatFileSize(attachment.file_size)" class="shrink-0 text-[10px] text-gray-400">{{ formatFileSize(attachment.file_size) }}</span>
+              <i class="fa-solid fa-chevron-right text-[9px] text-gray-400"></i>
+            </button>
+          </div>
+          <div
+            class="rounded-2xl rounded-br-md bg-[#1677FF]/10 px-4 py-2.5 text-sm leading-relaxed text-[#1F3A56] shadow-[0_2px_8px_rgba(59,130,246,0.12)]"
+            :style="isLongUserMessage(stripAttachmentPlaceholders(message.content)) ? { maxHeight: USER_MESSAGE_SCROLL_MAX_HEIGHT, overflowY: 'auto' } : undefined"
+          >
+            <div class="whitespace-pre-wrap">{{ stripAttachmentPlaceholders(message.content) }}</div>
           </div>
           <div class="mr-1 text-[10px] text-gray-400">{{ formatDateTimeValue(message.timestamp) }}</div>
         </template>

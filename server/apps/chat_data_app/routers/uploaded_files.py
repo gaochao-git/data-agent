@@ -2,7 +2,7 @@
 文件上传API路由
 """
 
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, Request
 from fastapi.responses import Response
 
 from utils.error_codes import ErrorCode
@@ -15,6 +15,7 @@ from ..services.uploaded_file_service import (
     get_file_content,
     list_files_by_thread,
 )
+from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 
@@ -24,7 +25,8 @@ router = APIRouter(prefix="/uploaded-files", tags=["uploaded-files"])
 @router.post("/upload")
 async def upload_file_api(
     file: UploadFile = File(...),
-    thread_id: str = Form(...)
+    thread_id: str = Form(...),
+    req: Request = None
 ):
     """
     上传文件
@@ -70,8 +72,12 @@ async def upload_file_api(
     await file.seek(0)
 
     try:
-        result = await upload_file(file, thread_id)
+        user = _get_current_user(req)
+        user_id = str(user.user_id)
+        result = await upload_file(file, thread_id, user_id=user_id)
         return business_response(data=result, msg="文件上传成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
         return business_response(
@@ -124,11 +130,13 @@ async def get_file_info_api(file_id: str):
 
 
 @router.delete("/{file_id}")
-async def delete_file_api(file_id: str):
+async def delete_file_api(file_id: str, req: Request = None):
     """
     删除文件
     """
-    success = await delete_file(file_id)
+    user = _get_current_user(req)
+    user_id = str(user.user_id)
+    success = await delete_file(file_id, user_id=user_id)
     if not success:
         return business_response(
             msg="文件不存在",
@@ -141,10 +149,12 @@ async def delete_file_api(file_id: str):
 
 
 @router.get("/{file_id}/content")
-async def get_file_content_api(file_id: str):
+async def get_file_content_api(file_id: str, req: Request = None):
     """
     获取原始文件内容（下载）
     """
+    user = _get_current_user(req)
+    user_id = str(user.user_id)
     info = await get_file_info(file_id)
     if not info:
         return business_response(
@@ -154,7 +164,7 @@ async def get_file_content_api(file_id: str):
             http_status_code=ErrorCode.HTTP_NOT_FOUND,
         )
 
-    content = await get_file_content(file_id)
+    content = await get_file_content(file_id, user_id=user_id)
     if content is None:
         return business_response(
             msg="文件内容不存在",
