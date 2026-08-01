@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -726,13 +727,76 @@ def _validate_office_preview_source(workspace_root: str, path: str) -> None:
         raise ValueError("文件过大，暂不支持预览超过 50MB 的 Office 文件")
 
 
+def _render_local_office_html(
+    workspace_root: str,
+    file_path: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    """在本地（local）后端用宿主机 ``officecli`` 将 Office 文件渲染为受控 HTML 预览。
+
+    逻辑与沙箱 ``sandbox_render_office_html`` 对齐：仅支持 .docx/.xlsx/.pptx，
+    转出的 HTML 受 ``max_chars``（上限 ``OFFICE_PREVIEW_MAX_CHARS``）约束，超出即标记
+    ``truncated``。宿主机未安装 ``officecli`` 或转换失败时抛错，由路由层统一降级为
+    ``preview_unavailable`` / ``preview_failed``。
+    """
+    target = resolve_workspace_path(workspace_root, file_path)
+    if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+        raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
+    if not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    officecli_bin = shutil.which("officecli")
+    if not officecli_bin:
+        raise RuntimeError("本地环境未安装 OfficeCLI，无法预览 Office 文件")
+    limit = max(1, min(int(max_chars), OFFICE_PREVIEW_MAX_CHARS))
+    fd, preview_path = tempfile.mkstemp(suffix=".html")
+    os.close(fd)
+    try:
+        exit_code = subprocess.run(
+            [officecli_bin, "view", str(target), "html", "--out", preview_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if exit_code.returncode != 0:
+            stderr = (exit_code.stderr or "").strip()
+            raise RuntimeError(stderr or "OfficeCLI HTML 预览失败")
+        preview_file = Path(preview_path)
+        if not preview_file.exists():
+            raise RuntimeError("OfficeCLI 未生成预览文件")
+        if preview_file.stat().st_size > limit:
+            return {
+                "renderer": "officecli-html",
+                "source_path": str(target),
+                "html": "",
+                "truncated": True,
+            }
+        html = preview_file.read_text(encoding="utf-8", errors="replace")
+    finally:
+        try:
+            os.unlink(preview_path)
+        except OSError:
+            pass
+    truncated = len(html) > limit
+    return {
+        "renderer": "officecli-html",
+        "source_path": str(target),
+        "html": html[:limit],
+        "truncated": truncated,
+    }
+
+
 async def render_conversation_workspace_office_preview(
     conversation_id: str,
     *,
     user_id: str,
     path: str,
+    backend: "str | None" = None,
 ) -> dict[str, Any]:
-    """Render an owned Office Open XML file through OfficeCLI."""
+    """Render an owned Office Open XML file through OfficeCLI.
+
+    ``backend`` 取实际会话工作区后端（local / sandbox），本地后端用宿主机 officecli
+    转换，沙箱后端走容器内 officecli 转换；默认 ``local``。
+    """
     workspace = ensure_conversation_workspace(conversation_id, user_id)
     workspace_root = workspace["root"]
     await asyncio.to_thread(
@@ -743,7 +807,7 @@ async def render_conversation_workspace_office_preview(
     runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
         user_id=user_id,
-        backend="sandbox",
+        backend=backend or "local",
     )
     preview = await runtime.render_office_html(
         file_path=path,
@@ -1499,7 +1563,12 @@ class LocalWorkspaceBackend:
         file_path: str,
         max_chars: int,
     ) -> dict[str, Any]:
-        raise ValueError("OfficeCLI HTML 预览仅支持 sandbox 工作区后端")
+        return await asyncio.to_thread(
+            _render_local_office_html,
+            runtime.workspace_root,
+            file_path,
+            max_chars,
+        )
 
     async def load_skill_payload(
         self,

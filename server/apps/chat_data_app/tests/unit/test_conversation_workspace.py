@@ -18,6 +18,7 @@ from langchain_core.messages import HumanMessage
 
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
+    _render_local_office_html,
     ensure_conversation_workspace,
     list_workspace_files,
     read_workspace_text_file,
@@ -1479,3 +1480,45 @@ async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp
     assert len(matches) == 1
     assert matches[0]["path"] == "/mnt/skills/demo-skill/references/guide.md"
     assert "订单数量" in matches[0]["line"]
+
+
+def test_render_local_office_html_invokes_host_officecli(monkeypatch):
+    workspace = ensure_conversation_workspace("conv_local_preview", "user_preview")
+    root = Path(workspace["root"])
+    docx = root / "outputs" / "report.docx"
+    docx.write_text("PK\x03\x04 fake docx bytes", encoding="utf-8")
+
+    calls = {}
+
+    def fake_which(_name):
+        return "/usr/local/bin/officecli"
+
+    def fake_run(args, **kwargs):
+        calls["args"] = list(args)
+        preview_path = args[5]
+        Path(preview_path).write_text("<main>local preview</main>", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(conversation_workspace_module.shutil, "which", fake_which)
+    monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
+
+    result = _render_local_office_html(str(root), "outputs/report.docx", 12 * 1024 * 1024)
+
+    assert result["renderer"] == "officecli-html"
+    assert result["html"] == "<main>local preview</main>"
+    assert result["truncated"] is False
+    assert calls["args"][0] == "/usr/local/bin/officecli"
+    assert calls["args"][1:4] == ["view", str(docx), "html"]
+    assert calls["args"][4] == "--out"
+
+
+def test_render_local_office_html_missing_binary_raises(monkeypatch):
+    workspace = ensure_conversation_workspace("conv_local_missing", "user_missing")
+    root = Path(workspace["root"])
+    docx = root / "outputs" / "report.docx"
+    docx.write_text("PK fake", encoding="utf-8")
+
+    monkeypatch.setattr(conversation_workspace_module.shutil, "which", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="未安装 OfficeCLI"):
+        _render_local_office_html(str(root), "outputs/report.docx", 1024)

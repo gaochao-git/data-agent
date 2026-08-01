@@ -149,12 +149,11 @@ async def render_conversation_workspace_office_preview_api(conversation_id: str,
             get_data_agent_graph,
             get_checkpointer,
         )
-        if backend != "sandbox":
-            return business_response(data={"available": False, "reason": "workspace_backend_local"}, msg="当前会话未启用沙箱预览")
         preview = await render_conversation_workspace_office_preview(
             conversation_id,
             user_id=user_id,
             path=path,
+            backend=backend,
         )
         return business_response(data=preview, msg="获取成功")
     except (FileNotFoundError, ValueError) as exc:

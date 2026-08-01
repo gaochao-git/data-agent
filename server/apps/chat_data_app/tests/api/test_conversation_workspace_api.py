@@ -92,7 +92,7 @@ def test_conversation_workspace_office_html_uses_sandbox_preview(client, monkeyp
     async def sandbox_backend(*_args, **_kwargs):
         return "sandbox"
 
-    async def render_preview(conversation_id, *, user_id, path):
+    async def render_preview(conversation_id, *, user_id, path, backend=None):
         assert (conversation_id, user_id, path) == ("conv_a", "user_a", path)
         return {"available": True, "renderer": "officecli-html", "html": "<main>report</main>", "truncated": False}
 
@@ -108,14 +108,18 @@ def test_conversation_workspace_office_html_uses_sandbox_preview(client, monkeyp
     assert response.json()["data"]["html"] == "<main>report</main>"
 
 
-def test_conversation_workspace_office_html_skips_local_backend(client, monkeypatch):
+def test_conversation_workspace_office_html_allows_local_backend(client, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def local_backend(*_args, **_kwargs):
         return "local"
 
-    async def render_preview(*_args, **_kwargs):
-        raise AssertionError("local backend must not invoke OfficeCLI")
+    captured = {}
+
+    async def render_preview(conversation_id, *, user_id, path, backend=None):
+        captured["backend"] = backend
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "outputs/report.docx")
+        return {"available": True, "renderer": "officecli-html", "html": "<main>local</main>", "truncated": False}
 
     monkeypatch.setattr(workspace_routes.conversation, "get_checkpoint_workspace_backend", local_backend)
     monkeypatch.setattr(workspace_routes, "render_conversation_workspace_office_preview", render_preview)
@@ -126,7 +130,8 @@ def test_conversation_workspace_office_html_skips_local_backend(client, monkeypa
     )
 
     assert response.status_code == 200
-    assert response.json()["data"] == {"available": False, "reason": "workspace_backend_local"}
+    assert response.json()["data"]["html"] == "<main>local</main>"
+    assert captured["backend"] == "local"
 
 
 def test_conversation_workspace_office_html_reports_oversized_preview(client, monkeypatch):
