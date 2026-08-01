@@ -3,6 +3,7 @@ uvicorn
 gunicorn
 uvicorn-worker
 PyMuPDF
+markitdown[pdf,docx,pptx,xlsx]==0.1.7
 Pillow
 pdf2image
 requests

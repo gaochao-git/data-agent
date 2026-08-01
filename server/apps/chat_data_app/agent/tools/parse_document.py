@@ -21,7 +21,7 @@ from ...services.conversation_workspace import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
 )
-from ...services.uploaded_file_parser import _parse_by_type
+from ...services.uploaded_file_parser import parse_uploaded_file_to_markdown
 
 logger = get_logger(__name__)
 
@@ -45,7 +45,7 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
                 只允许写入 workspace（或 outputs）。
 
         典型流程：先用 file_read 尝试直接读取用户上传的原始文件；若读到的内容不可读
-        （xlsx/pdf/docx 等二进制），再对本文件调用本工具解析为 Markdown，最后用 file_read
+        （xlsx/pptx/pdf/docx 等二进制），再对本文件调用本工具解析为 Markdown，最后用 file_read
         读取 target_path 的 Markdown 内容。
         """
         root = workspace_runtime.workspace_root
@@ -63,24 +63,13 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
         if not src_physical.exists() or not src_physical.is_file():
             return _json_result("parse_document", {"success": False, "error": "source_path 指向的文件不存在"})
 
-        file_type = Path(source_path).suffix.lstrip(".").lower()
-        original_filename = Path(source_path).name
-        # _parse_by_type 把临时 .md 写到 src_physical.parent（即 uploads 物理根），解析后由本工具搬移到 workspace
-        uploads_root = src_physical.parent
         try:
-            parse_filename = await _parse_by_type(uploads_root, src_physical, file_type, original_filename)
+            content = await parse_uploaded_file_to_markdown(src_physical)
         except Exception as exc:
             logger.error("parse_document 解析失败: %s", exc, exc_info=True)
             return _json_result("parse_document", {"success": False, "error": f"解析失败: {exc}"})
-        if not parse_filename:
-            return _json_result(
-                "parse_document",
-                {"success": False, "error": f"不支持的文件类型或解析为空: {file_type}"},
-            )
 
-        tmp_md = uploads_root / parse_filename
         try:
-            content = tmp_md.read_text(encoding="utf-8")
             # 走工作区运行时写入，与 file_write 等文件工具一致：
             # local 后端写本地、sandbox 后端同步到远程沙箱，否则 agent 后续 file_read 读不到。
             write_payload = await workspace_runtime.write_text_file(
@@ -91,11 +80,6 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
         except Exception as exc:
             logger.error("parse_document 写入失败: %s", exc, exc_info=True)
             return _json_result("parse_document", {"success": False, "error": f"写入失败: {exc}"})
-        finally:
-            try:
-                tmp_md.unlink()
-            except OSError:
-                pass
 
         written_path = str(write_payload.get("file_path") or target_path)
         return _json_result(

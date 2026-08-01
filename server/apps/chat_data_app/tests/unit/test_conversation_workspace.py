@@ -646,6 +646,9 @@ async def test_file_read_delegates_to_runtime_backend():
         async def artifact_payload(self, *_args, **_kwargs):
             raise AssertionError("unexpected artifact")
 
+        async def render_office_html(self, *_args, **_kwargs):
+            raise AssertionError("unexpected office preview")
+
         async def load_skill_payload(self, *_args, **_kwargs):
             raise AssertionError("unexpected skill load")
 
