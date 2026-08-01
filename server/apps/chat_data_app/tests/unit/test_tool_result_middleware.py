@@ -102,8 +102,7 @@ async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tm
     assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/.tool-offload/{result_id}.json"
     assert payload["meta"]["llm_analysis_skipped"] is True
     assert "完整数据未进入模型上下文" in payload["meta"]["message"]
-    assert "工具结果卸载处理" in payload["meta"]["message"]
-    assert "严禁依据路径、SQL、行数或元数据猜测结果" in payload["meta"]["message"]
+    assert "file_read" not in payload["meta"]["message"]
     saved_path = Path(paths["outputs"]) / ".tool-offload" / f"{result_id}.json"
     assert json.loads(saved_path.read_text(encoding="utf-8"))["results"][0]["data"][0]["content"] == "x" * 200
 
@@ -116,11 +115,11 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
 
     result = await tool_result._finalize_tool_message(message, request, _Budget())
 
-    assert "/mnt/user-data/outputs/.tool-offload/" in result.content
-    assert "file_read 按行分段读取" in result.content
-    assert "完整内容未进入当前模型上下文" in result.content
-    assert "工具结果卸载处理" in result.content
-    assert "严禁依据路径或截断摘要猜测未读取内容" in result.content
+    assert result.content.startswith("[tool_result_offloaded]\n")
+    assert "source_tool=calculator_tool" in result.content
+    assert "result_path=/mnt/user-data/outputs/.tool-offload/" in result.content
+    assert "content_in_context=false" in result.content
+    assert "file_read" not in result.content
     files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == "x" * 200
@@ -135,8 +134,12 @@ async def test_large_search_dataset_result_is_offloaded_by_shared_middleware(mon
 
     result = await tool_result._finalize_tool_message(message, request, _Budget())
 
-    assert "/mnt/user-data/outputs/.tool-offload/" in result.content
-    assert "file_read 按行分段读取" in result.content
+    assert result.content.startswith("[tool_result_offloaded]\n")
+    assert "source_tool=search_dataset" in result.content
+    assert "result_path=/mnt/user-data/outputs/.tool-offload/" in result.content
+    assert "content_in_context=false" in result.content
+    assert "preview:" not in result.content
+    assert "file_read" not in result.content
     files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == content

@@ -313,10 +313,11 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 调用 `present_artifacts` 成功后，可简短说明“已生成预览”或给出 outputs 路径；不要在正文重复粘贴产物 JSON。"""
 
 TOOL_RESULT_OFFLOAD_BLOCK = """## 工具结果卸载处理
-- 当工具消息明确说明“完整结果已保存”或“结果已卸载”并给出 `result_path` 时，完整内容没有进入当前模型上下文。`result_id`、路径、SQL、文件名、字符数、行数和截断摘要都不能替代完整结果。
+- 当工具消息含 `[tool_result_offloaded]`，或查询结果明确给出 `result_path` 且说明完整数据未进入上下文时，完整内容没有进入当前模型上下文。`result_id`、路径、SQL、文件名、字符数、行数和 `preview` 都不能替代完整结果。
 - 查询结果卸载后，前端会用 `result_id` 自动加载并向用户展示完整表格或图表。用户只是要求查询、查看或获取结果时，直接说明查询已完成、结果已展示；不要为了重复表格或逐行复述而调用 `file_read`。
 - 只有下一步必须依据结果中的具体值、行、分布或字段完成分析、计算、核对、筛选、比较、生成产物或回答追问时，才读取。聚合、筛选、排序或计算优先重新执行更小且受控的 DSL/SQL；必须查看原始行时，使用工具返回的原始 `result_path` 调用 `file_read(file_path=result_path, offset=..., limit=...)` 最小必要分段读取。不要猜测、拼接或自造路径，也不要一次读取全部内容。
 - 对已卸载但未读取的内容，严禁依据 SQL、指标名称、路径、行数、文件名或截断摘要推断数值、趋势、异常、原因、排名或任何业务结论；必须先取得实际数据后才能引用或分析。
+- `source_tool=search_dataset` 的卸载结果是查询前置条件：它不含可用指标、维度、表列、关系或口径。生成 DSL、SQL，或调用 `dsl2sql_tool`、`semantic_query_tool` 前，必须先调用 `file_read(file_path=result_path, offset=0, limit=200)` 读取实际语义配置；若所需配置、字段或关系未读到且返回 `has_more=true`，继续使用返回的 `next_offset` 分页读取。未完成所需配置的实际读取前，禁止调用查询工具，也不得依据用户问题、指标集 ID、名称或 `preview` 编造字段、口径、关联或 DSL。
 - `.tool-offload` 是隐藏内部缓存，不出现在工作区列表中，也不能用 `file_edit`、`present_artifacts` 或技能导入处理。每次 `file_read` 默认读取 200 行、最多 500 行，单行超过 500 个字符会直接截断；开启 Bash 时可读取返回的路径。"""
 
 BASH_WORKFLOW_BLOCK = """## Bash 使用

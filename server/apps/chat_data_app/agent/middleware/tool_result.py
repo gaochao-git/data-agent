@@ -117,7 +117,7 @@ async def _finalize_query_result(
         "execution_time_ms": query_result.get("execution_time_ms"),
         "result_size_chars": len(raw_result),
         "llm_analysis_skipped": True,
-        "message": "查询结果已超过上下文预算，完整数据未进入模型上下文；前端会自动加载完整结果供用户查看。后续只有必须基于具体数据继续分析、计算、核对或生成产物时，才按系统“工具结果卸载处理”规则使用 file_read 读取 result_path；严禁依据路径、SQL、行数或元数据猜测结果。",
+        "message": "查询结果已超过上下文预算，完整数据未进入模型上下文；前端会自动加载完整结果供用户查看。",
     })
     if query_result.get("sql"):
         public_meta["sql"] = query_result["sql"]
@@ -218,15 +218,35 @@ async def _externalize_generic_text(
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
         return _clip_text_to_budget(content, _inline_token_limit(request, tool_result_budget))
-    preview = _clip_text_to_budget(content, min(512, _inline_token_limit(request, tool_result_budget)))
-    return "\n".join([
-        f"[完整 {tool_name} 结果已保存到 {record.virtual_path}，共 {len(content)} 字符。]",
-        "完整内容未进入当前模型上下文；后续处理请遵循系统“工具结果卸载处理”规则。",
-        "只有必须依据完整内容继续分析、计算、核对或生成产物时，才使用 file_read 按行分段读取该路径；严禁依据路径或截断摘要猜测未读取内容。",
-        "",
-        "摘要：",
-        preview,
-    ])
+    return _build_offloaded_tool_result_message(
+        tool_name=tool_name,
+        result_path=record.virtual_path,
+        result_size_chars=len(content),
+        preview=None if tool_name == "search_dataset" else _clip_text_to_budget(
+            content,
+            min(512, _inline_token_limit(request, tool_result_budget)),
+        ),
+    )
+
+
+def _build_offloaded_tool_result_message(
+    *,
+    tool_name: str,
+    result_path: str,
+    result_size_chars: int,
+    preview: str | None,
+) -> str:
+    """Return offload facts only; the system prompt owns their disposition."""
+    lines = [
+        "[tool_result_offloaded]",
+        f"source_tool={tool_name}",
+        f"result_path={result_path}",
+        "content_in_context=false",
+        f"result_size_chars={result_size_chars}",
+    ]
+    if preview:
+        lines.extend(["", "preview:", preview])
+    return "\n".join(lines)
 
 
 async def _write_private_tool_result(
