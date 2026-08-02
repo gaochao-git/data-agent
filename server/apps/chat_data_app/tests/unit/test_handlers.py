@@ -88,12 +88,31 @@ def _override_semantic_context(monkeypatch, **overrides):
 
 @pytest.fixture(autouse=True)
 def _stub_semantic_conversation_context(monkeypatch):
+    async def noop_event_write(**_kwargs):
+        return None
+
     async def prepare_context(**kwargs):
         return _semantic_context_from_request(**kwargs)
 
     monkeypatch.setattr(
         "apps.chat_data_app.handlers.prepare_semantic_conversation_context",
         prepare_context,
+    )
+
+    async def resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
+        return requested_datasource_id
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.conversation.resolve_datasource_binding",
+        resolve_datasource_binding,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.conversation_event_service.persist_user_message",
+        noop_event_write,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.conversation_event_service.persist_turn",
+        noop_event_write,
     )
 
 

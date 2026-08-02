@@ -141,7 +141,6 @@ def _build_user_message(content: str, semantic_selection_event: dict[str, Any] |
 
 def _build_agent_context_state(
     *,
-    datasource_id: str | None,
     user_id: str | None,
     operator_name: str | None,
     conversation_id: str,
@@ -149,7 +148,6 @@ def _build_agent_context_state(
 ) -> dict[str, Any]:
     """构造单一 Agent 的状态字段。"""
     state = {
-        "conversation_datasource_id": datasource_id,
         "user_id": user_id,
         "operator_name": operator_name or "",
         "conversation_id": conversation_id,
@@ -345,6 +343,7 @@ async def _persist_agent_turn_history(
         messages=messages,
         reasoning_segments=stream_adapter.reasoning_segments,
         context_compression_events=(values or {}).get("context_compression_events") or [],
+        token_usage=sanitize_context_usage_for_response((values or {}).get("token_usage")),
     )
 
 
@@ -438,38 +437,6 @@ async def _persist_partial_agent_turn_history(
         )
     except Exception:
         logger.warning("流异常后的会话历史补写失败: conversation_id=%s", conversation_id, exc_info=True)
-
-
-async def _backfill_checkpoint_history(
-    agent: Any,
-    config: dict[str, Any],
-    *,
-    conversation_id: str,
-    user_id: str,
-    username: str | None,
-) -> None:
-    """在压缩 middleware 执行前回填旧 checkpoint 尚未迁出的原始历史。"""
-    if not hasattr(agent, "aget_state"):
-        return
-    try:
-        state = await agent.aget_state(config)
-    except Exception:
-        logger.warning("读取 checkpoint 回填历史失败: conversation_id=%s", conversation_id, exc_info=True)
-        return
-    values = getattr(state, "values", None)
-    if not isinstance(values, dict):
-        return
-    messages = values.get("messages")
-    if not isinstance(messages, list) or not messages:
-        return
-    await conversation_event_service.backfill_checkpoint_history(
-        conversation_id=conversation_id,
-        user_id=user_id,
-        operator_name=username or user_id,
-        messages=messages,
-        reasoning_segments=values.get("reasoning_segments") or [],
-        context_compression_events=values.get("context_compression_events") or [],
-    )
 
 
 def _format_tool_event(
@@ -982,6 +949,16 @@ async def _generate_chat_data_stream(
         yield _format_sse("done", "[DONE]")
         return
     datasource_id = semantic_context.datasource_id
+    if datasource_id and semantic_context.datasource_meta is not None:
+        bound_datasource_id = await conversation.resolve_datasource_binding(
+            thread_id,
+            user_id or "system",
+            datasource_id,
+        )
+        if bound_datasource_id != datasource_id:
+            yield _format_sse("error", {"error": "当前会话已绑定其他数据源组，请新建会话后再切换。"})
+            yield _format_sse("done", "[DONE]")
+            return
     semantic_config_id = semantic_context.semantic_config_id
     if semantic_context.semantic_config:
         logger.info(
@@ -1088,7 +1065,6 @@ async def _generate_chat_data_stream(
             )
 
             initial_state = _build_agent_context_state(
-                datasource_id=datasource_id,
                 user_id=user_id,
                 operator_name=username,
                 conversation_id=thread_id,
@@ -1138,16 +1114,6 @@ async def _generate_chat_data_stream(
                 on_first_message=lambda: log_phase("first_model_chunk"),
                 reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
             )
-            async def backfill_history() -> None:
-                await _backfill_checkpoint_history(
-                    agent,
-                    config,
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    username=username,
-                )
-                log_phase("backfill_checkpoint_history")
-
             async def persist_user_message() -> None:
                 await conversation_event_service.persist_user_message(
                     conversation_id=thread_id,
@@ -1190,7 +1156,6 @@ async def _generate_chat_data_stream(
             async for sse_event in stream_agent_turn(
                 stream_adapter=stream_adapter,
                 format_sse=_format_sse,
-                backfill_history=backfill_history,
                 persist_user_message=persist_user_message,
                 persist_turn_history=persist_turn_history,
                 persist_partial_history=persist_partial_history,
@@ -1237,7 +1202,7 @@ async def sql_completion_handler(
     else:
         skill_names = []
 
-    # 保持懒创建会话的既有行为；数据源组由下方 agent state 首次绑定。
+    # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
 
     return StreamingResponse(

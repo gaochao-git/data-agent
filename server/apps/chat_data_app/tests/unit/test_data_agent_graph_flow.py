@@ -36,7 +36,7 @@ def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     assert "conversation_id" in annotations
     assert "reasoning_segments" in annotations
     assert "token_usage" in annotations
-    assert "conversation_datasource_id" in annotations
+    assert "conversation_datasource_id" not in annotations
 
 
 def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):

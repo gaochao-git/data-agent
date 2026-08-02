@@ -7,8 +7,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from utils import conversation
-from utils.checkpoint import get_checkpointer
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -23,7 +21,6 @@ from ..services.conversation_workspace import (
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
 )
-from ..agent.data_agent import get_data_agent_graph
 from ..services.skill_service import skill_service
 from .dependencies import _get_current_user
 
@@ -144,16 +141,10 @@ async def render_conversation_workspace_office_preview_api(conversation_id: str,
             return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         if _is_internal_workspace_file(path):
             return business_response(msg="文件不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        backend = await conversation.get_checkpoint_workspace_backend(
-            conversation_id,
-            get_data_agent_graph,
-            get_checkpointer,
-        )
         preview = await render_conversation_workspace_office_preview(
             conversation_id,
             user_id=user_id,
             path=path,
-            backend=backend,
         )
         return business_response(data=preview, msg="获取成功")
     except (FileNotFoundError, ValueError) as exc:

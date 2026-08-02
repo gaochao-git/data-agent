@@ -6,10 +6,9 @@
 """
 
 import uuid
-import builtins
 from datetime import datetime
 import re
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -17,9 +16,7 @@ from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.services.conversation_event_service import conversation_event_service
-from apps.chat_data_app.services.context_budget import sanitize_context_usage_for_response
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
-from .checkpoint import get_checkpointer
 from .database import get_session
 from .models import UserThread
 
@@ -82,184 +79,6 @@ def _clean_title(title: str, fallback: str = "") -> str:
         title = fallback[:15].strip() if fallback else "新对话"
 
     return title
-
-
-def _get_first_user_message(messages: List[Any]) -> Optional[str]:
-    """从消息列表中获取第一条用户消息"""
-    for msg in messages:
-        if hasattr(msg, 'type') and msg.type == 'human':
-            return msg.content
-    return None
-
-
-def _extract_timestamp(msg) -> str:
-    """
-    从消息的 additional_kwargs 中提取时间戳
-
-    时间戳存储在 additional_kwargs["timestamp"] 中，
-    由发送消息时设置（流式处理的 handler 中）。
-    """
-    if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
-        ts = msg.additional_kwargs.get('timestamp')
-        if ts:
-            return ts
-    return ""
-
-
-def _extract_reasoning_content(msg) -> str:
-    """从消息元数据中提取模型原生思考内容。"""
-    candidates = []
-    for attr in ("additional_kwargs", "response_metadata"):
-        value = getattr(msg, attr, None)
-        if isinstance(value, dict):
-            candidates.append(value)
-    for candidate in candidates:
-        for key in ("reasoning_content", "reasoning", "reasoning_text"):
-            value = candidate.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return ""
-
-
-def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
-    """
-    序列化LangChain消息为前端格式
-
-    处理逻辑：
-    - HumanMessage (type='human') -> role='user'
-      - file_ids 从 additional_kwargs 中提取
-      - timestamp 从 additional_kwargs 中提取
-    - AIMessage (type='ai') -> role='assistant'
-      - tool_calls 保留用于前端展示工具卡片
-      - timestamp 从 additional_kwargs 中提取
-    - ToolMessage (type='tool') -> role='tool'，保留 tool_call_id 用于关联
-
-    保留 LangGraph 原始消息顺序，前端按顺序渲染即可正确显示工具调用和响应的交错顺序。
-    """
-    serialized = []
-
-    for msg in messages:
-        if not hasattr(msg, 'type'):
-            continue
-
-        # 时间戳只使用 checkpoint 中真实保存的消息时间，避免历史刷新时显示推导出来的假时间。
-        timestamp = _extract_timestamp(msg)
-
-        if msg.type == 'human':
-            msg_data = {
-                "id": msg.id,  # LangGraph 自动生成
-                "role": "user",
-                "content": msg.content,
-                "timestamp": timestamp
-            }
-            # 从 additional_kwargs 提取 file_ids
-            if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
-                file_ids = msg.additional_kwargs.get('file_ids')
-                if file_ids:
-                    msg_data["file_ids"] = file_ids
-                semantic_config_selection = _serialize_semantic_config_selection(msg.additional_kwargs.get("semantic_config_selection"))
-                if semantic_config_selection:
-                    msg_data["semantic_config_selection"] = semantic_config_selection
-                reasoning_turn_id = str(msg.additional_kwargs.get("reasoning_turn_id") or "").strip()
-                if reasoning_turn_id:
-                    msg_data["reasoning_turn_id"] = reasoning_turn_id
-
-            serialized.append(msg_data)
-
-        elif msg.type == 'ai':
-            ai_msg = {
-                "id": msg.id,  # LangGraph 自动生成
-                "role": "assistant",
-                "content": msg.content,
-                "timestamp": timestamp
-            }
-            # 保留 tool_calls 信息（用于前端展示工具调用卡片）
-            if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                tool_calls_list = []
-                for tc in msg.tool_calls:
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")
-                    tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
-                    tc_args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
-                    tool_calls_list.append({
-                        "id": tc_id,
-                        "name": tc_name,
-                        "args": tc_args
-                    })
-                ai_msg["tool_calls"] = tool_calls_list
-            reasoning_content = _extract_reasoning_content(msg)
-            if reasoning_content:
-                ai_msg["reasoning_content"] = reasoning_content
-            serialized.append(ai_msg)
-
-        elif msg.type == 'tool':
-            tool_name = getattr(msg, 'name', '')
-            tool_call_id = getattr(msg, 'tool_call_id', '')
-            tool_content = msg.content
-
-            # ToolMessage 作为独立消息，保留 tool_call_id 用于前端关联
-            serialized.append({
-                "id": msg.id,  # LangGraph 自动生成
-                "role": "tool",
-                "content": tool_content,
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "timestamp": timestamp
-            })
-
-    return serialized
-
-
-def _serialize_reasoning_segments(reasoning_segments: Any) -> List[Dict[str, Any]]:
-    """序列化模型原生思考分段，供前端恢复展示。"""
-    if not isinstance(reasoning_segments, builtins.list):
-        return []
-    serialized = []
-    for index, item in enumerate(reasoning_segments):
-        if not isinstance(item, dict):
-            continue
-        content = item.get("content")
-        if not isinstance(content, str) or not content:
-            continue
-        tool_call_count = item.get("tool_call_count", item.get("toolCallCount", 0))
-        try:
-            normalized_tool_call_count = max(0, int(tool_call_count))
-        except (TypeError, ValueError):
-            normalized_tool_call_count = 0
-        segment = {
-            "id": str(item.get("id") or f"reasoning-history-{index}"),
-            "content": content,
-            "tool_call_count": normalized_tool_call_count,
-        }
-        reasoning_turn_id = str(item.get("reasoning_turn_id") or item.get("reasoningTurnId") or "").strip()
-        if reasoning_turn_id:
-            segment["reasoning_turn_id"] = reasoning_turn_id
-        serialized.append(segment)
-    return serialized
-
-
-def _serialize_semantic_config_selection(selection: Any) -> Optional[Dict[str, Any]]:
-    """序列化智能问数指标集选择提示，供前端恢复展示。"""
-    if not isinstance(selection, dict):
-        return None
-    semantic_config_id = str(selection.get("semantic_config_id") or "").strip()
-    if not semantic_config_id:
-        return None
-    matched_metrics = selection.get("matched_metrics")
-    matched_dimensions = selection.get("matched_dimensions")
-    return {
-        "semantic_config_id": semantic_config_id,
-        "semantic_config_name": selection.get("semantic_config_name") or semantic_config_id,
-        "confidence": selection.get("confidence") or "",
-        "reason": selection.get("reason") or "",
-        "matched_metrics": matched_metrics if isinstance(matched_metrics, builtins.list) else [],
-        "matched_dimensions": matched_dimensions if isinstance(matched_dimensions, builtins.list) else [],
-        "auto_selected": bool(selection.get("auto_selected")),
-        "user_selected": bool(selection.get("user_selected")),
-    }
-
-
-# 公开别名（向后兼容）
-serialize_messages = _serialize_messages
 
 
 # ============ 公共函数 ============
@@ -400,96 +219,32 @@ async def sync_thread_to_db(
         logger.warning(f"同步会话到 user_threads 失败: {e}")
 
 
-def _get_checkpoint_datasource_id(values: Dict[str, Any] | None) -> Optional[str]:
-    """从 LangGraph state 读取会话首次绑定的数据源组。"""
-    datasource_id = str((values or {}).get("conversation_datasource_id") or "").strip()
-    return datasource_id or None
+async def get_datasource_id(conversation_id: str, user_id: str) -> Optional[str]:
+    """从业务会话表读取绑定的数据源组。"""
+    return await conversation_dao.get_datasource_id(
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
 
 
-def _get_checkpoint_workspace_backend(values: Dict[str, Any] | None) -> str:
-    """读取会话最近一轮使用的工作区后端。"""
-    workspace = (values or {}).get("workspace")
-    backend = str(workspace.get("workspace_backend") or "") if isinstance(workspace, dict) else ""
-    return "sandbox" if backend == "sandbox" else "local"
-
-
-async def get_checkpoint_datasource_id(
+async def resolve_datasource_binding(
     conversation_id: str,
-    get_graph: Callable,
-    get_checkpointer_fn: Callable,
+    user_id: str,
+    requested_datasource_id: str,
 ) -> Optional[str]:
-    """读取会话 checkpoint 中绑定的数据源组。"""
-    if get_checkpointer_fn is None:
-        return None
-    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-    async with get_checkpointer_fn() as checkpointer:
-        tuple_read, datasource_id = await _get_checkpoint_datasource_id_from_tuple(checkpointer, config)
-        if tuple_read or get_graph is None:
-            return datasource_id
-        graph = get_graph(checkpointer)
-        state = await graph.aget_state(config)
-    return _get_checkpoint_datasource_id(state.values if state and state.values else None)
-
-
-async def get_checkpoint_workspace_backend(
-    conversation_id: str,
-    get_graph: Callable,
-    get_checkpointer_fn: Callable,
-) -> str:
-    """读取会话最近一轮持久化的工作区后端。"""
-    if get_checkpointer_fn is None:
-        return "local"
-    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-    async with get_checkpointer_fn() as checkpointer:
-        getter = getattr(checkpointer, "aget_tuple", None)
-        if callable(getter):
-            checkpoint_tuple = await getter(config)
-            checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple else None
-            values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
-            # aget_tuple 已经确认该会话是否存在 checkpoint。新建会话在首轮
-            # completion 持久化前没有 checkpoint，应直接使用默认本地工作区。
-            return _get_checkpoint_workspace_backend(values if isinstance(values, dict) else None)
-        if get_graph is None:
-            return "local"
-        graph = get_graph(checkpointer)
-        state = await graph.aget_state(config)
-    return _get_checkpoint_workspace_backend(state.values if state and state.values else None)
-
-
-async def _get_checkpoint_datasource_id_from_tuple(checkpointer: Any, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:
-    """直接读取 checkpoint channel_values，避免仅查绑定数据源时创建完整 agent。"""
-    getter = getattr(checkpointer, "aget_tuple", None)
-    if not callable(getter):
-        return False, None
-    try:
-        checkpoint_tuple = await getter(config)
-    except Exception as err:
-        logger.warning("直接读取 checkpoint 绑定数据源失败，回退 graph state: %s", err)
-        return False, None
-    checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple else None
-    values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
-    return True, _get_checkpoint_datasource_id(values if isinstance(values, dict) else None)
+    """读取会话数据源绑定，首次请求时在行锁内完成绑定。"""
+    return await conversation_dao.resolve_datasource_binding(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        requested_datasource_id=str(requested_datasource_id or "").strip(),
+    )
 
 
 async def get_detail(
-    db_path: str,
     conversation_id: str,
-    get_graph: Callable,
-    get_checkpointer_fn: Callable,
     user_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    """
-    获取会话详情（含历史消息）
-
-    Args:
-        db_path: 数据库路径（已废弃，保留兼容）
-        conversation_id: 会话ID
-        get_graph: 获取graph的函数
-        get_checkpointer_fn: 获取checkpointer的函数
-
-    Returns:
-        {"id": "...", "title": "...", "messages": [...], "is_favorited": bool} 或 None
-    """
+    """从业务表和事件表获取会话详情。"""
     # 从数据库获取会话元信息
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if not thread:
@@ -497,58 +252,21 @@ async def get_detail(
     title = thread.thread_title
     is_favorited = bool(thread.is_favorited) if thread.is_favorited is not None else False
 
-    # 事件表是可见历史的权威来源；旧会话尚未迁出时兼容 checkpoint。
     event_history = await conversation_event_service.load_history(
         conversation_id=conversation_id,
         user_id=str(thread.user_id),
     )
-    messages = builtins.list(event_history.get("messages") or [])
-    history_events = builtins.list(event_history.get("history_events") or [])
-    reasoning_segments = builtins.list(event_history.get("reasoning_segments") or [])
-    token_usage = None
-    state = None
-
-    # 仅当 get_graph 存在时才从 checkpoint 获取消息历史
-    # 部分 agent 不使用 LangGraph，有自己的消息存储
-    if get_graph is not None:
-        config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-        async with get_checkpointer_fn() as checkpointer:
-            graph = get_graph(checkpointer)
-            state = await graph.aget_state(config)
-            if state and state.values:
-                raw_messages = state.values.get("messages", [])
-                if isinstance(raw_messages, builtins.list) and raw_messages:
-                    await conversation_event_service.backfill_checkpoint_history(
-                        conversation_id=conversation_id,
-                        user_id=str(thread.user_id),
-                        operator_name=str(thread.update_by_name or thread.user_id),
-                        messages=raw_messages,
-                        reasoning_segments=state.values.get("reasoning_segments") or [],
-                    )
-                    recovered_history = await conversation_event_service.load_history(
-                        conversation_id=conversation_id,
-                        user_id=str(thread.user_id),
-                    )
-                    if recovered_history.get("history_events"):
-                        messages = builtins.list(recovered_history.get("messages") or [])
-                        history_events = builtins.list(recovered_history.get("history_events") or [])
-                        reasoning_segments = builtins.list(recovered_history.get("reasoning_segments") or [])
-                if not messages:
-                    messages = _serialize_messages(raw_messages)
-                if not reasoning_segments:
-                    reasoning_segments = _serialize_reasoning_segments(state.values.get("reasoning_segments"))
-                raw_token_usage = state.values.get("token_usage")
-                if isinstance(raw_token_usage, dict):
-                    token_usage = sanitize_context_usage_for_response(raw_token_usage)
-
+    messages = [*(event_history.get("messages") or [])]
+    history_events = [*(event_history.get("history_events") or [])]
+    reasoning_segments = [*(event_history.get("reasoning_segments") or [])]
     return {
         "id": conversation_id,
         "title": title,
-        "datasource_id": _get_checkpoint_datasource_id(state.values if state and state.values else None),
+        "datasource_id": str(thread.datasource_id or "").strip() or None,
         "messages": messages,
         "history_events": history_events,
         "reasoning_segments": reasoning_segments,
-        "token_usage": token_usage,
+        "token_usage": event_history.get("token_usage"),
         "is_favorited": is_favorited,
     }
 
@@ -576,78 +294,24 @@ async def update_title(db_path: str, conversation_id: str, title: str, user_id: 
 async def generate_title(
     db_path: str,
     conversation_id: str,
-    get_graph: Callable,
-    get_checkpointer_fn: Callable,
     user_id: Optional[str] = None
 ) -> Optional[str]:
-    """
-    自动生成会话标题（从第一条消息用LLM生成）
-
-    Args:
-        db_path: 数据库路径（已废弃，保留兼容）
-        conversation_id: 会话ID
-        get_graph: 获取graph的函数
-        get_checkpointer_fn: 获取checkpointer的函数
-
-    Returns:
-        生成的标题，失败返回None
-    """
-    if get_graph is None:
-        thread = await conversation_dao.get_thread(conversation_id, user_id)
-        if not thread:
-            return None
-        title = str(thread.thread_title or "").strip()
-        if title and title != "未命名会话":
-            return title
-
-        title = "智能分析会话"
-        await update_title(db_path, conversation_id, title, user_id)
-        logger.info("无 graph agent 使用默认标题: %s -> %s", conversation_id, title)
-        return title
-
+    """根据事件表中的第一条用户消息生成会话标题。"""
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if not thread:
         return None
 
-    event_history = await conversation_event_service.load_history(
+    existing_title = str(thread.thread_title or "").strip()
+    if existing_title not in {"", "新会话", "未命名会话"}:
+        return existing_title
+
+    first_message = await conversation_event_service.get_first_user_message(
         conversation_id=conversation_id,
         user_id=str(user_id or thread.user_id),
     )
-    first_message = _get_first_user_message_from_history(event_history.get("messages") or [])
     if first_message:
         return await _generate_and_update_title(db_path, conversation_id, first_message, user_id)
-
-    # 旧会话兼容从 checkpoint 获取消息
-    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
-    async with get_checkpointer_fn() as checkpointer:
-        graph = get_graph(checkpointer)
-        state = await graph.aget_state(config)
-
-    if not state or not state.values:
-        logger.warning(f"生成标题失败: {conversation_id} - checkpoint 中没有状态")
-        return None
-
-    messages = state.values.get("messages", [])
-    if not messages:
-        logger.warning(f"生成标题失败: {conversation_id} - 没有消息记录")
-        return None
-
-    # 获取第一条用户消息
-    first_message = _get_first_user_message(messages)
-    if not first_message:
-        logger.warning(f"生成标题失败: {conversation_id} - 没有用户消息")
-        return None
-
-    return await _generate_and_update_title(db_path, conversation_id, first_message, user_id)
-
-
-def _get_first_user_message_from_history(messages: List[Dict[str, Any]]) -> Optional[str]:
-    for message in messages:
-        if str(message.get("role") or "") != "user":
-            continue
-        content = str(message.get("content") or "").strip()
-        if content:
-            return content
+    logger.warning("生成标题失败: %s - 事件表中没有用户消息", conversation_id)
     return None
 
 

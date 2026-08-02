@@ -10,13 +10,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from langchain_core.messages import HumanMessage
-
 from apps.chat_data_app.agent import agent_runtime
 from apps.chat_data_app.agent import agent_state
 from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.tools import common
-from utils import conversation
 
 
 def test_internal_query_result_protocol_is_not_public_envelope():
@@ -35,11 +32,9 @@ def test_internal_query_result_protocol_is_not_public_envelope():
     assert payload["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9, "save_as": ""}
 
 
-def test_state_reducers_keep_first_conversation_datasource():
+def test_state_reducers_merge_visible_history():
     assert agent_state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
     assert agent_state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
-    assert agent_state.keep_conversation_datasource_id(None, "ds_a") == "ds_a"
-    assert agent_state.keep_conversation_datasource_id("ds_a", "ds_b") == "ds_a"
 
 
 def test_agent_runtime_helpers_build_shared_agent_bits():
@@ -58,56 +53,6 @@ def test_agent_runtime_helpers_build_shared_agent_bits():
     assert model_calls[-1]["streaming"] is True
     assert model_calls[-1]["stream_usage"] is True
     assert model_calls[-1]["enable_thinking"] is True
-
-def test_serialize_semantic_config_selection_keeps_refresh_payload():
-    payload = conversation._serialize_semantic_config_selection({
-        "semantic_config_id": "cfg_pay",
-        "semantic_config_name": "支付汇总",
-        "confidence": "high",
-        "reason": "命中交易金额",
-        "matched_metrics": ["交易金额", ""],
-        "matched_dimensions": ["机构"],
-        "auto_selected": True,
-        "user_selected": True,
-    })
-
-    assert payload == {
-        "semantic_config_id": "cfg_pay",
-        "semantic_config_name": "支付汇总",
-        "confidence": "high",
-        "reason": "命中交易金额",
-        "matched_metrics": ["交易金额", ""],
-        "matched_dimensions": ["机构"],
-        "auto_selected": True,
-        "user_selected": True,
-    }
-    assert conversation._serialize_semantic_config_selection({}) is None
-    assert conversation._serialize_semantic_config_selection(None) is None
-
-
-def test_serialize_messages_keeps_user_semantic_config_selection():
-    messages = [
-        HumanMessage(
-            content="商品数量有多少",
-            additional_kwargs={
-                "timestamp": "2026-06-10 11:30:00",
-                "semantic_config_selection": {
-                    "semantic_config_id": "cfg_test",
-                    "semantic_config_name": "测试指标集",
-                    "reason": "用户从候选指标集中选择",
-                    "user_selected": True,
-                },
-            },
-        )
-    ]
-
-    payload = conversation.serialize_messages(messages)
-
-    assert payload[0]["role"] == "user"
-    assert payload[0]["semantic_config_selection"]["semantic_config_id"] == "cfg_test"
-    assert payload[0]["semantic_config_selection"]["semantic_config_name"] == "测试指标集"
-    assert payload[0]["semantic_config_selection"]["user_selected"] is True
-
 
 def test_common_workspace_root_validation_and_binary_detection(tmp_path):
     with pytest.raises(ValueError, match="缺少 workspace_root"):

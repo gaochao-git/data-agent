@@ -167,6 +167,8 @@ class QueryTaskService:
         operator_name: str,
     ) -> Dict[str, Any]:
         """创建用户发起的 SQL 异步查询任务。"""
+        if body.query_type not in {"sql", "builder"}:
+            raise ValueError(f"不支持的查询类型: {body.query_type}")
         body = body.model_copy(update={"user_id": user_id, "operator_name": operator_name})
         logger.info("query-tasks create: datasource_id=%s", body.datasource_id)
         datasource = await self.datasource_manager_factory().get_datasource_async(body.datasource_id)

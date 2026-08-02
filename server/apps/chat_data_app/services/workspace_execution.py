@@ -169,6 +169,19 @@ def _workspace_session_ttl_seconds() -> int:
     return max(30, min(timeout_seconds - 30, 300))
 
 
+async def _cached_session_matches_application(session: SandboxExecutionSession) -> bool:
+    """Compare cached mutable trees without rereading every file body."""
+    current_manifest = await asyncio.to_thread(
+        _mutable_application_metadata_manifest,
+        _application_workspace_root(session.workspace_root),
+    )
+    expected_manifest = {
+        path: (fingerprint[0], fingerprint[1])
+        for path, fingerprint in (session.application_manifest or {}).items()
+    }
+    return current_manifest == expected_manifest
+
+
 def _workspace_session_lock(cache_key: str) -> asyncio.Lock:
     lock = _WORKSPACE_EXECUTION_SESSION_LOCKS.get(cache_key)
     if lock is None:
@@ -352,6 +365,17 @@ def _mutable_application_manifest(workspace_root: Path) -> dict[str, tuple[int, 
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
             manifest[f"{directory_name}/{relative}"] = _file_fingerprint(path)
+    return manifest
+
+
+def _mutable_application_metadata_manifest(workspace_root: Path) -> dict[str, tuple[int, int]]:
+    """Return path, size and mtime for cheap cached-session validation."""
+    manifest: dict[str, tuple[int, int]] = {}
+    for directory_name in ("workspace", "outputs"):
+        directory = workspace_root / directory_name
+        for relative, path in _iter_application_files(directory):
+            stat = path.stat()
+            manifest[f"{directory_name}/{relative}"] = (stat.st_size, stat.st_mtime_ns)
     return manifest
 
 
@@ -846,16 +870,18 @@ async def get_workspace_execution_session(
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
         async with cached.session.operation_lock:
-            await _sync_sandbox_uploads(cached.session)
-        return cached.session
+            if await _cached_session_matches_application(cached.session):
+                await _sync_sandbox_uploads(cached.session)
+                return cached.session
 
     async with _workspace_session_lock(cache_key):
         now = time.monotonic()
         cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
         if cached is not None and cached.expires_at > now:
             async with cached.session.operation_lock:
-                await _sync_sandbox_uploads(cached.session)
-            return cached.session
+                if await _cached_session_matches_application(cached.session):
+                    await _sync_sandbox_uploads(cached.session)
+                    return cached.session
         if cached is not None:
             _WORKSPACE_EXECUTION_SESSION_CACHE.pop(cache_key, None)
             await release_workspace_execution_session(cached.session)

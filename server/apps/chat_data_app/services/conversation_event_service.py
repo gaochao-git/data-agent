@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from typing import Any, Iterable
@@ -9,6 +10,7 @@ from typing import Any, Iterable
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from utils.database import get_session
+from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
 from ..daos.conversation_event_dao import ConversationEventDao
 
@@ -19,6 +21,9 @@ EVENT_REASONING = "reasoning"
 EVENT_ASSISTANT_MESSAGE = "assistant_message"
 EVENT_TOOL_RESULT = "tool_result"
 EVENT_CONTEXT_COMPRESSION = "context_compression"
+EVENT_TOKEN_USAGE = "token_usage"
+EVENT_APPEND_MAX_ATTEMPTS = 3
+EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
 
 class ConversationEventService:
     """将 Agent 完整消息转换为追加式历史事件。"""
@@ -38,7 +43,7 @@ class ConversationEventService:
         if not turn_id:
             logger.warning("跳过无 ID 的用户历史消息: conversation_id=%s", conversation_id)
             return
-        await self._append_best_effort(
+        await self._append_events(
             conversation_id=conversation_id,
             user_id=user_id,
             operator_name=operator_name,
@@ -60,73 +65,38 @@ class ConversationEventService:
         messages: Iterable[BaseMessage],
         reasoning_segments: Iterable[dict[str, Any]],
         context_compression_events: Iterable[dict[str, Any]] = (),
+        token_usage: dict[str, Any] | None = None,
     ) -> None:
         events = _build_turn_events(
             turn_id=turn_id,
             messages=list(messages or []),
             reasoning_segments=list(reasoning_segments or []),
             context_compression_events=list(context_compression_events or []),
+            token_usage=_compact_token_usage(token_usage),
         )
         if not events:
             return
-        await self._append_best_effort(
+        await self._append_events(
             conversation_id=conversation_id,
             user_id=user_id,
             operator_name=operator_name,
             events=events,
         )
 
-    async def backfill_checkpoint_history(
-        self,
-        *,
-        conversation_id: str,
-        user_id: str,
-        operator_name: str,
-        messages: Iterable[BaseMessage],
-        reasoning_segments: Iterable[dict[str, Any]],
-        context_compression_events: Iterable[dict[str, Any]] = (),
-    ) -> None:
-        """将旧 checkpoint 中仍可读取的原始消息幂等回填到事件表。"""
-        raw_messages = list(messages or [])
-        raw_segments = list(reasoning_segments or [])
-        turn_ids = [
-            turn_id
-            for message in raw_messages
-            if isinstance(message, HumanMessage) and (turn_id := _message_id(message))
-        ]
-        scoped_segments = [
-            segment for segment in raw_segments
-            if str((segment or {}).get("reasoning_turn_id") or "").strip()
-        ]
-        legacy_groups = _split_legacy_reasoning_segments(raw_segments)
-        events: list[dict[str, Any]] = []
-        for turn_index, turn_id in enumerate(turn_ids):
-            # 旧数据没有轮次 ID 时，沿用历史页面按 tool_call_count 重置分组的规则。
-            turn_segments = [
-                *scoped_segments,
-                *(legacy_groups[turn_index] if turn_index < len(legacy_groups) else []),
-            ]
-            events.extend(_build_turn_events(
-                turn_id=turn_id,
-                messages=raw_messages,
-                reasoning_segments=turn_segments,
-                context_compression_events=list(context_compression_events or []),
-            ))
-        if events:
-            await self._append_best_effort(
+    async def load_history(self, *, conversation_id: str, user_id: str) -> dict[str, Any]:
+        rows = await self._dao.list_visible_events(conversation_id=conversation_id, user_id=user_id)
+        token_usage_payload = None
+        try:
+            token_usage_payload = await self._dao.get_latest_token_usage_payload(
                 conversation_id=conversation_id,
                 user_id=user_id,
-                operator_name=operator_name,
-                events=events,
             )
-
-    async def load_history(self, *, conversation_id: str, user_id: str) -> dict[str, list[dict[str, Any]]]:
-        try:
-            rows = await self._dao.list_events(conversation_id=conversation_id, user_id=user_id)
         except Exception:
-            # 新表未迁移或短暂数据库错误时，调用方继续兼容读取 checkpoint 历史。
-            logger.exception("读取会话原始事件失败: conversation_id=%s", conversation_id)
-            return {"messages": [], "reasoning_segments": [], "history_events": []}
+            logger.warning(
+                "读取会话 token 占用失败，历史消息继续返回: conversation_id=%s",
+                conversation_id,
+                exc_info=True,
+            )
         messages: list[dict[str, Any]] = []
         reasoning_segments: list[dict[str, Any]] = []
         history_events: list[dict[str, Any]] = []
@@ -148,9 +118,24 @@ class ConversationEventService:
             "messages": messages,
             "reasoning_segments": reasoning_segments,
             "history_events": history_events,
+            "token_usage": _load_payload(token_usage_payload),
         }
 
-    async def _append_best_effort(
+    async def get_first_user_message(self, *, conversation_id: str, user_id: str) -> str | None:
+        """读取首条有效用户消息正文，不加载完整会话历史。"""
+        try:
+            raw_payload = await self._dao.get_first_user_message_payload(
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        except Exception:
+            logger.exception("读取会话首条用户消息失败: conversation_id=%s", conversation_id)
+            return None
+        payload = _load_payload(raw_payload)
+        content = str((payload or {}).get("content") or "").strip()
+        return content or None
+
+    async def _append_events(
         self,
         *,
         conversation_id: str,
@@ -158,17 +143,32 @@ class ConversationEventService:
         operator_name: str,
         events: list[dict[str, Any]],
     ) -> None:
-        try:
-            await self._dao.append_events(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                operator_name=operator_name,
-                events=events,
-                now=datetime.now(),
-            )
-        except Exception:
-            # 事件历史不能使已开始的 Agent 对话失败；下次完整持久化会按 event_key 补齐。
-            logger.exception("追加会话原始事件失败: conversation_id=%s", conversation_id)
+        for attempt in range(1, EVENT_APPEND_MAX_ATTEMPTS + 1):
+            try:
+                await self._dao.append_events(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    operator_name=operator_name,
+                    events=events,
+                    now=datetime.now(),
+                )
+                return
+            except Exception as exc:
+                should_retry = is_mysql_connection_error(exc) and attempt < EVENT_APPEND_MAX_ATTEMPTS
+                if not should_retry:
+                    logger.exception(
+                        "追加会话原始事件失败: conversation_id=%s attempt=%s",
+                        conversation_id,
+                        attempt,
+                    )
+                    raise
+                logger.warning(
+                    "追加会话原始事件遇到连接错误，准备重试: conversation_id=%s attempt=%s",
+                    conversation_id,
+                    attempt,
+                    exc_info=True,
+                )
+                await asyncio.sleep(EVENT_APPEND_RETRY_DELAY_SECONDS)
 
 
 def _build_turn_events(
@@ -177,6 +177,7 @@ def _build_turn_events(
     messages: list[BaseMessage],
     reasoning_segments: list[dict[str, Any]],
     context_compression_events: list[dict[str, Any]] | None = None,
+    token_usage: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     start_index = _turn_start_index(messages, turn_id)
     if start_index is None:
@@ -282,7 +283,26 @@ def _build_turn_events(
             event_type=EVENT_CONTEXT_COMPRESSION,
             payload=event,
         ))
+    if isinstance(token_usage, dict) and token_usage:
+        events.append(_event(
+            turn_id=turn_id,
+            event_key=f"token_usage:{turn_id}",
+            event_type=EVENT_TOKEN_USAGE,
+            payload=token_usage,
+        ))
     return events
+
+
+def _compact_token_usage(token_usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """历史页只需恢复总体占用，不重复保存消息和工具级明细。"""
+    if not isinstance(token_usage, dict):
+        return None
+    compact = {
+        key: value
+        for key, value in token_usage.items()
+        if key not in {"breakdown", "llm_calls"}
+    }
+    return compact or None
 
 
 def _turn_start_index(messages: list[BaseMessage], turn_id: str) -> int | None:
@@ -337,27 +357,6 @@ def _normalize_context_compression_events(
             "compressed_messages": _non_negative_int(raw_event.get("compressed_messages")),
         })
     return normalized
-
-
-def _split_legacy_reasoning_segments(segments: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """按历史 UI 的规则分组没有 ``reasoning_turn_id`` 的旧思考分段。"""
-    groups: list[list[dict[str, Any]]] = []
-    for raw in segments:
-        if not isinstance(raw, dict) or str(raw.get("reasoning_turn_id") or "").strip():
-            continue
-        content = str(raw.get("content") or "").strip()
-        if not content:
-            continue
-        normalized = dict(raw)
-        normalized["content"] = content
-        normalized["tool_call_count"] = _normalize_tool_call_count(raw.get("tool_call_count"))
-        current_group = groups[-1] if groups else None
-        previous = current_group[-1] if current_group else None
-        if current_group is None or normalized["tool_call_count"] <= int(previous.get("tool_call_count") or 0):
-            groups.append([normalized])
-        else:
-            current_group.append(normalized)
-    return groups
 
 
 def _event(*, turn_id: str, event_key: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -451,7 +450,9 @@ def _extract_reasoning_content(message: AIMessage) -> str:
     return ""
 
 
-def _load_payload(raw_payload: str) -> dict[str, Any] | None:
+def _load_payload(raw_payload: str | None) -> dict[str, Any] | None:
+    if raw_payload is None:
+        return None
     try:
         payload = json.loads(raw_payload)
     except (TypeError, ValueError):

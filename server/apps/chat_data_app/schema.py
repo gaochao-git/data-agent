@@ -3,7 +3,7 @@ ChatData API 数据模型定义
 """
 
 import json
-from typing import Optional, Dict, List, Literal, Union, Any
+from typing import Any, Dict, ForwardRef, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
 from .services.runtime_config import DEFAULT_ROW_LIMIT
@@ -95,7 +95,7 @@ class ExecuteSqlRequest(BaseModel):
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
-    query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
+    query_type: Optional[str] = Field(default="sql", description="内部查询类型: sql | builder | agent")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
     semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
@@ -113,7 +113,7 @@ class QueryTaskCreateRequest(BaseModel):
     sql: List[str] = Field(default_factory=list, description="要执行的 SQL 语句列表；builder 查询由服务端根据 DSL 编译")
     limit: Optional[int] = Field(default=DEFAULT_ROW_LIMIT, description="结果行数限制")
     timeout: Optional[int] = Field(default=None, description="查询超时时间（秒），为空时按数据源类型取全局默认值")
-    query_type: Optional[str] = Field(default='sql', description="查询类型: sql | builder")
+    query_type: Literal["sql", "builder"] = Field(default="sql", description="查询类型: sql | builder")
     builder_config: Optional[dict] = Field(default=None, description="辅助查询模式的配置")
     semantic_builder_config: Optional[dict] = Field(default=None, description="语义可视化查询 DSL；服务端据此重新编译 SQL")
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
@@ -131,6 +131,12 @@ class QueryTaskCreateRequest(BaseModel):
         if len(self.sql) > 1 and self.semantic_builder_config:
             raise ValueError("SQL 批次不支持语义可视化查询")
         return self
+
+
+class InternalQueryTaskCreateRequest(QueryTaskCreateRequest):
+    """服务端内部查询任务请求，额外允许标记智能体来源。"""
+
+    query_type: Literal["sql", "builder", "agent"] = Field(default="sql", description="内部查询类型")
 
 
 class CompileSemanticBuilderSqlRequest(BaseModel):
@@ -547,8 +553,6 @@ class SemanticPrefillRequest(BaseModel):
 
 
 # ============ 树形过滤条件模型（参考 Cube.js 设计）============
-
-from typing import ForwardRef
 
 # 使用 ForwardRef 解决循环引用
 FilterConditionRef = ForwardRef('FilterCondition')

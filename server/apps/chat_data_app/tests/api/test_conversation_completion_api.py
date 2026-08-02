@@ -1,17 +1,27 @@
-import asyncio
 import json
 import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from apps.chat_data_app import routes
 from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services import semantic_builder_compiler, semantic_conversation_context, semantic_tools
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from apps.chat_data_app.routers import conversations as conversation_router
+
+
+@pytest.fixture(autouse=True)
+def _stub_conversation_event_writes(monkeypatch):
+    handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
+
+    async def noop_event_write(**_kwargs):
+        return None
+
+    monkeypatch.setattr(handler_module.conversation_event_service, "persist_user_message", noop_event_write)
+    monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
 
 
 class FakeMessageChunk:
@@ -73,7 +83,15 @@ def _patch_completion_dependencies(monkeypatch, graph):
     async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
         return conversation_id
 
+    async def fake_get_datasource_id(_conversation_id, _user_id):
+        return None
+
+    async def fake_resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
+        return requested_datasource_id
+
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", fake_get_datasource_id)
+    monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
     monkeypatch.setattr(handler_module, "create_data_agent", lambda *_args, **_kwargs: graph)
@@ -308,8 +326,16 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     async def fake_get_or_create_conversation(_db_path, agent_id, conversation_id, user_id):
         return conversation_id
 
+    async def fake_get_datasource_id(_conversation_id, _user_id):
+        return None
+
+    async def fake_resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
+        return requested_datasource_id
+
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", fake_get_datasource_id)
+    monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
     for module in (semantic_builder_compiler, semantic_conversation_context, semantic_tools):

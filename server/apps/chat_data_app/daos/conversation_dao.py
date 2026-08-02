@@ -158,6 +158,87 @@ class ConversationDao:
             result = await session.execute(select(UserThread.agent_id).where(*self._thread_conditions(conversation_id, user_id)))
             return result.scalar_one_or_none()
 
+    async def get_datasource_id(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+        """读取会话绑定的数据源组。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(UserThread.datasource_id).where(
+                    *self._thread_conditions(conversation_id, user_id)
+                )
+            )
+            datasource_id = result.scalar_one_or_none()
+            return str(datasource_id or "").strip() or None
+
+    async def list_unbound_threads(self, *, limit: int) -> List[UserThread]:
+        """列出仍需从旧 checkpoint 回填数据源绑定的有效会话。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(UserThread)
+                .where(
+                    UserThread.datasource_id == "",
+                    UserThread.delete_flag == 0,
+                )
+                .order_by(UserThread.id.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    async def backfill_datasource_binding(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        datasource_id: str,
+    ) -> bool:
+        """仅在绑定仍为空时回填，避免覆盖迁移期间产生的新绑定。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                sa_update(UserThread)
+                .where(
+                    UserThread.thread_id == conversation_id,
+                    UserThread.user_id == user_id,
+                    UserThread.datasource_id == "",
+                    UserThread.delete_flag == 0,
+                )
+                .values(
+                    datasource_id=datasource_id,
+                    update_time=datetime.now(),
+                    update_by=user_id,
+                )
+            )
+            return bool(result.rowcount)
+
+    async def resolve_datasource_binding(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        requested_datasource_id: str,
+    ) -> Optional[str]:
+        """在行锁内读取绑定，未绑定时写入请求值。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(UserThread)
+                .where(*self._thread_conditions(conversation_id, user_id))
+                .with_for_update()
+            )
+            thread = result.scalar_one_or_none()
+            if thread is None:
+                return None
+            bound_datasource_id = str(thread.datasource_id or "").strip()
+            if not bound_datasource_id and requested_datasource_id:
+                bound_datasource_id = requested_datasource_id
+                await session.execute(
+                    sa_update(UserThread)
+                    .where(UserThread.id == thread.id)
+                    .values(
+                        datasource_id=bound_datasource_id,
+                        update_time=datetime.now(),
+                        update_by=user_id,
+                    )
+                )
+            return bound_datasource_id or None
+
     async def exists_user_agent_thread(self, *, conversation_id: str, user_id: str, agent_id: str) -> bool:
         async with self._session_context() as session:
             result = await session.execute(

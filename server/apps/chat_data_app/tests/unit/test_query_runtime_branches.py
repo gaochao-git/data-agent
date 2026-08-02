@@ -451,6 +451,8 @@ def test_query_task_request_allows_builder_without_sql_and_requires_sql_otherwis
     assert builder.sql == []
     with pytest.raises(ValueError, match="SQL 至少包含一条有效语句"):
         QueryTaskCreateRequest(datasource_id="ds_a")
+    with pytest.raises(ValueError, match="Input should be 'sql' or 'builder'"):
+        QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"], query_type="agent")
 
 
 def test_persistent_query_task_result_payload_filters_http_members():

@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
@@ -80,6 +81,7 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
         turn_id="turn-1",
         messages=first_turn_messages,
         reasoning_segments=first_reasoning,
+        token_usage={"used": 80, "total": 100, "breakdown": [{"content": "large"}]},
     )
     # 重复持久化同一轮不能生成重复历史事件。
     await service.persist_turn(
@@ -105,11 +107,14 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
         turn_id="turn-2",
         messages=[second_user, AIMessage(content="最终结论", id="assistant-3")],
         reasoning_segments=[],
+        token_usage={"used": 35, "total": 100, "llm_calls": [{"input_tokens": 35}]},
     )
 
     history = await service.load_history(conversation_id="conv-1", user_id="user-1")
 
-    assert [event["sequence_no"] for event in history["history_events"]] == list(range(1, 9))
+    sequence_numbers = [event["sequence_no"] for event in history["history_events"]]
+    assert sequence_numbers == sorted(sequence_numbers)
+    assert len(sequence_numbers) == len(set(sequence_numbers))
     assert [event["event_type"] for event in history["history_events"]] == [
         "user_message",
         "reasoning",
@@ -128,6 +133,9 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
         "再给出结论",
         "最终结论",
     ]
+    assert history["token_usage"] == {"used": 35, "total": 100}
+    assert all(event["event_type"] != "token_usage" for event in history["history_events"])
+    assert await service.get_first_user_message(conversation_id="conv-1", user_id="user-1") == "查询订单"
 
 
 @pytest.mark.asyncio
@@ -203,3 +211,65 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
         "assistant_message",
     ]
     assert history["history_events"][3]["payload"] == compression_event
+
+
+@pytest.mark.asyncio
+async def test_event_append_retries_connection_errors_and_propagates_final_failure(monkeypatch):
+    class RetryDao:
+        def __init__(self, failures):
+            self.failures = failures
+            self.calls = 0
+
+        async def append_events(self, **_kwargs):
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise OperationalError(None, None, RuntimeError(2006, "server gone away"))
+            return []
+
+    async def skip_retry_delay(_delay):
+        return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.conversation_event_service.asyncio.sleep", skip_retry_delay)
+    message = HumanMessage(content="重试写入", id="turn-retry")
+    retry_dao = RetryDao(failures=2)
+    await ConversationEventService(retry_dao).persist_user_message(
+        conversation_id="conv-retry",
+        user_id="user-1",
+        operator_name="用户一",
+        message=message,
+    )
+    assert retry_dao.calls == 3
+
+    failed_dao = RetryDao(failures=3)
+    with pytest.raises(OperationalError):
+        await ConversationEventService(failed_dao).persist_user_message(
+            conversation_id="conv-failed",
+            user_id="user-1",
+            operator_name="用户一",
+            message=message,
+        )
+    assert failed_dao.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_token_usage_failure_does_not_clear_visible_history():
+    class EventRow:
+        payload = '{"id":"turn-1","role":"user","content":"保留消息","timestamp":""}'
+        sequence_no = 1
+        turn_id = "turn-1"
+        event_type = "user_message"
+
+    class TokenFailureDao:
+        async def list_visible_events(self, **_kwargs):
+            return [EventRow()]
+
+        async def get_latest_token_usage_payload(self, **_kwargs):
+            raise RuntimeError("JSON_REMOVE unavailable")
+
+    history = await ConversationEventService(TokenFailureDao()).load_history(
+        conversation_id="conv-1",
+        user_id="user-1",
+    )
+
+    assert history["messages"][0]["content"] == "保留消息"
+    assert history["token_usage"] is None

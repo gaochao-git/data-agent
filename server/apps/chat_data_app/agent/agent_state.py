@@ -29,11 +29,6 @@ def merge_context_compression_events(
     return merged
 
 
-def keep_conversation_datasource_id(existing: str | None, new: str | None) -> str | None:
-    """数据源组首次绑定后不可被后续轮次覆盖。"""
-    return existing or new
-
-
 class ExecutionContext(TypedDict, total=False):
     """工具执行所需的数据源和执行对象范围。"""
 
@@ -55,7 +50,6 @@ class ChatDataAgentState(AgentState, total=False):
     user_id: str | None
     operator_name: str | None
     conversation_id: str | None
-    conversation_datasource_id: Annotated[str | None, keep_conversation_datasource_id]
     execution_context: ExecutionContext
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None

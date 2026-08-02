@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -75,9 +76,15 @@ from apps.chat_data_app.schema import (
 
 
 @pytest.fixture(autouse=True)
-def mirror_dashboard_service():
+def mirror_dashboard_service(monkeypatch):
     previous = dashboard_runtime.get_dashboard_service
     dashboard_runtime.get_dashboard_service = lambda: dashboard_routes.get_dashboard_service()
+
+    async def ignore_event_write(**_kwargs):
+        return None
+
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", ignore_event_write)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", ignore_event_write)
     yield
     dashboard_runtime.get_dashboard_service = previous
 
@@ -865,7 +872,6 @@ def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
 
 
 def test_get_datasources_returns_group_datasource_list(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -879,7 +885,6 @@ def test_get_datasources_returns_group_datasource_list(monkeypatch):
 
 
 def test_get_datasources_supports_lightweight_mode(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -922,7 +927,6 @@ def test_get_admin_datasources_uses_unfiltered_list(monkeypatch):
 
 
 def test_get_datasources_does_not_build_display_name_from_current_user(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -986,7 +990,7 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    captured = {}
+    captured = {"persisted_users": [], "persisted_turns": []}
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["source_type"] = "hive"
     _mock_datasource_manager(monkeypatch, manager)
@@ -1003,6 +1007,15 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
 
     monkeypatch.setattr(query_execution_routes, "create_sql_assist_agent", fake_create_sql_assist_agent)
     _mock_authenticated_user(monkeypatch, user_id="sql_user", username="SQL用户")
+
+    async def persist_user_message(**kwargs):
+        captured["persisted_users"].append(kwargs)
+
+    async def persist_turn(**kwargs):
+        captured["persisted_turns"].append(kwargs)
+
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", persist_user_message)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", persist_turn)
 
     from apps.chat_data_app import agent as agent_module
 
@@ -1023,6 +1036,13 @@ def test_quick_sql_endpoint_streams_chunks_and_extracts_sql(monkeypatch):
     assert '"sql": "SELECT 1"' in text
     assert captured["sql_dialect"] == "hive"
     assert captured["tables_ddl_info"] == "CREATE TABLE orders(id bigint)"
+    persisted_user = captured["persisted_users"][0]
+    persisted_turn = captured["persisted_turns"][0]
+    assert persisted_user["user_id"] == "sql_user"
+    assert persisted_user["operator_name"] == "SQL用户"
+    assert persisted_turn["turn_id"] == persisted_user["message"].id
+    assert persisted_turn["messages"][0] is persisted_user["message"]
+    assert persisted_turn["messages"][1].content == "```sql\nSELECT 1\n```"
 
 
 def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch):
@@ -1061,6 +1081,75 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
     ), None))
 
     assert '"sql": "SELECT 2"' in "".join(_collect_stream_chunks_sync(response))
+
+
+def test_quick_sql_persists_partial_assistant_output_after_model_failure(monkeypatch):
+    captured = {"turns": []}
+
+    async def fake_context(_payload):
+        return "mysql", "CREATE TABLE orders(id bigint)", None
+
+    async def fake_ensure(_payload, _user_id):
+        return None
+
+    async def fake_stream(*_args, **_kwargs):
+        yield "SELECT "
+        raise RuntimeError("model interrupted")
+
+    async def persist_user_message(**_kwargs):
+        return None
+
+    async def persist_turn(**kwargs):
+        captured["turns"].append(kwargs)
+
+    monkeypatch.setattr(query_execution_routes, "_load_quick_sql_context", fake_context)
+    monkeypatch.setattr(query_execution_routes, "_ensure_sql_assist_conversation", fake_ensure)
+    monkeypatch.setattr(query_execution_routes, "_stream_sql_assist_chunks", fake_stream)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", persist_user_message)
+    monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", persist_turn)
+
+    response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
+        query="生成 SQL",
+        datasource_id="ds_a",
+        conversation_id="conv_partial",
+    ), None))
+    text = "".join(_collect_stream_chunks_sync(response))
+
+    assert '"content": "SELECT "' in text
+    assert "model interrupted" in text
+    assert len(captured["turns"]) == 1
+    persisted = captured["turns"][0]
+    assert persisted["messages"][1].content == "SELECT "
+    assert persisted["messages"][1].id == f"{persisted['turn_id']}:assistant"
+
+
+def test_quick_sql_partial_persistence_finishes_when_stream_is_cancelled(monkeypatch):
+    async def run_case():
+        started = asyncio.Event()
+        release = asyncio.Event()
+        completed = []
+
+        async def delayed_persist(**_kwargs):
+            started.set()
+            await release.wait()
+            completed.append(True)
+
+        monkeypatch.setattr(query_execution_routes, "_persist_quick_sql_assistant_turn", delayed_persist)
+        task = asyncio.create_task(query_execution_routes._persist_quick_sql_assistant_turn_shielded(
+            conversation_id="conv_cancelled",
+            user_id="user_a",
+            username="用户A",
+            user_message=HumanMessage(content="生成 SQL", id="turn-1"),
+            content="SELECT ",
+        ))
+        await started.wait()
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert completed == [True]
+
+    asyncio.run(run_case())
 
 
 def test_quick_sql_endpoint_rejects_foreign_conversation_and_streams_errors(monkeypatch):
@@ -2006,7 +2095,6 @@ def test_run_sql_query_task_skips_result_payload_for_all_http_targets(monkeypatc
 
 
 def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
-    from apps.chat_data_app import routes
 
     cache_item = SimpleNamespace(
         result_payload=json.dumps({
@@ -2083,7 +2171,6 @@ def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
 
 
 def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
     async def fake_build_result(_request, query_task_id=None, execution_map=None, **_kwargs):
@@ -2131,7 +2218,6 @@ def test_run_sql_query_task_marks_failed_when_all_members_fail(monkeypatch):
 
 
 def test_run_sql_query_task_marks_failed_on_unhandled_execute_error(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
 
@@ -2227,7 +2313,6 @@ def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):
 
 
 def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = []
 
@@ -2268,7 +2353,6 @@ def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monke
 
 
 def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["member_sources"] = [
@@ -2300,7 +2384,6 @@ def test_execute_panels_batch_uses_panel_member_mapping(monkeypatch):
 
 
 def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["member_sources"] = [
@@ -2330,7 +2413,6 @@ def test_execute_panels_batch_marks_failed_when_member_execution_fails(monkeypat
 
 
 def test_execute_panels_batch_marks_cancelled_when_stream_is_closed(monkeypatch):
-    from apps.chat_data_app import routes
 
     updates = _mock_query_tracking(monkeypatch)
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
@@ -2529,7 +2611,6 @@ def test_update_layout_only_updates_current_dashboard_panels(monkeypatch):
 
 
 def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
-    from apps.chat_data_app import routes
 
     async def _fake_get_all_tables(_datasource_id):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
@@ -2621,7 +2702,6 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
 
 
 def test_update_datasource_meta_rejects_duplicate_name(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -2660,7 +2740,6 @@ def test_update_datasource_meta_success_missing_blank_and_late_missing(monkeypat
 
 
 def test_update_mapped_modules_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="mapper_1")
@@ -2674,7 +2753,6 @@ def test_update_mapped_modules_persists(monkeypatch):
 
 
 def test_get_datasource_table_groups(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
@@ -2687,7 +2765,6 @@ def test_get_datasource_table_groups(monkeypatch):
 
 
 def test_update_datasource_table_groups_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="group_maintainer")
@@ -2708,7 +2785,6 @@ def test_update_datasource_table_groups_persists(monkeypatch):
 
 
 def test_update_datasource_table_business_desc_persists(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="table_maintainer", username="表维护人")
@@ -2724,7 +2800,6 @@ def test_update_datasource_table_business_desc_persists(monkeypatch):
 
 
 def test_datasource_column_dict_get_and_save(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
@@ -2763,7 +2838,6 @@ def test_datasource_column_dict_get_and_save(monkeypatch):
 
 
 def test_datasource_column_dict_not_found_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_maintainer", username="字典维护人")
@@ -2807,7 +2881,6 @@ def test_parse_column_dict_generate_response_normalizes_invalid_items():
 
 
 def test_generate_datasource_column_dict_uses_llm(monkeypatch):
-    from apps.chat_data_app import routes
 
     class _FakeLlm:
         async def ainvoke(self, messages):
@@ -2832,7 +2905,6 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
 
 
 def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatch):
-    from apps.chat_data_app import routes
 
     class _FakeLlm:
         async def ainvoke(self, messages):
@@ -3540,7 +3612,6 @@ def test_compile_semantic_builder_sql_endpoint_error_branches(monkeypatch):
 
 
 def test_create_datasource_group_from_template_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1", username="创建人1")
@@ -3612,7 +3683,6 @@ def test_create_datasource_group_saves_config_without_loading_tables(monkeypatch
 
 
 def test_update_datasource_group_config_updates_group_members(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1", username="维护人1")
@@ -3733,7 +3803,6 @@ def test_sync_datasource_group_metadata_updates_cached_tables(monkeypatch):
 
 
 def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="creator_1")
@@ -3771,7 +3840,6 @@ def test_create_datasource_group_validates_blank_and_duplicate_names(monkeypatch
 
 
 def test_update_datasource_group_config_errors_for_missing_duplicate_and_invalid_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="updater_1")
@@ -3809,7 +3877,6 @@ def test_update_datasource_group_config_errors_for_missing_duplicate_and_invalid
 
 
 def test_datasource_table_group_and_default_error_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch)
@@ -3963,7 +4030,6 @@ def test_get_db_tables_uses_manager_for_direct_http_and_error_branches(monkeypat
 
 
 def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["ds_tables"] = [
@@ -4033,7 +4099,6 @@ def test_datasource_schema_and_semantic_health_reports_specific_issues(monkeypat
 
 
 def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     manager.datasources["unsupported"] = {
@@ -4061,7 +4126,6 @@ def test_datasource_semantic_health_unsupported_and_load_failure(monkeypatch):
 
 
 def test_set_and_clear_default_datasource(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="default_operator")
@@ -4082,7 +4146,6 @@ def test_set_and_clear_default_datasource(monkeypatch):
 
 
 def test_delete_datasource_removes_only_current_group(monkeypatch):
-    from apps.chat_data_app import routes
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="delete_operator")
@@ -4170,7 +4233,6 @@ def test_routes_schema_identifier_helpers_cover_edges():
 
 
 def test_routes_remote_history_helpers_cover_success_failure_and_default_source(monkeypatch):
-    from apps.chat_data_app import routes
 
     started = datetime(2026, 6, 29, 16, 57, 45)
     finished = datetime(2026, 6, 29, 16, 57, 50)
@@ -4262,7 +4324,6 @@ def test_routes_remote_history_helpers_cover_success_failure_and_default_source(
 
 
 def test_routes_live_remote_sql_result_status_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     async def fake_fetch(remote_task_id, _source_type, **_kwargs):
         return {
@@ -4372,7 +4433,6 @@ def test_sql_batch_status_keeps_cancelled_task_terminal_with_pending_statements(
 
 
 def test_routes_task_owner_and_cancel_status_helpers():
-    from apps.chat_data_app import routes
 
     assert QueryHistoryService.task_user_id({"request_payload": "{bad", "create_by": " creator "}) == "creator"
     assert QueryHistoryService.task_user_id({"request_payload": json.dumps({"user_id": " payload_user "})}) == "payload_user"
@@ -4399,7 +4459,6 @@ def test_routes_task_owner_and_cancel_status_helpers():
 
 
 def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
-    from apps.chat_data_app import routes
 
     no_wait = SimpleNamespace(
         execution_id="ex_done",
@@ -4451,7 +4510,6 @@ def test_routes_wait_and_cancel_execution_extra_branches(monkeypatch):
 
 
 def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypatch):
-    from apps.chat_data_app import routes
 
     _mock_authenticated_user(monkeypatch)
 

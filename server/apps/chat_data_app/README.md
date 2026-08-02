@@ -40,11 +40,13 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 - LangGraph checkpoint 的 `messages` 只保存当前模型需要的最近原始消息；`context_summary` 保存累计上下文摘要。
 - `chat_data_conversation_event` 追加用户消息、思考分段、助手消息、工具结果和“上下文已压缩”分界事件，是会话历史回放的权威来源；压缩不改写已有事件，分界事件不保存内部摘要正文。
-- 历史接口优先读取事件表。旧会话尚未写入事件时，兼容读取 checkpoint。
+- 历史接口只读取事件表，不反序列化 checkpoint；没有事件记录的旧会话不再回退 checkpoint。
 
 单次主模型请求同时遵守输出预留与质量阈值：硬输入容量为 `模型上下文窗口 - CHAT_DATA_OUTPUT_MAX_TOKENS`，安全水位为硬输入容量的 `95%`；压缩在 `min(模型窗口 * CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO, 安全水位)` 时执行。压缩触发比例默认 `0.70`，必须大于 `0` 且不超过 `0.95`，非法配置会阻止服务启动。当前输入一旦达到或超过触发点，之后每次模型调用前都会继续尝试压缩。更小的值可用于更早压缩；压缩后优先保留当前用户问题、最近完整对话轮次和最近工具调用/结果配对，旧回合以及当前回合较早的完整工具链可以进入摘要，绝不拆开工具调用与工具结果。摘要生成后即替换运行态消息并显示“上下文已压缩”；`estimated_cleared_tokens` 仅记录本次预算释放量，可能为 `0`。摘要调用单独预留 `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`（默认 `2000`）输出 Token；若待摘要内容仍超过摘要输入预算，先按体积从大到小确定性压缩旧工具结果，仍不足才按完整轮次省略最早历史。主模型与摘要模型最终都控制在安全水位内，为 Token 估算误差和 Provider 消息封装留出余量；正常压缩仍超出该水位时依次移除最旧轮次、旧摘要和当前回合完整工具组，必要时只保留受限的当前用户消息继续执行。服务启动时校验压缩比例、模型窗口和输出预留；动态系统提示词与工具 schema 在 Agent 创建时校验，只有固定输入自身超过安全水位才拒绝创建 Agent。前端圆圈只表示 `当前输入 / 模型完整上下文窗口`，不把输出预留混入占比。
 
-部署前必须手工执行 `migrations/20260724_add_conversation_event.sql`。应用启动不会自动建业务表。
+部署前必须手工执行 `migrations/20260724_add_conversation_event.sql`。已有环境再运行一次
+`python migrations/backfill_conversation_datasource.py` 检查旧 checkpoint 绑定，确认输出后加 `--apply` 回填。
+应用启动不会自动建业务表，回填脚本也不会参与运行时请求。
 
 ### 统一入口
 

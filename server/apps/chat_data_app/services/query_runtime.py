@@ -20,7 +20,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 from utils.logger import get_logger
 from utils.alarm import emit_dangerous_sql_alarm
 
-from ..schema import ExecuteSqlRequest, QueryTaskCreateRequest
+from ..schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from . import query_cache
 from .datasource_manager import get_datasource_manager
 from .runtime_config import DEFAULT_ROW_LIMIT
@@ -872,7 +872,7 @@ async def create_task_for_execute_request(
     operator_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """为直接执行或智能体执行创建任务主记录。"""
-    payload = QueryTaskCreateRequest(
+    payload = InternalQueryTaskCreateRequest(
         datasource_id=request.datasource_id,
         member_datasource_ids=request.member_datasource_ids,
         user_id=request.user_id,

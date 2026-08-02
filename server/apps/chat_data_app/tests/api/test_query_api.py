@@ -460,6 +460,21 @@ def test_create_query_task_api_contract(client, auth_headers, fake_datasource_ma
     assert captured["scheduled"] == "task_a"
 
 
+def test_create_query_task_rejects_internal_agent_type(client, auth_headers):
+    response = client.post(
+        "/api/chatdata/query-tasks",
+        json={
+            "datasource_id": "ds_a",
+            "sql": ["select 1"],
+            "query_type": "agent",
+            "conversation_id": "foreign-conversation",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_query_task_returns_datasource_not_found(client, auth_headers, fake_datasource_manager, monkeypatch):
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
 

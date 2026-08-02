@@ -11,12 +11,10 @@ from langchain_core.messages import HumanMessage
 
 from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.checkpoint import get_checkpointer
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
 
-from ..agent import get_data_agent_graph
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
 from .semantic_common import AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
@@ -149,18 +147,17 @@ def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Di
     }
 
 
-async def _load_history_conversation_context(conversation_id: str) -> Optional[Dict[str, Any]]:
+async def _load_history_conversation_context(conversation_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """读取智能问数对话上下文，用于历史学习。"""
     normalized_id = str(conversation_id or "").strip()
     if not normalized_id:
         return None
     try:
-        agent_id = await conversation.get_agent_id("", normalized_id)
+        agent_id = await conversation.get_agent_id("", normalized_id, user_id)
         if agent_id != AGENT_ID:
             logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
             return None
-        graph_getter = lambda checkpointer=None: get_data_agent_graph(checkpointer=checkpointer)
-        detail = await conversation.get_detail("", normalized_id, graph_getter, get_checkpointer)
+        detail = await conversation.get_detail(normalized_id, user_id)
         messages = (detail or {}).get("messages") if isinstance(detail, dict) else []
         if not isinstance(messages, list):
             return None
@@ -570,7 +567,7 @@ class SemanticHistoryLearningService:
         self,
         dao: Optional[SemanticHistoryLearningDao] = None,
         *,
-        context_loader: Optional[Callable[[str], Awaitable[Optional[Dict[str, Any]]]]] = None,
+        context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
         suggestion_loader: Optional[Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]] = None,
         history_matcher: Optional[Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]] = None,
     ):
@@ -624,13 +621,14 @@ class SemanticHistoryLearningService:
     async def _attach_agent_context(
         self,
         sample: Dict[str, Any],
+        user_id: str,
         cache: Dict[str, Optional[Dict[str, Any]]],
     ) -> bool:
         conversation_id = str(sample.get("conversation_id") or "").strip()
         if not conversation_id:
             return False
         if conversation_id not in cache:
-            cache[conversation_id] = await self.context_loader(conversation_id)
+            cache[conversation_id] = await self.context_loader(conversation_id, user_id)
         conversation_context = cache.get(conversation_id)
         if not conversation_context:
             return False
@@ -646,6 +644,7 @@ class SemanticHistoryLearningService:
         datasource: Dict[str, Any],
         config: Dict[str, Any],
         config_id: str,
+        user_id: str,
         limit: int,
         skipped: Dict[str, int],
         source_stats: Dict[str, Dict[str, int]],
@@ -669,7 +668,7 @@ class SemanticHistoryLearningService:
                 self._record_config_skip(query_type, skip_reason, skipped, source_stats, datasource_id, config_id, execution, skip_detail)
                 continue
             sample = self._build_sample(execution, task, task_payload, query_type, history_tables)
-            if query_type == "agent" and not await self._attach_agent_context(sample, context_cache):
+            if query_type == "agent" and not await self._attach_agent_context(sample, user_id, context_cache):
                 skipped["missing_conversation_context"] += 1
                 source_stats[query_type]["skipped"] += 1
                 continue
@@ -752,6 +751,7 @@ class SemanticHistoryLearningService:
             datasource=datasource,
             config=config,
             config_id=config_id,
+            user_id=user_id,
             limit=limit,
             skipped=skipped,
             source_stats=source_stats,
@@ -785,7 +785,7 @@ class SemanticHistoryLearningService:
 
 def build_semantic_history_learning_service(
     *,
-    context_loader: Optional[Callable[[str], Awaitable[Optional[Dict[str, Any]]]]] = None,
+    context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
     suggestion_loader: Optional[Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]] = None,
     history_matcher: Optional[Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]] = None,
     session_context: Optional[Callable[[], Any]] = None,

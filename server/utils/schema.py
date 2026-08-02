@@ -4,6 +4,8 @@ LangGraph 公共数据库表结构定义
 业务表统一使用 MySQL
 """
 
+import os
+
 # ============ MySQL 表结构 ============
 
 MYSQL_USER_THREADS_TABLE = """
@@ -13,6 +15,7 @@ CREATE TABLE `user_threads` (
   `thread_id` varchar(255) NOT NULL COMMENT '会话ID',
   `thread_title` varchar(255) DEFAULT '未命名会话' COMMENT '会话标题',
   `agent_id` varchar(255) DEFAULT NULL COMMENT '智能体ID',
+  `datasource_id` varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID',
   `is_favorited` tinyint DEFAULT '0' COMMENT '是否收藏: 0-否, 1-是',
   `delete_flag` tinyint DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -26,6 +29,30 @@ CREATE TABLE `user_threads` (
   KEY `idx_user_id` (`user_id`),
   KEY `idx_agent_id` (`agent_id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8mb4 COMMENT='用户会话表'
+"""
+
+MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE = """
+CREATE TABLE `chat_data_conversation_event` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
+  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
+  `turn_id` varchar(64) NOT NULL DEFAULT '' COMMENT '用户轮次ID',
+  `sequence_no` bigint(20) NOT NULL COMMENT '会话内严格递增事件序号',
+  `event_key` varchar(255) NOT NULL COMMENT '幂等事件键',
+  `event_type` varchar(32) NOT NULL COMMENT '事件类型',
+  `payload` mediumtext NOT NULL COMMENT '事件JSON文本',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_conv_event_key` (`conversation_id`, `event_key`),
+  KEY `idx_conv_event_seq` (`conversation_id`, `sequence_no`),
+  KEY `idx_conv_event_turn` (`conversation_id`, `turn_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData会话原始事件历史';
 """
 
 MYSQL_UPLOADED_FILES_TABLE = """
@@ -478,6 +505,7 @@ CREATE TABLE `chat_data_eval_run_case` (
 
 MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
+    MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,
     MYSQL_UPLOADED_FILES_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_TABLE,
     MYSQL_CHAT_DATA_DASHBOARD_PANEL_TABLE,
@@ -499,8 +527,6 @@ MYSQL_TABLES = [
 
 
 # ============ 兼容接口 ============
-
-import os
 
 def _get_database_type() -> str:
     """获取业务表数据库类型。"""

@@ -16,7 +16,6 @@ async def stream_agent_turn(
     *,
     stream_adapter: Any,
     format_sse: SseFormatter,
-    backfill_history: AsyncHook,
     persist_user_message: AsyncHook,
     persist_turn_history: AsyncHook,
     persist_partial_history: AsyncHook,
@@ -35,7 +34,6 @@ async def stream_agent_turn(
     """
     resources_finalized = False
     try:
-        await backfill_history()
         await persist_user_message()
         if before_stream and not await before_stream():
             return

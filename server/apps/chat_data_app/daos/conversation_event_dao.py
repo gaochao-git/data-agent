@@ -94,8 +94,8 @@ class ConversationEventDao:
             await session.flush()
             return rows
 
-    async def list_events(self, *, conversation_id: str, user_id: str) -> list[ChatDataConversationEvent]:
-        """按服务端分配的全局会话序号返回原始事件。"""
+    async def list_visible_events(self, *, conversation_id: str, user_id: str) -> list[ChatDataConversationEvent]:
+        """按服务端分配的全局会话序号返回可见历史事件。"""
         async with self._session_context() as session:
             result = await session.execute(
                 select(ChatDataConversationEvent)
@@ -103,7 +103,44 @@ class ConversationEventDao:
                     ChatDataConversationEvent.conversation_id == conversation_id,
                     ChatDataConversationEvent.user_id == user_id,
                     ChatDataConversationEvent.delete_flag == 0,
+                    ChatDataConversationEvent.event_type != "token_usage",
                 )
                 .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
             )
             return list(result.scalars().all())
+
+    async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+        """读取最新一轮轻量上下文占用，旧版大明细在数据库侧剔除。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(func.json_remove(
+                    ChatDataConversationEvent.payload,
+                    "$.breakdown",
+                    "$.llm_calls",
+                ))
+                .where(
+                    ChatDataConversationEvent.conversation_id == conversation_id,
+                    ChatDataConversationEvent.user_id == user_id,
+                    ChatDataConversationEvent.event_type == "token_usage",
+                    ChatDataConversationEvent.delete_flag == 0,
+                )
+                .order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+    async def get_first_user_message_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+        """只读取首条用户消息，供标题生成使用。"""
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(ChatDataConversationEvent.payload)
+                .where(
+                    ChatDataConversationEvent.conversation_id == conversation_id,
+                    ChatDataConversationEvent.user_id == user_id,
+                    ChatDataConversationEvent.event_type == "user_message",
+                    ChatDataConversationEvent.delete_flag == 0,
+                )
+                .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()

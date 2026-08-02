@@ -1,5 +1,4 @@
 import json
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -209,6 +208,10 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
         return None
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", fake_get_agent_id)
+    async def get_datasource_id(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", get_datasource_id)
     calls = []
 
     async def handler(conversation_id, query, options, file_ids=None, user_id=None, username=None, request=None):
@@ -244,18 +247,26 @@ async def test_completion_route_validates_ownership_and_injects_supported_kwargs
 @pytest.mark.asyncio
 async def test_completion_route_binds_datasource_and_rejects_mismatch(router_state, monkeypatch):
     request = FakeRequest()
+    created = []
+    handler_options = []
 
     async def no_existing_conversation(*_args, **_kwargs):
         return None
 
-    async def get_checkpoint_datasource_id(*_args, **_kwargs):
+    async def create_conversation(*args, **_kwargs):
+        created.append(args)
+        return "conv"
+
+    async def get_datasource_id(*_args, **_kwargs):
         return "ds_a"
 
-    async def handler(**_kwargs):
+    async def handler(**kwargs):
+        handler_options.append(kwargs["options"])
         return {"streamed": True}
 
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", no_existing_conversation)
-    monkeypatch.setattr(conversation_router.conversation, "get_checkpoint_datasource_id", get_checkpoint_datasource_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_or_create_conversation", create_conversation)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", get_datasource_id)
     conversation_router._completion_handlers["agent_a"] = handler
 
     response = await conversation_router.completion(
@@ -264,6 +275,16 @@ async def test_completion_route_binds_datasource_and_rejects_mismatch(router_sta
         request,
     )
     assert response == {"streamed": True}
+    assert created == [("", "agent_a", "conv", "u1")]
+    assert handler_options[-1]["datasource_id"] == "ds_a"
+
+    restored = await conversation_router.completion(
+        "conv",
+        conversation_router.CompletionRequest(agent_id="agent_a", query="continue"),
+        request,
+    )
+    assert restored == {"streamed": True}
+    assert handler_options[-1]["datasource_id"] == "ds_a"
 
     rejected = payload(await conversation_router.completion(
         "conv",
@@ -274,17 +295,17 @@ async def test_completion_route_binds_datasource_and_rejects_mismatch(router_sta
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_context_returns_checkpoint_datasource(router_state, monkeypatch):
+async def test_get_conversation_context_returns_business_datasource(router_state, monkeypatch):
     request = FakeRequest()
 
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
 
-    async def get_checkpoint_datasource_id(*_args, **_kwargs):
+    async def get_datasource_id(*_args, **_kwargs):
         return "ds_a"
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-    monkeypatch.setattr(conversation_router.conversation, "get_checkpoint_datasource_id", get_checkpoint_datasource_id)
+    monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", get_datasource_id)
 
     result = payload(await conversation_router.get_conversation_context("conv", request))
     assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a"}

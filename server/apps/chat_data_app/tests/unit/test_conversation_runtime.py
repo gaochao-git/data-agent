@@ -48,7 +48,6 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        backfill_history=lambda: hook("backfill"),
         persist_user_message=lambda: hook("user"),
         before_stream=lambda: _before_stream(calls),
         persist_turn_history=lambda: hook("history"),
@@ -60,7 +59,7 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
 
     assert events == ["event: message\n\n", "event: message_end\n\n", "event: done\n\n"]
     assert adapter.finish_calls == [{"persist_latest_ai_timestamp": True}]
-    assert calls == ["backfill", "user", "before", "finalize:True", "history", "after"]
+    assert calls == ["user", "before", "finalize:True", "history", "after"]
 
 
 @pytest.mark.asyncio
@@ -77,7 +76,6 @@ async def test_stream_agent_turn_persists_disconnected_turn_without_end_events()
     events = await _collect(stream_agent_turn(
         stream_adapter=adapter,
         format_sse=lambda event, _data: f"event: {event}\n\n",
-        backfill_history=lambda: hook("backfill"),
         persist_user_message=lambda: hook("user"),
         persist_turn_history=lambda: hook("history"),
         persist_partial_history=lambda: hook("partial"),
@@ -86,7 +84,7 @@ async def test_stream_agent_turn_persists_disconnected_turn_without_end_events()
 
     assert events == []
     assert adapter.finish_calls == [{}]
-    assert calls == ["backfill", "user", "history", "finalize:True"]
+    assert calls == ["user", "history", "finalize:True"]
 
 
 @pytest.mark.asyncio
@@ -104,14 +102,13 @@ async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_o
         await _collect(stream_agent_turn(
             stream_adapter=adapter,
             format_sse=lambda event, _data: f"event: {event}\n\n",
-            backfill_history=lambda: hook("backfill"),
             persist_user_message=lambda: hook("user"),
             persist_turn_history=lambda: hook("history"),
             persist_partial_history=lambda: hook("partial"),
             finalize_resources=finalize_resources,
         ))
 
-    assert calls == ["backfill", "user", "partial", "finalize:False"]
+    assert calls == ["user", "partial", "finalize:False"]
 
 
 async def _before_stream(calls: list[str]) -> bool:

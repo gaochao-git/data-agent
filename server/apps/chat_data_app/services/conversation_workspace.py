@@ -790,13 +790,8 @@ async def render_conversation_workspace_office_preview(
     *,
     user_id: str,
     path: str,
-    backend: "str | None" = None,
 ) -> dict[str, Any]:
-    """Render an owned Office Open XML file through OfficeCLI.
-
-    ``backend`` 取实际会话工作区后端（local / sandbox），本地后端用宿主机 officecli
-    转换，沙箱后端走容器内 officecli 转换；默认 ``local``。
-    """
+    """Render an owned Office file from the application-side authoritative copy."""
     workspace = ensure_conversation_workspace(conversation_id, user_id)
     workspace_root = workspace["root"]
     await asyncio.to_thread(
@@ -807,7 +802,7 @@ async def render_conversation_workspace_office_preview(
     runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
         user_id=user_id,
-        backend=backend or "local",
+        backend="local",
     )
     preview = await runtime.render_office_html(
         file_path=path,

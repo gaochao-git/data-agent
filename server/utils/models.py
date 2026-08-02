@@ -3,13 +3,13 @@ SQLAlchemy 数据模型定义
 """
 
 from datetime import datetime
+import json
 from typing import Optional
 
 from sqlalchemy import BigInteger, Integer, String, DateTime, SmallInteger, Text, Index, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
-from sqlalchemy import Column
 
 # SQLite 用 Integer（才能自增），MySQL 用 BigInteger
 AutoIncrementId = BigInteger().with_variant(Integer, "sqlite")
@@ -30,6 +30,7 @@ class UserThread(Base):
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     thread_title: Mapped[Optional[str]] = mapped_column(String(255), default="未命名会话")
     agent_id: Mapped[Optional[str]] = mapped_column(String(255))
+    datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     is_favorited: Mapped[int] = mapped_column(SmallInteger, default=0)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -178,7 +179,6 @@ class SqlQueryHistory(Base):
 
     def to_dict(self):
         """转换为字典"""
-        import json
         result = {
             'id': self.id,
             'title': self.query_title,
@@ -195,7 +195,7 @@ class SqlQueryHistory(Base):
         if self.builder_config:
             try:
                 result['builder_config'] = json.loads(self.builder_config)
-            except:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 result['builder_config'] = None
         return result
 
@@ -230,7 +230,6 @@ class SqlQueryFavorite(Base):
 
     def to_dict(self):
         """转换为字典"""
-        import json
         result = {
             'id': self.id,
             'datasource_id': self.datasource_id,
@@ -250,7 +249,7 @@ class SqlQueryFavorite(Base):
         if self.builder_config:
             try:
                 result['builder_config'] = json.loads(self.builder_config)
-            except:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 result['builder_config'] = None
         return result
 

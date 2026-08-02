@@ -4,7 +4,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from utils import conversation as conversation_module
@@ -43,7 +43,7 @@ def conversation_db(monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def test_conversation_serializers_and_helpers():
+def test_conversation_formatting_helpers():
     now = datetime(2026, 1, 2, 3, 4, 5)
     thread = SimpleNamespace(
         thread_id="conv_a",
@@ -64,174 +64,6 @@ def test_conversation_serializers_and_helpers():
     assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "create_time": None, "update_time": None, "is_favorited": None}))["is_favorited"] is False
     assert conversation_module._clean_title("《销售额分析!!!》", fallback="fallback") == "销售额分析"
     assert conversation_module._clean_title("!!", fallback="fallback-title") == "fallback-title"
-    assert conversation_module._get_first_user_message([AIMessage(content="a"), HumanMessage(content="hello")]) == "hello"
-    assert conversation_module._get_first_user_message([AIMessage(content="a")]) is None
-
-    human = HumanMessage(
-        content="用户问题",
-        id="h1",
-        additional_kwargs={
-            "timestamp": "t1",
-            "file_ids": ["f1"],
-            "semantic_config_selection": {
-                "semantic_config_id": "cfg",
-                "semantic_config_name": "指标集",
-                "confidence": "high",
-                "reason": "match",
-                "matched_metrics": ["销售额"],
-                "matched_dimensions": ["城市"],
-                "auto_selected": True,
-            },
-        },
-    )
-    ai = AIMessage(
-        content="回答",
-        id="a1",
-        additional_kwargs={"timestamp": "t2"},
-        tool_calls=[{"id": "tc1", "name": "tool_a", "args": {"x": 1}}],
-    )
-    tool = ToolMessage(content="工具结果", tool_call_id="tc1", name="tool_a", id="tool1", additional_kwargs={"timestamp": "t3"})
-    serialized = conversation_module._serialize_messages([object(), human, ai, tool])
-
-    assert serialized[0]["role"] == "user"
-    assert serialized[0]["file_ids"] == ["f1"]
-    assert serialized[0]["semantic_config_selection"]["semantic_config_id"] == "cfg"
-    assert serialized[1]["tool_calls"][0]["name"] == "tool_a"
-    assert serialized[2]["role"] == "tool"
-    assert serialized[2]["tool_call_id"] == "tc1"
-    assert serialized[1]["timestamp"] == "t2"
-    assert serialized[2]["timestamp"] == "t3"
-
-    assert conversation_module._serialize_semantic_config_selection(None) is None
-    assert conversation_module._serialize_semantic_config_selection({"semantic_config_id": ""}) is None
-
-
-def test_serialize_messages_does_not_infer_missing_assistant_timestamps():
-    human = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "2026-06-21 07:14:24"})
-    ai = AIMessage(content="回答", id="a1")
-    tool = ToolMessage(content="工具结果", tool_call_id="tc1", name="tool_a", id="tool1")
-    followup_ai = AIMessage(content="总结", id="a2")
-
-    serialized = conversation_module._serialize_messages([human, ai, tool, followup_ai])
-
-    assert serialized[0]["timestamp"] == "2026-06-21 07:14:24"
-    assert serialized[1]["timestamp"] == ""
-    assert serialized[2]["timestamp"] == ""
-    assert serialized[3]["timestamp"] == ""
-
-
-def test_serialize_messages_uses_message_own_timestamp():
-    human = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "2026-06-21 07:30:27"})
-    ai = AIMessage(content="回答", id="a1", additional_kwargs={"timestamp": "2026-06-21 07:30:59"})
-    tool = ToolMessage(
-        content="工具结果",
-        tool_call_id="tc1",
-        name="tool_a",
-        id="tool1",
-        additional_kwargs={"timestamp": "2026-06-21 07:30:50"},
-    )
-
-    serialized = conversation_module._serialize_messages([human, ai, tool])
-
-    assert serialized[0]["timestamp"] == "2026-06-21 07:30:27"
-    assert serialized[1]["timestamp"] == "2026-06-21 07:30:59"
-    assert serialized[2]["timestamp"] == "2026-06-21 07:30:50"
-
-
-def test_conversation_serializer_object_tool_calls_and_stage_edges():
-    class ToolCall:
-        id = "obj_tc"
-        name = "object_tool"
-        args = {"x": 2}
-
-    ai = AIMessage(content="回答", id="ai_obj")
-    ai.tool_calls = [ToolCall()]
-    semantic_selection = conversation_module._serialize_semantic_config_selection({
-        "semantic_config_id": "cfg",
-        "matched_metrics": "bad",
-        "matched_dimensions": "bad",
-    })
-    serialized = conversation_module._serialize_messages([SimpleNamespace(type="unknown")])
-    human_without_files = HumanMessage(content="无附件", id="h_no_file", additional_kwargs={"file_ids": []})
-    human_without_file_payload = conversation_module._serialize_messages([human_without_files])[0]
-
-    assert conversation_module._extract_timestamp(SimpleNamespace(additional_kwargs={})) == ""
-    assert conversation_module._extract_timestamp(SimpleNamespace(additional_kwargs={"timestamp": ""})) == ""
-    assert conversation_module._serialize_messages([ai])[0]["tool_calls"][0] == {"id": "obj_tc", "name": "object_tool", "args": {"x": 2}}
-    assert "file_ids" not in human_without_file_payload
-    assert semantic_selection["semantic_config_name"] == "cfg"
-    assert semantic_selection["matched_metrics"] == []
-    assert semantic_selection["matched_dimensions"] == []
-    assert serialized == []
-
-
-def test_conversation_reasoning_serialization_and_timestamp_branches():
-    ai = AIMessage(
-        content="回答",
-        id="ai_reasoning",
-        additional_kwargs={"reasoning_content": "思考过程", "timestamp": "t1"},
-    )
-    serialized_ai = conversation_module._serialize_messages([ai])[0]
-    assert serialized_ai["reasoning_content"] == "思考过程"
-    assert serialized_ai["timestamp"] == "t1"
-
-    assert conversation_module._extract_reasoning_content(SimpleNamespace(additional_kwargs={}, response_metadata={})) == ""
-    assert conversation_module._extract_reasoning_content(SimpleNamespace(response_metadata={"reasoning": "元数据思考"})) == "元数据思考"
-    assert conversation_module._serialize_reasoning_segments("bad") == []
-    assert conversation_module._serialize_reasoning_segments([
-        "skip",
-        {"content": ""},
-        {"id": "", "content": "第一段", "toolCallCount": "2"},
-        {"content": "第二段", "tool_call_count": "bad", "reasoning_turn_id": "turn-2"},
-        {"content": "第三段", "tool_call_count": -3},
-    ]) == [
-        {"id": "reasoning-history-2", "content": "第一段", "tool_call_count": 2},
-        {"id": "reasoning-history-3", "content": "第二段", "tool_call_count": 0, "reasoning_turn_id": "turn-2"},
-        {"id": "reasoning-history-4", "content": "第三段", "tool_call_count": 0},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_datasource_id_reads_tuple_without_building_graph():
-    class Checkpointer:
-        async def aget_tuple(self, config):
-            assert config["configurable"]["thread_id"] == "conv_ds"
-            return SimpleNamespace(checkpoint={"channel_values": {"conversation_datasource_id": "ds_a"}})
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return Checkpointer()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    def get_graph(_checkpointer):
-        raise AssertionError("只读取绑定数据源时不应创建完整 agent")
-
-    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
-
-    assert datasource_id == "ds_a"
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_datasource_id_skips_graph_when_tuple_has_no_binding():
-    class Checkpointer:
-        async def aget_tuple(self, _config):
-            return SimpleNamespace(checkpoint={"channel_values": {"messages": []}})
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return Checkpointer()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    def get_graph(_checkpointer):
-        raise AssertionError("checkpoint 可直接读取时不应创建完整 agent")
-
-    datasource_id = await conversation_module.get_checkpoint_datasource_id("conv_ds", get_graph, lambda: CheckpointerContext())
-
-    assert datasource_id is None
 
 
 @pytest.mark.asyncio
@@ -259,6 +91,11 @@ async def test_conversation_crud_and_list_branches(conversation_db):
     assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is True
     assert await conversation_module.toggle_favorite("", conv_id, user_id="u1") is False
     assert await conversation_module.toggle_favorite("", "missing", user_id="u1") is None
+    assert await conversation_module.get_datasource_id(conv_id, "u1") is None
+    assert await conversation_module.resolve_datasource_binding(conv_id, "u1", "ds_a") == "ds_a"
+    assert await conversation_module.get_datasource_id(conv_id, "u1") == "ds_a"
+    assert await conversation_module.resolve_datasource_binding(conv_id, "u1", "ds_b") == "ds_a"
+    assert await conversation_module.resolve_datasource_binding("missing", "u1", "ds_a") is None
 
 
 @pytest.mark.asyncio
@@ -295,12 +132,12 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     await conversation_module.sync_thread_to_db("u1", "conv_sync", "agent_a", title="更新标题", is_new=False)
     await conversation_module.sync_thread_to_db("u1", "conv_sync", "agent_a", is_new=False)
 
-    detail = await conversation_module.get_detail("", "conv_sync", None, None, user_id="u1")
+    detail = await conversation_module.get_detail("conv_sync", "u1")
     assert detail["title"] == "更新标题"
     assert detail["messages"] == []
 
-    assert await conversation_module.generate_title("", "missing", None, None, user_id="u1") is None
-    assert await conversation_module.generate_title("", "conv_sync", None, None, user_id="u1") == "更新标题"
+    assert await conversation_module.generate_title("", "missing", "u1") is None
+    assert await conversation_module.generate_title("", "conv_sync", "u1") == "更新标题"
 
     await conversation_module.update_title("", "conv_sync", "未命名会话", user_id="u1")
     calls = []
@@ -310,46 +147,34 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
         return True
 
     monkeypatch.setattr(conversation_module, "update_title", fake_update_title)
-    assert await conversation_module.generate_title("", "conv_sync", None, None, user_id="u1") == "智能分析会话"
-    assert calls == [("conv_sync", "智能分析会话", "u1")]
+    assert await conversation_module.generate_title("", "conv_sync", "u1") is None
+    assert calls == []
 
 
 @pytest.mark.asyncio
-async def test_conversation_get_detail_with_graph_state_and_missing_thread(conversation_db):
+async def test_conversation_get_detail_reads_event_store_without_checkpoint(conversation_db):
     await conversation_module.sync_thread_to_db("u1", "conv_detail", "agent_a", title="详情标题", is_new=True)
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    raw_token_usage = {
+    await conversation_module.resolve_datasource_binding("conv_detail", "u1", "ds_a")
+    user_message = HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "t1"})
+    token_usage = {
         "used": 12,
         "total": 100,
         "breakdown": [{
             "key": "system_prompt",
-            "content": "SECRET_SYSTEM_PROMPT",
-            "children": [{"role": "system", "content": "SECRET_SYSTEM_PROMPT"}],
+            "content": "[系统提示词已隐藏]",
         }],
     }
+    await conversation_module.conversation_event_service.persist_turn(
+        conversation_id="conv_detail",
+        user_id="u1",
+        operator_name="用户一",
+        turn_id="h1",
+        messages=[user_message, AIMessage(content="回答", id="a1")],
+        reasoning_segments=[],
+        token_usage=token_usage,
+    )
 
-    class Graph:
-        async def aget_state(self, _config):
-            return SimpleNamespace(
-                values={
-                    "messages": [
-                        HumanMessage(content="问题", id="h1", additional_kwargs={"timestamp": "t1"}),
-                        AIMessage(content="回答", id="a1"),
-                    ],
-                    "token_usage": raw_token_usage,
-                    "conversation_datasource_id": "ds_a",
-                },
-                tasks=[],
-            )
-
-    detail = await conversation_module.get_detail("", "conv_detail", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1")
+    detail = await conversation_module.get_detail("conv_detail", "u1")
 
     assert detail["title"] == "详情标题"
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
@@ -357,113 +182,15 @@ async def test_conversation_get_detail_with_graph_state_and_missing_thread(conve
     assert "task_stages" not in detail
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"]["used"] == 12
-    assert detail["token_usage"]["breakdown"][0]["content"] == "[系统提示词已隐藏]"
-    assert detail["token_usage"]["breakdown"][0]["children"][0]["content"] == "[系统提示词已隐藏]"
-    assert raw_token_usage["breakdown"][0]["content"] == "SECRET_SYSTEM_PROMPT"
+    assert "breakdown" not in detail["token_usage"]
     assert detail["datasource_id"] == "ds_a"
-    assert await conversation_module.get_detail("", "missing", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1") is None
+    assert await conversation_module.get_detail("missing", "u1") is None
 
 
 @pytest.mark.asyncio
-async def test_get_checkpoint_datasource_id_reads_persisted_state():
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={"conversation_datasource_id": "ds_a"})
-
-    assert await conversation_module.get_checkpoint_datasource_id(
-        "conv",
-        lambda _checkpointer: Graph(),
-        lambda: CheckpointerContext(),
-    ) == "ds_a"
-    assert await conversation_module.get_checkpoint_datasource_id("conv", None, lambda: CheckpointerContext()) is None
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_workspace_backend_defaults_local_without_checkpoint():
-    class Checkpointer:
-        async def aget_tuple(self, _config):
-            return None
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return Checkpointer()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    def get_graph(_checkpointer):
-        raise AssertionError("新会话没有 checkpoint 时不应创建 Agent graph")
-
-    assert await conversation_module.get_checkpoint_workspace_backend(
-        "new_conversation",
-        get_graph,
-        lambda: CheckpointerContext(),
-    ) == "local"
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_workspace_backend_reads_persisted_value():
-    class Checkpointer:
-        async def aget_tuple(self, _config):
-            return SimpleNamespace(checkpoint={"channel_values": {"workspace": {"workspace_backend": "sandbox"}}})
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return Checkpointer()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    assert await conversation_module.get_checkpoint_workspace_backend(
-        "sandbox_conversation",
-        None,
-        lambda: CheckpointerContext(),
-    ) == "sandbox"
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_workspace_backend_reads_graph_state_without_tuple_reader():
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={"workspace": {"workspace_backend": "sandbox"}})
-
-    assert await conversation_module.get_checkpoint_workspace_backend(
-        "sandbox_conversation",
-        lambda _checkpointer: Graph(),
-        lambda: CheckpointerContext(),
-    ) == "sandbox"
-
-
-@pytest.mark.asyncio
-async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
+async def test_conversation_get_detail_with_empty_event_history(conversation_db):
     await conversation_module.sync_thread_to_db("u1", "conv_empty_graph", "agent_a", title="空状态", is_new=True)
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={})
-
-    detail = await conversation_module.get_detail("", "conv_empty_graph", lambda _cp: Graph(), lambda: CheckpointerContext(), user_id="u1")
+    detail = await conversation_module.get_detail("conv_empty_graph", "u1")
 
     assert detail["title"] == "空状态"
     assert detail["messages"] == []
@@ -473,28 +200,15 @@ async def test_conversation_get_detail_with_empty_graph_state(conversation_db):
 
 
 @pytest.mark.asyncio
-async def test_conversation_generate_title_with_graph_branches(conversation_db, monkeypatch):
+async def test_conversation_generate_title_from_event_history(conversation_db, monkeypatch):
     await conversation_module.sync_thread_to_db("u1", "conv_graph", "agent_a", is_new=True)
-
-    class CheckpointerContext:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            return False
-
-    class Graph:
-        def __init__(self, state):
-            self.state = state
-
-        async def aget_state(self, _config):
-            return self.state
-
-    assert await conversation_module.generate_title("", "conv_graph", lambda _cp: Graph(None), lambda: CheckpointerContext(), user_id="u1") is None
-    empty_state = SimpleNamespace(values={"messages": []})
-    assert await conversation_module.generate_title("", "conv_graph", lambda _cp: Graph(empty_state), lambda: CheckpointerContext(), user_id="u1") is None
-    no_human_state = SimpleNamespace(values={"messages": [AIMessage(content="hi")]})
-    assert await conversation_module.generate_title("", "conv_graph", lambda _cp: Graph(no_human_state), lambda: CheckpointerContext(), user_id="u1") is None
+    assert await conversation_module.generate_title("", "conv_graph", "u1") is None
+    await conversation_module.conversation_event_service.persist_user_message(
+        conversation_id="conv_graph",
+        user_id="u1",
+        operator_name="用户一",
+        message=HumanMessage(content="请分析订单销售趋势", id="title-turn"),
+    )
 
     class FakeLLMResult:
         content = "《订单销售趋势分析!!!》"
@@ -510,8 +224,7 @@ async def test_conversation_generate_title_with_graph_branches(conversation_db, 
 
     monkeypatch.setattr(conversation_module, "_get_title_llm", lambda: object())
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: FakePrompt())
-    human_state = SimpleNamespace(values={"messages": [HumanMessage(content="请分析订单销售趋势")]})
-    assert await conversation_module.generate_title("", "conv_graph", lambda _cp: Graph(human_state), lambda: CheckpointerContext(), user_id="u1") == "订单销售趋势分析"
+    assert await conversation_module.generate_title("", "conv_graph", "u1") == "订单销售趋势分析"
 
     class BadChain:
         async def ainvoke(self, _payload):
@@ -522,4 +235,5 @@ async def test_conversation_generate_title_with_graph_branches(conversation_db, 
             return BadChain()
 
     monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: BadPrompt())
-    assert await conversation_module.generate_title("", "conv_graph", lambda _cp: Graph(human_state), lambda: CheckpointerContext(), user_id="u1") == "请分析订单销售趋势"
+    await conversation_module.update_title("", "conv_graph", "未命名会话", "u1")
+    assert await conversation_module.generate_title("", "conv_graph", "u1") == "请分析订单销售趋势"

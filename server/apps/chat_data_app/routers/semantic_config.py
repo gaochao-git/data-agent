@@ -11,13 +11,10 @@ from langchain_core.messages import HumanMessage
 from auth import AuthenticationError
 
 from utils.error_codes import ErrorCode
-from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
 from utils.response import business_response
-from ..agent import get_data_agent_graph
 from ..agent.prompts.dim_metric_auto_prefill import (
     build_auto_prefill_knowledge_prompt,
     build_metric_recommendation_prompt,
@@ -34,13 +31,12 @@ from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_history_learning_service import (
     SemanticHistoryLearningService,
-    _compact_history_conversation_messages,
     _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
     _history_belongs_to_config as _service_history_belongs_to_config,
+    _load_history_conversation_context,
     build_semantic_history_learning_service,
 )
 from ..services.semantic_common import (
-    AGENT_ID,
     _can_mutate_semantic_config,
     _is_private_semantic_config_owner,
     _is_public_semantic_config,
@@ -118,28 +114,6 @@ def _history_belongs_to_config(
         source_type,
         table_parser=_history_table_parser,
     )
-
-
-async def _load_history_conversation_context(conversation_id: str) -> Optional[Dict[str, Any]]:
-    """读取智能问数对话上下文，用于历史学习。"""
-    normalized_id = str(conversation_id or "").strip()
-    if not normalized_id:
-        return None
-    try:
-        agent_id = await conversation.get_agent_id("", normalized_id)
-        if agent_id != AGENT_ID:
-            logger.warning("历史学习跳过未知 Agent 会话: conversation_id=%s agent_id=%s", normalized_id, agent_id)
-            return None
-        graph_getter = lambda checkpointer=None: get_data_agent_graph(checkpointer=checkpointer)
-        detail = await conversation.get_detail("", normalized_id, graph_getter, get_checkpointer)
-        messages = (detail or {}).get("messages") if isinstance(detail, dict) else []
-        if not isinstance(messages, list):
-            return None
-        context = _compact_history_conversation_messages(messages)
-        return context if context.get("user_turns") else None
-    except Exception as err:
-        logger.warning("读取历史学习对话上下文失败: conversation_id=%s error=%s", normalized_id, err, exc_info=True)
-        return None
 
 
 async def _generate_history_learning_suggestions_by_llm(

@@ -618,6 +618,32 @@ def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypa
     assert uploaded_paths == [("/mnt/user-data/uploads/new.txt", b"new", 666)]
 
 
+def test_cached_sandbox_is_reused_only_while_application_trees_match(tmp_path, monkeypatch):
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(workspace_root.parents[3]))
+    target = workspace_root / "workspace" / "report.txt"
+    target.write_text("v1", encoding="utf-8")
+    session = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root=str(workspace_root),
+        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+    )
+    monkeypatch.setattr(
+        workspace_execution,
+        "_file_fingerprint",
+        lambda _path: (_ for _ in ()).throw(AssertionError("cache validation must not hash files")),
+    )
+
+    assert asyncio.run(workspace_execution._cached_session_matches_application(session)) is True
+
+    target.write_text("v2", encoding="utf-8")
+    stat = target.stat()
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    assert asyncio.run(workspace_execution._cached_session_matches_application(session)) is False
+
+
 def test_validate_backend_accepts_absolute_chat_data_home(monkeypatch):
     # sandbox 模式下 CHAT_DATA_HOME 为绝对路径时应通过后端校验
     monkeypatch.setenv("CHAT_DATA_HOME", "/data/sandbox/workspace/chat_data")

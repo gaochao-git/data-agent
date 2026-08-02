@@ -130,28 +130,18 @@ async def _get_existing_agent_for_completion(conversation_id: str, request_agent
 
 async def _completion_datasource_binding_response(
     conversation_id: str,
+    user_id: str,
     requested_datasource_id: str,
-    agent_id: str,
 ):
-    """校验当前会话是否已绑定其他数据源组。"""
-    if not requested_datasource_id:
-        return None
-    agent_config = get_agent_config(agent_id)
-    if not agent_config:
-        return None
-
-    bound_datasource_id = await conversation.get_checkpoint_datasource_id(
-        conversation_id,
-        agent_config["get_graph"],
-        agent_config["get_checkpointer"],
-    )
-    if not bound_datasource_id or bound_datasource_id == requested_datasource_id:
-        return None
-    return business_response(
-        msg="当前会话已绑定其他数据源组，请新建会话后再切换数据源组",
-        code=ErrorCode.CHATDATA_BAD_REQUEST,
-        status="error",
-    )
+    """恢复会话已有绑定，并拒绝与它冲突的请求。"""
+    bound_datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
+    if requested_datasource_id and bound_datasource_id and bound_datasource_id != requested_datasource_id:
+        return None, business_response(
+            msg="当前会话已绑定其他数据源组，请新建会话后再切换数据源组",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+        )
+    return bound_datasource_id or requested_datasource_id or None, None
 
 
 def _build_completion_handler_kwargs(
@@ -334,10 +324,7 @@ async def get_conversation_detail(conversation_id: str, req: Request):
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         result = await conversation.get_detail(
-            config["db_path"],
             conversation_id,
-            config["get_graph"],
-            config["get_checkpointer"],
             user_id
         )
         if not result:
@@ -415,8 +402,6 @@ async def generate_conversation_title(conversation_id: str, req: Request):
         title = await conversation.generate_title(
             config["db_path"],
             conversation_id,
-            config["get_graph"],
-            config["get_checkpointer"],
             user_id
         )
         if not title:
@@ -492,15 +477,19 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         handler = _completion_handlers.get(request.agent_id)
         if not handler:
             return business_response(msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+        if not existing_agent_id:
+            await conversation.get_or_create_conversation("", request.agent_id, conversation_id, user_id)
         options = dict(request.options or {})
         requested_datasource_id = str(options.get("datasource_id") or "").strip()
-        datasource_binding_response = await _completion_datasource_binding_response(
+        bound_datasource_id, datasource_binding_response = await _completion_datasource_binding_response(
             conversation_id,
+            user_id,
             requested_datasource_id,
-            request.agent_id,
         )
         if datasource_binding_response:
             return datasource_binding_response
+        if bound_datasource_id:
+            options["datasource_id"] = bound_datasource_id
 
         # 调用对应的 completion 处理器
         kwargs = _build_completion_handler_kwargs(handler, conversation_id, request, options, req, user_id, username)
@@ -525,11 +514,7 @@ async def get_conversation_context(conversation_id: str, req: Request):
         if not config:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        datasource_id = await conversation.get_checkpoint_datasource_id(
-            conversation_id,
-            config["get_graph"],
-            config["get_checkpointer"],
-        )
+        datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
         return business_response(data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功")
     except AuthenticationError as e:
         return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
 from utils import conversation
@@ -25,6 +27,7 @@ from ..schema import (
     QuickSqlRequest,
 )
 from ..services.datasource_manager import get_datasource_manager
+from ..services.conversation_event_service import conversation_event_service
 from ..services.query_task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,
@@ -52,11 +55,13 @@ def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
     return current_user if current_user is not None else _get_current_user(request)
 
 
-def _current_user_id(request: Request | None) -> str:
+def _current_user_identity(request: Request | None) -> tuple[str, str]:
     if request is None:
-        return "system"
+        return "system", "system"
     current_user = _get_current_user(request)
-    return getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system"
+    user_id = str(getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system")
+    username = str(getattr(current_user, "username", None) or user_id)
+    return user_id, username
 
 
 async def _load_quick_sql_context(payload: QuickSqlRequest) -> tuple[str | None, str | None, str | None]:
@@ -72,12 +77,8 @@ async def _load_quick_sql_context(payload: QuickSqlRequest) -> tuple[str | None,
     return str(datasource["source_type"]), get_tables_create_format(tables, table_names), None
 
 
-async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Request | None) -> str | None:
-    if not payload.conversation_id:
-        return "缺少 SQL 辅助会话ID"
-
-    current_user_id = _current_user_id(request)
-    existing_agent_id = await conversation.get_agent_id("", payload.conversation_id, current_user_id)
+async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, user_id: str) -> str | None:
+    existing_agent_id = await conversation.get_agent_id("", payload.conversation_id, user_id)
     if existing_agent_id and existing_agent_id != SQL_ASSIST_AGENT_ID:
         return "对话不存在"
 
@@ -86,19 +87,16 @@ async def _ensure_sql_assist_conversation(payload: QuickSqlRequest, request: Req
         if unowned_agent_id:
             return "对话不存在"
 
-    await conversation.get_or_create_conversation("", SQL_ASSIST_AGENT_ID, payload.conversation_id, current_user_id)
+    await conversation.get_or_create_conversation("", SQL_ASSIST_AGENT_ID, payload.conversation_id, user_id)
     return None
 
 
-def _quick_sql_initial_state(payload: QuickSqlRequest) -> dict[str, Any]:
-    return {
-        "messages": [
-            HumanMessage(
-                content=payload.query,
-                additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
-            )
-        ],
-    }
+def _build_quick_sql_user_message(payload: QuickSqlRequest) -> HumanMessage:
+    return HumanMessage(
+        content=payload.query,
+        id=str(uuid.uuid4()),
+        additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+    )
 
 
 def _extract_sql_from_content(content: str) -> str:
@@ -106,13 +104,59 @@ def _extract_sql_from_content(content: str) -> str:
     return sql_match.group(1).strip() if sql_match else content.strip()
 
 
+async def _persist_quick_sql_assistant_turn(
+    *,
+    conversation_id: str,
+    user_id: str,
+    username: str,
+    user_message: HumanMessage,
+    content: str,
+) -> None:
+    """幂等保存 SQL 助手已输出的正文，包括异常中断时的部分内容。"""
+    if not content:
+        return
+    turn_id = str(user_message.id or "")
+    await conversation_event_service.persist_turn(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=username,
+        turn_id=turn_id,
+        messages=[
+            user_message,
+            AIMessage(
+                content=content,
+                id=f"{turn_id}:assistant",
+                additional_kwargs={"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+            ),
+        ],
+        reasoning_segments=[],
+    )
+
+
+async def _persist_quick_sql_assistant_turn_shielded(**kwargs: Any) -> None:
+    """客户端取消流时仍等待权威历史写入完成。"""
+    task = asyncio.create_task(_persist_quick_sql_assistant_turn(**kwargs))
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            logger.exception(
+                "SQL 助手流取消后保存部分历史失败: conversation_id=%s",
+                kwargs.get("conversation_id"),
+            )
+        raise
+
+
 async def _stream_sql_assist_chunks(
-    payload: QuickSqlRequest,
+    conversation_id: str,
+    user_message: HumanMessage,
     *,
     source_type: str,
     tables_ddl_info: str,
 ):
-    config = {"configurable": {"thread_id": payload.conversation_id, "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}}
     async with agent_module.get_checkpointer() as checkpointer:
         agent = create_sql_assist_agent(
             checkpointer,
@@ -120,7 +164,7 @@ async def _stream_sql_assist_chunks(
             tables_ddl_info=tables_ddl_info,
         )
         async for chunk, metadata in agent.astream(
-            _quick_sql_initial_state(payload),
+            {"messages": [user_message]},
             config=config,
             stream_mode="messages",
         ):
@@ -136,16 +180,41 @@ async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request 
             yield _sse_error(context_error)
             return
 
-        conversation_error = await _ensure_sql_assist_conversation(payload, request)
+        if not payload.conversation_id:
+            yield _sse_error("缺少 SQL 辅助会话ID")
+            return
+        user_id, username = _current_user_identity(request)
+        conversation_error = await _ensure_sql_assist_conversation(payload, user_id)
         if conversation_error:
             yield _sse_error(conversation_error)
             return
 
+        conversation_id = str(payload.conversation_id or "")
+        user_message = _build_quick_sql_user_message(payload)
+        await conversation_event_service.persist_user_message(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+            message=user_message,
+        )
         full_content = ""
-        async for content in _stream_sql_assist_chunks(payload, source_type=source_type or "", tables_ddl_info=tables_ddl_info or ""):
-            full_content += content
-            yield _sse_event({"type": "chunk", "content": content})
-
+        try:
+            async for content in _stream_sql_assist_chunks(
+                conversation_id=conversation_id,
+                user_message=user_message,
+                source_type=source_type or "",
+                tables_ddl_info=tables_ddl_info or "",
+            ):
+                full_content += content
+                yield _sse_event({"type": "chunk", "content": content})
+        finally:
+            await _persist_quick_sql_assistant_turn_shielded(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                username=username,
+                user_message=user_message,
+                content=full_content,
+            )
         sql = _extract_sql_from_content(full_content)
         logger.info("生成的 SQL: %s...", sql[:200])
         yield _sse_event({"type": "complete", "sql": sql})
