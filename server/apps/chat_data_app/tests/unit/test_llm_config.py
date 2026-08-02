@@ -19,6 +19,7 @@ def _assert_thinking_extra_body(extra_body, enabled: bool):
         "chat_template_kwargs": {
             "enable_thinking": enabled,
         },
+        "reasoning_effort": "high" if enabled else "none",
     }
 
 
@@ -89,6 +90,23 @@ def test_chat_data_non_qwen_disables_thinking_by_default(monkeypatch):
 
     _assert_thinking_extra_body(captured["extra_body"], False)
     assert captured["api_key"] is None
+
+
+def test_chat_data_reasoning_effort_carried_for_thinking_toggle(monkeypatch):
+    captured = {}
+
+    def fake_get_llm(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    _set_models(monkeypatch, "deepseek-reasoner;0.2;64000")
+    monkeypatch.setattr(llm_config, "get_llm", fake_get_llm)
+
+    llm_config.get_chat_data_llm(enable_thinking=True)
+    assert captured["extra_body"]["reasoning_effort"] == "high"
+
+    llm_config.get_chat_data_llm(enable_thinking=False)
+    assert captured["extra_body"]["reasoning_effort"] == "none"
 
 
 def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch):

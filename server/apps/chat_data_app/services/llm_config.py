@@ -143,6 +143,9 @@ def _get_chat_data_extra_body(enable_thinking: bool | None = None) -> dict[str, 
         "chat_template_kwargs": {
             "enable_thinking": thinking_enabled,
         },
+        # DeepSeek 不认 enable_thinking，需通过 reasoning_effort 控制思考强度；
+        # qwen/glm 会忽略该键，无副作用。三键合并由各自模型认领自己支持的键。
+        "reasoning_effort": "high" if thinking_enabled else "none",
     }
 
 
