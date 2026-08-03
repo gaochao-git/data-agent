@@ -746,6 +746,9 @@ async def test_file_read_delegates_to_runtime_backend():
         async def run_bash(self, *_args, **_kwargs):
             raise AssertionError("unexpected bash run")
 
+        async def run_officecli(self, *_args, **_kwargs):
+            raise AssertionError("unexpected officecli run")
+
         async def create_dir(self, *_args, **_kwargs):
             raise AssertionError("unexpected create dir")
 

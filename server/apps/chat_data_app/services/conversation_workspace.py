@@ -57,6 +57,11 @@ from .workspace_execution import (
     sandbox_write_text_file,
     sandbox_workspace_dir,
 )
+from .officecli_adapter import (
+    command_path_values,
+    parse_officecli_args,
+    translate_command_args,
+)
 
 logger = get_logger(__name__)
 
@@ -208,6 +213,15 @@ class WorkspaceBackend(Protocol):
         runtime: "ConversationWorkspaceRuntime",
         *,
         command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]: ...
+
+    async def run_officecli(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        args: list[str],
         cwd: str | None,
         timeout_seconds: int,
     ) -> dict[str, Any]: ...
@@ -424,6 +438,17 @@ class ConversationWorkspaceRuntime:
     ) -> dict[str, Any]:
         return await self.backend.run_bash(
             self, command=command, cwd=cwd, timeout_seconds=timeout_seconds
+        )
+
+    async def run_officecli(
+        self,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        return await self.backend.run_officecli(
+            self, args=args, cwd=cwd, timeout_seconds=timeout_seconds
         )
 
 
@@ -1824,6 +1849,91 @@ class LocalWorkspaceBackend:
                 "timed_out": True,
             }
 
+    async def run_officecli(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        """本地后端：用宿主机 ``officecli`` 二进制以 argv 数组直接 execve，不经过 shell。
+
+        路径按 bash 的越界校验（已排除 OfficeCLI DOM 选择器）后，**逐个 argv 元素**做
+        虚拟→物理翻译。不能走"拼串翻译再 shlex.split 还原"：物理根一旦含空格
+        （如 ``/Users/gao chao/...``），还原时参数会被劈成多个 token。
+        环境变量按 bash_run 同样的白名单裁剪，避免把服务进程的数据库口令等配置带给子进程。
+        """
+        officecli_bin = shutil.which("officecli")
+        if not officecli_bin:
+            raise RuntimeError("本地环境未安装 OfficeCLI，无法执行 officecli_run")
+        raw_cwd = str(cwd or "workspace").strip()
+        if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            raise ValueError("officecli_run 不允许将 cwd 设置为技能目录")
+        else:
+            local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+
+        command_spec = parse_officecli_args(args)
+        visible_cwd = str(cwd or "/mnt/user-data/workspace").strip()
+        for index, path in command_path_values(command_spec, visible_cwd):
+            if path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                raise ValueError(f"officecli_run 不支持技能路径: {path}")
+            try:
+                resolve_workspace_path(
+                    runtime.workspace_root,
+                    path,
+                    writable=index in command_spec.write_indices,
+                )
+            except ValueError as exc:
+                raise ValueError(f"officecli_run 路径校验失败: {exc}") from exc
+        path_mapping = WorkspacePathMapping(
+            workspace_root=runtime.workspace_root,
+            runtime_skills_dir=runtime.runtime_skills_dir,
+        )
+        translated_args = translate_command_args(
+            command_spec, visible_cwd, path_mapping.translate
+        )
+
+        process = await asyncio.create_subprocess_exec(
+            officecli_bin,
+            *translated_args,
+            cwd=str(local_cwd),
+            # HOME 指向会话根（非 workspace），officecli 的配置/缓存不会污染用户可见目录。
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": str(runtime.workspace_root),
+                "LANG": "C.UTF-8",
+            },
+            stdin=asyncio.subprocess.DEVNULL,  # batch 等子命令会读 stdin，避免继承并卡到超时
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "args": args,
+                "exit_code": int(process.returncode or 0),
+                "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
+                "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
+                "timed_out": False,
+            }
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "args": args,
+                "exit_code": 124,
+                "stdout": "",
+                "stderr": "officecli 执行超时",
+                "timed_out": True,
+            }
+
 
 @dataclass
 class SandboxWorkspaceBackend:
@@ -2086,13 +2196,65 @@ class SandboxWorkspaceBackend:
             "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
         }
 
+    async def run_officecli(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        """沙箱后端：OpenSandbox SDK 仅接受字符串命令，故将 argv 数组 shlex.quote 后拼成
+        ``officecli ...`` 字符串，经 ``run_command_in_sandbox`` 执行；执行后同步工作区。
+
+        沙箱内 ``/mnt/user-data/*`` 即真实挂载路径，无需翻译；仅按沙箱边界校验真实路径参数
+        （排除 OfficeCLI DOM 选择器），拒绝越界访问。flag 内嵌路径（如 ``--out=/mnt/...``）
+        在沙箱内本就是合法路径，不做额外转换。技能路径与本地后端一样拒绝，保证两后端行为一致。
+        """
+        command_spec = parse_officecli_args(args)
+        visible_cwd = str(cwd or sandbox_workspace_dir())
+        if visible_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            raise ValueError("officecli_run 不允许将 cwd 设置为技能目录")
+        sandbox_cwd = sandbox_visible_path(visible_cwd)
+        for index, path in command_path_values(command_spec, visible_cwd):
+            if path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                raise ValueError(f"officecli_run 不支持技能路径: {path}")
+            sandbox_visible_path(path, writable=index in command_spec.write_indices)
+        session_ref = await self._session_ref(runtime)
+        session = session_ref.current
+        if session is None:
+            raise ValueError("OpenSandbox 执行环境未准备")
+        async with session.operation_lock:
+            quoted = " ".join(shlex.quote(str(a)) for a in command_spec.args)
+            command = f"cd {shlex.quote(sandbox_cwd)} && officecli {quoted}"
+            exit_code, stdout, stderr = await run_command_in_sandbox(
+                session=session,
+                command=command,
+                timeout_seconds=timeout_seconds,
+            )
+            if exit_code == 0 and (command_spec.mutates or command_spec.write_indices):
+                try:
+                    await sync_sandbox_working_trees(session)
+                except Exception as exc:
+                    raise ValueError(f"officecli 执行后的工作区同步失败: {exc}") from exc
+        return {
+            "backend": OPENSANDBOX_BACKEND,
+            "sandbox_id": session.sandbox_id,
+            "cwd": sandbox_path_to_visible(sandbox_cwd),
+            "args": args,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
+        }
+
 
 def create_workspace_backend(name: str) -> WorkspaceBackend:
     """Create a backend once at runtime construction; invalid input falls back to local."""
     return SandboxWorkspaceBackend() if str(name or "").strip().lower() == "sandbox" else LocalWorkspaceBackend()
 
 
-def _absolute_command_path_tokens(command: str) -> list[str]:
+def _absolute_command_path_tokens(command: str, *, tool_name: str = "bash_run") -> list[str]:
     try:
         tokens = shlex.split(command)
     except ValueError as exc:
@@ -2109,7 +2271,7 @@ def _absolute_command_path_tokens(command: str) -> list[str]:
         elif normalized.startswith("/"):
             paths.append(normalized)
     if invalid:
-        raise ValueError("bash_run 不允许路径越界: " + ", ".join(invalid[:3]))
+        raise ValueError(f"{tool_name} 不允许路径越界: " + ", ".join(invalid[:3]))
     return paths
 
 

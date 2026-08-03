@@ -317,6 +317,14 @@ BASH_WORKFLOW_BLOCK = """## Bash 使用
 - 浏览目录统一使用 `dir_list(path="/mnt/user-data/workspace", max_depth=2)`；仅当需要 find / grep / 递归脚本等高级 bash 能力时才使用 `bash_run`。不要臆测文件是否存在。
 - Bash 只处理当前会话工作区；生成最终产物仍须写入 outputs 并调用 `present_artifacts`。"""
 
+OFFICECLI_WORKFLOW_BLOCK = """## Office 文件编辑（OfficeCLI）
+- 编辑或查询 Word / Excel / PowerPoint（docx/xlsx/pptx）统一使用 `officecli_run(command_args=[...])`，它通过 exec 直接运行 OfficeCLI，**不需要**开启 `bash_run`，也不区分 local / sandbox 后端。
+- `command_args` 是 OfficeCLI 子命令与参数数组，例如 `["view", "/mnt/user-data/workspace/报告.docx", "outline"]`。**每个元素都是独立参数，不要加引号、不要拼接成一整条命令**：路径含空格或选择器含 `[N]` 都照原样写（`"/mnt/user-data/workspace/我的 报告.docx"`、`"/slide[1]/shape[2]"`），加引号反而会被当成文件名的一部分。
+- DOM 选择器（如 `/slide[1]`、`/Sheet1/A1`、`/body/p[1]`）是文档内部定位，不是文件路径。
+- 禁用子命令：plugins / watch / unwatch / open / close / mcp / install / skills（常驻进程会锁文件、监听服务与网络安装不安全）。
+- **路径分区（只读区）**：`/mnt/user-data/workspace` 与 `/mnt/user-data/outputs` 可读可写；`/mnt/user-data/uploads` 是用户上传的**只读区**，`view`/`get`/`query`/`validate` 可读取其内容，但 `add`/`set`/`remove`/`save`/`create` 等修改类子命令**禁止写入或修改 uploads 路径**。需要编辑上传文件时，先用 `file_copy` 把文件复制到 `/mnt/user-data/workspace` 再操作；工具会在违规时直接报错并提示此流程。
+- 编辑流程：先 `view`/`get`/`query` 读取结构 → `add`/`set`/`remove`/`move`/`swap` 修改 → 每次修改后执行 `save <file>` 落盘 → `validate` 与 `view ... issues` 校验；确认无误后再 `present_artifacts`。`batch` 仅在已通过 `help` 确认 JSON 结构时使用。"""
+
 DIALECT_BLOCK = """## 方言上下文
 {dialect_context_text}"""
 
@@ -377,6 +385,7 @@ def build_unified_system_prompt(
     sections.append(PRIORITY_BLOCK)
     sections.append(WORKSPACE_WORKFLOW_BLOCK)
     sections.append(TOOL_RESULT_OFFLOAD_BLOCK)
+    sections.append(OFFICECLI_WORKFLOW_BLOCK)
     if runtime_options.bash_enabled:
         sections.append(BASH_WORKFLOW_BLOCK)
     sections.append(SEMANTIC_FEWSHOT_PROMPT)

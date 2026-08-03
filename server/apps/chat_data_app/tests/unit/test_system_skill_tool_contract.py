@@ -25,7 +25,6 @@ def test_system_skills_do_not_reference_removed_patch_tool_contract():
     for name in (
         "chart-processing",
         "dashboard-generation",
-        "data-analysis-report",
         "officecli",
         "skill-creator",
     ):
@@ -50,26 +49,9 @@ def test_system_skills_describe_current_filesystem_tools():
 def test_officecli_system_skill_uses_chatdata_runtime_contract():
     office = _skill_text("officecli")
 
-    assert "bash_run" in office
     assert "present_artifacts" in office
-    assert "references/word-charts.md" in office
+    assert "references/word.md" in office
     assert "officecli load_skill" not in office
     assert "officecli plugins" not in office
     assert "officecli watch" not in office
     assert "curl -fsSL" not in office
-
-
-def test_data_analysis_report_system_skill_uses_current_agent_contract():
-    report = _skill_text("data-analysis-report")
-
-    assert "search_dataset" in report
-    assert "dsl2sql_tool" in report
-    assert "semantic_query_tool" in report
-    assert "chart-processing" in report
-    assert "officecli" in report
-    assert "bash_run" in report
-    assert "present_artifacts" in report
-    assert "/mnt/user-data/outputs/" in report
-    assert "/mnt/user-data/workspace/" in report
-    assert "file_edit(operation=\"write\"" not in report
-    assert "*** Begin Patch" not in report

@@ -25,6 +25,7 @@ from .tools.filesystem import create_filesystem_tools
 from .tools.parse_document import create_parse_document_tool
 from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.bash_run import create_bash_run_tool
+from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.search_dataset import create_search_dataset_tool
 from .tools.skill_load import create_skill_load_tool
@@ -61,6 +62,7 @@ def assemble_tools(
         ),
         semantic_query_tool,
         calculator_tool,
+        create_officecli_run_tool(workspace_runtime),
     ]
     if runtime_options.bash_enabled:
         tools.append(create_bash_run_tool(workspace_runtime))

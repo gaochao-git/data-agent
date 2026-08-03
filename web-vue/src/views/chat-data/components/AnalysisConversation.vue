@@ -639,7 +639,7 @@ const parseToolResultPayload = (result?: string): Record<string, unknown> | null
 }
 
 const getPresentedArtifacts = (tool?: ToolCallInfo | null): Array<Record<string, unknown>> => {
-  if (!tool || tool.tool_name !== 'present_artifacts') return []
+  if (!tool || tool.tool_name !== 'present_artifacts' || tool.status !== 'completed') return []
   const payload = parseToolResultPayload(tool.result)
   const artifacts = payload?.artifacts
   if (!Array.isArray(artifacts)) return []
@@ -2101,12 +2101,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
         >
           <template #assistant-extra="{ message: msg }">
             <PresentedFileArtifacts
-              v-if="getPresentedOfficeArtifacts(msg).length && !msg.isStreaming"
+              v-if="getPresentedOfficeArtifacts(msg).length"
               :artifacts="getPresentedOfficeArtifacts(msg)"
               @preview="handleOpenPresentedOfficeArtifact"
               @download="handleDownloadPresentedOfficeArtifact"
             />
-            <div v-if="getPresentedSkillArtifacts(msg).length && !msg.isStreaming" class="mt-3 space-y-2">
+            <div v-if="getPresentedSkillArtifacts(msg).length" class="mt-3 space-y-2">
               <div
                 v-for="skill in getPresentedSkillArtifacts(msg)"
                 :key="skill.path"
@@ -2142,7 +2142,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 </button>
               </div>
             </div>
-            <div v-if="getDashboardPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
+            <div v-if="getDashboardPreviewTools(msg).length" class="mt-3 space-y-3">
                   <div
                     v-for="tool in getDashboardPreviewTools(msg)"
                     :key="tool.tool_call_id"
@@ -2201,7 +2201,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     </div>
                   </div>
                 </div>
-            <div v-if="getChartPreviewTools(msg).length && !msg.isStreaming" class="mt-3 space-y-3">
+            <div v-if="getChartPreviewTools(msg).length" class="mt-3 space-y-3">
                   <div
                     v-for="tool in getChartPreviewTools(msg)"
                     :key="tool.tool_call_id"

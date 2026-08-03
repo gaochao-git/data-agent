@@ -12,10 +12,12 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   file_move: '移动文件',
   file_copy: '复制文件',
   file_delete: '删除文件',
+  parse_document: '解析文档',
   dir_create: '创建目录',
   dir_list: '列出目录',
   dir_delete: '删除目录',
   bash_run: '运行脚本',
+  officecli_run: '运行 OfficeCLI',
   get_current_time: '获取当前时间',
   present_artifacts: '展示文件',
 }

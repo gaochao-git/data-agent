@@ -12,6 +12,7 @@ describe('toolDisplay', () => {
       file_move: '移动文件',
       file_copy: '复制文件',
       file_delete: '删除文件',
+      parse_document: '解析文档',
       file_glob: '查找文件',
       file_grep: '搜索文本',
       dir_create: '创建目录',
@@ -24,6 +25,7 @@ describe('toolDisplay', () => {
       semantic_query_tool: '查询数据',
       calculator_tool: '精确计算',
       bash_run: '运行脚本',
+      officecli_run: '运行 OfficeCLI',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
