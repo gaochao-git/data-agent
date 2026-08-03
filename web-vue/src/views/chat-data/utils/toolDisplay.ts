@@ -10,6 +10,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   file_edit: '修改文件',
   file_write: '写入文件',
   file_move: '移动文件',
+  file_copy: '复制文件',
   file_delete: '删除文件',
   dir_create: '创建目录',
   dir_list: '列出目录',
