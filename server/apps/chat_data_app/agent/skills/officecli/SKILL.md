@@ -33,6 +33,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
    - Word（含原生图表）：`/mnt/skills/officecli/references/word.md`
    - Excel：`/mnt/skills/officecli/references/excel.md`
    - PowerPoint：`/mnt/skills/officecli/references/powerpoint.md`
+   - 党政机关公文：`/mnt/skills/officecli/references/gb-t-9704-2012.md`
 3. 编辑已有上传文件时，先复制到 workspace，例如：`file_copy(source_path="/mnt/user-data/uploads/原文件.docx", destination_path="/mnt/user-data/workspace/修订稿.docx")`。不要覆盖 uploads 中的原文件。
 4. 用 `view`、`get` 或 `query` 读取当前文件结构，例如 `officecli_run(command_args=["view", "/mnt/user-data/workspace/报告.docx", "outline"])`；每次编辑前重新读取目标结构。DOM 选择器（如 `/body/p[1]`、`/slide[1]`、`/Sheet1/A1`）是文档内部定位，作为独立数组元素原样传入即可。
 5. 用 `create`、`add`、`set`、`remove`、`move` 或 `batch` 完成修改，例如 `officecli_run(command_args=["set", "/mnt/user-data/workspace/报告.docx", "/body/p[1]", "--prop", "bold=true"])`。`batch` 仅在已通过 `help` 确认 JSON 结构时使用；**`batch` 不接受内联 JSON 位置参数**，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再用 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交（详见各格式参考文档的 batch 章节）；不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。

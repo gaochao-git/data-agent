@@ -464,6 +464,29 @@ async def test_present_artifacts_returns_outputs_artifact_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_present_artifacts_returns_office_document(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_present_docx_{uuid.uuid4().hex}")
+    document_path = Path(paths["outputs"]) / "公文报告.docx"
+    document_path.write_bytes(b"PK\x03\x04fake-docx")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["present_artifacts"].ainvoke({
+        "files": ["/mnt/user-data/outputs/公文报告.docx"],
+    })
+
+    payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
+    assert payload["errors"] == []
+    assert payload["artifacts"] == [{
+        "file_path": "/outputs/公文报告.docx",
+        "artifact_type": "document",
+        "renderer": "document",
+        "artifact_version": "v1",
+        "name": "公文报告",
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_present_artifacts_returns_valid_output_skill(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_present_skill_{uuid.uuid4().hex}")
     skill_dir = Path(paths["outputs"]) / "sales-analysis"
