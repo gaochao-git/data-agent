@@ -64,6 +64,12 @@ if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
 CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
 # 是否允许用户在前端手动选择运行选项以覆盖系统默认配置；关闭则完全依赖系统默认。
 CHAT_DATA_CAPABILITY_USER_OVERRIDABLE = read_bool_env("CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", False)
+if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":
+    logger.warning(
+        "当前运行组合为 bash_enabled=true + workspace_backend=local：Agent 可以宿主进程权限执行任意代码，"
+        "命令黑名单与路径校验可被「写脚本再执行」绕过。仅可用于可信 / 纯本地开发场景，"
+        "多租户或对外暴露环境请改用 workspace_backend=sandbox 由容器隔离兜底。"
+    )
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHAT_DATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
 CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
