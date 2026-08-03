@@ -21,7 +21,7 @@ workspace/dashboard_draft.json
   -> outputs/<业务主题>-<唯一后缀>.dashboard.json
 ```
 
-新建看板时先用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿，校验通过后用 `file_write(file_path="outputs/<业务主题>-<唯一后缀>.dashboard.json", content=dashboard_spec)` 写入最终预览文件。修改已有看板预览时，先 `file_read` 指定 outputs 文件；局部修改使用 `file_edit(file_path, old_content, new_content)`，其中 `old_content` 必须是最新文件中完整、非空且唯一的一段原文。需要整体替换时使用 `file_write`。
+新建看板时先用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿，校验通过后用 `file_move(source_path="workspace/dashboard_draft.json", destination_path="outputs/<业务主题>-<唯一后缀>.dashboard.json")` 移入最终预览文件。不要再次用 `file_write` 重写相同内容。修改已有看板预览时，直接先 `file_read` 指定 outputs 文件；局部修改使用 `file_edit(file_path, old_content, new_content)`，其中 `old_content` 必须是最新文件中完整、非空且唯一的一段原文。需要整体替换时在该 outputs 文件使用 `file_write`。
 
 草稿阶段可以整体覆盖同一个 `workspace/dashboard_draft.json`；不要用 append 拼接 JSON。写入或整体覆盖 `dashboard_spec` 时必须使用多行缩进 JSON 和 `file_write`。局部修改前必须先用 `file_read` 读取当前内容；`file_edit` 找不到原文或匹配多处时，重新读取并提供更长且唯一的 `old_content`，不能凭记忆重试。
 
@@ -308,10 +308,10 @@ DSL 字段：
 3. 调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`。
 4. 根据返回 warnings 和错误修正 DSL。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
-6. 新建预览时用 `file_write` 写入一个新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才先 `file_read` 再用 `file_edit` 精确替换唯一内容，或用 `file_write` 整体覆盖。
+6. 新建预览时用 `file_move` 将校验完成的 `workspace/dashboard_draft.json` 移入新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才先 `file_read` 再用 `file_edit` 精确替换唯一内容，或直接在该 outputs 文件用 `file_write` 整体覆盖。
 7. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示最终看板预览。
 
-写入或更新 `workspace/dashboard_draft.json` 后必须继续校验，并写入 outputs 最终预览文件；不能把草稿写入当成看板生成完成。更新已有 outputs 看板文件后必要时重新校验，确认看板规格仍可执行。
+写入或更新 `workspace/dashboard_draft.json` 后必须继续校验，并用 `file_move` 将校验通过的草稿移入 outputs；不能把草稿写入当成看板生成完成。更新已有 outputs 看板文件后必要时重新校验，确认看板规格仍可执行。
 
 ## 失败处理
 

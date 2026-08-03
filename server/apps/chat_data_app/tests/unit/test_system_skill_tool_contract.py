@@ -41,6 +41,8 @@ def test_system_skills_describe_current_filesystem_tools():
     assert "file_write" in chart
     assert "file_edit(file_path, old_content, new_content)" in chart
     assert "file_write" in dashboard
+    assert "file_move(source_path=" in dashboard
+    assert "不要再次用 `file_write` 重写相同内容" in dashboard
     assert "file_edit(file_path, old_content, new_content)" in dashboard
     assert "dir_create" in creator
     assert "present_artifacts" in creator
