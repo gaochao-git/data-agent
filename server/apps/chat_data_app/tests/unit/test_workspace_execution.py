@@ -107,35 +107,6 @@ def test_bash_path_validation_still_rejects_real_absolute_paths():
     assert _absolute_command_path_tokens("cat /etc/passwd") == ["/etc/passwd"]
 
 
-def test_sandbox_load_skill_accepts_single_word_skill_name(monkeypatch):
-    session_ref = SandboxExecutionSessionRef()
-    session_ref.current = SandboxExecutionSession(
-        sandbox=object(),
-        sandbox_id="sbx_1",
-        workspace_root="/host/user-data",
-    )
-
-    async def fake_resolve(**kwargs):
-        return kwargs["file_path"]
-
-    async def fake_path_info(**_kwargs):
-        return SimpleNamespace(entry_type="dir")
-
-    async def fake_path_kind(**_kwargs):
-        return "dir"
-
-    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
-    monkeypatch.setattr(workspace_execution, "_sandbox_path_info", fake_path_info)
-    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_path_kind)
-
-    with pytest.raises(ValueError, match="技能文件不存在: officecli"):
-        asyncio.run(workspace_execution.sandbox_load_skill_payload(
-            session_ref=session_ref,
-            skill_name="officecli",
-            max_chars=100,
-        ))
-
-
 def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monkeypatch):
     captured = {}
 
@@ -405,7 +376,7 @@ def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(mon
     ]
 
 
-def test_sandbox_load_skill_and_list_dir_delegate_through_real_path(monkeypatch):
+def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
     captured = {}
 
     class FakeDirectoryListEntry:
@@ -456,11 +427,6 @@ def test_sandbox_load_skill_and_list_dir_delegate_through_real_path(monkeypatch)
                 for path in entries_by_directory.get(entry.path, [])
             ]
 
-        async def read_bytes(self, path, **_kwargs):
-            if path == "/mnt/skills/demo-skill/SKILL.md":
-                return b"---\ntitle: Demo\ndescription: Test skill\n---\n# Demo\n"
-            return b""
-
     session_ref = SandboxExecutionSessionRef()
     session_ref.current = SandboxExecutionSession(
         sandbox=SimpleNamespace(files=FakeFiles()),
@@ -481,16 +447,11 @@ def test_sandbox_load_skill_and_list_dir_delegate_through_real_path(monkeypatch)
         lambda: FakeDirectoryListEntry,
     )
 
-    skill = asyncio.run(workspace_execution.sandbox_load_skill_payload(
-        session_ref=session_ref, skill_name="demo-skill", max_chars=100,
-    ))
     entries = asyncio.run(workspace_execution.sandbox_list_dir(
         session_ref=session_ref, path="workspace", max_depth=2,
     ))
 
-    assert resolved_paths == ["/mnt/skills/demo-skill", "workspace"]
-    assert skill["visible_path"] == "/mnt/skills/demo-skill"
-    assert skill["references"] == ["guide"]
+    assert resolved_paths == ["workspace"]
     assert entries[0]["path"] == "/mnt/user-data/workspace/a.txt"
     assert entries[0]["type"] == "file"
     assert any(

@@ -5,7 +5,6 @@ import { getToolDisplayName } from '../toolDisplay'
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
     const expectedNames: Record<string, string> = {
-      skill_load: '加载技能',
       file_read: '读取文件',
       file_edit: '修改文件',
       file_write: '写入文件',

@@ -99,15 +99,12 @@ metadata:
 
 进入本技能后执行：
 
-1. 确认已经看到 `skill_load("skill-creator")` 返回 `[skill_load]`。
-2. 需要设计复杂工作流时读取：
+1. 需要设计复杂工作流时，用 `file_read` 读取：
    - `/mnt/skills/skill-creator/references/workflows.md`
-3. 需要约束输出格式时读取：
+2. 需要约束输出格式时，用 `file_read` 读取：
    - `/mnt/skills/skill-creator/references/output-patterns.md`
-4. 生成后如有脚本可用，使用：
+3. 生成后如有脚本可用，使用：
    - `/mnt/skills/skill-creator/scripts/quick_validate.py`
-
-`skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
 
 ## 工作流程
 

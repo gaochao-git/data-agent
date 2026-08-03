@@ -154,9 +154,6 @@ const compactDescription = computed(() => {
   if (props.toolCall.tool_name === 'file_edit') {
     return getFileName(args.file_path || args.path)
   }
-  if (props.toolCall.tool_name === 'skill_load') {
-    return String(args.skill_name || args.name || getResultField('runtime_path') || '').trim()
-  }
   if (props.toolCall.tool_name === 'semantic_query_tool') {
     return normalizeVisiblePath(args.save_as)
   }

@@ -14,13 +14,13 @@ metadata:
 
 处理 `.docx`、`.xlsx`、`.pptx` 文件：创建文档、修改文字和格式、编辑工作簿单元格/公式，或调整演示文稿页面和形状。
 
-OfficeCLI 在 ChatData 运行环境中可用（OpenSandbox 镜像预装，本地运行环境宿主也预装）。它是 Office Open XML 的结构化编辑器，不需要安装 Microsoft Office、LibreOffice 或其他依赖。
+OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft Office、LibreOffice 或其他依赖。
 
 ## 前置条件与安全边界
 
-1. 先调用 `skill_load("officecli")`。本技能通过 `officecli_run` 工具执行 OfficeCLI，该工具在 local 与 sandbox 两种后端均可用、且不需要开启 `bash_run`；运行失败（如环境确实无 OfficeCLI）时如实说明，不要伪造修改结果。
+1. 本 `SKILL.md` 已通过 `file_read` 读取。本技能通过 `officecli_run` 工具执行 OfficeCLI；运行失败时如实说明，不要伪造修改结果。
 2. 禁止安装、升级、联网下载、插件、MCP、`watch`、后台进程或访问宿主机路径。
-3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或 `outputs/.tool-offload/`。`/mnt/skills/` 仅供 `skill_load`、`file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
+3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或 `outputs/.tool-offload/`。`/mnt/skills/` 仅供 `file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
 4. `officecli_run(command_args=[...])` 的每个数组元素就是一个独立参数，**不要加引号、不要把整条命令拼成一个字符串**。文件路径一律用完整绝对路径；含空格、方括号或中文时照原样写（如 `"/mnt/user-data/workspace/我的 报告.docx"`），加引号会被当成文件名的一部分。
 5. 不确定命令、元素路径或属性名时，先用 `officecli help <format> <element>` 查询，不要猜测。`docx`、`xlsx`、`pptx` 分别对应 Word、Excel、PowerPoint。
 
@@ -28,7 +28,7 @@ OfficeCLI 在 ChatData 运行环境中可用（OpenSandbox 镜像预装，本地
 
 ## 工作流程
 
-1. 调用 `skill_load("officecli")`，再执行 `officecli_run(command_args=["--version"])` 验证 OfficeCLI 可用。
+1. 执行 `officecli_run(command_args=["--version"])` 验证 OfficeCLI 可用。
 2. 根据文件类型按需用 `file_read` 读取一份参考文档：
    - Word（含原生图表）：`/mnt/skills/officecli/references/word.md`
    - Excel：`/mnt/skills/officecli/references/excel.md`

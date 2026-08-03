@@ -14,7 +14,6 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
-from apps.chat_data_app.agent.tools import skill_load
 from apps.chat_data_app.routers import conversation_workspace, dependencies
 from apps.chat_data_app.services import conversation_workspace as conversation_workspace_service
 from apps.chat_data_app.services import semantic_common
@@ -1296,60 +1295,8 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     assert "<category>" not in minimal_prompt
 
 
-def test_calculator_and_skill_load_extra_branches(monkeypatch, tmp_path):
+def test_calculator_extra_branches():
     assert calculator._format_decimal(calculator.Decimal("1.2300")) == "1.23"
     assert calculator._calculate_item({"expression": ""})["error"] == "expression 不能为空"
     assert calculator._calculate_item({"expression": "1/0"})["error"] == "除数不能为 0"
     assert calculator._calculate_item({"expression": "(1+2)", "decimal_places": 0})["result"] == "3"
-
-    payload = {
-        "name": "skill-a",
-        "title": "技能A",
-        "visible_path": "/runtime/skill-a",
-        "references": ["guide"],
-        "scripts": ["run.py"],
-        "assets": ["a.png"],
-        "skill_md": "# Skill",
-    }
-    assert "runtime_path=/runtime/skill-a" in skill_load.format_skill_load_result(payload)
-
-    workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
-    workspace_root.mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "skill-a"
-    skill_dir.parent.mkdir(parents=True)
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text("# Skill A", encoding="utf-8")
-    (skill_dir / "references").mkdir()
-    (skill_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
-    (skill_dir / "scripts").mkdir()
-    (skill_dir / "scripts" / "run.py").write_text("print(1)", encoding="utf-8")
-    (skill_dir / "assets").mkdir()
-    (skill_dir / "assets" / "a.png").write_bytes(b"png")
-
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=str(workspace_root),
-        user_id="u1",
-        backend="local",
-    )
-    built = asyncio.run(runtime.load_skill_payload(skill_name="skill-a", max_chars=16000))
-    assert built["references"] == ["guide"]
-    assert built["scripts"] == ["run.py"]
-    assert built["assets"] == ["a.png"]
-    assert built["visible_path"] == "/mnt/skills/skill-a"
-
-    with pytest.raises(ValueError, match="技能不存在"):
-        asyncio.run(runtime.load_skill_payload(skill_name="missing", max_chars=16000))
-
-    tool = skill_load.create_skill_load_tool(runtime, user_id="u1")
-    async def load_payload(*_args, **_kwargs):
-        return dict(built)
-
-    monkeypatch.setattr(runtime, "load_skill_payload", load_payload)
-    result = asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))
-    assert "runtime_path=/mnt/skills/skill-a" in result
-
-    async def raise_payload(*_args, **_kwargs):
-        raise RuntimeError("load failed")
-
-    monkeypatch.setattr(runtime, "load_skill_payload", raise_payload)
-    assert "skill_load 执行失败: load failed" in asyncio.run(tool.ainvoke({"skill_name": "skill-a"}))

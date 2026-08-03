@@ -48,6 +48,22 @@ def test_system_skills_describe_current_filesystem_tools():
     assert "present_artifacts" in creator
 
 
+def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
+    for name in (
+        "chart-processing",
+        "dashboard-generation",
+        "officecli",
+        "skill-creator",
+    ):
+        text = _skill_text(name)
+        assert "skill_load" not in text
+
+    assert "file_read" in _skill_text("chart-processing")
+    assert "file_read" in _skill_text("dashboard-generation")
+    assert "file_read" in _skill_text("officecli")
+    assert "file_read" in _skill_text("skill-creator")
+
+
 def test_officecli_system_skill_uses_chatdata_runtime_contract():
     office = _skill_text("officecli")
 

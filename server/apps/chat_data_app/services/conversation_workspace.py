@@ -31,7 +31,6 @@ from .runtime_skill_snapshot import (
     runtime_skills_snapshot_dir_from_workspace,
 )
 from .semantic_common import AGENT_ID
-from .skill_service import resolve_skill_name
 from .workspace_execution import (
     OPENSANDBOX_BACKEND,
     SandboxExecutionSessionRef,
@@ -44,7 +43,6 @@ from .workspace_execution import (
     sandbox_delete_path,
     sandbox_grep_text,
     sandbox_list_dir,
-    sandbox_load_skill_payload,
     sandbox_move_path,
     sandbox_path_to_visible,
     sandbox_read_text_file,
@@ -125,14 +123,6 @@ class WorkspaceBackend(Protocol):
         runtime: "ConversationWorkspaceRuntime",
         *,
         file_path: str,
-        max_chars: int,
-    ) -> dict[str, Any]: ...
-
-    async def load_skill_payload(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-        *,
-        skill_name: str,
         max_chars: int,
     ) -> dict[str, Any]: ...
 
@@ -356,9 +346,6 @@ class ConversationWorkspaceRuntime:
             file_path=file_path,
             max_chars=max_chars,
         )
-
-    async def load_skill_payload(self, *, skill_name: str, max_chars: int) -> dict[str, Any]:
-        return await self.backend.load_skill_payload(self, skill_name=skill_name, max_chars=max_chars)
 
     async def list_dir(self, *, path: str, max_depth: int) -> list[dict[str, Any]]:
         return await self.backend.list_dir(self, path=path, max_depth=max_depth)
@@ -1202,50 +1189,6 @@ def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[st
         return {}
 
 
-def _list_skill_files(snapshot_dir: Path, directory_name: str, pattern: str = "*") -> list[str]:
-    root = snapshot_dir / directory_name
-    if not root.exists() or root.is_symlink():
-        return []
-    return sorted(
-        str(item.relative_to(root).with_suffix("")) if directory_name == "references" else str(item.relative_to(root))
-        for item in root.rglob(pattern)
-        if item.is_file() and not item.is_symlink()
-    )
-
-
-def _build_local_skill_payload(runtime: ConversationWorkspaceRuntime, skill_name: str, max_chars: int) -> dict[str, Any]:
-    resolved_name = resolve_skill_name(skill_name)
-    snapshot_root = runtime.runtime_skills_dir.resolve()
-    snapshot_entry = runtime.runtime_skills_dir / resolved_name
-    snapshot_dir = snapshot_entry.resolve()
-    if (
-        snapshot_entry.is_symlink()
-        or not snapshot_dir.is_dir()
-        or snapshot_root not in snapshot_dir.parents
-    ):
-        raise ValueError(f"技能不存在或无权限访问: {resolved_name}")
-    skill_md_path = (snapshot_dir / "SKILL.md").resolve()
-    if not skill_md_path.is_file() or snapshot_dir not in skill_md_path.parents:
-        raise ValueError(f"技能文件不存在: {resolved_name}")
-    skill_md = _read_text_prefix(skill_md_path, max_chars + 1)
-    title, description = _parse_skill_frontmatter(skill_md)
-    return {
-        "name": resolved_name,
-        "title": title or resolved_name,
-        "description": description or "",
-        "visible_path": runtime_skill_visible_root(resolved_name),
-        "skill_md": skill_md,
-        "references": _list_skill_files(snapshot_dir, "references", "*.md"),
-        "scripts": _list_skill_files(snapshot_dir, "scripts"),
-        "assets": _list_skill_files(snapshot_dir, "assets"),
-    }
-
-
-def _read_text_prefix(path: Path, max_chars: int) -> str:
-    with path.open("r", encoding="utf-8", errors="replace") as file_obj:
-        return file_obj.read(max_chars)
-
-
 def _list_local_workspace_dir(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -1539,27 +1482,6 @@ def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) 
     )
 
 
-def _parse_skill_frontmatter(text: str) -> tuple[str, str]:
-    if not text.startswith("---\n"):
-        return "", ""
-    closing_index = text.find("\n---\n", len("---\n"))
-    if closing_index < 0:
-        return "", ""
-    title = name = description = ""
-    for line in text[len("---\n"):closing_index].splitlines():
-        key, separator, value = line.partition(":")
-        if not separator:
-            continue
-        normalized = value.strip().strip('"').strip("'")
-        if key.strip() == "title":
-            title = normalized
-        elif key.strip() == "name":
-            name = normalized
-        elif key.strip() == "description":
-            description = normalized
-    return title or name, description
-
-
 @dataclass
 class LocalWorkspaceBackend:
     """Path-validated local filesystem backend for a conversation workspace."""
@@ -1644,16 +1566,6 @@ class LocalWorkspaceBackend:
             file_path,
             max_chars,
         )
-
-    async def load_skill_payload(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-        *,
-        skill_name: str,
-        max_chars: int,
-    ) -> dict[str, Any]:
-        await runtime._ensure_snapshot_async()
-        return await asyncio.to_thread(_build_local_skill_payload, runtime, skill_name, max_chars)
 
     async def list_dir(
         self,
@@ -2030,18 +1942,6 @@ class SandboxWorkspaceBackend:
             session_ref=await self._session_ref(runtime),
             file_path=file_path,
             max_chars=max_chars,
-        )
-
-    async def load_skill_payload(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-        *,
-        skill_name: str,
-        max_chars: int,
-    ) -> dict[str, Any]:
-        await runtime._ensure_snapshot_async()
-        return await sandbox_load_skill_payload(
-            session_ref=await self._session_ref(runtime), skill_name=resolve_skill_name(skill_name), max_chars=max_chars
         )
 
     async def list_dir(

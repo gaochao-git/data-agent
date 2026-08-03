@@ -138,10 +138,9 @@ EMPTY_AVAILABLE_SKILLS_XML = "<available_skills>\n</available_skills>"
 
 SKILLS_USAGE_BLOCK = """## 技能使用
 - 只有用户本轮显式引用技能，或前端传入本轮指定技能时，才允许读取对应技能；
-- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `skill_load` 读取 `xxx`，禁止再向用户确认是否加载。
+- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，禁止再向用户确认。
 - 前端已注入的技能信息无需再输出，也无需向用户解释技能选择。
-- `skill_load` 返回已含 SKILL.md 正文，不再用 `file_read` 重复读取。
-- 技能要求读取 reference / asset 时按技能正文调用 `file_read`；路径失败时根据 `skill_load` 返回的文件列表修正后重试。"""
+- `SKILL.md` 是技能入口；需要参考资料、脚本或资源时，严格按其中声明的 `/mnt/skills/<技能名>/...` 路径继续使用 `file_read`、`file_glob` 或 `dir_list`。"""
 
 QUERY_FLOW_BLOCK = """## 主流程
 1. 先判断场景。
@@ -292,7 +291,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。复制单个文件使用 `file_copy`：源可以是 `workspace`、`outputs`、`uploads` 或只读 `/mnt/skills` 技能路径，目标只能是 `workspace` 或 `outputs`。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
 - 用户上传的原始文件位于 `/mnt/user-data/uploads/`，上传后**未预解析**。处理用户附带的文件时：先用 `file_read` 尝试直接读取原始文件——`csv / txt / md / json / log` 等纯文本可直接拿到内容；若为 `xlsx / pptx / pdf / docx` 等二进制，`file_read` 读到的会是乱码或不可读内容，此时再调用 `parse_document(source_path=<原始文件路径>, target_path=/mnt/user-data/workspace/<业务名>.md)` 把文件解析为 Markdown 写入 workspace，并用 `file_read` 读取该 `.md`。当用户已通过消息附件给出具体文件路径时，可直接处理，不必先 `dir_list`。
-- `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、`/mnt/skills/system/...`、`/mnt/skills/user/...`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
+- 技能只读挂载根为 `<available_skills>` 中 `skill_file` 的父目录（形如 `/mnt/skills/<技能名>`）。读取技能参考文件必须使用 `SKILL.md` 中声明的完整路径。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、`/mnt/skills/system/...`、`/mnt/skills/user/...`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。
 - `outputs` 目录是唯一最终产物区：最终图表命名为 `/mnt/user-data/outputs/<业务名>.chart.json`；新建看板必须命名为 `/mnt/user-data/outputs/<业务名>-<短时间戳或短随机后缀>.dashboard.json`，避免覆盖同一会话中的历史看板预览。生成可导入技能时，根目录必须是 `/mnt/user-data/outputs/<skill-name>/`，入口文件必须是 `SKILL.md`，且 frontmatter 的 `name` 必须与 `<skill-name>` 一致。中间文件放 `workspace`，校验后写入 outputs。
 - `file_write` 负责新建或整体覆盖，`file_edit` 负责已有文件的一处唯一精确替换；两者都不代表产物已经展示给用户。需要在聊天框展示最终图表、看板、文件或新技能时，必须在写入 outputs 后调用 `present_artifacts(files=[...])`；技能只能传 `/mnt/user-data/outputs/<skill-name>/SKILL.md`，成功后前端才会展示“导入技能”入口。不要展示 workspace、uploads 或已安装技能目录。
 
@@ -329,12 +328,12 @@ DIALECT_BLOCK = """## 方言上下文
 {dialect_context_text}"""
 
 PRIORITY_BLOCK = """## 优先级
-1. 技能优先：`available_skills` 是当前运行时可用技能清单。用户消息匹配可用技能的 name / title / description 或明显意图时，第一步调用 `skill_load("<name>")`，参数只能使用匹配技能的 `<name>` 值，不能使用 title、skill_id 或自造名称。
-2. 技能命中时，文字说明不能替代工具调用；如果回复了“开始加载技能 / 正在加载技能 / 进入技能流程 / 使用某技能”，同一轮必须立刻调用 `skill_load`。
+1. 技能优先：`available_skills` 是当前运行时可用技能清单。用户消息匹配可用技能的 name / title / description 或明显意图时，第一步调用 `file_read(file_path="<skill_file>")` 读取其 `SKILL.md`；路径必须使用匹配项声明的 `<skill_file>`，不能自造。
+2. 技能命中时，文字说明不能替代文件读取；如果回复了“开始加载技能 / 正在加载技能 / 进入技能流程 / 使用某技能”，同一轮必须立刻读取该技能的 `SKILL.md`。
 3. 如果用户指定了某个技能但 `available_skills` 中没有匹配项，直接说明当前没有可用的匹配技能，不要调用不存在的技能，也不要只列出技能后结束。
 4. 未命中技能时，按上方规则处理。
 5. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
-6. 用户询问支持哪些图表、要求生成图表 / 看板 / 可视化时，先 `skill_load("chart-processing")` 获取图表类型清单与生成规范；涉及 Word / PowerPoint 图表时先 `skill_load("officecli")`。不要用通用 ECharts 知识编造未注册的 chart_type。"""
+6. 用户询问支持哪些图表、要求生成图表 / 看板 / 可视化时，先读取 `<available_skills>` 中 `chart-processing` 的 `skill_file` 获取图表类型清单与生成规范；涉及 Word / PowerPoint 图表时先读取 `officecli` 的 `skill_file`。不要用通用 ECharts 知识编造未注册的 chart_type。"""
 
 
 # ---------------------------------------------------------------------------

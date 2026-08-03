@@ -23,7 +23,7 @@ from ..tool_results import (
 
 logger = get_logger(__name__)
 
-_READ_PAGINATED_TOOLS = frozenset({"file_read", "skill_load"})
+_READ_PAGINATED_TOOLS = frozenset({"file_read"})
 
 
 def create_tool_result_middleware():
@@ -378,17 +378,6 @@ def _read_tool_recovery(tool_name: str, request: Any, content: Any) -> dict[str,
             offset=_non_negative_int(args.get("offset"), default=0),
             limit=_positive_int(args.get("limit"), default=200),
         )
-    if tool_name == "skill_load":
-        result_path = _skill_markdown_path(content)
-        if not result_path:
-            return None
-        return build_tool_result_recovery(
-            source_tool=tool_name,
-            result_path=result_path,
-            result_size_chars=len(_tool_message_text(content) or ""),
-            offset=0,
-            limit=200,
-        )
     return None
 
 
@@ -398,15 +387,6 @@ def _request_tool_args(request: Any) -> dict[str, Any]:
         return {}
     args = tool_call.get("args")
     return args if isinstance(args, dict) else {}
-
-
-def _skill_markdown_path(content: Any) -> str:
-    text = _tool_message_text(content) or ""
-    for line in text.splitlines():
-        if line.startswith("runtime_path="):
-            runtime_path = line.partition("=")[2].strip().rstrip("/")
-            return f"{runtime_path}/SKILL.md" if runtime_path else ""
-    return ""
 
 
 def _non_negative_int(value: Any, *, default: int) -> int:

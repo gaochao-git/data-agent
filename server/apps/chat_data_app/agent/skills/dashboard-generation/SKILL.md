@@ -55,35 +55,31 @@ workspace/dashboard_draft.json
 
 进入本技能后执行：
 
-1. 确认已经看到 `skill_load("dashboard-generation")` 返回 `[skill_load]`。
-2. 读取主指南：
+1. 读取主指南：
    - `/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md`
 3. 用户需求宽泛或需要模板时，再读取一个示例：
    - 综合 / 默认分析：`/mnt/skills/dashboard-generation/assets/examples/comprehensive-dashboard.json`
    - 风险 / 异常 / 预警：`/mnt/skills/dashboard-generation/assets/examples/risk-monitoring-dashboard.json`
    - 机构 / 区域 / 产品 / 客户画像：`/mnt/skills/dashboard-generation/assets/examples/profile-dashboard.json`
 
-`skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
-
 ## 工具流程
 
 按下面顺序完成，不把工具参数、JSON、DSL、SQL 或工具返回原文写进用户正文。
 每次调用工具前先输出一句短句说明当前要做什么；工具返回后用一句短句概括发现，再继续下一步。
 
-1. `skill_load("dashboard-generation")`
-2. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
-3. 按需 `file_read` 一个示例 JSON
-4. 调用 `search_dataset(query=用户原始看板目标)` 检索相关指标集。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定指标集
-5. 从 `search_dataset` 返回的 `semantic_config_ids` 中确定一个指标集，只使用工具返回的真实指标和维度；无法唯一判断时先澄清
-6. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
-7. 内部构建完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`
-8. `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)` 校验整份规格
-9. 校验失败时，按主指南修正后重新调用 `dsl2sql_tool`
-10. 校验通过后用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿
-11. 校验完成后用 `file_move(source_path="/mnt/user-data/workspace/dashboard_draft.json", destination_path="/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json")` 将草稿移入最终产物区；不要再次用 `file_write` 重写相同内容
-12. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文；需要整体覆盖时改用 `file_write`
-13. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 展示最终看板预览
-14. 简短总结预览结果
+1. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
+2. 按需 `file_read` 一个示例 JSON
+3. 调用 `search_dataset(query=用户原始看板目标)` 检索相关指标集。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定指标集
+4. 从 `search_dataset` 返回的 `semantic_config_ids` 中确定一个指标集，只使用工具返回的真实指标和维度；无法唯一判断时先澄清
+5. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
+6. 内部构建完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`
+7. `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)` 校验整份规格
+8. 校验失败时，按主指南修正后重新调用 `dsl2sql_tool`
+9. 校验通过后用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿
+10. 校验完成后用 `file_move(source_path="/mnt/user-data/workspace/dashboard_draft.json", destination_path="/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json")` 将草稿移入最终产物区；不要再次用 `file_write` 重写相同内容
+11. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文；需要整体覆盖时改用 `file_write`
+12. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 展示最终看板预览
+13. 简短总结预览结果
 
 新建看板预览时不要复用或覆盖已有 outputs 看板文件；同一会话中多次生成看板，应保留多个独立的 `.dashboard.json` 产物。修改已有预览文件前必须 `file_read` 当前文件内容，修改后必要时重新调用 `dsl2sql_tool` 校验。
 

@@ -28,7 +28,6 @@ from .tools.bash_run import create_bash_run_tool
 from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.search_dataset import create_search_dataset_tool
-from .tools.skill_load import create_skill_load_tool
 
 
 def assemble_tools(
@@ -49,7 +48,6 @@ def assemble_tools(
         datasource_group_context=datasource_group_context,
     )
     tools = [
-        create_skill_load_tool(workspace_runtime, user_id=user_id),
         *create_filesystem_tools(workspace_runtime),
         *create_parse_document_tool(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),

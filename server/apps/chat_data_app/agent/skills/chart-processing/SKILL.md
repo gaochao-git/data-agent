@@ -48,15 +48,12 @@ metadata:
 
 进入本技能后执行：
 
-1. 确认已经看到 `skill_load("chart-processing")` 返回 `[skill_load]`。
-2. 读取主指南：
+1. 读取主指南：
    - `/mnt/skills/chart-processing/references/chart-spec-guide.md`
 3. 需要写 Python 处理脚本时，优先参考：
    - 单 SQL 图：`/mnt/skills/chart-processing/scripts/single_result_chart.py`
    - 本期 / 上期、同比 / 环比：`/mnt/skills/chart-processing/scripts/compare_period_chart.py`
    - 多 SQL 多系列拼接：`/mnt/skills/chart-processing/scripts/join_results_chart.py`
-
-`skill_load` 返回已包含本 `SKILL.md` 正文，不需要再读取 `SKILL.md`。
 
 ## 场景判断
 
@@ -141,9 +138,8 @@ metadata:
 
 按下面顺序完成，不把工具参数、JSON、SQL、脚本或工具返回原文写进用户正文。
 
-1. `skill_load("chart-processing")`
-2. `file_read("/mnt/skills/chart-processing/references/chart-spec-guide.md")`
-3. 判断属于单 SQL 还是多 SQL 场景
+1. `file_read("/mnt/skills/chart-processing/references/chart-spec-guide.md")`
+2. 判断属于单 SQL 还是多 SQL 场景
 4. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
 5. 使用 `dsl2sql_tool` 构造真实查询；禁止手写 SQL
 6. 使用 `semantic_query_tool(dsl=同一份DSL, save_as="/mnt/user-data/workspace/current.json")` 获取真实数据并保存中间文件；多 SQL 场景分别保存为 `/mnt/user-data/workspace/current.json`、`/mnt/user-data/workspace/previous.json` 等
@@ -194,7 +190,7 @@ metadata:
 
 ## 图表示例（few-shot）
 
-以下示例只用于学习图表内部语义参数选择和工具调用顺序。语义参数、DSL、SQL、脚本和工具参数不得输出到用户消息正文；需要使用时直接作为工具参数传入。进入本技能后按上方「工具流程」执行，下面示例省略 `skill_load` 与 `file_read` 指南步骤。
+以下示例只用于学习图表内部语义参数选择和工具调用顺序。语义参数、DSL、SQL、脚本和工具参数不得输出到用户消息正文；需要使用时直接作为工具参数传入。进入本技能后按上方「工具流程」执行，下面示例省略 `file_read` 指南步骤。
 
 ### 示例1：阶段转化漏斗图
 用户：用漏斗图看线索到成交的转化

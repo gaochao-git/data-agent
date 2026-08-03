@@ -152,7 +152,7 @@ async def test_structured_generic_tool_result_is_serialized_before_offload(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["file_read", "skill_load"])
+@pytest.mark.parametrize("tool_name", ["file_read"])
 async def test_paginated_read_tools_are_not_offloaded(monkeypatch, tmp_path, tool_name):
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = ToolMessage(content="x" * 200, name=tool_name, tool_call_id="call_read")

@@ -87,7 +87,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 | 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
-- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
+- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
 - `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
 
 ```text
@@ -479,7 +479,7 @@ chat_data_app/
 ```
 create_agent
   ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
-  └─ tools 节点：执行 skill_load、search_dataset、dsl2sql_tool、semantic_query_tool 等工具
+  └─ tools 节点：执行 file_read、search_dataset、dsl2sql_tool、semantic_query_tool 等工具
 
 model → tools → model，直到模型不再发起工具调用后结束。
 ```
@@ -488,7 +488,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 
 | 工具 | 说明 |
 |-----|------|
-| `skill_load` | 按需加载系统或用户技能，并将已加载技能以只读目录暴露给当前会话 |
+| `file_read` | 读取受控会话文件，或读取运行时技能快照中的 `SKILL.md` 与其声明资源 |
 | `dsl2sql_tool` | 根据语义参数生成 SQL |
 | `semantic_query_tool` | 执行语义查询；接收语义 DSL，内部生成 SQL 后执行 |
 
@@ -522,7 +522,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 回答
 ```
 
-`skill_load` 可加载系统技能或当前用户可见的已发布用户技能。加载后仅向当前会话提供该技能目录的只读访问；脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
+系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过数据源组智能问数说明和指标集配置维护。
 
 指标集检索分两层：
 

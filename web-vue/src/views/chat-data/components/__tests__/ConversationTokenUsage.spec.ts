@@ -140,10 +140,10 @@ describe('ConversationTokenUsage', () => {
             label: '工具定义',
             tokens: 19,
             children: [{
-              key: 'skill_load',
-              label: '工具定义 · skill_load',
+              key: 'file_read',
+              label: '工具定义 · file_read',
               tokens: 19,
-              content: '{"name":"skill_load"}',
+              content: '{"name":"file_read"}',
             }],
           }],
         },
@@ -154,10 +154,10 @@ describe('ConversationTokenUsage', () => {
     await wrapper.get('button').trigger('click')
     expect(wrapper.text()).toContain('工具定义（1 个）')
     expect(wrapper.get('[title="本次请求传入模型的工具定义"]').text()).toBe('工具')
-    expect(wrapper.text()).not.toContain('skill_load')
+    expect(wrapper.text()).not.toContain('file_read')
 
     await wrapper.get('button[class*="grid"]').trigger('click')
-    expect(wrapper.text()).toContain('skill_load')
+    expect(wrapper.text()).toContain('file_read')
     wrapper.unmount()
   })
 })

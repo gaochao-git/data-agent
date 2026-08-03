@@ -1017,7 +1017,6 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert captured["state_schema"] is data_agent.ChatDataAgentState
     assert captured["name"] == "chat_data_agent"
     assert [getattr(tool, "name", tool) for tool in captured["tools"]] == [
-        "skill_load",
         "file_read",
         "file_edit",
         "file_write",
