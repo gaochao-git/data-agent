@@ -152,6 +152,87 @@ def test_resolve_workspace_path_accepts_short_absolute_aliases():
     assert outputs_file == Path(paths["outputs"]) / "sales.chart.json"
 
 
+@pytest.mark.asyncio
+async def test_file_copy_copies_upload_into_workspace_and_keeps_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    paths = ensure_conversation_workspace("conv_file_copy", "user_a")
+    source = Path(paths["uploads"]) / "原文件.docx"
+    source.write_bytes(b"\x00\x01docx-bytes")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    payload = await runtime.copy_path(
+        source_path="/mnt/user-data/uploads/原文件.docx",
+        destination_path="/mnt/user-data/workspace/修订稿.docx",
+    )
+
+    destination = Path(paths["workspace"]) / "修订稿.docx"
+    assert payload["type"] == "file"
+    assert payload["bytes"] == len(b"\x00\x01docx-bytes")
+    assert destination.read_bytes() == b"\x00\x01docx-bytes"
+    assert source.read_bytes() == b"\x00\x01docx-bytes"
+
+
+@pytest.mark.asyncio
+async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp_path):
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    paths = ensure_conversation_workspace("conv_file_copy_guard", "user_a")
+    source = Path(paths["uploads"]) / "a.bin"
+    source.write_bytes(b"a")
+    existing = Path(paths["workspace"]) / "b.bin"
+    existing.write_bytes(b"b")
+    offload = Path(paths["outputs"]) / ".tool-offload" / "r.json"
+    offload.write_text("{}", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    with pytest.raises(ValueError, match="目标路径已存在"):
+        await runtime.copy_path(source_path="uploads/a.bin", destination_path="workspace/b.bin")
+    with pytest.raises(ValueError, match="只允许写入"):
+        await runtime.copy_path(source_path="uploads/a.bin", destination_path="uploads/c.bin")
+    with pytest.raises(ValueError, match="只支持复制单个文件"):
+        await runtime.copy_path(source_path="workspace", destination_path="workspace/d.bin")
+    with pytest.raises(ValueError, match="tool-offload"):
+        await runtime.copy_path(source_path="outputs/.tool-offload/r.json", destination_path="workspace/e.json")
+    with pytest.raises(FileNotFoundError):
+        await runtime.copy_path(source_path="uploads/missing.bin", destination_path="workspace/f.bin")
+
+
+@pytest.mark.asyncio
+async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable(tmp_path):
+    """/mnt/skills 只读技能文件可作为 file_copy 源，且技能路径不能作为复制目标。"""
+    workspace_root = tmp_path / "threads" / "u1" / "conv_skill_copy" / "user-data"
+    (workspace_root / "workspace").mkdir(parents=True)
+    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    template = skill_dir / "assets" / "template.pptx"
+    template.parent.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# demo", encoding="utf-8")
+    template.write_bytes(b"\x00pptx-template")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(workspace_root), user_id="u1", backend="local",
+    )
+
+    payload = await runtime.copy_path(
+        source_path="/mnt/skills/demo-skill/assets/template.pptx",
+        destination_path="/mnt/user-data/workspace/汇报.pptx",
+    )
+
+    assert payload["source_path"] == "/mnt/skills/demo-skill/assets/template.pptx"
+    assert payload["destination_path"] == "/workspace/汇报.pptx"
+    assert payload["type"] == "file"
+    assert payload["bytes"] == len(b"\x00pptx-template")
+    assert (workspace_root / "workspace" / "汇报.pptx").read_bytes() == b"\x00pptx-template"
+    # 只读技能源文件不得被移动或改动
+    assert template.read_bytes() == b"\x00pptx-template"
+
+    # 技能路径只读，不能作为复制目标
+    with pytest.raises(ValueError):
+        await runtime.copy_path(
+            source_path="/mnt/user-data/workspace/汇报.pptx",
+            destination_path="/mnt/skills/demo-skill/assets/hacked.pptx",
+        )
+
+
 def test_workspace_json_list_read_and_visible_paths():
     conversation_id = f"conv_workspace_file_ops_{uuid.uuid4().hex}"
     paths = ensure_conversation_workspace(conversation_id)
@@ -673,6 +754,9 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def move_path(self, *_args, **_kwargs):
             raise AssertionError("unexpected move")
+
+        async def copy_path(self, *_args, **_kwargs):
+            raise AssertionError("unexpected copy")
 
         async def search_files(self, *_args, **_kwargs):
             raise AssertionError("unexpected search")

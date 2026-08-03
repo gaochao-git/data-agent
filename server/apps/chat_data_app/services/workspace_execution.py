@@ -1605,6 +1605,54 @@ async def sandbox_move_path(
         }
 
 
+async def sandbox_copy_path(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    source_path: str,
+    destination_path: str,
+) -> dict[str, Any]:
+    """Copy one readable file (workspace/outputs/uploads/skills) into a mutable destination."""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        source = await _resolve_sandbox_real_path(session=session, file_path=source_path)
+        if _is_tool_results_sandbox_path(source):
+            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能复制")
+        source_kind = await _sandbox_path_kind(session=session, path=source)
+        if source_kind != "file":
+            raise ValueError(f"file_copy 只支持复制单个文件: {source_path}")
+        destination = await _sandbox_mutable_path(session=session, file_path=destination_path)
+        try:
+            await _sandbox_path_kind(session=session, path=destination)
+        except Exception as exc:
+            if not _is_sandbox_file_not_found(exc):
+                raise
+        else:
+            raise ValueError(f"目标路径已存在: {destination_path}")
+        parent_type = await _sandbox_path_kind(
+            session=session,
+            path=str(PurePosixPath(destination).parent),
+        )
+        if parent_type != "dir":
+            raise ValueError(f"目标父路径不是目录: {destination_path}")
+        data = await _read_sandbox_file_bytes(sandbox=session.sandbox, path=source)
+        await _write_sandbox_file(sandbox=session.sandbox, path=destination, data=data)
+        await _persist_sandbox_paths(session=session, changed_paths=[destination])
+        logger.info(
+            "OpenSandbox file_copy 完成: sandbox_id=%s source=%s destination=%s bytes=%s",
+            session.sandbox_id,
+            source,
+            destination,
+            len(data),
+        )
+        return {
+            "source_path": sandbox_path_to_visible(source),
+            "destination_path": sandbox_path_to_visible(destination),
+            "type": "file",
+            "bytes": len(data),
+        }
+
+
 async def sandbox_search_files(
     *,
     session_ref: SandboxExecutionSessionRef,

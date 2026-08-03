@@ -178,6 +178,19 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             logger.error("file_move 执行失败: %s", exc, exc_info=True)
             return f"file_move 执行失败: {exc}"
 
+    @tool("file_copy")
+    async def file_copy(source_path: str, destination_path: str) -> str:
+        """复制 uploads/、workspace/、outputs/ 或只读 /mnt/skills 技能路径下的单个文件到 workspace/ 或 outputs/。目标路径不得存在，且其父目录必须已存在。"""
+        try:
+            payload = await workspace_runtime.copy_path(
+                source_path=source_path,
+                destination_path=destination_path,
+            )
+            return _json_result("file_copy", payload)
+        except Exception as exc:
+            logger.error("file_copy 执行失败: %s", exc, exc_info=True)
+            return f"file_copy 执行失败: {exc}"
+
     @tool("file_delete")
     async def file_delete(file_path: str) -> str:
         """删除 workspace/ 或 outputs/ 下的单个文件。不能删除目录、根目录或隐藏工具结果缓存。"""
@@ -313,6 +326,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         file_edit,
         file_write,
         file_move,
+        file_copy,
         file_delete,
         file_glob,
         file_grep,

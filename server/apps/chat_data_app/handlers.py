@@ -62,6 +62,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "file_edit": "修改文件",
     "file_write": "写入文件",
     "file_move": "移动文件",
+    "file_copy": "复制文件",
     "file_delete": "删除文件",
     "file_glob": "查找文件",
     "file_grep": "搜索文本",

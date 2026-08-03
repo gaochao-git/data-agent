@@ -1022,6 +1022,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "file_edit",
         "file_write",
         "file_move",
+        "file_copy",
         "file_delete",
         "file_glob",
         "file_grep",

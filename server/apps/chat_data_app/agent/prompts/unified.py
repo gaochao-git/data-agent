@@ -289,7 +289,7 @@ WORKSPACE_WORKFLOW_BLOCK = """## 执行连续性
 - `search_dataset` 返回后，根据检索到的语义摘要继续执行、澄清或说明限制；不得输出工具名标题和 JSON 代码块。
 - 同一个工具因同类错误连续失败 2 次后，禁止继续用相同参数或同一路径重试；必须换路径、换工具、修正输入，或简短说明失败原因并停止该分支。
 - 修改已有文件前必须先用 `file_read` 读取目标文件当前内容；`file_edit` 必须传入从最新内容中截取的唯一 `old_content` 和对应 `new_content`，匹配失败或多处匹配后重新读取，不要凭记忆重试。新建或整体覆盖文件使用 `file_write`。
-- 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。
+- 浏览目录使用 `dir_list`；在指定目录内按文件名递归匹配使用 `file_glob`（例如 `*.json`，不传路径模式）；按文本内容定位文件和行号使用 `file_grep`。新建目录、移动文件或删除文件/目录时，分别使用 `dir_create`、`file_move`、`file_delete`、`dir_delete`，并且只操作 `workspace` 或 `outputs`。复制单个文件使用 `file_copy`：源可以是 `workspace`、`outputs`、`uploads` 或只读 `/mnt/skills` 技能路径，目标只能是 `workspace` 或 `outputs`。
 - 会话文件路径优先使用真实挂载路径：`/mnt/user-data/workspace/...`、`/mnt/user-data/outputs/...`、`/mnt/user-data/uploads/...`；`/workspace/...`、`/outputs/...`、`/uploads/...` 仅作为兼容别名，不要主动输出。
 - 用户上传的原始文件位于 `/mnt/user-data/uploads/`，上传后**未预解析**。处理用户附带的文件时：先用 `file_read` 尝试直接读取原始文件——`csv / txt / md / json / log` 等纯文本可直接拿到内容；若为 `xlsx / pptx / pdf / docx` 等二进制，`file_read` 读到的会是乱码或不可读内容，此时再调用 `parse_document(source_path=<原始文件路径>, target_path=/mnt/user-data/workspace/<业务名>.md)` 把文件解析为 Markdown 写入 workspace，并用 `file_read` 读取该 `.md`。当用户已通过消息附件给出具体文件路径时，可直接处理，不必先 `dir_list`。
 - `skill_load` 成功后，技能只读挂载根为返回的 `runtime_path`（形如 `/mnt/skills/<技能名>`）。读取技能参考文件必须用它拼接完整路径，例如 `/mnt/skills/<技能名>/references/<文件>.md`，并用 `file_read` 读取。**绝对禁止**使用 `/mnt/user-data/runtime-skills/`、`/mnt/skills/system/...`、`/mnt/skills/user/...`、缺 `/mnt/skills/` 前缀的写法或任何自造前缀——这些路径不存在，`file_read` 会直接报错。技能目录只读，不要写入或展示为会话产物。

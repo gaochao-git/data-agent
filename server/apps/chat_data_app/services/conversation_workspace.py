@@ -39,6 +39,7 @@ from .workspace_execution import (
     parse_rg_output,
     run_command_in_sandbox,
     sandbox_artifact_payload,
+    sandbox_copy_path,
     sandbox_create_dir,
     sandbox_delete_path,
     sandbox_grep_text,
@@ -155,6 +156,14 @@ class WorkspaceBackend(Protocol):
     ) -> dict[str, Any]: ...
 
     async def move_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def copy_path(
         self,
         runtime: "ConversationWorkspaceRuntime",
         *,
@@ -359,6 +368,13 @@ class ConversationWorkspaceRuntime:
 
     async def move_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
         return await self.backend.move_path(
+            self,
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def copy_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
+        return await self.backend.copy_path(
             self,
             source_path=source_path,
             destination_path=destination_path,
@@ -1331,6 +1347,45 @@ def _move_local_path(workspace_root: str, source_path: str, destination_path: st
     }
 
 
+def _copy_local_resolved_path(
+    workspace_root: str,
+    source: Path,
+    source_visible_path: str,
+    destination_path: str,
+) -> dict[str, Any]:
+    """Copy one already-resolved readable file into a mutable workspace destination."""
+    if source.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not source.exists():
+        raise FileNotFoundError(f"源路径不存在: {source_visible_path}")
+    if not source.is_file():
+        raise ValueError(f"file_copy 只支持复制单个文件: {source_visible_path}")
+    destination = _resolve_local_mutable_path(workspace_root, destination_path)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError(f"目标路径已存在: {destination_path}")
+    if not destination.parent.is_dir():
+        raise ValueError(f"目标父目录不存在: {destination_path}")
+    shutil.copy2(source, destination)
+    return {
+        "source_path": source_visible_path,
+        "destination_path": to_visible_path(workspace_root, destination),
+        "type": "file",
+        "bytes": destination.stat().st_size,
+    }
+
+
+def _copy_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:
+    source = resolve_workspace_path(workspace_root, source_path)
+    if is_tool_result_workspace_path(workspace_root, source):
+        raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能复制")
+    return _copy_local_resolved_path(
+        workspace_root,
+        source,
+        to_visible_path(workspace_root, source),
+        destination_path,
+    )
+
+
 def _search_local_workspace_files(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -1626,6 +1681,30 @@ class LocalWorkspaceBackend:
             destination_path,
         )
 
+    async def copy_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        raw_source = str(source_path or "").strip()
+        if raw_source.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            source, visible_source = await runtime.resolve_readonly_skill_path_async(raw_source)
+            return await asyncio.to_thread(
+                _copy_local_resolved_path,
+                runtime.workspace_root,
+                source,
+                visible_source,
+                destination_path,
+            )
+        return await asyncio.to_thread(
+            _copy_local_path,
+            runtime.workspace_root,
+            source_path,
+            destination_path,
+        )
+
     async def search_files(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -1897,6 +1976,19 @@ class SandboxWorkspaceBackend:
         destination_path: str,
     ) -> dict[str, Any]:
         return await sandbox_move_path(
+            session_ref=await self._session_ref(runtime),
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def copy_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_copy_path(
             session_ref=await self._session_ref(runtime),
             source_path=source_path,
             destination_path=destination_path,

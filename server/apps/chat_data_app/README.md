@@ -87,7 +87,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 | 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
-- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
+- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts` / `skill_load`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历、产物解析与技能加载委托给 `WorkspaceBackend`。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
 - `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
 
 ```text

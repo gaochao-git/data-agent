@@ -250,6 +250,78 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
     assert target.read_text(encoding="utf-8") == "status=new"
 
 
+def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tmp_path):
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    remote = {"/mnt/user-data/uploads/source.docx": b"\x00docx"}
+
+    class FakeFiles:
+        async def read_bytes(self, path):
+            return remote[path]
+
+        async def write_file(self, path, data, mode=None):
+            remote[path] = data
+
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=FakeFiles()),
+        sandbox_id="sbx_copy",
+        workspace_root=str(workspace_root),
+        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+    )
+
+    async def fake_kind(session, path, entry=None):
+        if path == "/mnt/user-data/uploads/source.docx":
+            return "file"
+        if path == "/mnt/user-data/workspace":
+            return "dir"
+        raise FileNotFoundError(f"路径不存在: {path}")
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_kind)
+
+    payload = asyncio.run(workspace_execution.sandbox_copy_path(
+        session_ref=session_ref,
+        source_path="/mnt/user-data/uploads/source.docx",
+        destination_path="/mnt/user-data/workspace/copy.docx",
+    ))
+
+    assert payload["type"] == "file"
+    assert payload["bytes"] == len(b"\x00docx")
+    assert payload["source_path"].endswith("/uploads/source.docx")
+    assert remote["/mnt/user-data/workspace/copy.docx"] == b"\x00docx"
+    assert (workspace_root / "workspace" / "copy.docx").read_bytes() == b"\x00docx"
+
+
+def test_sandbox_file_copy_rejects_tool_offload_source_and_existing_destination(monkeypatch, tmp_path):
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(tmp_path / "chat-data"))
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=SimpleNamespace()),
+        sandbox_id="sbx_copy_guard",
+        workspace_root=str(workspace_root),
+        application_manifest=workspace_execution._mutable_application_manifest(workspace_root),
+    )
+
+    with pytest.raises(ValueError, match="tool-offload"):
+        asyncio.run(workspace_execution.sandbox_copy_path(
+            session_ref=session_ref,
+            source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+            destination_path="/mnt/user-data/workspace/e.json",
+        ))
+
+    async def fake_kind(session, path, entry=None):
+        return "file"
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_path_kind", fake_kind)
+    with pytest.raises(ValueError, match="目标路径已存在"):
+        asyncio.run(workspace_execution.sandbox_copy_path(
+            session_ref=session_ref,
+            source_path="/mnt/user-data/uploads/a.bin",
+            destination_path="/mnt/user-data/workspace/b.bin",
+        ))
+
+
 def test_sandbox_file_edit_rejects_missing_or_nonunique_content(monkeypatch):
     session_ref = SandboxExecutionSessionRef()
     session_ref.current = SandboxExecutionSession(
