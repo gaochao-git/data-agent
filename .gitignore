@@ -38,6 +38,7 @@ build/
 
 # Python 测试
 .pytest_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
