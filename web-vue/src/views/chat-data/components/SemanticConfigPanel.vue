@@ -490,11 +490,11 @@ const createConfig = async () => {
   if (creatingConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
+    const { value } = await ElMessageBox.prompt('请输入语义模型名称', '新建语义模型', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入指标集名称',
+      inputPlaceholder: '请输入语义模型名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -773,13 +773,13 @@ const activeFieldRowsValidationError = computed(() => {
 })
 
 const activeConfigSaveDisabledReason = computed(() => {
-  if (!activeConfig.value) return '暂无指标集'
+  if (!activeConfig.value) return '暂无语义模型'
   if (isSavingActiveConfig.value) return '正在保存'
-  if (!activeConfig.value.name) return '请填写指标集名称'
+  if (!activeConfig.value.name) return '请填写语义模型名称'
   if (editingType.value !== null) return '请先完成当前编辑'
   if (activeFieldRowsValidationError.value) return activeFieldRowsValidationError.value
   if (!isActiveConfigDirty.value && !isFieldRowsDirty.value) return '没有需要保存的修改'
-  if (!canManageConfig(activeConfig.value)) return '没有权限修改该指标集'
+  if (!canManageConfig(activeConfig.value)) return '没有权限修改该语义模型'
   return ''
 })
 
@@ -1188,7 +1188,6 @@ const formatJoinTypeLabel = (joinType?: string) => {
 const formatRelationshipTypeLabel = (relationshipType?: string) => {
   if (relationshipType === 'one_to_many') return '一对多'
   if (relationshipType === 'many_to_one') return '多对一'
-  if (relationshipType === 'many_to_many') return '多对多'
   return '一对一'
 }
 
@@ -2578,27 +2577,27 @@ const saveOntologyRules = (ontologyRules: string) => {
         >
           <i class="fa-solid fa-arrow-left"></i>
         </button>
-        <div class="text-sm font-semibold text-gray-800">指标集管理</div>
+        <div class="text-sm font-semibold text-gray-800">模型管理</div>
       </div>
       <div class="flex min-w-0 flex-1 flex-nowrap items-center gap-3">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
         <div class="h-9 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
           {{ datasourceName || '暂无数据源' }}
         </div>
-        <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
+        <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
         <el-select
           :model-value="activeConfig?.id || ''"
           class="min-w-0 flex-1"
           filterable
           :disabled="loading || configs.length === 0"
           :title="activeConfig ? formatConfigOptionLabel(activeConfig) : ''"
-          placeholder="请选择指标集"
+          placeholder="请选择语义模型"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
           @change="toggleExpand"
         >
           <el-option v-if="loading" value="" label="加载中" />
-          <el-option v-else-if="configs.length === 0" value="" label="暂无指标集" />
+          <el-option v-else-if="configs.length === 0" value="" label="暂无语义模型" />
           <el-option
             v-for="(config, configIndex) in configs"
             :key="config.id"
@@ -2609,7 +2608,7 @@ const saveOntologyRules = (ontologyRules: string) => {
         </el-select>
         <button
           class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建指标集"
+          title="新建语义模型"
           :disabled="creatingConfig"
           @click="createConfig"
         >
@@ -2627,8 +2626,8 @@ const saveOntologyRules = (ontologyRules: string) => {
     <div v-else class="flex-1 min-h-0 p-4">
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
-        <p class="text-sm text-gray-500 m-0 mb-1">暂无指标集</p>
-        <span class="text-xs text-gray-400">点击上方加号创建第一个指标集</span>
+        <p class="text-sm text-gray-500 m-0 mb-1">暂无语义模型</p>
+        <span class="text-xs text-gray-400">点击上方加号创建第一个语义模型</span>
       </div>
 
       <div v-else class="h-full min-h-0">
@@ -2644,7 +2643,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                   class="min-w-0 flex-1"
                   filterable
                   :title="formatConfigOptionLabel(activeConfig)"
-                  placeholder="请选择指标集"
+                  placeholder="请选择语义模型"
                   fit-input-width
                   popper-class="chatdata-semantic-config-select-popper"
                   @change="toggleExpand"
@@ -2659,7 +2658,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                 </el-select>
                 <button
                   class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-md bg-blue-500 text-white text-[12px] cursor-pointer transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="新建指标集"
+                  title="新建语义模型"
                   :disabled="creatingConfig"
                   @click="createConfig"
                 >
@@ -2670,14 +2669,14 @@ const saveOntologyRules = (ontologyRules: string) => {
                 type="text"
                 :value="activeConfig.name"
                 class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-700 outline-none focus:border-blue-500"
-                placeholder="指标集名称"
+                placeholder="语义模型名称"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { name: ($event.target as HTMLInputElement).value })"
               />
               <input
                 type="text"
                 :value="activeConfig.description"
-                placeholder="指标集描述：简要说明这个指标集是什么"
+                placeholder="语义模型描述：简要说明这个语义模型是什么"
                 class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-500 outline-none focus:border-blue-500"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { description: ($event.target as HTMLInputElement).value })"
@@ -2726,7 +2725,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                     canSaveActiveConfig ? 'bg-[#1677FF] text-white cursor-pointer hover:bg-[#0958D9]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   ]"
                   :disabled="!canSaveActiveConfig"
-                  :title="activeConfigSaveDisabledReason || '保存指标集'"
+                  :title="activeConfigSaveDisabledReason || '保存语义模型'"
                   @click="saveActiveConfig"
                 >
                   <template v-if="isSavingActiveConfig">
@@ -2739,7 +2738,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                 <button
                   class="px-3 py-2 rounded-md text-xs border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
                   :disabled="!canManageConfig(activeConfig)"
-                  title="删除指标集"
+                  title="删除语义模型"
                   @click="handleDeleteConfig(activeConfig.id, activeConfig.name)"
                 >
                   <i class="fa-solid fa-trash mr-1"></i>删除

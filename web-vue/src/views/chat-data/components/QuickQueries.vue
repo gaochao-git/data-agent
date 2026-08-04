@@ -410,7 +410,7 @@ const getTemplatePreview = (template: QueryTemplate) => {
     return table ? `${table}(${getJoinTypeLabel(String(item.joinType || ''))})` : ''
   })
   const parts = [
-    config.semantic_config_name ? `指标集 ${config.semantic_config_name}` : '',
+    config.semantic_config_name ? `语义模型 ${config.semantic_config_name}` : '',
     config.mainTable ? `表 ${config.mainTable}` : '',
     dimensions ? `维度 ${dimensions}` : '',
     aggregations ? `指标 ${aggregations}` : '',

@@ -117,7 +117,7 @@ watch(visible, (next) => {
           </div>
         </div>
         <div class="mt-2 text-xs text-gray-500">
-          智能问数学用户对话和纠错反馈；可视化查询学用户配置的维度、指标和过滤；SQL查询学用户编写的SQL。仅分析当前指标集相关历史，采纳后仍需保存当前指标集。
+          智能问数学用户对话和纠错反馈；可视化查询学习用户配置的维度、指标和过滤；SQL查询学习用户编写的SQL。仅分析当前语义模型相关历史，采纳后仍需保存当前语义模型。
         </div>
         <div class="mt-1 text-xs text-gray-500">
           执行时先取最近 {{ historyLearningForm.days }} 天历史，最多扫描 {{ historyLearningForm.limit * 5 }} 条用于筛选，最终最多学习 {{ historyLearningForm.limit }} 条。
@@ -140,7 +140,7 @@ watch(visible, (next) => {
         <div class="rounded border border-gray-200 bg-white px-3 py-2">
           SQL查询 {{ historyLearningResult.source_stats?.sql?.matched || 0 }} 条
         </div>
-        <div class="rounded border border-gray-200 bg-white px-3 py-2" :title="`过滤原因包括：来源未选、非当前指标集、SQL表范围不匹配、SQL解析失败、智能问数缺少对话上下文等`">
+        <div class="rounded border border-gray-200 bg-white px-3 py-2" :title="`过滤原因包括：来源未选、非当前语义模型、SQL表范围不匹配、SQL解析失败、智能问数缺少对话上下文等`">
           过滤 {{ Math.max(0, historyLearningResult.scanned_count - historyLearningResult.matched_count) }} 条
         </div>
       </div>

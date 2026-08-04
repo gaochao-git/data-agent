@@ -83,7 +83,7 @@ const PARAM_LABELS: Record<string, string> = {
   source_path: '源路径',
   target_path: '目标路径',
   destination_path: '目标路径',
-  semantic_config_id: '指标集ID',
+  semantic_config_id: '语义模型ID',
   content: '内容',
   mode: '写入模式',
   max_depth: '最大深度',
@@ -334,10 +334,10 @@ const semanticSelectionConfigs = computed(() => {
 const semanticSelectionHeader = computed(() => {
   const result = semanticSelectionResult.value
   if (!result) return ''
-  if (result.directory) return '当前可见指标集'
+  if (result.directory) return '当前可见语义模型'
   return semanticSelectionConfigs.value.length > 0
-    ? `检索到 ${semanticSelectionConfigs.value.length} 个相关指标集`
-    : '未检索到相关指标集'
+    ? `检索到 ${semanticSelectionConfigs.value.length} 个相关语义模型`
+    : '未检索到相关语义模型'
 })
 
 type ResultPart = { type: 'text' | 'sql' | 'json'; content: string }

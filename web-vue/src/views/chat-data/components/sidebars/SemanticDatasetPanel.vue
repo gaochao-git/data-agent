@@ -268,7 +268,7 @@ const currentDatasetValue = computed(() => {
 })
 
 const currentDatasetName = computed(() => {
-  return availableSemanticConfigs.value.find(cfg => cfg.id === currentDatasetValue.value)?.name || '请选择指标集'
+  return availableSemanticConfigs.value.find(cfg => cfg.id === currentDatasetValue.value)?.name || '请选择语义模型'
 })
 
 const toggleDatasetDropdown = () => {
@@ -338,7 +338,7 @@ onUnmounted(() => {
           <input
             v-model.trim="datasetKeyword"
             type="text"
-            placeholder="搜索指标集"
+            placeholder="搜索语义模型"
             class="mb-1 h-[28px] w-full rounded border border-[#DDE1E8] bg-white px-2 text-[12px] text-[#21252C] outline-none focus:border-[#165DFF] placeholder:text-[#93949580]"
           />
           <div class="max-h-[190px] overflow-y-auto">
@@ -357,7 +357,7 @@ onUnmounted(() => {
               <span v-else class="w-3 shrink-0"></span>
               <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{{ cfg.name }}</span>
             </button>
-            <div v-if="filteredSemanticConfigs.length === 0" class="px-2 py-2 text-[12px] text-[#9CA3AF]">无匹配指标集</div>
+            <div v-if="filteredSemanticConfigs.length === 0" class="px-2 py-2 text-[12px] text-[#9CA3AF]">无匹配语义模型</div>
           </div>
         </div>
       </div>
@@ -365,7 +365,7 @@ onUnmounted(() => {
         type="button"
         class="ml-1 h-[28px] w-[28px] shrink-0 rounded border border-[#DDE1E8] bg-white text-[#5B5C60] transition-colors hover:border-[#165DFF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
         :disabled="loading"
-        title="刷新指标集"
+        title="刷新语义模型"
         @click="emit('refresh')"
       >
         <i :class="['fa-solid fa-rotate-right text-[12px]', loading ? 'fa-spin' : '']"></i>

@@ -85,7 +85,7 @@ const {
   adminMode: toRef(props, 'adminMode'),
 })
 
-const drawerTitle = computed(() => props.config?.name || '当前指标集')
+const drawerTitle = computed(() => props.config?.name || '当前语义模型')
 
 watch(visible, async (next) => {
   if (!next) return
@@ -119,7 +119,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
           ]"
         />
         <div class="py-2 text-xs text-gray-500">
-          每个指标集需先维护专属测试集：根据当前指标/维度生成草稿 → 校对并保存 → 再跑接口链路评测。
+          每个语义模型需先维护专属测试集：根据当前指标/维度生成草稿 → 校对并保存 → 再跑接口链路评测。
           <span v-if="evaluationCasesDirty" class="text-amber-600 ml-1">（有未保存修改）</span>
         </div>
       </div>
@@ -182,7 +182,7 @@ watch(evaluateDrawerTab, handleEvaluationTabChange)
             </el-table-column>
           </el-table>
           <div v-if="!evaluationCasesLoading && evaluationCases.length === 0" class="py-16 text-center text-sm text-gray-400">
-            当前指标集还没有测试集。请点击「生成测试集草稿」，系统会按本指标集的指标、维度和表关系自动生成评测用例并生成标准 SQL。
+            当前语义模型还没有测试集。请点击「生成测试集草稿」，系统会按本语义模型的指标、维度和表关系自动生成评测用例并生成标准 SQL。
           </div>
         </div>
 

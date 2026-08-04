@@ -1473,7 +1473,7 @@ defineExpose({
                 :disabled="checkingHealthId !== null"
                 :class="['flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                   checkingHealthId === ds.id ? 'text-blue-600' : 'text-slate-600 hover:bg-slate-200']"
-                title="校验指标集"
+                title="校验语义模型"
                 @click.stop="handleCheckSemanticHealth(ds)"
               >
                 <i :class="['fa-solid text-xs', checkingHealthId === ds.id ? 'fa-spinner fa-spin' : 'fa-shield-halved']"></i>
@@ -1555,11 +1555,11 @@ defineExpose({
               </el-popover>
               <button
                 class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200"
-                title="指标集管理"
+                title="模型管理"
                 @click.stop="handleOpenSemanticConfig(ds.id)"
               >
                 <i class="fa-solid fa-sitemap text-xs"></i>
-                <span>指标</span>
+                <span>模型</span>
               </button>
               <!-- 删除 -->
               <button
@@ -1854,13 +1854,13 @@ defineExpose({
 
     </el-dialog>
 
-    <!-- 指标集校验结果 -->
+    <!-- 语义模型校验结果 -->
     <el-dialog v-model="showHealthModal" width="860px" :show-close="false">
       <template #header>
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <i class="fa-solid fa-shield-halved text-blue-600"></i>
-            <h3 class="m-0 text-lg font-semibold text-slate-900">指标集校验<span v-if="healthResult"> - {{ healthResult.group_name }}</span></h3>
+            <h3 class="m-0 text-lg font-semibold text-slate-900">语义模型校验<span v-if="healthResult"> - {{ healthResult.group_name }}</span></h3>
           </div>
           <button class="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" @click="showHealthModal = false">
             <i class="fa-solid fa-xmark"></i>
@@ -1902,14 +1902,14 @@ defineExpose({
         </div>
 
         <div v-if="healthResult.configs.length === 0" class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-          当前数据源还没有指标集
+          当前数据源还没有语义模型
         </div>
         <div v-else class="rounded-xl border border-slate-200 bg-white">
           <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <div class="flex items-start gap-3">
               <div class="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">2</div>
               <div>
-                <div class="text-sm font-semibold text-slate-900">缓存表 ↔ 指标集</div>
+                <div class="text-sm font-semibold text-slate-900">缓存表 ↔ 语义模型</div>
                 <div class="mt-0.5 text-xs text-slate-400">检查指标、维度、关联关系引用的表字段，是否仍存在于当前缓存表结构。</div>
               </div>
             </div>
@@ -1920,7 +1920,7 @@ defineExpose({
             </span>
           </div>
           <div class="border-b border-slate-100 px-4 py-3 text-xs text-slate-500">
-            已校验 {{ healthResult.semantic?.summary.config_count ?? healthResult.summary.config_count }} 个指标集，发现 {{ healthResult.semantic?.summary.issue_count ?? healthResult.summary.issue_count }} 个问题
+            已校验 {{ healthResult.semantic?.summary.config_count ?? healthResult.summary.config_count }} 个语义模型，发现 {{ healthResult.semantic?.summary.issue_count ?? healthResult.summary.issue_count }} 个问题
           </div>
           <div class="max-h-[360px] space-y-3 overflow-y-auto bg-slate-50/40 p-3">
             <div v-for="config in healthResult.configs" :key="config.config_id" class="rounded-xl border border-slate-200 bg-white">
@@ -1938,7 +1938,7 @@ defineExpose({
                 </span>
               </div>
               <div v-if="config.issues.length === 0" class="px-4 py-3 text-xs text-slate-400">
-                该指标集引用的指标、维度和关联关系均能匹配当前缓存表结构。
+                该语义模型引用的指标、维度和关联关系均能匹配当前缓存表结构。
               </div>
               <div v-else class="space-y-2 p-3">
                 <div
@@ -2085,7 +2085,7 @@ defineExpose({
 
       <div class="space-y-3">
         <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
-          字段字典用于维护物理字段的枚举值、数据存储格式和单位，供指标集展示和智能问数理解字段。
+          字段字典用于维护物理字段的枚举值、数据存储格式和单位，供语义模型展示和智能问数理解字段。
         </div>
 
         <div v-if="loadingColumnDict" class="flex min-h-[220px] flex-col items-center justify-center text-slate-400">

@@ -19,7 +19,7 @@ describe('toolDisplay', () => {
       dir_delete: '删除目录',
       present_artifacts: '展示文件',
       get_current_time: '获取当前时间',
-      search_dataset: '搜索指标集',
+      search_dataset: '搜索语义模型',
       dsl2sql_tool: '生成 SQL',
       semantic_query_tool: '查询数据',
       calculator_tool: '精确计算',

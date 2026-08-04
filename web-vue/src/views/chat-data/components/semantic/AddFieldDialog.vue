@@ -124,7 +124,7 @@ const handleTableChange = () => {
       </div>
       <div>
         <div class="text-xs text-gray-600 mb-1">显示名称</div>
-        <el-input v-model="form.displayName" placeholder="请输入显示名称（同指标集内唯一）" />
+        <el-input v-model="form.displayName" placeholder="请输入显示名称（同语义模型内唯一）" />
       </div>
       <div>
         <div class="text-xs text-gray-600 mb-1">新增类型</div>

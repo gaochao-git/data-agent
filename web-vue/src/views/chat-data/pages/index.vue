@@ -47,7 +47,7 @@ const DEFAULT_MODE_LABELS: Record<ViewMode, string> = {
   builder: '可视化查询',
   editor: 'SQL查询',
   dashboard: '数据看板',
-  metricConfig: '指标集配置',
+  metricConfig: '语义模型配置',
 }
 
 const resolveModeLabels = (): Record<ViewMode, string> => {
@@ -296,11 +296,11 @@ const activeSidebarTab = ref<string>('metrics')
 const sidebarTabs = computed(() => {
   const tabs: Array<{ key: string; label: string; icon: string }> = []
   if (viewMode.value === 'conversation') {
-    tabs.push({ key: 'metrics', label: '指标集', icon: 'fa-bullseye' })
+    tabs.push({ key: 'metrics', label: '语义模型', icon: 'fa-bullseye' })
   } else if (viewMode.value === 'dashboard') {
     tabs.push({ key: 'dashboard', label: '数据看板', icon: 'fa-chart-pie' })
   } else if (viewMode.value === 'builder') {
-    tabs.push({ key: 'tables', label: '指标集', icon: 'fa-database' })
+    tabs.push({ key: 'tables', label: '语义模型', icon: 'fa-database' })
   } else if (viewMode.value === 'editor') {
     tabs.push({ key: 'tables', label: '数据表', icon: 'fa-database' })
   }
@@ -970,11 +970,11 @@ const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
   let datasetName = ''
   try {
-    const { value } = await ElMessageBox.prompt('请输入指标集名称', '新建指标集', {
+    const { value } = await ElMessageBox.prompt('请输入语义模型名称', '新建语义模型', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputValue: '',
-      inputPlaceholder: '请输入指标集名称',
+      inputPlaceholder: '请输入语义模型名称',
       inputPattern: /\S+/,
       inputErrorMessage: '名称不能为空',
       customClass: 'chatdata-message-box',
@@ -1566,7 +1566,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 指标集配置：全宽内容区，不占用左侧栏空间 -->
+    <!-- 语义模型配置：全宽内容区，不占用左侧栏空间 -->
     <div v-if="!noMatchedDatasource && metricConfigMounted" v-show="viewMode === 'metricConfig'" class="flex flex-col overflow-hidden bg-[#F5F7FA]" style="height: calc(100vh - 130px)">
       <div class="h-12 shrink-0 flex flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
@@ -1579,7 +1579,7 @@ onUnmounted(() => {
             {{ ds.group_name }}
           </option>
         </select>
-        <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">指标集</span>
+        <span class="ml-4 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
         <el-select
           v-model="metricSelectedSemanticConfigId"
           class="min-w-0 flex-1"
@@ -1587,9 +1587,9 @@ onUnmounted(() => {
           :loading="loadingMetricSemanticConfigs"
           :disabled="loadingMetricSemanticConfigs || metricSemanticConfigs.length === 0"
           :title="currentMetricSemanticConfig ? formatMetricSemanticConfigLabel(currentMetricSemanticConfig) : ''"
-          placeholder="请选择指标集"
+          placeholder="请选择语义模型"
           loading-text="加载中"
-          no-data-text="暂无指标集"
+          no-data-text="暂无语义模型"
           fit-input-width
           popper-class="chatdata-semantic-config-select-popper"
         >
@@ -1603,7 +1603,7 @@ onUnmounted(() => {
         </el-select>
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg border-none bg-blue-500 text-white text-[13px] transition-all hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建指标集"
+          title="新建语义模型"
           :disabled="!selectedDatasourceId || creatingMetricConfig"
           @click="handleCreateMetricConfig"
         >

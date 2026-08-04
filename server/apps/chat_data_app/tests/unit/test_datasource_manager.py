@@ -2151,7 +2151,7 @@ def test_datasource_manager_relationship_and_helper_fallback_branches(monkeypatc
     assert relationships[0]["relationship_type"] == "one_to_one"
     assert relationships[1]["join_conditions"] == [{"left_column": "user_id", "right_column": "user_id"}]
 
-    for relationship_type in ("one_to_one", "one_to_many", "many_to_one", "many_to_many"):
+    for relationship_type in ("one_to_one", "one_to_many", "many_to_one"):
         candidate = {
             "semantic_configs": [{
                 "relationships": [{

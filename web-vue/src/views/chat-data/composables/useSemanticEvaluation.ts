@@ -211,7 +211,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     await loadEvaluationCases()
     evaluateDrawerTab.value = evaluationSceneReady.value ? 'run' : 'cases'
     if (options.hasUnsavedSemanticConfig.value) {
-      ElMessage.warning('当前指标集有未保存修改，请保存后再运行评测')
+      ElMessage.warning('当前语义模型有未保存修改，请保存后再运行评测')
     }
   }
 
@@ -324,7 +324,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     if (evaluationCases.value && evaluationCases.value.length > 0) {
       try {
         await ElMessageBox.confirm(
-          '当前指标集已有测试集，继续生成将覆盖已有测试集，是否继续？',
+          '当前语义模型已有测试集，继续生成将覆盖已有测试集，是否继续？',
           '确认生成',
           {
             confirmButtonText: '继续',
@@ -353,7 +353,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
       evaluationCasesDirty.value = evaluationCases.value.length > 0
       syncEvaluationRunList()
       evaluateDrawerTab.value = 'cases'
-      ElMessage.success('已根据当前指标集生成测试集草稿，请校对后保存')
+      ElMessage.success('已根据当前语义模型生成测试集草稿，请校对后保存')
     } catch (err) {
       console.error('生成测试集失败:', err)
       ElMessage.error('生成测试集失败')
@@ -566,7 +566,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
     const datasourceId = currentDatasourceId()
     if (!config || !datasourceId) return
     if (!evaluationSceneReady.value || evaluationCases.value.length === 0) {
-      ElMessage.warning('请先在「测试集」页根据当前指标集生成草稿并保存')
+      ElMessage.warning('请先在「测试集」页根据当前语义模型生成草稿并保存')
       evaluateDrawerTab.value = 'cases'
       return
     }
@@ -576,7 +576,7 @@ export function useSemanticEvaluation(options: UseSemanticEvaluationOptions) {
       return
     }
     if (options.hasUnsavedSemanticConfig.value) {
-      ElMessage.warning('当前指标集有未保存修改，请先保存后再评测')
+      ElMessage.warning('当前语义模型有未保存修改，请先保存后再评测')
       return
     }
     const selectedIds = evaluationSelectedRows.value.map(row => row.id)

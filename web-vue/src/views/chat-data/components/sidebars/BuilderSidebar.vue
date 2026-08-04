@@ -145,7 +145,7 @@ const handleDragEnd = () => {
 
       <div v-else-if="!semanticConfig" class="flex flex-col items-center justify-center gap-2 p-6 text-gray-400 text-xs">
         <i class="fa-solid fa-layer-group text-xl opacity-50"></i>
-        <span>请选择指标集</span>
+        <span>请选择语义模型</span>
       </div>
 
       <template v-else>

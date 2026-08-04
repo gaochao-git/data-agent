@@ -164,7 +164,7 @@ const filteredSemanticConfigs = computed(() => {
 })
 
 const getSmartSelectionSummary = () => {
-  return `${semanticConfigs.value.length}指标集/${semanticConfigTableCount.value}表`
+  return `${semanticConfigs.value.length}语义模型/${semanticConfigTableCount.value}表`
 }
 
 const getConfigSummary = (config: SemanticConfigItem) => {
@@ -186,7 +186,7 @@ const getConfigScopeLabel = (config: SemanticConfigItem) => {
 }
 
 const getConfigScopeTitle = (config: SemanticConfigItem) => {
-  return `${getConfigScopeLabel(config)}指标集`
+  return `${getConfigScopeLabel(config)}语义模型`
 }
 
 const getConfigSelectCircleClass = (config: SemanticConfigItem) => {
@@ -667,7 +667,7 @@ onUnmounted(() => {
 
       <div v-else-if="semanticConfigs.length === 0" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
         <i class="fa-solid fa-database text-2xl opacity-50"></i>
-        <span>暂无指标集</span>
+        <span>暂无语义模型</span>
       </div>
 
       <div v-else class="semantic-config-list flex-1 min-h-0 overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-black/10">
@@ -677,7 +677,7 @@ onUnmounted(() => {
             <input
               v-model="configSearchKeyword"
               class="h-full min-w-0 flex-1 border-none bg-transparent p-0 text-[12px] text-[#1D2129] outline-none placeholder:text-[#A8ABB2]"
-              placeholder="搜索指标集、维度、指标"
+        placeholder="搜索语义模型、维度、指标"
             />
             <button
               v-if="configSearchKeyword"
@@ -696,7 +696,7 @@ onUnmounted(() => {
             'mb-1 flex h-[28px] cursor-pointer items-center rounded px-4 text-[12px] text-[#4E5969] transition-colors hover:bg-[#f0f1f3]',
             selectedConfigId === null ? 'bg-[#E8F3FF]' : ''
           ]"
-          :title="`智能选择指标集：可用指标集 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
+          :title="`智能选择语义模型：可用语义模型 ${semanticConfigs.length} 个，涉及表 ${semanticConfigTableCount} 张`"
           @click="handleSelectConfig(null)"
         >
           <span
@@ -704,14 +704,14 @@ onUnmounted(() => {
               'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px]',
               selectedConfigId === null ? 'border-[#165DFF] bg-[#165DFF] text-white' : 'border-[#C9CDD4] bg-white text-transparent hover:border-[#165DFF]'
             ]"
-            title="使用智能选择指标集提问"
+            title="使用智能选择语义模型提问"
           >
             <i class="fa-solid fa-check"></i>
           </span>
-          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择指标集</span>
+          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[#2E2F32]">智能选择语义模型</span>
           <span
             class="semantic-config-summary ml-2 shrink-0 text-[10px] text-[#939495]"
-            :title="`可用指标集：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
+            :title="`可用语义模型：${semanticConfigs.length}；涉及表：${semanticConfigTableCount}`"
           >
             {{ getSmartSelectionSummary() }}
           </span>
@@ -719,7 +719,7 @@ onUnmounted(() => {
             type="button"
             class="ml-1 flex h-5 w-5 items-center justify-center rounded text-[#5B5C60] transition-colors hover:bg-[#E8F3FF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="isLoadingConfigs"
-            title="刷新指标集"
+            title="刷新语义模型"
             @click.stop="loadSemanticConfigs"
           >
             <i :class="['fa-solid fa-rotate-right text-[10px]', isLoadingConfigs ? 'fa-spin' : '']"></i>
@@ -730,7 +730,7 @@ onUnmounted(() => {
           v-if="filteredSemanticConfigs.length === 0"
           class="px-4 py-5 text-center text-[12px] text-[#A8ABB2]"
         >
-          未找到匹配的指标集
+          未找到匹配的语义模型
         </div>
 
         <div v-for="config in filteredSemanticConfigs" :key="config.id" class="mb-0.5">
@@ -749,7 +749,7 @@ onUnmounted(() => {
                 'mr-2 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border text-[9px] transition-all duration-150',
                 getConfigSelectCircleClass(config)
               ]"
-              :title="`${selectedConfigId === config.id ? '当前提问使用该指标集' : '使用该指标集提问'}（${getConfigScopeTitle(config)}）`"
+              :title="`${selectedConfigId === config.id ? '当前提问使用该语义模型' : '使用该语义模型提问'}（${getConfigScopeTitle(config)}）`"
               @click.stop="handleSelectConfig(selectedConfigId === config.id ? null : config.id)"
             >
               <i class="fa-solid fa-check"></i>

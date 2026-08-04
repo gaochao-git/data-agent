@@ -562,7 +562,7 @@ export interface SemanticRelationship {
     left_column: string
     right_column: string
   }>
-  relationship_type: 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
+  relationship_type: 'one_to_one' | 'one_to_many' | 'many_to_one'
   join_type: 'inner' | 'left' | 'right'
 }
 

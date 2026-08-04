@@ -34,7 +34,6 @@ SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES = {
     "one_to_one",
     "one_to_many",
     "many_to_one",
-    "many_to_many",
 }
 DEFAULT_SEMANTIC_RELATIONSHIP_TYPE = "one_to_one"
 

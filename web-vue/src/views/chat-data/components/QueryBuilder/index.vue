@@ -285,7 +285,7 @@ const hasRawResult = computed(() => !!rawResultData.value)
 
 const ensureSemanticConfigSelected = () => {
   if (hasSemanticConfigSelected.value) return true
-  ElMessage.warning('请先选择指标集')
+  ElMessage.warning('请先选择语义模型')
   return false
 }
 
@@ -1130,7 +1130,7 @@ const addFieldToDimension = (field: BuilderDragFieldData) => {
   const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
     return
   }
   // 支持指标 -> 维度：自动转换为非聚合字段
@@ -1171,7 +1171,7 @@ const addFieldToAggregation = (field: BuilderDragFieldData) => {
   const tableAlias = getTableAlias(field)
   if (!table || !column) return
   if (!canConnectTableInSemanticMode({ table, tableAlias })) {
-    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
     return
   }
   const targetFunc = (aggFunc || getDefaultAggregationFunc({ table, column, type: field?.type })) as AggregationField['func']
@@ -2027,7 +2027,7 @@ const handleDropToFilter = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2063,7 +2063,7 @@ const handleDropToOrder = (e: DragEvent) => {
     const tableAlias = getTableAlias(draggedItem.value.data)
     if (!canConnectTableInSemanticMode({ table, tableAlias })) {
       draggedItem.value = null
-      ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善指标集关系')
+    ElMessage.warning('该字段所属表与当前已选字段无关联，请先完善语义模型关系')
       return
     }
     const resolvedAggFunc = (aggFunc || getAggFuncFromExpression(expression)) as AggregationField['func'] | undefined
@@ -2471,7 +2471,7 @@ const handleQuickBuilderConfig = (config: BuilderConfig) => {
 
   if (!isAvailableSemanticConfig(targetConfigId)) {
     const configName = getBuilderSemanticConfigName(config) || targetConfigId
-    ElMessage.warning(`收藏关联的指标集不可用：${configName}`)
+    ElMessage.warning(`收藏关联的语义模型不可用：${configName}`)
     return
   }
 

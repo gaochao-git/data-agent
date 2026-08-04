@@ -4,7 +4,6 @@ export const SEMANTIC_RELATIONSHIP_TYPES = [
   'one_to_one',
   'one_to_many',
   'many_to_one',
-  'many_to_many',
 ] as const
 
 export const DEFAULT_SEMANTIC_RELATIONSHIP_TYPE: SemanticRelationship['relationship_type'] = 'one_to_one'

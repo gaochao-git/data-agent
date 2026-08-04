@@ -36,7 +36,6 @@ const relationshipTypeOptions: Array<{
   { value: 'one_to_one', label: '一对一', code: '1:1' },
   { value: 'one_to_many', label: '一对多', code: '1:N' },
   { value: 'many_to_one', label: '多对一', code: 'N:1' },
-  { value: 'many_to_many', label: '多对多', code: 'N:N' },
 ]
 
 const handleLeftAliasChange = () => {
