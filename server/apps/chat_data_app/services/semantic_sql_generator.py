@@ -525,7 +525,7 @@ class SemanticSQLGenerator:
             order_by: 排序条件
             limit: 限制条数
             offset: 跳过条数
-            user_query: 用户原始查询（仅用于调用链上下文，不参与 SQL 决策）
+            user_query: 历史兼容参数，保留签名但不参与 SQL 生成
 
         Returns:
             {
