@@ -356,6 +356,7 @@ export interface DashboardSpecPayload {
   writable_card_count?: number
   datasource_id?: string | null
   semantic_config_id?: string | null
+  semantic_config_ids?: string[]
   conversation_id?: string | null
 }
 

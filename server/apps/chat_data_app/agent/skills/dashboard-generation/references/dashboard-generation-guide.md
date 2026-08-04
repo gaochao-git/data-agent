@@ -242,9 +242,9 @@ KPI 行之后再放趋势、结构、排行和明细。不要让柱状图、折�
 
 看板卡片的 `dsl` 使用与智能问数一致的语义层规则，由平台工具转换为 SQL。不要手写 SQL，除非用户明确要求并且工具支持。
 
-系统提示词只提供可见指标集目录和手动选择的轻量引用，不包含完整指标、维度、表结构或关联关系。生成 DSL 前必须调用 `search_dataset` 获取实际语义配置；手动选择只作为优先参考，不锁定指标集。再从工具返回的 `semantic_config_ids` 中根据用户的业务目标确定唯一指标集。
+系统提示词只提供可见语义模型目录和手动选择的轻量引用，不包含完整指标、维度、表结构或关联关系。生成 DSL 前必须调用 `search_dataset` 获取实际语义配置；手动选择只作为优先参考，不锁定语义模型。再从工具返回的 `semantic_config_ids` 中为每张卡片根据业务目标确定一个语义模型。
 
-看板只能使用一个指标集。多个返回项都可能符合、但无法判断用户要哪个业务口径时，必须先向用户澄清；不得混用多个 `semantic_configs` 的指标或维度，不得生成看板 DSL，不得调用 `dsl2sql_tool`。
+一个看板可以包含多个语义模型，但每张卡片只能使用一个 `semantic_config_id`。多个返回项都可能符合、但无法判断某张卡片要哪个业务口径时，必须先向用户澄清；不得在同一张卡片混用多个 `semantic_configs` 的指标或维度。AI 创建看板仍使用当前会话绑定的一个 `datasource_id`，不在卡片中重复填写数据源。
 
 看板生成场景禁止在卡片中直接写 `sql` 字段。即使模型能够推断物理表和字段，也必须使用当前指标体系中的 `metrics`、`dimensions`、`filters` 生成 DSL，再交给平台工具转换 SQL。
 
@@ -303,10 +303,10 @@ DSL 字段：
 
 ## 校验流程
 
-1. 先确定唯一指标集，再生成完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`。
-2. `dashboard_spec.semantic_config_id` 必须取 `search_dataset` 返回的 `semantic_config_ids` 之一。
-3. 调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`。
-4. 根据返回 warnings 和错误修正 DSL。
+1. 为每张卡片确定一个语义模型，再生成完整 `dashboard_spec`；每张卡片必须包含 `semantic_config_id`，旧规格可以使用顶层默认字段。
+2. 每张卡片的 `semantic_config_id` 必须取 `search_dataset` 返回的 `semantic_config_ids` 之一。
+3. **看板必须批量校验**：调用一次 `dsl2sql_tool(dsl=dashboard_spec)`，传入包含 `dashboard_name` 和完整 `cards` 数组的整个规格。工具会按卡片语义模型生成校验结果并返回 `mode=batch`、`valid_count`、`semantic_config_ids`、逐卡 `panels` 和 `warnings`。
+4. 根据批量返回的逐卡模型、`panels` 和 `warnings` 修正完整 `dashboard_spec`，再整体调用 `dsl2sql_tool`；禁止将每张卡片的 DSL 拆开单独校验。
 5. 有效卡片数量满足用户目标后，写入 `workspace/dashboard_draft.json` 草稿。
 6. 新建预览时用 `file_move` 将校验完成的 `workspace/dashboard_draft.json` 移入新的 `outputs/<业务主题>-<唯一后缀>.dashboard.json`；只有用户明确要求修改已有预览时，才先 `file_read` 再用 `file_edit` 精确替换唯一内容，或直接在该 outputs 文件用 `file_write` 整体覆盖。
 7. 调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>.dashboard.json"])` 显式展示最终看板预览。

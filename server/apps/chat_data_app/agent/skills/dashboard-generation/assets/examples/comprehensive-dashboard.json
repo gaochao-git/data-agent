@@ -1,11 +1,11 @@
 {
   "dashboard_name": "综合业务分析看板",
-  "semantic_config_id": "已确定的指标集ID",
   "analysis_target": "当前数据源",
   "topic": "综合业务分析",
   "cards": [
     {
       "title": "核心指标总览",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "kpi",
       "purpose": "展示当前业务总体规模或核心结果",
       "diagnosis": "用于快速判断整体水平是否偏高、偏低或变化明显",
@@ -14,6 +14,7 @@
     },
     {
       "title": "关键指标总览",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "kpi",
       "purpose": "补充展示第二个核心指标",
       "diagnosis": "与核心指标总览共同形成首屏判断",
@@ -22,6 +23,7 @@
     },
     {
       "title": "核心指标趋势",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "line",
       "purpose": "观察核心指标随时间变化",
       "diagnosis": "识别持续增长、回落、周期波动或异常拐点",
@@ -30,6 +32,7 @@
     },
     {
       "title": "结构分布",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "bar",
       "purpose": "按主要业务维度拆解贡献",
       "diagnosis": "识别贡献集中或结构失衡的维度项",
@@ -38,6 +41,7 @@
     },
     {
       "title": "明细诊断",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "table",
       "purpose": "保留可追溯的对象明细和多指标对照",
       "diagnosis": "用于进一步筛查异常对象和后续处理",

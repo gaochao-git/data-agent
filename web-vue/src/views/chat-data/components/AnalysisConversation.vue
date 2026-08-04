@@ -819,6 +819,9 @@ const getDashboardSpecFromTool = (tool?: ToolCallInfo | null): DashboardSpecPayl
     : cards.length
   const specSemanticConfigId = typeof spec.semantic_config_id === 'string' ? spec.semantic_config_id.trim() : ''
   const resultSemanticConfigId = typeof resultPayload?.semantic_config_id === 'string' ? resultPayload.semantic_config_id.trim() : ''
+  const resultSemanticConfigIds = Array.isArray(resultPayload?.semantic_config_ids)
+    ? resultPayload.semantic_config_ids.map(item => String(item || '').trim()).filter(Boolean)
+    : []
 
   return {
     dashboard_spec: spec,
@@ -826,6 +829,7 @@ const getDashboardSpecFromTool = (tool?: ToolCallInfo | null): DashboardSpecPayl
     writable_card_count: Math.max(0, validCount),
     datasource_id: typeof resultPayload?.datasource_id === 'string' ? resultPayload.datasource_id : selectedDatasource.value || null,
     semantic_config_id: resultSemanticConfigId || specSemanticConfigId || props.semanticConfigId || null,
+    semantic_config_ids: resultSemanticConfigIds,
     conversation_id: props.conversationId || localConversationId.value || null,
   }
 }

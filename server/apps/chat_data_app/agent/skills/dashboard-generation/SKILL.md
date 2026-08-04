@@ -69,12 +69,12 @@ workspace/dashboard_draft.json
 
 1. `file_read("/mnt/skills/dashboard-generation/references/dashboard-generation-guide.md")`
 2. 按需 `file_read` 一个示例 JSON
-3. 调用 `search_dataset(query=用户原始看板目标)` 检索相关指标集。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定指标集
-4. 从 `search_dataset` 返回的 `semantic_config_ids` 中确定一个指标集，只使用工具返回的真实指标和维度；无法唯一判断时先澄清
+3. 调用 `search_dataset(query=用户原始看板目标)` 检索相关语义模型。系统提示词中的手动选择仅是优先参考，不包含完整字段口径，也不锁定语义模型
+4. 从 `search_dataset` 返回的 `semantic_config_ids` 中为每张卡片确定一个语义模型，只使用对应模型返回的真实指标和维度；某张卡片无法唯一判断时先澄清该卡片
 5. 如枚举、状态、类型、时间或金额等字段存储口径不明确，先构造明细抽样并查询 3 条原始数据确认结构
-6. 内部构建完整 `dashboard_spec`，顶层必须包含 `semantic_config_id`
-7. `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)` 校验整份规格
-8. 校验失败时，按主指南修正后重新调用 `dsl2sql_tool`
+6. 内部构建完整 `dashboard_spec`，每张卡片必须包含 `semantic_config_id`；旧规格才使用顶层默认字段
+7. **一次批量校验整份规格**：调用 `dsl2sql_tool(dsl=dashboard_spec)`，其中 `dsl` 必须是包含 `dashboard_name` 和完整 `cards` 数组的整个 `dashboard_spec`。
+8. 工具返回 `mode=batch`、`valid_count`、逐卡 `panels` 和 `warnings`；不要为每张卡片单独调用 `dsl2sql_tool`。如果有卡片失败，修正完整 `dashboard_spec` 后再次整体提交，不能拆卡片重试。
 9. 校验通过后用 `file_write(file_path="workspace/dashboard_draft.json", content=dashboard_spec)` 写入草稿
 10. 校验完成后用 `file_move(source_path="/mnt/user-data/workspace/dashboard_draft.json", destination_path="/mnt/user-data/outputs/<业务主题>-<唯一后缀>.dashboard.json")` 将草稿移入最终产物区；不要再次用 `file_write` 重写相同内容
 11. 只有用户明确要求修改某个已有看板预览文件时，才先 `file_read` 该 outputs 文件并用 `file_edit(file_path, old_content, new_content)` 精确替换一段完整且唯一的原文；需要整体覆盖时改用 `file_write`
@@ -89,10 +89,10 @@ workspace/dashboard_draft.json
 
 具体规格、布局、图表选择、DSL 规则和失败处理以 `references/dashboard-generation-guide.md` 为准。这里保留必须遵守的底线：
 
-- 指标、维度、过滤、排序字段必须来自已确定的唯一指标集。
-- 必须先调用 `search_dataset`；它返回相关指标集及其实际语义配置，主模型需根据用户问题选择一个真实 ID。无法唯一判断时先向用户澄清，不得生成看板 DSL。
-- `dashboard_spec.semantic_config_id` 必填，取值必须是 `search_dataset` 返回的 `semantic_config_ids` 之一。
-- outputs 看板文件中的 `semantic_config_id` 必须与 `dsl2sql_tool` 校验时传入的指标集 ID 一致。
+- 每张卡片的指标、维度、过滤、排序字段必须来自该卡片 `semantic_config_id` 对应的语义模型。
+- 必须先调用 `search_dataset`；它返回相关语义模型及其实际语义配置，主模型需为每张卡片选择一个真实 ID。无法唯一判断时先向用户澄清，不得生成该卡片 DSL。
+- 每张卡片的 `semantic_config_id` 必填，取值必须是 `search_dataset` 返回的 `semantic_config_ids` 之一；顶层同名字段仅兼容旧规格默认值。
+- 同一张卡片不得混用多个语义模型；不同卡片可以使用不同语义模型，但仍使用当前会话绑定的同一个 `datasource_id`。
 - 默认生成最小可用看板，优先覆盖总览、趋势、结构 / 对比、排行 / 诊断等核心视角。
 - 每张卡片必须包含 `title`、`chart_type`、`layout`、`dsl`。
 - 卡片中不包含 `sql`、`data`、`rows`、`result`、`x_field`、`y_field`，不使用 `type` 代替 `chart_type`。
@@ -107,7 +107,7 @@ workspace/dashboard_draft.json
 
 1. 已读取主指南。
 2. 已构建包含 `dashboard_name` 和非空 `cards` 的 `dashboard_spec`。
-3. 已调用 `dsl2sql_tool(dsl=dashboard_spec, semantic_config_id=dashboard_spec.semantic_config_id)`，且至少一个卡片通过校验。
+3. 已将完整 `dashboard_spec` 一次传给 `dsl2sql_tool` 批量校验，并根据逐卡 `semantic_config_id`、`panels` / `warnings` 修正失败卡片。
 4. 已生成或更新一个 `outputs/*.dashboard.json` 文件，且可被识别为 dashboard_spec。
 5. 已调用 `present_artifacts` 显式展示最终 outputs 看板。
 6. 最终文件符合“设计规则”的字段底线。

@@ -29,14 +29,18 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
     bound_operator_name = str(operator_name or "").strip() or None
 
     @tool("dsl2sql_tool")
-    async def dsl2sql_tool(dsl: Any, semantic_config_id: str, user_query: str = "") -> str:
-        """使用与智能问数一致的语义层规则校验单个 DSL 或批量卡片 DSL，并转换为 SQL。"""
+    async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None, user_query: str = "") -> str:
+        """使用统一语义规则校验单个查询 DSL，或一次批量校验完整 dashboard_spec 的所有卡片 DSL。
+
+        看板场景必须把包含 dashboard_name 和 cards 的完整 dashboard_spec
+        作为一次 dsl 传入；每张卡片必须有 semantic_config_id，或由旧规格顶层字段提供默认值。
+        工具会返回 mode=batch、valid_count、warnings 和逐卡 panels。
+        不要为看板中的每张卡片分别调用本工具。
+        """
         try:
             if not bound_datasource_id:
                 return "dsl2sql_tool 执行失败: 当前会话未绑定数据源"
             effective_semantic_config_id = str(semantic_config_id or "").strip() or None
-            if not effective_semantic_config_id:
-                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 search_dataset 后显式传入指标集ID"
             dsl = normalize_dsl_payload(dsl)
             if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
                 result = await validate_dashboard_spec_payload(
@@ -52,11 +56,17 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     "mode": "batch",
                     "datasource_id": bound_datasource_id,
                     "semantic_config_id": effective_semantic_config_id,
+                    "semantic_config_ids": result.get("semantic_config_ids") or [],
                     "valid_count": result.get("valid_count") or 0,
                     "warnings": result.get("warnings") or [],
                     "panels": result.get("panels") or [],
                 })
             if isinstance(dsl, list):
+                if not effective_semantic_config_id and not any(
+                    isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
+                    for card in dsl
+                ):
+                    return "dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先调用 search_dataset"
                 result = await validate_dashboard_spec_payload(
                     dashboard_spec={"cards": dsl},
                     datasource_id=bound_datasource_id,
@@ -70,12 +80,15 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     "mode": "batch",
                     "datasource_id": bound_datasource_id,
                     "semantic_config_id": effective_semantic_config_id,
+                    "semantic_config_ids": result.get("semantic_config_ids") or [],
                     "valid_count": result.get("valid_count") or 0,
                     "warnings": result.get("warnings") or [],
                     "panels": result.get("panels") or [],
                 })
             if not isinstance(dsl, dict):
                 return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
+            if not effective_semantic_config_id:
+                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 search_dataset 后显式传入语义模型ID"
             semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id, user_id=bound_user_id)
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
             if payload.get("compare"):

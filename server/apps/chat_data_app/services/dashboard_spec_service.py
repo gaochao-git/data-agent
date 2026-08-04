@@ -196,7 +196,7 @@ async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
     if not normalized_semantic_config_id:
-        raise ValueError("缺少指标集ID，无法生成看板 SQL")
+        raise ValueError("缺少语义模型ID，无法生成看板 SQL")
     ds_manager = get_datasource_manager()
     datasource = await ds_manager.get_datasource_async(datasource_id)
     if not datasource:
@@ -222,6 +222,15 @@ async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config
     if result.get("relationships") and not result.get("joins"):
         result["joins"] = result.get("relationships")
     return result
+
+
+def resolve_dashboard_card_semantic_config_id(
+    card: Dict[str, Any],
+    default_semantic_config_id: Optional[str] = None,
+) -> str:
+    """解析卡片语义模型；新规格优先使用卡片级 ID，旧规格回退到顶层默认值。"""
+    card_id = str((card or {}).get("semantic_config_id") or "").strip()
+    return card_id or str(default_semantic_config_id or "").strip()
 
 
 def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticSQLGenerator, user_query: Optional[str] = None) -> str:
@@ -294,7 +303,10 @@ def validate_dashboard_card_structure(card: Dict[str, Any], index: int) -> List[
     return errors
 
 
-def validate_dashboard_spec_structure(dashboard_spec: Dict[str, Any]) -> List[str]:
+def validate_dashboard_spec_structure(
+    dashboard_spec: Dict[str, Any],
+    default_semantic_config_id: Optional[str] = None,
+) -> List[str]:
     """严格校验看板规格结构。"""
     errors: List[str] = []
     spec = dashboard_spec or {}
@@ -304,24 +316,50 @@ def validate_dashboard_spec_structure(dashboard_spec: Dict[str, Any]) -> List[st
     if not cards:
         errors.append("cards 必须是非空数组")
         return errors
-    if not str(spec.get("semantic_config_id") or "").strip():
-        errors.append("semantic_config_id 必填")
+    default_semantic_config_id = (
+        str(spec.get("semantic_config_id") or "").strip()
+        or str(default_semantic_config_id or "").strip()
+    )
+    has_card_semantic_config_id = any(
+        isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
+        for card in cards[:12]
+    )
+    if not default_semantic_config_id and not has_card_semantic_config_id:
+        errors.append("semantic_config_id 必填：请在每张卡片中指定，或提供旧规格的顶层默认值")
     for index, card in enumerate(cards[:12]):
         if not isinstance(card, dict):
             errors.append(f"卡片{index + 1} 必须是对象")
             continue
+        if not resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id):
+            errors.append(f"卡片「{card.get('title') or index + 1}」缺少 semantic_config_id")
         errors.extend(validate_dashboard_card_structure(card, index))
     return errors
 
 
-def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGenerator, user_query: Optional[str] = None) -> tuple[List[Dict[str, Any]], List[str]]:
+def build_dashboard_panel_plans(
+    cards: List[Any],
+    sql_generator: Optional[SemanticSQLGenerator] = None,
+    user_query: Optional[str] = None,
+    *,
+    semantic_config_generators: Optional[Dict[str, SemanticSQLGenerator]] = None,
+    default_semantic_config_id: Optional[str] = None,
+) -> tuple[List[Dict[str, Any]], List[str]]:
     """预生成看板面板 SQL，避免无有效卡片时先创建空看板。"""
     panel_plans: List[Dict[str, Any]] = []
     warnings: List[str] = []
+    generators = semantic_config_generators or {}
     for index, card in enumerate(cards[:12]):
         if not isinstance(card, dict):
             continue
         try:
+            semantic_config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
+            generator = (
+                generators.get(semantic_config_id)
+                if semantic_config_generators is not None
+                else sql_generator
+            )
+            if generator is None:
+                raise ValueError("缺少 semantic_config_id 对应的语义模型")
             dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
             _payload, normalize_warnings = remove_mixed_raw_metrics_for_aggregate_dsl({
                 **dsl,
@@ -331,10 +369,10 @@ def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGene
                 "having": dsl.get("having") or card.get("having") or [],
                 "order_by": dsl.get("order_by") or card.get("order_by") or [],
                 "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
-            }, getattr(sql_generator, "semantic_config", {}))
+            }, getattr(generator, "semantic_config", {}))
             for warning in normalize_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
-            sql = build_panel_sql_from_dashboard_card(card, sql_generator, user_query=user_query)
+            sql = build_panel_sql_from_dashboard_card(card, generator, user_query=user_query)
             if not sql:
                 raise ValueError("SQL 为空")
             chart_type = normalize_dashboard_spec_chart_type(card.get("chart_type"))
@@ -343,6 +381,7 @@ def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGene
                 "card": card,
                 "sql": sql,
                 "chart_type": chart_type,
+                "semantic_config_id": semantic_config_id,
                 "error": "",
             })
         except Exception as err:
@@ -353,6 +392,7 @@ def build_dashboard_panel_plans(cards: List[Any], sql_generator: SemanticSQLGene
                 "card": card,
                 "sql": "",
                 "chart_type": normalize_dashboard_spec_chart_type(card.get("chart_type")),
+                "semantic_config_id": resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id),
                 "error": error,
             })
     return panel_plans, warnings
@@ -437,7 +477,8 @@ async def validate_dashboard_spec_payload(
     cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
     if not cards:
         raise ValueError("看板规格缺少卡片，无法创建看板")
-    structure_errors = validate_dashboard_spec_structure(spec)
+    default_semantic_config_id = str(semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
+    structure_errors = validate_dashboard_spec_structure(spec, default_semantic_config_id=default_semantic_config_id)
     if structure_errors:
         return {
             "valid": False,
@@ -445,9 +486,23 @@ async def validate_dashboard_spec_payload(
             "warnings": structure_errors,
             "panels": [],
         }
-    semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id, user_id=user_id)
-    sql_generator = SemanticSQLGenerator(semantic_config)
-    panel_plans, warnings = build_dashboard_panel_plans(cards, sql_generator, user_query=user_query)
+    semantic_config_ids: List[str] = []
+    for card in cards[:12]:
+        if not isinstance(card, dict):
+            continue
+        config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
+        if config_id and config_id not in semantic_config_ids:
+            semantic_config_ids.append(config_id)
+    semantic_config_generators: Dict[str, SemanticSQLGenerator] = {}
+    for config_id in semantic_config_ids:
+        semantic_config = await get_dashboard_spec_semantic_config(datasource_id, config_id, user_id=user_id)
+        semantic_config_generators[config_id] = SemanticSQLGenerator(semantic_config)
+    panel_plans, warnings = build_dashboard_panel_plans(
+        cards,
+        user_query=user_query,
+        semantic_config_generators=semantic_config_generators,
+        default_semantic_config_id=default_semantic_config_id,
+    )
     if execute_sql and panel_plans:
         panel_plans, execution_warnings = await filter_executable_dashboard_panel_plans(
             panel_plans,
@@ -457,14 +512,16 @@ async def validate_dashboard_spec_payload(
         )
         warnings.extend(execution_warnings)
     return {
-        "valid": bool(panel_plans),
+        "valid": any(not plan.get("error") for plan in panel_plans),
         "valid_count": len([plan for plan in panel_plans if not plan.get("error")]),
+        "semantic_config_ids": semantic_config_ids,
         "warnings": warnings,
         "panels": [
             {
                 "index": int(plan["index"]),
                 "title": str(plan["card"].get("title") or f"分析卡片{int(plan['index']) + 1}"),
                 "chart_type": plan["chart_type"],
+                "semantic_config_id": plan.get("semantic_config_id") or "",
                 "sql": plan["sql"],
                 "error": plan.get("error") or "",
             }

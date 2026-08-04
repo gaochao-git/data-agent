@@ -32,6 +32,7 @@ from apps.chat_data_app.services.dashboard_spec_service import (
     normalize_dashboard_spec_order_by,
     normalize_semantic_dsl_payload,
     remove_mixed_raw_metrics_for_aggregate_dsl,
+    resolve_dashboard_card_semantic_config_id,
     validate_dashboard_card_structure,
     validate_dashboard_spec_structure,
     validate_dashboard_spec_payload,
@@ -475,7 +476,7 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
     try:
         asyncio.run(get_dashboard_spec_semantic_config("ds_a", None))
     except ValueError as err:
-        assert "缺少指标集ID" in str(err)
+        assert "缺少语义模型ID" in str(err)
     else:
         raise AssertionError("missing semantic config id should be rejected")
 
@@ -590,6 +591,96 @@ def test_validate_dashboard_spec_structure_rejects_missing_name_and_non_object_c
     assert "dashboard_name 必填" in errors
     assert "卡片1 必须是对象" in errors
     assert validate_dashboard_spec_structure({"dashboard_name": "空看板", "cards": []}) == ["cards 必须是非空数组"]
+
+
+def test_dashboard_card_semantic_config_id_supports_card_override_and_legacy_default():
+    assert resolve_dashboard_card_semantic_config_id({"semantic_config_id": "card_model"}, "default_model") == "card_model"
+    assert resolve_dashboard_card_semantic_config_id({}, "default_model") == "default_model"
+    assert validate_dashboard_spec_structure({
+        "dashboard_name": "多模型看板",
+        "cards": [
+            {
+                "title": "订单卡片",
+                "semantic_config_id": "order_model",
+                "chart_type": "kpi",
+                "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                "dsl": {},
+            },
+            {
+                "title": "支付卡片",
+                "semantic_config_id": "payment_model",
+                "chart_type": "kpi",
+                "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                "dsl": {},
+            },
+        ],
+    }) == []
+
+
+def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeypatch):
+    generator_calls = []
+
+    class FakeGenerator:
+        def __init__(self, semantic_config):
+            self.semantic_config = semantic_config
+
+        def generate_sql(self, **_kwargs):
+            model_id = self.semantic_config["id"]
+            return {"success": True, "sql": f"select '{model_id}' as model_id"}
+
+    async def fake_get_config(_datasource_id, semantic_config_id, user_id=None):
+        generator_calls.append((semantic_config_id, user_id))
+        return {"id": semantic_config_id, "metrics": []}
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard_spec_service.get_dashboard_spec_semantic_config",
+        fake_get_config,
+    )
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.dashboard_spec_service.SemanticSQLGenerator",
+        FakeGenerator,
+    )
+
+    result = asyncio.run(validate_dashboard_spec_payload(
+        dashboard_spec={
+            "dashboard_name": "多模型看板",
+            "cards": [
+                {
+                    "title": "订单卡片",
+                    "semantic_config_id": "orders",
+                    "chart_type": "kpi",
+                    "layout": {"x": 0, "y": 0, "w": 6, "h": 2},
+                    "dsl": {"metrics": ["订单数"]},
+                },
+                {
+                    "title": "支付卡片",
+                    "semantic_config_id": "payments",
+                    "chart_type": "kpi",
+                    "layout": {"x": 6, "y": 0, "w": 6, "h": 2},
+                    "dsl": {"metrics": ["支付数"]},
+                },
+                {
+                    "title": "订单趋势",
+                    "semantic_config_id": "orders",
+                    "chart_type": "line",
+                    "layout": {"x": 0, "y": 2, "w": 12, "h": 4},
+                    "dsl": {"metrics": ["订单数"]},
+                },
+            ],
+        },
+        datasource_id="ds_a",
+        user_id="user_a",
+    ))
+
+    assert generator_calls == [("orders", "user_a"), ("payments", "user_a")]
+    assert result["valid"] is True
+    assert result["semantic_config_ids"] == ["orders", "payments"]
+    assert [panel["semantic_config_id"] for panel in result["panels"]] == ["orders", "payments", "orders"]
+    assert [panel["sql"] for panel in result["panels"]] == [
+        "select 'orders' as model_id",
+        "select 'payments' as model_id",
+        "select 'orders' as model_id",
+    ]
 
 
 def test_build_dashboard_panel_plans_records_success_warnings_and_errors():
@@ -890,7 +981,7 @@ def test_dashboard_spec_structure_invalid_layout_branches():
         "cards": [{"title": "无 DSL", "chart_type": "kpi", "layout": {"x": 0, "y": 0, "w": 3, "h": 2}}],
     })
     assert "dashboard_name 必填" in spec_errors
-    assert "semantic_config_id 必填" in spec_errors
+    assert any(item.startswith("semantic_config_id 必填") for item in spec_errors)
     assert any("缺少 dsl 对象" in item for item in spec_errors)
 
     x_range_errors = validate_dashboard_card_structure(

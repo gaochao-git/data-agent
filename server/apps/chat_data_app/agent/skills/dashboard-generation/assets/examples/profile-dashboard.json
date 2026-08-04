@@ -1,11 +1,11 @@
 {
   "dashboard_name": "对象画像分析看板",
-  "semantic_config_id": "已确定的指标集ID",
   "analysis_target": "指定对象",
   "topic": "对象画像分析",
   "cards": [
     {
       "title": "对象核心表现",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "kpi",
       "purpose": "展示指定对象的核心指标水平",
       "diagnosis": "用于判断对象当前状态和业务贡献",
@@ -14,6 +14,7 @@
     },
     {
       "title": "对象趋势变化",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "line",
       "purpose": "展示指定对象核心指标的时间变化",
       "diagnosis": "识别对象自身变化趋势和异常波动",
@@ -22,6 +23,7 @@
     },
     {
       "title": "同类对象对比",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "bar",
       "purpose": "比较指定对象与同类对象表现",
       "diagnosis": "判断对象在同类中的排名和差距",
@@ -30,6 +32,7 @@
     },
     {
       "title": "对象明细诊断",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "table",
       "purpose": "展示指定对象下的多维明细",
       "diagnosis": "定位造成指标变化的具体维度项",

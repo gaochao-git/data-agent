@@ -1,11 +1,11 @@
 {
   "dashboard_name": "风险监控看板",
-  "semantic_config_id": "已确定的指标集ID",
   "analysis_target": "当前数据源",
   "topic": "风险监控",
   "cards": [
     {
       "title": "风险对象数量",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "kpi",
       "purpose": "展示风险对象或异常事件总体规模",
       "diagnosis": "规模上升代表需要进一步定位来源和责任对象",
@@ -14,6 +14,7 @@
     },
     {
       "title": "风险趋势",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "line",
       "purpose": "观察风险相关指标随时间变化",
       "diagnosis": "识别持续上升、短期冲高和异常拐点",
@@ -22,6 +23,7 @@
     },
     {
       "title": "风险结构",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "bar",
       "purpose": "按风险类型、区域、机构或产品拆解风险来源",
       "diagnosis": "定位主要贡献维度和集中风险来源",
@@ -30,6 +32,7 @@
     },
     {
       "title": "高风险对象排行",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "horizontal_bar",
       "purpose": "定位风险指标最高的对象",
       "diagnosis": "优先关注排名靠前且持续高位的对象",
@@ -38,6 +41,7 @@
     },
     {
       "title": "风险明细清单",
+      "semantic_config_id": "已确定的语义模型ID",
       "chart_type": "table",
       "purpose": "输出可核查的风险对象明细",
       "diagnosis": "用于人工复核、派单或后续治理",

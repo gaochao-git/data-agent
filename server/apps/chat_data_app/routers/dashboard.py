@@ -186,9 +186,12 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
         cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
         if not cards:
             return business_response(msg="看板规格缺少卡片，无法创建看板", code=ErrorCode.CHATDATA_DASHBOARD_CARD_REQUIRED, status="error")
-        semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip()
-        if not semantic_config_id:
-            return business_response(msg="看板规格缺少指标集ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error")
+        semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
+        if not semantic_config_id and not any(
+            isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
+            for card in cards
+        ):
+            return business_response(msg="看板规格缺少语义模型ID，无法创建看板", code=ErrorCode.CHATDATA_SEMANTIC_CONFIG_REQUIRED, status="error")
 
         result = await create_dashboard_from_spec_payload(
             dashboard_spec=spec,
