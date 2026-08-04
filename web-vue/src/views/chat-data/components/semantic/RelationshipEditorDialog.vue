@@ -28,6 +28,17 @@ const emit = defineEmits<{
 const visible = defineModel<boolean>('visible', { default: false })
 const relationship = defineModel<SemanticRelationship | null>('relationship', { default: null })
 
+const relationshipTypeOptions: Array<{
+  value: SemanticRelationship['relationship_type']
+  label: string
+  code: string
+}> = [
+  { value: 'one_to_one', label: '一对一', code: '1:1' },
+  { value: 'one_to_many', label: '一对多', code: '1:N' },
+  { value: 'many_to_one', label: '多对一', code: 'N:1' },
+  { value: 'many_to_many', label: '多对多', code: 'N:N' },
+]
+
 const handleLeftAliasChange = () => {
   const rel = relationship.value
   if (!rel) return
@@ -65,41 +76,9 @@ const removeJoinCondition = (index: number) => {
 </script>
 
 <template>
-  <el-dialog v-model="visible" width="820px" title="连接方式" @close="emit('cancel')">
+  <el-dialog v-model="visible" width="820px" title="编辑表关系" @close="emit('cancel')">
     <div v-if="relationship" class="overflow-x-auto">
       <div class="min-w-[680px] space-y-4">
-      <div class="flex items-center gap-2">
-        <button
-          :class="[
-            'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-            relationship.join_type === 'inner' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-          ]"
-          @click="relationship.join_type = 'inner'"
-        >
-          <span>内连接</span>
-          <span class="text-[10px] opacity-70">INNER</span>
-        </button>
-        <button
-          :class="[
-            'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-            relationship.join_type === 'left' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-          ]"
-          @click="relationship.join_type = 'left'"
-        >
-          <span>左连接</span>
-          <span class="text-[10px] opacity-70">LEFT</span>
-        </button>
-        <button
-          :class="[
-            'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
-            relationship.join_type === 'right' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'
-          ]"
-          @click="relationship.join_type = 'right'"
-        >
-          <span>右连接</span>
-          <span class="text-[10px] opacity-70">RIGHT</span>
-        </button>
-      </div>
       <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
         <select
           v-model="relationship.left_alias"
@@ -116,6 +95,58 @@ const removeJoinCondition = (index: number) => {
         >
           <option v-for="entry in scopeEntries" :key="entry.alias" :value="entry.alias">{{ entry.label }}</option>
         </select>
+      </div>
+      <div class="rounded-md border border-gray-200 bg-gray-50/50 p-3 space-y-2">
+        <div class="text-xs font-medium text-gray-600">关系基数</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            v-for="option in relationshipTypeOptions"
+            :key="option.value"
+            :class="[
+              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
+              relationship.relationship_type === option.value ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-600'
+            ]"
+            @click="relationship.relationship_type = option.value"
+          >
+            <span>{{ option.label }}</span>
+            <span class="text-[10px] opacity-70">{{ option.code }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="rounded-md border border-gray-200 bg-gray-50/50 p-3 space-y-2">
+        <div class="text-xs font-medium text-gray-600">连接方式</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            :class="[
+              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
+              relationship.join_type === 'inner' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-600'
+            ]"
+            @click="relationship.join_type = 'inner'"
+          >
+            <span>内连接</span>
+            <span class="text-[10px] opacity-70">INNER</span>
+          </button>
+          <button
+            :class="[
+              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
+              relationship.join_type === 'left' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-600'
+            ]"
+            @click="relationship.join_type = 'left'"
+          >
+            <span>左连接</span>
+            <span class="text-[10px] opacity-70">LEFT</span>
+          </button>
+          <button
+            :class="[
+              'px-3 py-1.5 rounded border text-xs flex items-center gap-1.5',
+              relationship.join_type === 'right' ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 bg-white text-gray-600'
+            ]"
+            @click="relationship.join_type = 'right'"
+          >
+            <span>右连接</span>
+            <span class="text-[10px] opacity-70">RIGHT</span>
+          </button>
+        </div>
       </div>
       <div class="rounded-md border border-gray-200 bg-gray-50/50 p-3">
         <div class="mb-2 flex items-center justify-between">

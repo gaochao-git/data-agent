@@ -2148,7 +2148,33 @@ def test_datasource_manager_relationship_and_helper_fallback_branches(monkeypatc
     relationships = datasource["semantic_configs"][0]["relationships"]
     assert len(relationships) == 2
     assert relationships[0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
+    assert relationships[0]["relationship_type"] == "one_to_one"
     assert relationships[1]["join_conditions"] == [{"left_column": "user_id", "right_column": "user_id"}]
+
+    for relationship_type in ("one_to_one", "one_to_many", "many_to_one", "many_to_many"):
+        candidate = {
+            "semantic_configs": [{
+                "relationships": [{
+                    "left_column": "id",
+                    "right_column": "id",
+                    "relationship_type": relationship_type,
+                }],
+            }],
+        }
+        manager._normalize_semantic_relationships(candidate)
+        assert candidate["semantic_configs"][0]["relationships"][0]["relationship_type"] == relationship_type
+
+    invalid = {
+        "semantic_configs": [{
+            "relationships": [{
+                "left_column": "id",
+                "right_column": "id",
+                "relationship_type": "unknown",
+            }],
+        }],
+    }
+    manager._normalize_semantic_relationships(invalid)
+    assert invalid["semantic_configs"][0]["relationships"][0]["relationship_type"] == "one_to_one"
 
     merged = _merge_member_source_lines(
         current={},

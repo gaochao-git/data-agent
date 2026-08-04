@@ -429,9 +429,9 @@ class SemanticRelationship(BaseModel):
         default_factory=list,
         description="多字段关联条件列表，如[{left_column:'id', right_column:'id'}]；多个条件使用AND"
     )
-    relationship_type: Literal["one_to_one", "one_to_many", "many_to_one"] = Field(
-        default="one_to_many",
-        description="关系类型：one_to_one/one_to_many/many_to_one"
+    relationship_type: Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"] = Field(
+        default="one_to_one",
+        description="关系基数：one_to_one/one_to_many/many_to_one/many_to_many"
     )
     join_type: Literal["inner", "left", "right"] = Field(default="left", description="关联类型")
 

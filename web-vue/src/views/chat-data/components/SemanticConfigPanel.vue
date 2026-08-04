@@ -25,6 +25,7 @@ import {
   quoteIdentifier,
   formatSemanticConfigOptionLabel,
   getRelationshipConditions,
+  normalizeSemanticRelationship,
   isQuerySucceeded,
   syncRelationshipColumnsFromConditions,
 } from '../utils'
@@ -444,7 +445,10 @@ const fetchConfigs = async () => {
   try {
     const res = await semanticConfigListApi.value(props.datasourceId)
     if (res.status === 'success') {
-      configs.value = res.data?.configs || []
+      configs.value = (res.data?.configs || []).map(config => ({
+        ...config,
+        relationships: (config.relationships || []).map(normalizeSemanticRelationship),
+      }))
       const nextSignatures: Record<string, string> = {}
       configs.value.forEach(cfg => {
         nextSignatures[cfg.id] = buildConfigSignature(cfg)
@@ -997,7 +1001,7 @@ const addRelationship = (configId: string) => {
     left_column: '',
     right_column: '',
     join_conditions: [{ left_column: '', right_column: '' }],
-    relationship_type: 'one_to_many',
+    relationship_type: 'one_to_one',
     join_type: 'left',
   }
 }
@@ -1012,6 +1016,7 @@ const editRelationship = (configId: string, rel: SemanticRelationship, index: nu
   editingConfigId.value = configId
   editingRelationship.value = {
     ...rel,
+    relationship_type: normalizeSemanticRelationship(rel).relationship_type,
     left_table: leftEntry?.table || rel.left_table,
     left_alias: leftEntry?.alias || leftAlias,
     right_table: rightEntry?.table || rel.right_table,
@@ -1180,6 +1185,13 @@ const formatJoinTypeLabel = (joinType?: string) => {
   return '左连接'
 }
 
+const formatRelationshipTypeLabel = (relationshipType?: string) => {
+  if (relationshipType === 'one_to_many') return '一对多'
+  if (relationshipType === 'many_to_one') return '多对一'
+  if (relationshipType === 'many_to_many') return '多对多'
+  return '一对一'
+}
+
 const activeUnlinkedTables = computed(() => {
   if (!activeConfig.value) return [] as TableScopeEntry[]
   const scope = getScopeEntries(activeConfig.value.id)
@@ -1293,7 +1305,7 @@ const openLinkTableEditor = (configId: string, targetAlias: string) => {
     left_column: '',
     right_column: '',
     join_conditions: [{ left_column: '', right_column: '' }],
-    relationship_type: 'one_to_many',
+    relationship_type: 'one_to_one',
     join_type: 'left',
   }
   showRelationshipEditor.value = true
@@ -2901,6 +2913,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                           >
                             <span class="flex items-center gap-2 min-w-0">
                               <span class="shrink-0 pr-2 border-r border-blue-200 whitespace-nowrap">{{ formatJoinTypeLabel(item.rel.join_type) }}</span>
+                              <span class="shrink-0 pr-2 border-r border-blue-200 whitespace-nowrap">{{ formatRelationshipTypeLabel(item.rel.relationship_type) }}</span>
                                 <span class="block flex-1 min-w-0 overflow-x-auto overflow-y-hidden whitespace-nowrap">
                                   <span class="inline-block whitespace-nowrap pr-1">
                                   {{

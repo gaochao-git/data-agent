@@ -30,6 +30,13 @@ logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _UNSET = object()
 SUPPORTED_QUERY_EXECUTOR_TYPES = {"direct", "http"}
+SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES = {
+    "one_to_one",
+    "one_to_many",
+    "many_to_one",
+    "many_to_many",
+}
+DEFAULT_SEMANTIC_RELATIONSHIP_TYPE = "one_to_one"
 
 
 def _read_positive_int_env(name: str, default: int) -> int:
@@ -295,7 +302,7 @@ class DataSourceManager:
         logger.info("数据源 DAO 已启用")
 
     def _normalize_semantic_relationships(self, datasource: dict):
-        """规范化语义关系：统一使用 join_conditions，并同步首条到 left/right 字段。"""
+        """规范化语义关系并补齐缺失的关系基数。"""
         configs = datasource.get("semantic_configs", [])
         for config in configs:
             relationships = config.get("relationships", [])
@@ -322,6 +329,10 @@ class DataSourceManager:
                 next_rel["join_conditions"] = normalized_conditions
                 next_rel["left_column"] = normalized_conditions[0]["left_column"]
                 next_rel["right_column"] = normalized_conditions[0]["right_column"]
+                relationship_type = str(next_rel.get("relationship_type") or "").strip().lower()
+                if relationship_type not in SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES:
+                    relationship_type = DEFAULT_SEMANTIC_RELATIONSHIP_TYPE
+                next_rel["relationship_type"] = relationship_type
                 normalized_relationships.append(next_rel)
 
             config["relationships"] = normalized_relationships
@@ -1164,6 +1175,8 @@ class DataSourceManager:
         if not datasource:
             return []
         configs = datasource.get("semantic_configs") or []
+        # 兼容历史配置：读取时补齐关系基数，但不在本次读取中回写数据库。
+        self._normalize_semantic_relationships({"semantic_configs": configs})
         normalized_user_id = str(user_id or "").strip()
         if not normalized_user_id:
             return configs

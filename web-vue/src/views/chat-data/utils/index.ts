@@ -30,6 +30,7 @@ export {
 } from './sqlFunctionCatalog'
 export {
   getRelationshipConditions,
+  normalizeSemanticRelationship,
   syncRelationshipColumnsFromConditions,
 } from './semanticRelationship'
 export {

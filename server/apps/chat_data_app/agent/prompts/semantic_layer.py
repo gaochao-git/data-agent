@@ -188,7 +188,7 @@ def build_semantic_prompt(semantic_config: dict, mode: str = "query") -> str:
             left_ref = semantic_table_ref(left_table, relationship.get("left_alias", ""))
             right_ref = semantic_table_ref(right_table, relationship.get("right_alias", ""))
             join_type = relationship.get("join_type", "left").upper()
-            rel_type = relationship.get("relationship_type", "one_to_many")
+            rel_type = relationship.get("relationship_type", "one_to_one")
             join_conditions = relationship.get("join_conditions") or []
             condition_parts = []
             for condition in join_conditions:
