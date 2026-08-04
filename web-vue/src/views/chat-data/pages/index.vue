@@ -802,6 +802,17 @@ const handleHistoryConversationSelect = async (id: string) => {
   showHistoryPopover.value = false
 }
 
+const handleUpdateConversationTitle = (conversationId: string, title: string) => {
+  const conv = conversations.value.find((c) => c.id === conversationId)
+  if (conv) {
+    conv.title = title
+    conv.updated_at = new Date().toISOString()
+  }
+  if (currentConversationId.value === conversationId) {
+    currentConversationTitle.value = title
+  }
+}
+
 // 首条消息完成后的回调
 const handleFirstMessageComplete = async (convId: string) => {
   hasEnteredConversationOnce.value = true
@@ -1547,6 +1558,7 @@ onUnmounted(() => {
                 @select-conversation="handleHistoryConversationSelect"
                 @new-conversation="handleNewConversation"
                 @load-more-conversations="loadMoreConversations"
+                @update-conversation-title="handleUpdateConversationTitle"
               />
             </div>
           </div>

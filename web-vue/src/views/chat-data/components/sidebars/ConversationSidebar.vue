@@ -4,8 +4,8 @@
  * 用于智能问数模式，包含指标和会话两个 tab
  * 看板已提取为独立的 DashboardPanel 组件
  */
-import { ref, reactive, computed, watch, onUnmounted, type ComponentPublicInstance } from 'vue'
-import { getSemanticConfigs } from '../../api'
+import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
+import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
 import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
 import {
@@ -81,6 +81,7 @@ const emit = defineEmits<{
   selectConversation: [conversationId: string]
   newConversation: []
   loadMoreConversations: []
+  updateConversationTitle: [conversationId: string, title: string]
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
@@ -304,6 +305,75 @@ const handleConversationScroll = (event: Event) => {
   const target = event.currentTarget as HTMLElement
   if (target.scrollHeight - target.scrollTop - target.clientHeight <= 80) {
     emit('loadMoreConversations')
+  }
+}
+
+// 会话标题编辑状态
+const editingConversationId = ref<string | null>(null)
+const editingTitle = ref('')
+const editingInputRef = ref<HTMLInputElement | null>(null)
+const isSavingTitle = ref(false)
+
+const startEditConversationTitle = (conv: ConversationItem, event: MouseEvent) => {
+  event.stopPropagation()
+  editingConversationId.value = conv.id
+  editingTitle.value = conv.title || ''
+  void nextTick(() => {
+    editingInputRef.value?.focus()
+    editingInputRef.value?.select()
+  })
+}
+
+const cancelEditConversationTitle = () => {
+  editingConversationId.value = null
+  editingTitle.value = ''
+}
+
+const confirmEditConversationTitle = async (convId: string) => {
+  const newTitle = editingTitle.value.trim()
+  if (!newTitle || isSavingTitle.value) {
+    cancelEditConversationTitle()
+    return
+  }
+
+  // 找到当前显示标题以判断是否变化
+  const currentTitle = props.groupedConversations
+    .flatMap(g => g.items)
+    .find(c => c.id === convId)?.title
+
+  if (newTitle === currentTitle) {
+    cancelEditConversationTitle()
+    return
+  }
+
+  isSavingTitle.value = true
+  try {
+    const res = await apiUpdateConversationTitle(convId, newTitle)
+    if (res.status === 'success') {
+      // 后端会截断标题长度，以返回值为准回显，避免前后端不一致
+      emit('updateConversationTitle', convId, res.data?.title ?? newTitle)
+      cancelEditConversationTitle()
+    } else {
+      // 保存失败时保持编辑状态，方便用户重试或取消
+      editingInputRef.value?.focus()
+    }
+  } catch (err) {
+    console.error('更新会话标题失败:', err)
+    editingInputRef.value?.focus()
+  } finally {
+    isSavingTitle.value = false
+  }
+}
+
+const handleEditTitleKeydown = (convId: string, event: KeyboardEvent) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    void confirmEditConversationTitle(convId)
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelEditConversationTitle()
   }
 }
 
@@ -535,15 +605,42 @@ onUnmounted(() => {
               <div
                 v-for="conv in group.items"
                 :key="conv.id"
-                class="flex items-center gap-2 py-3 cursor-pointer transition-all duration-150"
-                :class="currentConversationId === conv.id ? 'text-blue-500 font-medium' : 'text-gray-800 hover:text-blue-500'"
+                class="group flex items-center gap-2 py-2.5 px-1 -mx-1 rounded-md cursor-pointer transition-all duration-150"
+                :class="currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50'"
                 @click="emit('selectConversation', conv.id)"
               >
                 <i
                   :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
                   :style="{ color: getConversationIconMeta(conv.id).color }"
                 ></i>
-                <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+
+                <!-- 标题编辑态 -->
+                <template v-if="editingConversationId === conv.id">
+                  <input
+                    ref="editingInputRef"
+                    v-model="editingTitle"
+                    type="text"
+                    class="flex-1 min-w-0 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none text-gray-800 leading-relaxed"
+                    :disabled="isSavingTitle"
+                    placeholder="输入新标题"
+                    @click.stop
+                    @keydown="handleEditTitleKeydown(conv.id, $event)"
+                    @blur="confirmEditConversationTitle(conv.id)"
+                  />
+                </template>
+
+                <!-- 标题展示态 -->
+                <template v-else>
+                  <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 flex h-6 w-6 items-center justify-center rounded text-gray-400 opacity-0 transition-all duration-150 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100"
+                    title="修改标题"
+                    @click.stop="startEditConversationTitle(conv, $event)"
+                  >
+                    <i class="fa-solid fa-pen text-[10px]"></i>
+                  </button>
+                </template>
               </div>
             </div>
           </template>

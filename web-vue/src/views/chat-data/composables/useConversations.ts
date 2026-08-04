@@ -6,7 +6,7 @@ import { ref, computed } from 'vue'
 import {
   getConversations,
   createConversation as apiCreateConversation,
-  updateConversation
+  updateConversationTitle as apiUpdateConversationTitle
 } from '../api'
 
 interface Conversation {
@@ -99,10 +99,11 @@ export function useConversations(agentId: string = 'chat_data') {
   // 更新会话标题
   const updateConversationTitle = async (conversationId: string, title: string): Promise<boolean> => {
     try {
-      await updateConversation(conversationId, { title })
+      const res = await apiUpdateConversationTitle(conversationId, title)
       const conv = conversations.value.find((c) => c.id === conversationId)
       if (conv) {
-        conv.title = title
+        // 后端会截断标题长度，以返回值为准
+        conv.title = res.data?.title ?? title
         conv.updated_at = new Date().toISOString()
       }
       return true

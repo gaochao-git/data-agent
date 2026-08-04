@@ -867,12 +867,15 @@ export function uploadFile(conversationId: string, file: File): Promise<ApiRespo
   })
 }
 
-/** 更新会话 */
-export function updateConversation(conversationId: string, data: { title?: string }): Promise<ApiResponse<null>> {
+/** 修改会话标题（后端仅开放 title 子资源，标题会被截断到 20 字） */
+export function updateConversationTitle(
+  conversationId: string,
+  title: string
+): Promise<ApiResponse<{ id: string; title: string }>> {
   return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/title`,
     method: 'put',
-    data
+    data: { title }
   })
 }
 
