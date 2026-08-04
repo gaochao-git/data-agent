@@ -2,7 +2,7 @@
 语义 SQL 生成器
 
 封装 DSL 生成和 SQL 转换的完整逻辑，
-包括参数验证、意图匹配、SQL 验证等功能。
+包括参数验证、DSL 映射、SQL 验证等功能。
 """
 
 import re
@@ -17,12 +17,6 @@ from .semantic_formatter import format_params_for_display
 from .semantic_input_validator import InputValidator
 
 logger = get_logger(__name__)
-
-
-class QueryIntentType:
-    """查询意图类型常量。"""
-    DETAIL = "detail"
-    AGGREGATE = "aggregate"
 
 
 class SemanticSQLGenerator:
@@ -78,14 +72,6 @@ class SemanticSQLGenerator:
         return func, column_expr
 
     @staticmethod
-    def _has_detail_intent(user_query: Optional[str]) -> bool:
-        text = (user_query or "").strip().lower()
-        if not text:
-            return False
-        keywords = ("明细", "详情", "详细", "列表", "list", "detail", "drill", "下钻")
-        return any(k in text for k in keywords)
-
-    @staticmethod
     def _table_alias(item: Dict[str, Any]) -> str:
         return str((item or {}).get("table_alias") or (item or {}).get("alias") or (item or {}).get("table") or "").strip()
 
@@ -120,40 +106,6 @@ class SemanticSQLGenerator:
     @staticmethod
     def _relationship_right_alias(rel: Dict[str, Any]) -> str:
         return str((rel or {}).get("right_alias") or (rel or {}).get("right_table") or "").strip()
-
-    @staticmethod
-    def _detail_intent_only_from_metric_name(user_query: Optional[str], matched_metrics: List[Dict[str, Any]]) -> bool:
-        """识别“明细”只是指标名称一部分的情况，避免误判为明细查询。"""
-        text = (user_query or "").strip().lower()
-        if not text:
-            return False
-        metric_names = [str(item.get("name") or "").strip().lower() for item in matched_metrics]
-        return any(name and name in text for name in metric_names)
-
-    def _determine_query_intent_type(
-        self,
-        metrics: List[str],
-        matched_metrics: List[Dict[str, Any]],
-        dimensions: List[Any],
-        having: List[Dict[str, Any]],
-        user_query: Optional[str],
-    ) -> str:
-        """
-        判断当前查询应按明细还是聚合处理。
-
-        判定优先级：
-        1. 用户明确表达明细意图 -> 明细
-        2. 出现 HAVING -> 聚合
-        3. 选择了聚合指标 -> 聚合
-        4. 其余场景回落为明细（dimensions 是明细展示字段）
-        """
-        if self._has_detail_intent(user_query) and not self._detail_intent_only_from_metric_name(user_query, matched_metrics):
-            return QueryIntentType.DETAIL
-        if having:
-            return QueryIntentType.AGGREGATE
-        if metrics and self._has_aggregate_metric(matched_metrics):
-            return QueryIntentType.AGGREGATE
-        return QueryIntentType.DETAIL
 
     def _collect_tables_from_filter_node(self, node: Dict[str, Any], tables_needed: set[str]):
         if not isinstance(node, dict):
@@ -573,7 +525,7 @@ class SemanticSQLGenerator:
             order_by: 排序条件
             limit: 限制条数
             offset: 跳过条数
-            user_query: 用户原始查询（用于日志记录）
+            user_query: 用户原始查询（仅用于调用链上下文，不参与 SQL 决策）
 
         Returns:
             {
@@ -634,19 +586,11 @@ class SemanticSQLGenerator:
         if err:
             return {"success": False, "error": err}
 
-        query_intent_type = self._determine_query_intent_type(
-            metrics=metrics or [],
-            matched_metrics=matched_metrics,
-            dimensions=matched_dimensions,
-            having=validated_having,
-            user_query=user_query,
-        )
-        is_detail_query = query_intent_type == QueryIntentType.DETAIL
-        is_aggregate_query = query_intent_type == QueryIntentType.AGGREGATE
-        logger.debug(
-            f"[语义查询判定] type={query_intent_type}, metrics={metrics}, "
-            f"dimensions={[self._extract_dimension_name(d) for d in matched_dimensions]}, "
-            f"having={bool(validated_having)}"
+        # SQL 形态只由 DSL 和语义配置决定，不能根据 user_query 的关键词猜测。
+        # 只要输出中存在聚合表达式或 HAVING，RAW 字段就必须进入 GROUP BY。
+        requires_grouping_for_raw_fields = bool(validated_having) or any(
+            self._parse_aggregate_expression((metric.get("expression") or "").strip())
+            for metric in matched_metrics
         )
 
         main_table = None
@@ -698,24 +642,6 @@ class SemanticSQLGenerator:
             metric_alias_to_id[metric_name] = agg_id
             parsed = self._parse_aggregate_expression(metric_expression)
             if parsed:
-                if is_detail_query:
-                    column_expr = parsed[1]
-                    if column_expr == "*":
-                        continue
-                    raw_column = column_expr.split(".")[-1].replace("`", "")
-                    raw_table = metric_table or main_table
-                    raw_table_alias = metric_table_alias or raw_table
-                    raw_expr = f"{raw_table_alias}.{raw_column}" if raw_table_alias else raw_column
-                    builder_aggregations.append({
-                        "id": agg_id,
-                        "func": "RAW",
-                        "table": raw_table,
-                        "tableAlias": raw_table_alias,
-                        "column": raw_column,
-                        "alias": metric_name,
-                        "expression": raw_expr,
-                    })
-                    continue
                 func, column_expr = parsed
                 if "." in column_expr:
                     metric_column = column_expr.split(".")[-1].replace("`", "")
@@ -737,8 +663,8 @@ class SemanticSQLGenerator:
                 raw_table_alias = metric_table_alias or raw_table
                 raw_expr = metric_expression or (f"{raw_table_alias}.{metric_column}" if raw_table_alias and metric_column else "")
                 raw_column = metric_column or "*"
-                # 聚合查询中，RAW 指标需作为分组字段，避免 SELECT 聚合+非聚合非法
-                if is_aggregate_query and raw_column != "*":
+                # 存在聚合输出时，RAW 指标需作为分组字段，避免 SELECT 聚合+非聚合非法。
+                if requires_grouping_for_raw_fields and raw_column != "*":
                     dim_key = (raw_table_alias, raw_column)
                     if dim_key not in builder_dimension_keys:
                         builder_dimensions.append({
@@ -884,24 +810,3 @@ class SemanticSQLGenerator:
 
         params_block = format_params_for_display(metrics, dimension_names, filters, having, validated_order_by, validated_limit, validated_offset)
         return {"success": True, "sql": sql, "params_block": params_block, "error": None}
-
-    def _has_aggregate_metric(self, matched_metrics: List[Dict]) -> bool:
-        """判断指标列表中是否包含聚合表达式。"""
-        for metric in matched_metrics:
-            expression = (metric.get("expression") or "").strip()
-            if not expression:
-                continue
-            if self._is_aggregate_expression(expression):
-                return True
-        return False
-
-    def _is_aggregate_expression(self, expression: str) -> bool:
-        """判断单个表达式是否为聚合表达式。"""
-        expr = (expression or "").strip().upper()
-        return bool(expr) and (
-            expr.startswith("COUNT(")
-            or expr.startswith("SUM(")
-            or expr.startswith("AVG(")
-            or expr.startswith("MAX(")
-            or expr.startswith("MIN(")
-        )

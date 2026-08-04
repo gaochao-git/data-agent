@@ -803,7 +803,7 @@ def test_generate_rejects_having_unknown_metric_and_order_direction():
     assert "排序方向" in bad_order["error"]
 
 
-def test_generate_detail_intent_turns_aggregate_metric_into_raw_field():
+def test_generate_aggregate_metric_is_not_changed_by_user_query_wording():
     config = build_config()
     config["metrics"].append({"name": "订单金额最大值", "expression": "MAX(orders.amount)", "table": "orders"})
 
@@ -818,13 +818,11 @@ def test_generate_detail_intent_turns_aggregate_metric_into_raw_field():
         },
     )
 
-    assert "COUNT(" not in sql
-    assert "MAX(" not in sql
-    assert "amount AS `订单金额最大值`" in sql
+    assert "MAX(amount) AS `订单金额最大值`" in sql
     assert "GROUP BY" not in sql
 
 
-def test_generate_metric_name_with_detail_word_is_not_detail_intent():
+def test_generate_metric_expression_is_the_source_of_sql_shape():
     config = build_config()
     config["metrics"] = [
         {"name": "订单明细数量", "expression": "COUNT(orders.order_id)", "table": "orders"},
@@ -888,9 +886,6 @@ def test_generator_helper_branches_for_tables_and_joins():
 
     assert generator._parse_aggregate_expression("") is None
     assert generator._parse_aggregate_expression("orders.amount") is None
-    assert generator._has_detail_intent("查看列表") is True
-    assert generator._has_detail_intent("") is False
-    assert generator._detail_intent_only_from_metric_name("查询订单明细数量", [{"name": "订单明细数量"}]) is True
     assert generator._validate_table_column("orders", "missing") is None
     assert generator._validate_table_column("missing", "id").startswith("表 'missing' 不存在")
     assert generator._map_filter_node_for_builder({"or": [{"dimension": "订单状态", "operator": "=", "value": "paid"}]}) == {
@@ -1004,7 +999,7 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
     }
     generator = SemanticSQLGenerator(config)
 
-    detail = generator.generate_sql(
+    aggregate = generator.generate_sql(
         metrics=["订单数"],
         dimensions=[],
         filters=[],
@@ -1012,8 +1007,9 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
         order_by=[],
         user_query="查看明细列表",
     )
-    assert detail["success"] is False
-    assert "未找到可用于查询的字段" in detail["error"]
+    assert aggregate["success"] is True
+    assert captured["builder_config"]["aggregations"][0]["func"] == "COUNT"
+    assert captured["builder_config"]["aggregations"][0]["column"] == "*"
 
     result = generator.generate_sql(
         metrics=["支付金额"],
@@ -1146,24 +1142,8 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
     generator = SemanticSQLGenerator(config)
 
     assert generator._parse_aggregate_expression("count(distinct orders.order_id)") == ("COUNT_DISTINCT", "orders.order_id")
-    assert generator._has_detail_intent("detail list") is True
-    assert generator._detail_intent_only_from_metric_name("", [{"name": "订单明细数量"}]) is False
     assert generator._validate_table_column("orders", "status") is None
     assert "不存在字段" in generator._validate_table_column("orders", "missing")
-    assert generator._determine_query_intent_type(
-        metrics=["原始订单号"],
-        matched_metrics=[config["metrics"][2]],
-        dimensions=[],
-        having=[{"metric": "订单数", "operator": ">", "value": 1}],
-        user_query="查看明细",
-    ) == "detail"
-    assert generator._determine_query_intent_type(
-        metrics=[],
-        matched_metrics=[],
-        dimensions=[],
-        having=[{"metric": "订单数", "operator": ">", "value": 1}],
-        user_query="订单明细数量",
-    ) == "detail"
 
     result = generator.generate_sql(
         metrics=["销售额"],

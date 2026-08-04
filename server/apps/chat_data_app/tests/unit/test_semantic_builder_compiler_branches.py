@@ -441,7 +441,6 @@ def test_semantic_sql_generator_remaining_join_and_metric_branches(monkeypatch):
     generator = compiler_module.SemanticSQLGenerator(config)
 
     assert generator._normalize_metrics_allow_dimension_raw(["状态"])[0][0]["_from_dimension"] is True
-    assert generator._determine_query_intent_type(["明细指标"], [{"name": "明细指标", "expression": "SUM(orders.amount)"}], [], [], "查询明细指标") == "aggregate"
     assert generator._collect_tables_from_filter_node("bad", set()) is None
     assert generator._map_filter_node_for_builder("bad") == {}
 
@@ -457,8 +456,7 @@ def test_semantic_sql_generator_remaining_join_and_metric_branches(monkeypatch):
     assert no_path_generator._build_builder_joins("orders", {"orders", "u"}) == []
 
     result = generator.generate_sql(metrics=["总行数"], dimensions=[], filters=[], having=[], user_query="查询明细列表")
-    assert result["success"] is False
-    assert "未找到可用于查询的字段" in result["error"]
+    assert result["success"] is True
 
     def fail_compile(*_args, **_kwargs):
         raise RuntimeError("compile down")
@@ -485,4 +483,3 @@ def test_semantic_sql_generator_table_validation_and_prompt_edges():
     missing_column = generator._validate_table_column("orders", "missing")
     assert "可用字段" in missing_column
     assert "..." in missing_column
-    assert generator._has_aggregate_metric([{"expression": ""}, {"expression": "orders.c2"}]) is False

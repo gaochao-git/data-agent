@@ -1719,7 +1719,7 @@ def test_semantic_unified_engine_allows_dimension_in_metrics():
     assert "GROUP BY order_no, user_id" in sql
 
 
-def test_semantic_unified_engine_detail_intent_avoids_aggregate_card_sql():
+def test_semantic_unified_engine_uses_dsl_metric_expression_not_user_query():
     semantic_config = {
         "source_type": "mysql",
         "metrics": [
@@ -1747,9 +1747,8 @@ def test_semantic_unified_engine_detail_intent_avoids_aggregate_card_sql():
     )
     assert result["success"] is True
     sql = result["sql"]
-    assert "COUNT(" not in sql.upper()
+    assert "COUNT(order_id)" in sql
     assert "GROUP BY" not in sql.upper()
-    assert "order_id AS `订单数量`" in sql
 
 
 def test_semantic_unified_engine_dimensions_only_query_is_detail():
