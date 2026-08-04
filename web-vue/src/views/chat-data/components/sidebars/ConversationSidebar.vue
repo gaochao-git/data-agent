@@ -314,6 +314,11 @@ const editingTitle = ref('')
 const editingInputRef = ref<HTMLInputElement | null>(null)
 const isSavingTitle = ref(false)
 
+// v-for 内的字符串 ref 会被 Vue 3 收集为数组，改用函数 ref 确保拿到单个 DOM 元素
+const setEditingInputRef = (el: Element | ComponentPublicInstance | null) => {
+  editingInputRef.value = (el as HTMLInputElement) || null
+}
+
 const startEditConversationTitle = (conv: ConversationItem, event: MouseEvent) => {
   event.stopPropagation()
   editingConversationId.value = conv.id
@@ -617,7 +622,7 @@ onUnmounted(() => {
                 <!-- 标题编辑态 -->
                 <template v-if="editingConversationId === conv.id">
                   <input
-                    ref="editingInputRef"
+                    :ref="setEditingInputRef"
                     v-model="editingTitle"
                     type="text"
                     class="flex-1 min-w-0 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none text-gray-800 leading-relaxed"
