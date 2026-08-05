@@ -278,24 +278,6 @@ def _normalize_enable_thinking(value: Any) -> bool | None:
     return None
 
 
-async def _persist_reasoning_segments(
-    agent: Any,
-    config: dict[str, Any],
-    segments: list[dict[str, Any]],
-    as_node: str,
-    persisted_count: int = 0,
-) -> int:
-    pending_segments = segments[persisted_count:]
-    if not pending_segments or not hasattr(agent, "aupdate_state"):
-        return persisted_count
-    try:
-        await agent.aupdate_state(config, {"reasoning_segments": pending_segments}, as_node=as_node)
-        return len(segments)
-    except Exception as exc:
-        logger.warning("保存模型思考分段失败: %s", exc)
-        return persisted_count
-
-
 async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any], state: Any | None) -> Any | None:
     """为 create_agent 产生的最新 AIMessage 补充完成时间，保持历史消息时间口径一致。"""
     values = getattr(state, "values", None) if state is not None else None
@@ -666,7 +648,6 @@ class _AgentSseStreamAdapter:
         visible_message_filter=None,
         disconnect_log_message: str = "客户端已断开，停止流式输出: %s",
         disconnect_log_id: str = "",
-        reasoning_as_node: str = "model",
         include_empty_tool_messages: bool = False,
         on_first_message=None,
         debug_label: str | None = None,
@@ -679,7 +660,6 @@ class _AgentSseStreamAdapter:
         self.visible_message_filter = visible_message_filter
         self.disconnect_log_message = disconnect_log_message
         self.disconnect_log_id = disconnect_log_id
-        self.reasoning_as_node = reasoning_as_node
         self.include_empty_tool_messages = include_empty_tool_messages
         self.on_first_message = on_first_message
         self.debug_label = debug_label
@@ -687,7 +667,6 @@ class _AgentSseStreamAdapter:
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
         self.archived_turn_messages: list[Any] = []
-        self.persisted_reasoning_count = 0
         self.latest_token_usage: dict[str, Any] | None = None
         self.state: Any | None = None
         self.disconnected = False
@@ -738,14 +717,7 @@ class _AgentSseStreamAdapter:
                 await timeout_task
 
     async def finish(self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False) -> dict[str, Any]:
-        """持久化思考分段并构造 message_end payload。"""
-        self.persisted_reasoning_count = await _persist_reasoning_segments(
-            self.agent,
-            self.config,
-            self.reasoning_segments,
-            as_node=self.reasoning_as_node,
-            persisted_count=self.persisted_reasoning_count,
-        )
+        """读取最终状态并构造 message_end payload。"""
         self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
         if persist_latest_ai_timestamp:
             self.state = await _persist_latest_ai_message_timestamp(self.agent, self.config, self.state)
@@ -756,13 +728,6 @@ class _AgentSseStreamAdapter:
         if not self.request or not await self.request.is_disconnected():
             return False
         logger.info(self.disconnect_log_message, self.disconnect_log_id)
-        self.persisted_reasoning_count = await _persist_reasoning_segments(
-            self.agent,
-            self.config,
-            self.reasoning_segments,
-            as_node=self.reasoning_as_node,
-            persisted_count=self.persisted_reasoning_count,
-        )
         self.disconnected = True
         return True
 

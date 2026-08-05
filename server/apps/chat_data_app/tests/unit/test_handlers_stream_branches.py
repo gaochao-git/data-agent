@@ -213,9 +213,8 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
     assert "semantic_query_tool" in text
     assert "event: message" in text
     assert end_payload["timestamp"] == "2026-07-15 09:00:00"
-    assert end_payload["usage"]["total_tokens"] == 9
-    assert agent.updated[0][1]["reasoning_segments"][0]["content"] == "调用 搜索指标集"
-    assert agent.updated[0][1]["reasoning_segments"][0]["reasoning_turn_id"] == "turn-1"
+    assert end_payload["usage"]["total_tokens"] == 7
+    assert agent.updated == []
 
 
 def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):
@@ -365,33 +364,6 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
         "assistant-final",
     ]
     assert messages[2].content == "第一份完整结果"
-
-
-@pytest.mark.asyncio
-async def test_persist_reasoning_segments_only_writes_delta():
-    class Graph:
-        def __init__(self):
-            self.updates = []
-
-        async def aupdate_state(self, config, values, as_node=None):
-            self.updates.append((config, values, as_node))
-
-    graph = Graph()
-    segments = [
-        {"id": "reasoning-0", "content": "工具前", "tool_call_count": 0},
-        {"id": "reasoning-1", "content": "工具后", "tool_call_count": 1},
-    ]
-
-    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent")
-    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent", persisted_count)
-    segments.append({"id": "reasoning-2", "content": "继续", "tool_call_count": 1})
-    persisted_count = await handlers._persist_reasoning_segments(graph, {"thread_id": "t"}, segments, "agent", persisted_count)
-
-    assert persisted_count == 3
-    assert [update[1]["reasoning_segments"] for update in graph.updates] == [
-        segments[:2],
-        [segments[2]],
-    ]
 
 
 def test_message_end_payload_prefers_persisted_ai_timestamp():
@@ -732,17 +704,6 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
     assert "semantic_config_selected" not in text
     assert "semantic_config_select_required" not in text
     assert original_resolver(None, None, []) is None
-
-
-@pytest.mark.asyncio
-async def test_persist_reasoning_segments_keeps_count_on_update_error():
-    class Graph:
-        async def aupdate_state(self, *_args, **_kwargs):
-            raise RuntimeError("state write failed")
-
-    segments = [{"id": "reasoning-0", "content": "思考", "tool_call_count": 0}]
-
-    assert await handlers._persist_reasoning_segments(Graph(), {"thread_id": "t"}, segments, "agent") == 0
 
 
 @pytest.mark.asyncio

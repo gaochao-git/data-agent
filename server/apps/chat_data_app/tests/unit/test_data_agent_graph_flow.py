@@ -34,7 +34,7 @@ def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     assert "workspace" in annotations
     assert "semantic_config_id" not in annotations
     assert "conversation_id" in annotations
-    assert "reasoning_segments" in annotations
+    assert "reasoning_segments" not in annotations
     assert "token_usage" in annotations
     assert "conversation_datasource_id" not in annotations
 

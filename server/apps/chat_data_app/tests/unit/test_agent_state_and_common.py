@@ -32,11 +32,6 @@ def test_internal_query_result_protocol_is_not_public_envelope():
     assert payload["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9, "save_as": ""}
 
 
-def test_state_reducers_merge_visible_history():
-    assert agent_state.merge_reasoning_segments(None, [{"id": "r1"}]) == [{"id": "r1"}]
-    assert agent_state.merge_reasoning_segments([{"id": "r1"}], [{"id": "r2"}]) == [{"id": "r1"}, {"id": "r2"}]
-
-
 def test_agent_runtime_helpers_build_shared_agent_bits():
     model_calls = []
 

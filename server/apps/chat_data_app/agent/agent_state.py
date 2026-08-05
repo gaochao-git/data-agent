@@ -6,11 +6,6 @@ from langchain.agents import AgentState
 from typing_extensions import TypedDict
 
 
-def merge_reasoning_segments(existing: list[dict] | None, new: list[dict] | None) -> list[dict]:
-    """追加模型原生思考分段，供历史会话恢复。"""
-    return list(existing or []) + list(new or [])
-
-
 def merge_context_compression_events(
     existing: list[dict] | None,
     new: list[dict] | None,
@@ -56,5 +51,4 @@ class ChatDataAgentState(AgentState, total=False):
     context_compression: dict[str, Any] | None
     context_summary: str | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
-    reasoning_segments: Annotated[list[dict[str, Any]], merge_reasoning_segments]
     workspace: ConversationWorkspaceContext
