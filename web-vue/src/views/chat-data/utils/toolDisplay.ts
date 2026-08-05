@@ -1,6 +1,6 @@
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   search_dataset: '搜索语义模型',
-  dsl2sql_tool: '生成 SQL',
+  dsl2sql_tool: '编译 SQL',
   semantic_query_tool: '查询数据',
   calculator_tool: '精确计算',
   file_read: '读取文件',
