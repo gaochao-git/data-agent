@@ -872,7 +872,11 @@ class _AgentSseStreamAdapter:
             state_usage = self.state.values.get("token_usage")
         if prefer_latest_usage:
             return self.latest_token_usage or state_usage
-        return state_usage if state_usage is not None else self.latest_token_usage
+        # Keep legacy full checkpoints authoritative. New checkpoints contain
+        # only compact counters, so use the in-memory full payload when present.
+        if isinstance(state_usage, dict) and {"llm_calls", "breakdown"} & state_usage.keys():
+            return state_usage
+        return self.latest_token_usage or state_usage
 
     @staticmethod
     def _parse_stream_event(event: Any) -> tuple[str, Any]:

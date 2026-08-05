@@ -89,7 +89,7 @@ def create_context_usage_middleware(
         _emit_context_usage(usage)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
-            command=Command(update={"token_usage": usage}),
+            command=Command(update={"token_usage": compact_token_usage_for_state(usage)}),
         )
 
     def get_context_usage() -> dict[str, Any] | None:
@@ -140,6 +140,68 @@ def _build_llm_call_record(token_usage: dict[str, Any], *, model_id: str | None,
         "context_compression": token_usage.get("context_compression"),
         "breakdown": list(token_usage.get("breakdown") or []),
     }
+
+
+_STATE_USAGE_FIELDS = (
+    "used",
+    "total",
+    "percentage",
+    "remaining",
+    "context_window",
+    "max_output_tokens",
+    "hard_input_limit_tokens",
+    "hard_input_guard_ratio",
+    "hard_input_guard_tokens",
+    "compression_trigger_tokens",
+    "compression_trigger_ratio",
+    "compression_target_tokens",
+    "input_tokens",
+    "current_input_tokens",
+    "max_input_tokens",
+    "cumulative_input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "estimated",
+    "current_cached_input_tokens",
+    "cumulative_cached_input_tokens",
+    "current_cache_hit_rate",
+    "cumulative_cache_hit_rate",
+)
+
+_STATE_COMPRESSION_FIELDS = (
+    "enabled",
+    "triggered",
+    "estimated_tokens_before",
+    "estimated_tokens_after",
+    "estimated_cleared_tokens",
+    "threshold_tokens",
+    "trigger_ratio",
+    "hard_input_limit_tokens",
+    "hard_input_guard_ratio",
+    "hard_input_guard_tokens",
+    "compression_target_tokens",
+    "static_input_tokens",
+    "compressed_messages",
+    "summary_chars",
+    "compression_skipped_reason",
+)
+
+
+def compact_token_usage_for_state(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """只保留 checkpoint 所需的统计值，避免保存 prompt、工具和消息明细。"""
+    if not isinstance(usage, dict):
+        return None
+    compact = {key: usage[key] for key in _STATE_USAGE_FIELDS if key in usage}
+    compression = usage.get("context_compression")
+    if isinstance(compression, dict):
+        compact_compression = {
+            key: compression[key]
+            for key in _STATE_COMPRESSION_FIELDS
+            if key in compression
+        }
+        if compact_compression:
+            compact["context_compression"] = compact_compression
+    return compact or None
 
 
 def create_chat_data_context_usage_middleware(

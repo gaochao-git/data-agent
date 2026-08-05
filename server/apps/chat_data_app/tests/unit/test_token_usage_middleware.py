@@ -18,6 +18,7 @@ from apps.chat_data_app.agent.middleware.context_usage import (
     build_usage_from_llm_calls,
     build_message_breakdown,
     build_prompt_breakdown,
+    compact_token_usage_for_state,
     count_messages_tokens,
     count_tools_tokens,
     create_request_context_usage_middleware,
@@ -645,6 +646,32 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
+def test_compact_token_usage_for_state_removes_large_details_without_mutation():
+    usage = {
+        "used": 10,
+        "total": 100,
+        "input_tokens": 10,
+        "llm_calls": [{"breakdown": [{"content": "large prompt"}]}],
+        "breakdown": [{"content": "large prompt"}],
+        "context_compression": {
+            "triggered": False,
+            "summary": "large summary should not be persisted",
+            "summary_chars": 12,
+        },
+    }
+
+    compact = compact_token_usage_for_state(usage)
+
+    assert compact == {
+        "used": 10,
+        "total": 100,
+        "input_tokens": 10,
+        "context_compression": {"triggered": False, "summary_chars": 12},
+    }
+    assert "llm_calls" in usage
+    assert "breakdown" in usage
+
+
 def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch):
     async def run():
         from apps.chat_data_app.agent.middleware import context_usage
@@ -692,6 +719,10 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
     assert response.model_response.result[0].content == "ok"
     usage = response.command.update["token_usage"]
     assert "context_editing" not in usage
+    assert "llm_calls" not in usage
+    assert "breakdown" not in usage
+    assert "llm_calls" in middleware.get_context_usage()
+    assert "breakdown" in middleware.get_context_usage()
     assert "context_editing" not in middleware.get_context_usage()
 
 
