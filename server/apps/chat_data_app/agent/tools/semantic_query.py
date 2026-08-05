@@ -286,9 +286,10 @@ async def semantic_query_tool(
     save_as: str | None = None,
 ) -> str:
     """
-    执行语义查询并返回统一查询结果。
+    执行数据库查询并返回统一查询结果。
 
-    优先接收语义 DSL，内部生成 SQL 后执行；DSL 明确无法表达时接收只读 SQL 执行。
+    常规查询传入语义 DSL，服务端先编译为 SQL 再执行；只有 DSL 无法表达查询结构时，
+    才传入只读 SQL 直接执行。两种模式都必须指定语义模型和执行对象范围。
     """
     return await _run_semantic_query_tool(
         dsl=dsl,
