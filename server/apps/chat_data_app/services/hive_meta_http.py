@@ -10,6 +10,7 @@ import httpx
 
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
+from .runtime_config import read_bool_env
 from .sql_executor import HTTP_AUTH_TOKEN
 
 logger = get_logger(__name__)
@@ -34,6 +35,7 @@ META_TABLES_URL = str(os.getenv("CHAT_DATA_META_TABLES_URL") or "").strip()
 META_SCHEMA_URL = str(os.getenv("CHAT_DATA_META_SCHEMA_URL") or "").strip()
 META_TIMEOUT_SECONDS = _read_positive_int_env("CHAT_DATA_META_TIMEOUT_SECONDS", 30)
 META_SCHEMA_MAX_CONCURRENCY = _read_positive_int_env("CHAT_DATA_META_SCHEMA_MAX_CONCURRENCY", 10)
+HTTP_VERIFY_TLS = read_bool_env("CHAT_DATA_HTTP_VERIFY_TLS", False)
 
 
 def validate_hive_meta_config() -> None:
@@ -188,7 +190,7 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
 async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[HiveMetaHTTP] 请求对方接口: url=%s payload=%s", url, _meta_payload_summary(payload))
     try:
-        async with httpx.AsyncClient(verify=False, timeout=META_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(verify=HTTP_VERIFY_TLS, timeout=META_TIMEOUT_SECONDS) as client:
             response = await client.post(url, json=payload, headers=_build_headers())
             response.raise_for_status()
             response_payload = response.json()
