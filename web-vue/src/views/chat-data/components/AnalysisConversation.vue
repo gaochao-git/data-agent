@@ -272,7 +272,6 @@ const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
 const sidePanelTab = ref<'console' | 'tool'>('console')
 const selectedConsoleFilePath = ref<string | null>(null)
-const selectedConsoleDirectoryPath = ref<string | null>(null)
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(['uploads']))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
@@ -454,10 +453,6 @@ const pushProducedFile = (files: ProducedFile[], path: string, source: string, s
   files.push({ path, fullPath: displayPath, relativePath, displayPath, source, status })
 }
 
-const formatConsoleDisplayPath = (path: unknown): string => {
-  return toSandboxDisplayPath(path)
-}
-
 const producedFiles = computed(() => {
   const files: ProducedFile[] = []
   for (const file of workspaceFiles.value) {
@@ -549,36 +544,19 @@ const setConsoleDirectoryCollapsed = (path: string, collapsed: boolean) => {
   collapsedConsoleDirectories.value = next
 }
 
-const toggleConsoleDirectory = (name: string) => {
-  const next = new Set(collapsedConsoleDirectories.value)
-  if (next.has(name)) next.delete(name)
-  else next.add(name)
-  collapsedConsoleDirectories.value = next
-}
-
 const getFileCount = (node: ProducedFileTreeNode): number => {
   return (node.file ? 1 : 0) + node.children.reduce((count, child) => count + getFileCount(child), 0)
 }
 
 const isFileTreeNodeCollapsed = (path: string): boolean => collapsedConsoleDirectories.value.has(path)
 
-const selectConsoleDirectory = (path: string) => {
-  selectedConsoleDirectoryPath.value = normalizeVisiblePath(path)
-  selectedConsoleFilePath.value = null
-  selectedConsoleOfficeHtml.value = null
-  selectedConsoleOfficePreviewReason.value = null
-  loadingOfficePreviewKey.value = null
-}
-
-const selectConsoleDirectoryAndToggle = (path: string) => {
+const toggleConsoleDirectory = (path: string) => {
   const normalized = normalizeVisiblePath(path)
-  selectConsoleDirectory(normalized)
   setConsoleDirectoryCollapsed(normalized, !isFileTreeNodeCollapsed(normalized))
 }
 
 const selectConsoleFile = (path: string) => {
   selectedConsoleFilePath.value = normalizeVisiblePath(path)
-  selectedConsoleDirectoryPath.value = null
   selectedConsoleOfficeHtml.value = null
   selectedConsoleOfficePreviewReason.value = null
   loadingOfficePreviewKey.value = null
@@ -2326,11 +2304,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 >
                   <button
                     type="button"
-                    :class="[
-                      'flex h-7 w-full items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-700 hover:bg-slate-50',
-                      selectedConsoleDirectoryPath === directory.path ? 'bg-blue-50 text-blue-700' : ''
-                    ]"
-                    @click="selectConsoleDirectoryAndToggle(directory.path)"
+                    class="flex h-7 w-full items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-700 hover:bg-slate-50"
+                    @click="toggleConsoleDirectory(directory.path)"
                   >
                     <i class="w-3 text-[10px] text-slate-400" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
                     <i class="fa-regular w-4 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
@@ -2362,14 +2337,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
                         v-else
                         role="button"
                         tabindex="0"
-                        :class="[
-                          'flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-slate-50',
-                          selectedConsoleDirectoryPath === item.node.path ? 'bg-blue-50 text-blue-700' : ''
-                        ]"
+                        class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded border-none bg-transparent px-1.5 text-left text-slate-600 hover:bg-slate-50"
                         :style="{ paddingLeft: `${item.depth * 18 + 10}px` }"
-                        @click="selectConsoleDirectoryAndToggle(item.node.path)"
-                        @keydown.enter.prevent="selectConsoleDirectoryAndToggle(item.node.path)"
-                        @keydown.space.prevent="selectConsoleDirectoryAndToggle(item.node.path)"
+                        @click="toggleConsoleDirectory(item.node.path)"
+                        @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
+                        @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
                       >
                         <i class="w-3 text-[10px] text-slate-400" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
                         <i class="fa-regular w-4 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
@@ -2386,10 +2358,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
             </div>
           </div>
 
-          <div v-if="selectedConsoleFile || selectedConsoleDirectoryPath" class="rounded-lg border border-slate-100 bg-slate-50 p-3">
+          <div v-if="selectedConsoleFile" class="rounded-lg border border-slate-100 bg-slate-50 p-3">
             <div class="mb-2 flex items-center justify-between gap-2">
               <div class="min-w-0 truncate font-mono text-xs font-medium text-slate-500">
-                {{ selectedConsoleFile?.displayPath || formatConsoleDisplayPath(selectedConsoleDirectoryPath) }}
+                {{ selectedConsoleFile?.displayPath }}
               </div>
               <div class="flex shrink-0 items-center gap-2">
                 <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
@@ -2448,11 +2420,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
               >
                 <i class="fa-solid fa-compress"></i>
               </button>
-              <div v-if="!selectedConsoleFile" class="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-slate-500">
-                请选择文件查看内容。
-              </div>
               <ChartSpecRenderer
-                v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
+                v-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
                 :spec="selectedConsoleChartSpec"
               />
               <div v-else-if="hasSelectedConsoleTable && consoleFilePreviewMode === 'table'" :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] overflow-auto rounded-md border border-slate-100 bg-white' : 'max-h-[46vh] overflow-auto rounded-md border border-slate-100 bg-white'">
