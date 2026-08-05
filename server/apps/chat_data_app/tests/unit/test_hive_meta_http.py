@@ -325,6 +325,39 @@ async def test_hive_meta_post_json_uses_http_client(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hive_meta_post_json_passes_verify_tls_switch(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 20000, "data": {"tables": []}}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(hive_meta_http.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(hive_meta_http, "HTTP_AUTH_TOKEN", "secret")
+    monkeypatch.setattr(hive_meta_http, "HTTP_VERIFY_TLS", True)
+
+    await hive_meta_http._post_json("http://meta/tables", {"org_code": "org_1"})
+
+    assert calls[0][1]["verify"] is True
+
+
+@pytest.mark.asyncio
 async def test_hive_meta_post_json_failure_writes_external_api_alarm(monkeypatch):
     alarms = []
 

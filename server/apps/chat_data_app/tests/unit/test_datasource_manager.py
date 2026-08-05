@@ -319,8 +319,8 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
             return self.payload
 
     class FakeClient:
-        def __init__(self, timeout):
-            calls.append(("init", timeout))
+        def __init__(self, timeout, verify):
+            calls.append(("init", timeout, verify))
 
         async def __aenter__(self):
             return self
@@ -334,6 +334,7 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
 
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_URL", "http://permission.local")
     monkeypatch.setattr(execution_permission, "HTTP_PERMISSION_TIMEOUT_SECONDS", 9)
+    monkeypatch.setattr(execution_permission, "HTTP_VERIFY_TLS", False)
     monkeypatch.setattr(execution_permission.httpx, "AsyncClient", FakeClient)
     permission_alarms = []
     monkeypatch.setattr(execution_permission, "emit_external_api_alarm", lambda *args, **kwargs: permission_alarms.append((args, kwargs)))
@@ -341,7 +342,7 @@ def test_execution_permission_http_provider_success_and_failure(monkeypatch):
     result = asyncio.run(execution_permission.get_http_permission_org_codes(" user_a ", " 用户A "))
     assert result == {"ORG_A", "ORG_B"}
     assert calls == [
-        ("init", 9),
+        ("init", 9, False),
         ("post", "http://permission.local", {"userId": "user_a", "username": "用户A"}),
     ]
 
