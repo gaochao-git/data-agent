@@ -215,21 +215,12 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
         "message": (
-            "已返回相关指标集运行时语义配置，不含数据源组全量表结构。请根据用户问题自行决定后续查询、澄清或回答；"
-            "每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
+            "已返回相关指标集的轻量引用。必须使用每项 path 对应的 Ossie YAML，通过 file_grep/file_read 按需读取真实指标、维度、关系和口径；"
+            "在完成必要读取前，不得生成 DSL 或猜测字段。每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
             if returned_ids else
             "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。"
         ),
     }
-
-
-def _semantic_config_for_selection_tool(config: Dict[str, Any]) -> Dict[str, Any]:
-    """构造选择工具返回的指标集配置，去掉全量表结构和重复关系别名。"""
-    result = dict(config or {})
-    result.pop("tables", None)
-    result.pop("ds_tables", None)
-    result.pop("joins", None)
-    return result
 
 
 def _semantic_config_directory_to_tool_payload(directory: List[Dict[str, Any]]) -> Dict[str, Any]:

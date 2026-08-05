@@ -22,9 +22,28 @@ from apps.chat_data_app.services.semantic_tools import (
     list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
     _is_semantic_config_directory_query,
-    _semantic_config_for_selection_tool,
     _selection_to_tool_payload,
 )
+
+
+def _semantic_snapshot(configs):
+    directory = []
+    paths = {}
+    indexed = {}
+    for config in configs:
+        config_id = config["id"]
+        path = f"/mnt/user-data/workspace/semantic/request/{config_id}.yaml"
+        directory.append({
+            "id": config_id,
+            "name": config.get("name", config_id),
+            "description": config.get("description", ""),
+            "metrics_total": len(config.get("metrics") or []),
+            "dimensions_total": len(config.get("dimensions") or []),
+            "path": path,
+        })
+        paths[config_id] = path
+        indexed[config_id] = config
+    return {"request_id": "request", "directory": directory, "paths": paths, "configs": indexed}
 
 
 def test_extract_datasource_id_from_state():
@@ -101,8 +120,8 @@ def test_selection_to_tool_payload_branches():
     payload = _selection_to_tool_payload(
         {"semantic_config_ids": ["cfg_order", "cfg_user", "missing"]},
         {
-            "cfg_order": {"id": "cfg_order", "name": "订单分析", "metrics": [{"name": "订单金额"}]},
-            "cfg_user": {"id": "cfg_user", "name": "用户分析", "dimensions": [{"name": "用户名称"}]},
+            "cfg_order": {"id": "cfg_order", "name": "订单分析", "description": "", "metrics_total": 1, "dimensions_total": 0, "path": "/mnt/user-data/workspace/semantic/order.yaml"},
+            "cfg_user": {"id": "cfg_user", "name": "用户分析", "description": "", "metrics_total": 0, "dimensions_total": 1, "path": "/mnt/user-data/workspace/semantic/user.yaml"},
         },
     )
 
@@ -110,39 +129,16 @@ def test_selection_to_tool_payload_branches():
     assert empty["message"].startswith("当前数据源组没有")
     assert payload["success"] is True
     assert payload["semantic_config_ids"] == ["cfg_order", "cfg_user"]
-    assert payload["semantic_configs"]["cfg_order"]["metrics"][0]["name"] == "订单金额"
+    assert payload["semantic_configs"]["cfg_order"] == {
+        "id": "cfg_order",
+        "name": "订单分析",
+        "description": "",
+        "metrics_total": 1,
+        "dimensions_total": 0,
+        "path": "/mnt/user-data/workspace/semantic/order.yaml",
+    }
     assert "query_plan" not in payload
     assert "cross_config_required" not in payload
-
-
-def test_semantic_config_for_selection_tool_removes_full_table_schemas():
-    config = {
-        "id": "sc_order",
-        "metrics": [{"name": "订单金额", "table": "orders", "expression": "SUM(amount)"}],
-        "dimensions": [{"name": "用户名称", "table": "users", "column": "username"}],
-        "relationships": [{"left_table": "orders", "right_table": "users"}],
-        "joins": [{"left_table": "orders", "right_table": "users"}],
-        "tables": [
-            {"table_name": "orders", "columns": [{"name": "amount"}]},
-            {"table_name": "users", "columns": [{"name": "username"}]},
-            {"table_name": "products", "columns": [{"name": "product_name"}]},
-        ],
-        "ds_tables": [
-            {"table_name": "orders", "columns": [{"name": "amount"}]},
-        ],
-    }
-
-    tool_config = _semantic_config_for_selection_tool(config)
-
-    assert "tables" not in tool_config
-    assert "ds_tables" not in tool_config
-    assert "joins" not in tool_config
-    assert tool_config["metrics"][0]["table"] == "orders"
-    assert tool_config["metrics"][0]["expression"] == "SUM(amount)"
-    assert tool_config["dimensions"][0]["table"] == "users"
-    assert tool_config["dimensions"][0]["column"] == "username"
-    assert tool_config["relationships"] == [{"left_table": "orders", "right_table": "users"}]
-    assert [item["table_name"] for item in config["tables"]] == ["orders", "users", "products"]
 
 
 def test_search_dataset_returns_full_directory_for_directory_query(monkeypatch):
@@ -264,6 +260,7 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
         model_id=None,
         user_id=None,
         datasource_group_context=None,
+        semantic_configs=None,
     ):
         captured.update({
             "datasource_id": datasource_id,
@@ -271,21 +268,19 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
             "model_id": model_id,
             "user_id": user_id,
             "datasource_group_context": datasource_group_context,
+            "semantic_configs": semantic_configs,
         })
         return {"semantic_config_ids": ["sc_a"]}
 
-    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
-        captured["load_args"] = (datasource_id, semantic_config_id)
-        return {"id": semantic_config_id, "name": "订单分析", "metrics": [], "dimensions": []}
-
     monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
+    config = {"id": "sc_a", "name": "订单分析", "metrics": [], "dimensions": []}
 
     tool = create_search_dataset_tool(
         model_id="model_a",
         datasource_id="ds_bound",
         user_id="u1",
         datasource_group_context="当前数据源组按执行对象数据源分库",
+        semantic_snapshot=_semantic_snapshot([config]),
     )
     result = asyncio.run(tool.ainvoke({
         "query": "查询订单金额",
@@ -297,90 +292,77 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
     assert captured["model_id"] == "model_a"
     assert captured["user_id"] == "u1"
     assert captured["datasource_group_context"] == "当前数据源组按执行对象数据源分库"
-    assert captured["load_args"] == ("ds_bound", "sc_a")
+    assert captured["semantic_configs"] == [config]
     assert payload["semantic_config_ids"] == ["sc_a"]
     assert payload["semantic_configs"]["sc_a"]["name"] == "订单分析"
+    assert payload["semantic_configs"]["sc_a"]["path"].endswith("/sc_a.yaml")
 
 
-def test_search_dataset_returns_all_retrieved_semantic_summaries(monkeypatch):
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
+def test_search_dataset_returns_lightweight_references_for_all_selected_configs(monkeypatch):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None, semantic_configs=None):
         assert datasource_id == "ds_bound"
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
 
-    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
-        return {
-            "id": semantic_config_id,
-            "name": "订单分析" if semantic_config_id == "sc_order" else "用户分析",
-            "metrics": [{"name": "订单金额" if semantic_config_id == "sc_order" else "用户数"}],
-            "dimensions": [],
-        }
+    configs = [
+        {"id": "sc_order", "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []},
+        {"id": "sc_user", "name": "用户分析", "metrics": [{"name": "用户数"}], "dimensions": []},
+    ]
 
     monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound")
+    tool = create_search_dataset_tool(datasource_id="ds_bound", semantic_snapshot=_semantic_snapshot(configs))
     result = asyncio.run(tool.ainvoke({"query": "查询订单金额和用户数"}))
     payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
 
     assert payload["semantic_config_ids"] == ["sc_order", "sc_user"]
-    assert payload["semantic_configs"]["sc_order"]["metrics"][0]["name"] == "订单金额"
-    assert payload["semantic_configs"]["sc_user"]["metrics"][0]["name"] == "用户数"
+    assert payload["semantic_configs"]["sc_order"]["metrics_total"] == 1
+    assert payload["semantic_configs"]["sc_user"]["name"] == "用户分析"
+    assert all(
+        set(item) == {"id", "name", "description", "metrics_total", "dimensions_total", "path"}
+        for item in payload["semantic_configs"].values()
+    )
 
 
-def test_search_dataset_returns_selected_config_without_full_table_schemas(monkeypatch):
+def test_search_dataset_returns_selected_reference_without_full_config(monkeypatch):
     async def fake_select_semantic_config_for_query(**_kwargs):
         return {"semantic_config_ids": ["sc_order"]}
 
-    async def fake_load_runtime_semantic_config(_datasource_id, semantic_config_id):
-        return {
-            "id": semantic_config_id,
-            "name": "订单分析",
-            "metrics": [{"name": "订单金额", "table": "orders"}],
-            "dimensions": [{"name": "用户名称", "table": "users"}],
-            "relationships": [{"left_table": "orders", "right_table": "users"}],
-            "joins": [{"left_table": "orders", "right_table": "users"}],
-            "tables": [
-                {"table_name": "orders", "columns": [{"name": "amount"}]},
-                {"table_name": "users", "columns": [{"name": "username"}]},
-                {"table_name": "products", "columns": [{"name": "product_name"}]},
-            ],
-        }
+    config = {
+        "id": "sc_order",
+        "name": "订单分析",
+        "metrics": [{"name": "订单金额", "table": "orders"}],
+        "dimensions": [{"name": "用户名称", "table": "users"}],
+        "relationships": [{"left_table": "orders", "right_table": "users"}],
+        "joins": [{"left_table": "orders", "right_table": "users"}],
+        "tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}],
+    }
 
     monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound")
+    tool = create_search_dataset_tool(datasource_id="ds_bound", semantic_snapshot=_semantic_snapshot([config]))
     result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
     payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
 
     selected_config = payload["semantic_configs"]["sc_order"]
-    assert "tables" not in selected_config
-    assert "joins" not in selected_config
-    assert selected_config["metrics"][0]["table"] == "orders"
-    assert selected_config["dimensions"][0]["table"] == "users"
-    assert selected_config["relationships"] == [{"left_table": "orders", "right_table": "users"}]
+    assert set(selected_config) == {"id", "name", "description", "metrics_total", "dimensions_total", "path"}
+    assert selected_config["metrics_total"] == 1
+    assert selected_config["dimensions_total"] == 1
+    assert selected_config["path"].endswith("/sc_order.yaml")
 
 
-def test_search_dataset_keeps_loaded_configs_when_a_retrieved_config_cannot_load(monkeypatch):
-    loaded = []
-
-    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None):
+def test_search_dataset_ignores_selected_config_absent_from_snapshot(monkeypatch):
+    async def fake_select_semantic_config_for_query(datasource_id, user_query, model_id=None, user_id=None, datasource_group_context=None, semantic_configs=None):
         return {"semantic_config_ids": ["sc_order", "sc_missing"]}
 
-    async def fake_load_runtime_semantic_config(datasource_id, semantic_config_id):
-        loaded.append(semantic_config_id)
-        if semantic_config_id == "sc_missing":
-            return None
-        return {"id": semantic_config_id, "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []}
-
     monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.load_runtime_semantic_config", fake_load_runtime_semantic_config)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound")
+    snapshot = _semantic_snapshot([
+        {"id": "sc_order", "name": "订单分析", "metrics": [{"name": "订单金额"}], "dimensions": []},
+    ])
+    tool = create_search_dataset_tool(datasource_id="ds_bound", semantic_snapshot=snapshot)
     result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
     payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
 
-    assert loaded == ["sc_order", "sc_missing"]
     assert payload["semantic_config_ids"] == ["sc_order"]
     assert list(payload["semantic_configs"]) == ["sc_order"]
 

@@ -49,6 +49,7 @@ from .workspace_execution import (
     sandbox_render_office_html,
     sandbox_write_tool_result,
     sync_sandbox_working_trees,
+    sandbox_write_text_files,
     sandbox_search_files,
     sandbox_visible_path,
     sandbox_replace_text_file,
@@ -319,6 +320,30 @@ class ConversationWorkspaceRuntime:
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
         return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
+    async def write_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        """Write system-generated request snapshots through the active backend."""
+        normalized = [
+            (str(path or "").strip(), str(content or ""))
+            for path, content in entries
+            if str(path or "").strip()
+        ]
+        if not normalized:
+            return []
+        batch_writer = getattr(self.backend, "write_text_files", None)
+        if callable(batch_writer):
+            return await batch_writer(self, entries=normalized)
+        return [
+            await asyncio.to_thread(
+                _write_local_text_file,
+                self.workspace_root,
+                path,
+                content,
+                "overwrite",
+                allow_semantic_snapshot_write=True,
+            )
+            for path, content in normalized
+        ]
+
     async def replace_text_file(
         self,
         *,
@@ -479,7 +504,13 @@ def resolve_uploads_root(user_id: str, thread_id: str) -> Path:
     return Path(paths["uploads"])
 
 
-def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = False) -> Path:
+def resolve_workspace_path(
+    workspace_root: str,
+    path: str,
+    *,
+    writable: bool = False,
+    allow_semantic_snapshot_write: bool = False,
+) -> Path:
     """解析模型可见路径并按解析后的真实路径实施目录边界。"""
     root = Path(workspace_root).resolve()
     raw = str(path or "").strip()
@@ -518,6 +549,11 @@ def resolve_workspace_path(workspace_root: str, path: str, *, writable: bool = F
             raise ValueError("只允许写入 workspace/ 或 outputs/")
         if is_tool_result_workspace_path(str(root), target):
             raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
+        if (
+            is_semantic_snapshot_workspace_path(str(root), target)
+            and not allow_semantic_snapshot_write
+        ):
+            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
     return target
 
 
@@ -526,6 +562,13 @@ def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
     results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_OFFLOAD_DIR_NAME).resolve()
     target = path.resolve()
     return target == results_root or results_root in target.parents
+
+
+def is_semantic_snapshot_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a path belongs to request-scoped Ossie snapshots."""
+    snapshots_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+    target = path.resolve()
+    return target == snapshots_root or snapshots_root in target.parents
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
@@ -1112,10 +1155,22 @@ def _read_local_runtime_skill_file(
     )
 
 
-def _write_local_text_file(workspace_root: str, file_path: str, content: str, mode: str) -> dict[str, Any]:
+def _write_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    content: str,
+    mode: str,
+    *,
+    allow_semantic_snapshot_write: bool = False,
+) -> dict[str, Any]:
     if mode != "overwrite":
         raise ValueError("内部文件写入只支持 overwrite")
-    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    target = resolve_workspace_path(
+        workspace_root,
+        file_path,
+        writable=True,
+        allow_semantic_snapshot_write=allow_semantic_snapshot_write,
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as file_obj:
         file_obj.write(content)
@@ -1510,6 +1565,26 @@ class LocalWorkspaceBackend:
     ) -> dict[str, Any]:
         return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
 
+    async def write_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        def write_batch() -> list[dict[str, Any]]:
+            return [
+                _write_local_text_file(
+                    runtime.workspace_root,
+                    path,
+                    content,
+                    "overwrite",
+                    allow_semantic_snapshot_write=True,
+                )
+                for path, content in entries
+            ]
+
+        return await asyncio.to_thread(write_batch)
+
     async def write_tool_result(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -1883,6 +1958,17 @@ class SandboxWorkspaceBackend:
     ) -> dict[str, Any]:
         return await sandbox_write_text_file(
             session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
+        )
+
+    async def write_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        return await sandbox_write_text_files(
+            session_ref=await self._session_ref(runtime),
+            entries=entries,
         )
 
     async def write_tool_result(

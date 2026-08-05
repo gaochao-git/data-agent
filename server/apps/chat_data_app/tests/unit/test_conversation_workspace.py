@@ -115,6 +115,15 @@ def test_resolve_workspace_path_restricts_writes():
         resolve_workspace_path(paths["root"], "other-files/demo/SKILL.md", writable=True)
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "outputs/.tool-offload/private.json", writable=True)
+    with pytest.raises(ValueError, match="语义模型只读快照"):
+        resolve_workspace_path(paths["root"], "workspace/semantic/request/model.yaml", writable=True)
+    snapshot = resolve_workspace_path(
+        paths["root"],
+        "workspace/semantic/request/model.yaml",
+        writable=True,
+        allow_semantic_snapshot_write=True,
+    )
+    assert snapshot.name == "model.yaml"
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,13 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     assert sandbox_visible_path("outputs/.tool-offload/result_1.json") == "/mnt/user-data/outputs/.tool-offload/result_1.json"
     with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
         sandbox_visible_path("outputs/.tool-offload/result_1.json", writable=True)
+    with pytest.raises(ValueError, match="语义模型只读快照"):
+        sandbox_visible_path("workspace/semantic/request/model.yaml", writable=True)
+    assert sandbox_visible_path(
+        "workspace/semantic/request/model.yaml",
+        writable=True,
+        allow_semantic_snapshot_write=True,
+    ) == "/mnt/user-data/workspace/semantic/request/model.yaml"
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
     with pytest.raises(ValueError, match="路径越界"):

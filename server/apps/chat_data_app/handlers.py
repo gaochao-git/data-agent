@@ -43,6 +43,8 @@ from .services.semantic_conversation_context import (
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
 )
+from .services.semantic_tools import format_semantic_config_directory_for_prompt
+from .services.semantic_materializer import materialize_runtime_semantic_models
 
 logger = get_logger(__name__)
 
@@ -976,13 +978,31 @@ async def _generate_chat_data_stream(
         user_id=user_id,
         override=(options or {}).get("runtime_options"),
     )
-    data_context = await build_conversation_prompt_context(prompt_context)
     workspace_paths = await prepare_conversation_workspace(thread_id, user_id or "system")
     workspace_runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_paths["root"],
         user_id=user_id or "system",
         backend=runtime_options.workspace_backend,
     )
+    semantic_snapshot = {"request_id": "", "directory": [], "paths": {}, "configs": {}}
+    if datasource_id:
+        try:
+            semantic_snapshot = await materialize_runtime_semantic_models(
+                workspace_runtime=workspace_runtime,
+                datasource_id=datasource_id,
+                user_id=user_id or "system",
+                source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+            )
+            prompt_context["semantic_config_directory_info"] = format_semantic_config_directory_for_prompt(
+                semantic_snapshot.get("directory") or []
+            )
+        except Exception as err:
+            logger.error("生成本轮 Ossie 语义模型快照失败: datasource_id=%s error=%s", datasource_id, err, exc_info=True)
+            yield _format_sse("error", {"error": "当前语义模型快照生成失败，请稍后重试。"})
+            yield _format_sse("done", "[DONE]")
+            return
+    log_phase("materialize_semantic_models")
+    data_context = await build_conversation_prompt_context(prompt_context)
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
@@ -1102,6 +1122,7 @@ async def _generate_chat_data_stream(
                 operator_name=username,
                 datasource_group_context=prompt_context["datasource_group_context"],
                 workspace_runtime=workspace_runtime,
+                semantic_snapshot=semantic_snapshot,
             )
             log_phase("create_agent")
             stream_adapter = _AgentSseStreamAdapter(

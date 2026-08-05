@@ -958,6 +958,7 @@ def sandbox_visible_path(
     path: str,
     *,
     writable: bool = False,
+    allow_semantic_snapshot_write: bool = False,
 ) -> str:
     raw = unquote(str(path or "").strip())
     while raw.startswith("./"):
@@ -1008,6 +1009,8 @@ def sandbox_visible_path(
             raise ValueError("只允许写入 workspace/ 或 outputs/")
         if _is_tool_results_sandbox_path(sandbox_path):
             raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
+        if _is_semantic_snapshot_sandbox_path(sandbox_path) and not allow_semantic_snapshot_write:
+            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
     return sandbox_path
 
 
@@ -1033,6 +1036,11 @@ def _is_outputs_sandbox_path(path: str) -> bool:
 
 def _is_tool_results_sandbox_path(path: str) -> bool:
     root = f"{sandbox_outputs_dir()}/.tool-offload"
+    return path == root or path.startswith(f"{root}/")
+
+
+def _is_semantic_snapshot_sandbox_path(path: str) -> bool:
+    root = f"{sandbox_workspace_dir()}/semantic"
     return path == root or path.startswith(f"{root}/")
 
 
@@ -1727,6 +1735,64 @@ async def sandbox_write_text_file(*, session_ref: SandboxExecutionSessionRef, fi
             "mode": mode,
             "bytes": len(data),
         }
+
+
+async def sandbox_write_text_files(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    entries: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Write generated text files in one OpenSandbox Files API request."""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        targets = [
+            (_resolve_sandbox_target_for_batch(session, path), str(content or ""))
+            for path, content in entries
+        ]
+        parents = [str(PurePosixPath(target).parent) for target, _ in targets]
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=parents,
+            mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        )
+        _, _, WriteEntry = _import_opensandbox_filesystem_models()
+        writer = getattr(getattr(session.sandbox, "files", None), "write_files", None)
+        if not callable(writer):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.write_files")
+        await writer([
+            WriteEntry(path=target, data=content.encode("utf-8"), mode=_SANDBOX_WRITABLE_FILE_MODE)
+            for target, content in targets
+        ])
+        await _persist_sandbox_paths(
+            session=session,
+            changed_paths=[target for target, _ in targets],
+        )
+        results = [{
+                "operation": "write",
+                "file_path": sandbox_path_to_visible(target),
+                "mode": "overwrite",
+                "bytes": len(content.encode("utf-8")),
+            } for target, content in targets]
+        logger.info(
+            "OpenSandbox Files API 批量上传完成: sandbox_id=%s files=%s bytes=%s",
+            session.sandbox_id,
+            len(results),
+            sum(item["bytes"] for item in results),
+        )
+        return results
+
+
+def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_path: str) -> str:
+    """Resolve a generated workspace path before the batch Files API call."""
+    target = sandbox_visible_path(
+        file_path,
+        writable=True,
+        allow_semantic_snapshot_write=True,
+    )
+    if not _is_semantic_snapshot_sandbox_path(target):
+        raise ValueError("系统批量写入仅允许 workspace/semantic/ 语义模型快照")
+    return target
 
 
 async def sandbox_replace_text_file(
