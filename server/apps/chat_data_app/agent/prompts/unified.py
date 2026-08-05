@@ -194,7 +194,7 @@ DSL_PARAMS_BLOCK = """## DSL 参数
 - 语义 DSL 对象使用字段：`metrics`、`dimensions`、`filters`、`having`、`order_by`、`limit`、`offset`；调用 `dsl2sql_tool` 时把完整 DSL 放入 `dsl` 参数。
 - DSL 路径下，`semantic_query_tool` 必须使用顶层 `dsl={...}` 参数传入同一份完整语义 DSL。
 - SQL 路径下，`semantic_query_tool` 使用顶层 `sql` 参数，不能同时传入 `dsl`。
-- `dimensions` 支持简单格式和时间粒度格式；时间粒度使用 `time_grain`，可选 year/quarter/month/week/day/hour。
+- `dimensions` 支持两种格式：普通维度直接写字符串，例如 `"订单状态"`；带时间粒度时必须写对象 `{"name":"下单时间","time_grain":"month"}`。注意：`dimensions` 对象使用 `name`，固定值过滤条件才使用 `filters[].dimension`；不要把 `dimension` 写到 `dimensions` 对象中，否则维度名称会被解析为空。
 - `operator` 使用 SQL 风格操作符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`、`IN`、`NOT IN`、`LIKE`、`NOT LIKE`、`STARTS WITH`、`ENDS WITH`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`EMPTY STRING`；不要使用 `equals`、`notEquals` 这类枚举名。
 - 结构化 `left/right` 表达式的外层 `operator` 只支持比较符：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`；`IN`、`LIKE`、`BETWEEN` 等只用于固定值过滤。
 - `filters` 支持固定值过滤：`dimension`、`operator`、`value`、`value_type`；`value_type` 仅允许 `literal` / `sql_function`。
@@ -208,28 +208,33 @@ DSL_PARAMS_BLOCK = """## DSL 参数
 - 明细查询：用户问题“查询字段A在值1和值2之间的字段A、字段B记录”
   DSL：
   ```json
-  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"dimension":"字段A","operator":"BETWEEN","value":["值1","值2"]}]}
+  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"dimension":"字段A","operator":"BETWEEN","value":["值1","值2"]}],"order_by":[]}
   ```
 - 分组查询：用户问题“按维度A看指标A”
   DSL：
   ```json
-  {"metrics":["指标A"],"dimensions":["维度A"]}
+  {"metrics":["指标A"],"dimensions":["维度A"],"filters":[],"having":[],"order_by":[]}
+  ```
+- 时间趋势查询：用户问题“按月统计指标A趋势”
+  DSL：
+  ```json
+  {"metrics":["指标A"],"dimensions":[{"name":"时间维度","time_grain":"month"}],"filters":[],"having":[],"order_by":[{"field":"时间维度","direction":"ASC"}]}
   ```
 - HAVING 分组后过滤：用户问题“按维度A看指标A大于10的对象”
   DSL：
   ```json
-  {"metrics":["指标A"],"dimensions":["维度A"],"having":[{"metric":"指标A","operator":">","value":10}]}
+  {"metrics":["指标A"],"dimensions":["维度A"],"filters":[],"having":[{"metric":"指标A","operator":">","value":10}],"order_by":[]}
   ```
 - WHERE 行级字段过滤：用户问题“字段A大于字段B”
   DSL：
   ```json
-  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"dimension","name":"字段B"}}]}
+  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"dimension","name":"字段B"}}],"order_by":[]}
   ```
   这类条件对应 SQL `WHERE`；如果还涉及倍数、加减乘除，再用 `binary` 组合。
 - AND/OR 条件组合：用户问题“字段A等于值1或值2，并且字段B大于10”
   DSL：
   ```json
-  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"and":[{"or":[{"dimension":"字段A","operator":"=","value":"值1"},{"dimension":"字段A","operator":"=","value":"值2"}]},{"dimension":"字段B","operator":">","value":10}]}]}
+  {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"and":[{"or":[{"dimension":"字段A","operator":"=","value":"值1"},{"dimension":"字段A","operator":"=","value":"值2"}]},{"dimension":"字段B","operator":">","value":10}]}],"order_by":[]}
   ```"""
 
 NL2SQL_BLOCK = """## NL2SQL 回退规则
