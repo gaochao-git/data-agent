@@ -1332,12 +1332,7 @@ async def sandbox_list_dir(
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
-        lexical_target = sandbox_visible_path(path)
-        if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
-        if _is_tool_results_sandbox_path(target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         if await _sandbox_path_kind(session=session, path=target) != "dir":
             raise ValueError(f"路径不是目录: {path}")
         files = getattr(session.sandbox, "files", None)
@@ -1355,7 +1350,6 @@ async def sandbox_list_dir(
             entry_type = _sandbox_entry_type(entry)
             if (
                 not entry_path.startswith(target_prefix)
-                or _is_tool_results_sandbox_path(entry_path)
                 or entry_type == "symlink"
             ):
                 continue
@@ -1551,9 +1545,6 @@ async def sandbox_search_files(
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
-        lexical_target = sandbox_visible_path(path)
-        if _is_tool_results_sandbox_path(lexical_target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         target = await _resolve_sandbox_real_path(session=session, file_path=path)
         files = getattr(session.sandbox, "files", None)
         searcher = getattr(files, "search", None)
@@ -1568,7 +1559,6 @@ async def sandbox_search_files(
             if (
                 not entry_path
                 or not entry_path.startswith(target_prefix)
-                or _is_tool_results_sandbox_path(entry_path)
             ):
                 continue
             results.append({"path": sandbox_path_to_visible(entry_path), "type": "file"})
@@ -1602,7 +1592,7 @@ def build_rg_command_str(
     """Build an rg command string for the sandbox backend (shell-executed).
 
     -F: fixed strings, --json: structured JSON Lines output for robust parsing.
-    rg skips hidden dirs (``.tool-offload``) and binary files by default.
+    --hidden: include hidden dirs such as ``.tool-offload`` in the search.
     """
     parts = ["rg", "-F", "--json", "--hidden"]
     if glob and glob != "**/*":

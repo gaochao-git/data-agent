@@ -326,7 +326,7 @@ def test_sandbox_file_edit_rejects_missing_or_nonunique_content(monkeypatch):
         ))
 
 
-def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(monkeypatch):
+def test_sandbox_file_glob_uses_native_files_search_and_includes_tool_results(monkeypatch):
     captured = {}
 
     class FakeSearchEntry:
@@ -338,9 +338,9 @@ def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(mon
         async def search(self, entry):
             captured["entry"] = entry
             return [
-                SimpleNamespace(path="/mnt/user-data/workspace/z-last.json"),
+                SimpleNamespace(path="/mnt/user-data/outputs/z-last.json"),
                 SimpleNamespace(path="/mnt/user-data/outputs/.tool-offload/query.json"),
-                SimpleNamespace(path="/mnt/user-data/workspace/a-first.json"),
+                SimpleNamespace(path="/mnt/user-data/outputs/a-first.json"),
                 SimpleNamespace(path="/tmp/outside.json"),
             ]
 
@@ -352,7 +352,7 @@ def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(mon
     )
 
     async def fake_resolve(**_kwargs):
-        return "/mnt/user-data/workspace"
+        return "/mnt/user-data/outputs"
 
     monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
     monkeypatch.setattr(
@@ -363,16 +363,17 @@ def test_sandbox_file_glob_uses_native_files_search_and_filters_tool_results(mon
 
     results = asyncio.run(workspace_execution.sandbox_search_files(
         session_ref=session_ref,
-        path="workspace",
+        path="outputs",
         pattern="*.json",
         max_results=100,
     ))
 
-    assert captured["entry"].path == "/mnt/user-data/workspace"
+    assert captured["entry"].path == "/mnt/user-data/outputs"
     assert captured["entry"].pattern == "*.json"
     assert results == [
-        {"path": "/mnt/user-data/workspace/a-first.json", "type": "file"},
-        {"path": "/mnt/user-data/workspace/z-last.json", "type": "file"},
+        {"path": "/mnt/user-data/outputs/.tool-offload/query.json", "type": "file"},
+        {"path": "/mnt/user-data/outputs/a-first.json", "type": "file"},
+        {"path": "/mnt/user-data/outputs/z-last.json", "type": "file"},
     ]
 
 

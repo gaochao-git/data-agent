@@ -1200,8 +1200,6 @@ def _list_local_workspace_dir(
         is_skill = True
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
-        if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能列出")
         visible_root = ""
         is_skill = False
     if not target.exists():
@@ -1224,8 +1222,6 @@ def _list_local_workspace_dir(
                 return
             resolved = child.resolve()
             if child.is_symlink():
-                continue
-            if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
                 continue
             try:
                 stat = child.stat()
@@ -1366,8 +1362,6 @@ def _search_local_workspace_files(
         is_skill = True
     else:
         target = resolve_workspace_path(runtime.workspace_root, raw)
-        if is_tool_result_workspace_path(runtime.workspace_root, target):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能搜索")
         visible_root = to_visible_path(runtime.workspace_root, target)
         is_skill = False
     if not target.is_dir() or target.is_symlink():
@@ -1379,8 +1373,6 @@ def _search_local_workspace_files(
         if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
             continue
         resolved = item.resolve()
-        if not is_skill and is_tool_result_workspace_path(runtime.workspace_root, resolved):
-            continue
         if is_skill:
             visible_path = visible_root.rstrip("/") + "/" + item.relative_to(target).as_posix()
         else:

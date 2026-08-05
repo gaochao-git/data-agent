@@ -874,7 +874,7 @@ async def test_file_read_rejects_local_path_escape(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_glob_recursively_matches_filenames_and_hides_tool_results(monkeypatch):
+async def test_file_glob_recursively_matches_filenames_and_includes_tool_results(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_glob_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
     (Path(paths["workspace"]) / "reports" / "daily").mkdir(parents=True)
@@ -893,6 +893,13 @@ async def test_file_glob_recursively_matches_filenames_and_hides_tool_results(mo
         {"path": "/workspace/reports/daily/sales.json", "type": "file"},
         {"path": "/workspace/summary.json", "type": "file"},
     ]
+
+    offload_result = await tools["file_glob"].ainvoke({
+        "path": "outputs",
+        "pattern": "*.json",
+    })
+    offload_payload = json.loads(offload_result.replace("[file_glob]\n", "", 1))
+    assert {"path": "/outputs/.tool-offload/query.json", "type": "file"} in offload_payload["entries"]
 
 
 @pytest.mark.asyncio
