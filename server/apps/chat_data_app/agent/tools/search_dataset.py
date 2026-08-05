@@ -34,7 +34,7 @@ def create_search_dataset_tool(
     bound_user_id = str(user_id or "").strip()
     bound_group_context = str(datasource_group_context or "").strip()
     bound_snapshot = semantic_snapshot or {}
-    has_request_snapshot = bool(bound_snapshot.get("request_id"))
+    has_snapshot = bool(bound_snapshot.get("snapshot_id"))
 
     @tool("search_dataset", args_schema=SelectSemanticConfigInput)
     async def search_dataset(
@@ -63,7 +63,7 @@ def create_search_dataset_tool(
                 datasource_group_context=bound_group_context or semantic_tools.extract_datasource_group_context(state),
                 semantic_configs=(
                     list((bound_snapshot.get("configs") or {}).values())
-                    if has_request_snapshot
+                    if has_snapshot
                     else None
                 ),
             )
@@ -76,9 +76,9 @@ def create_search_dataset_tool(
             for config_id in selected_ids:
                 config = (bound_snapshot.get("configs") or {}).get(config_id)
                 if config is None:
-                    # The request snapshot is the only model-visible semantic view.
+                    # The conversation snapshot is the only model-visible semantic view.
                     # Do not re-load a newer config without an Ossie YAML path.
-                    if has_request_snapshot:
+                    if has_snapshot:
                         continue
                     config = await semantic_tools._load_runtime_semantic_config_for_user(
                         current_datasource_id,

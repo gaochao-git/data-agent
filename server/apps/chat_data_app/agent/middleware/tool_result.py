@@ -11,7 +11,7 @@ from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
 from utils.tool_result_store import ToolResultRecord
-from ...services.conversation_workspace import ConversationWorkspaceRuntime
+from ...services.conversation_workspace import workspace_runtime_from_state
 from ...services.query_result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 from ..tool_results import (
@@ -152,18 +152,13 @@ async def _save_query_result_to_workspace(
 ) -> tuple[str, dict[str, Any] | None]:
     state = _request_state(request)
     workspace = state.get("workspace") if isinstance(state.get("workspace"), dict) else {}
-    workspace_root = str(workspace.get("workspace_root") or "").strip()
-    if not workspace_root:
+    if not str(workspace.get("workspace_root") or "").strip():
         return build_query_result_response(
             status=query_result_status(query_result),
             error="当前会话未初始化工作目录，无法保存结果",
             meta=public_meta,
         ), None
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=workspace_root,
-        user_id=str(state.get("user_id") or "system"),
-        backend="sandbox" if workspace.get("workspace_backend") == "sandbox" else "local",
-    )
+    runtime = workspace_runtime_from_state(state)
     try:
         write_result = await runtime.write_text_file(
             file_path=save_as,
@@ -315,11 +310,7 @@ async def _write_private_tool_result(
         conversation_id=conversation_id,
         user_id=user_id,
     )
-    runtime = ConversationWorkspaceRuntime(
-        workspace_root=workspace_root,
-        user_id=user_id,
-        backend="sandbox" if workspace.get("workspace_backend") == "sandbox" else "local",
-    )
+    runtime = workspace_runtime_from_state(_request_state(request))
     await runtime.write_tool_result(file_path=record.virtual_path, content=content)
     return record
 

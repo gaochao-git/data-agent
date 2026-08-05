@@ -182,7 +182,7 @@ async def test_storage_failure_returns_incomplete_query_result_marker(monkeypatc
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr(tool_result.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = _query_tool_message({
         "status": "succeeded",
@@ -206,7 +206,7 @@ async def test_search_dataset_storage_failure_returns_bounded_content(monkeypatc
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr(tool_result.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     content = '[search_dataset]\n{"metrics":"' + "x" * 200 + '"}'
     message = ToolMessage(content=content, name="search_dataset", tool_call_id="call_dataset")
@@ -227,7 +227,7 @@ async def test_generic_storage_failure_returns_incomplete_result_marker(monkeypa
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
-    monkeypatch.setattr(tool_result.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
+    monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = ToolMessage(content="x" * 200, name="calculator_tool", tool_call_id="call_generic")
 

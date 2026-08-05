@@ -16,6 +16,13 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
+from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
+from utils import tool_result_store
+from apps.chat_data_app.agent.data_agent import assemble_tools
+from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
+from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
+from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
+
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
     _render_local_office_html,
@@ -24,17 +31,28 @@ from apps.chat_data_app.services.conversation_workspace import (
     read_workspace_text_file,
     resolve_workspace_path,
     to_visible_path,
+    workspace_runtime_from_state,
 )
-from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
-from utils import tool_result_store
-from apps.chat_data_app.agent.data_agent import assemble_tools
-from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
-from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
 filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
+
+
+def test_workspace_runtime_from_state_preserves_generic_snapshot_context(tmp_path):
+    runtime = workspace_runtime_from_state({
+        "user_id": "u1",
+        "workspace": {
+            "workspace_root": str(tmp_path),
+            "workspace_backend": "local",
+            "snapshot_id": "request-123",
+        },
+    })
+
+    assert runtime.workspace_root == str(tmp_path)
+    assert runtime.user_id == "u1"
+    assert runtime.backend_name == "local"
+    assert runtime.snapshot_id == "request-123"
 
 
 def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
@@ -116,14 +134,35 @@ def test_resolve_workspace_path_restricts_writes():
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "outputs/.tool-offload/private.json", writable=True)
     with pytest.raises(ValueError, match="语义模型只读快照"):
-        resolve_workspace_path(paths["root"], "workspace/semantic/request/model.yaml", writable=True)
+        resolve_workspace_path(paths["root"], "workspace/semantic/model.yaml", writable=True)
     snapshot = resolve_workspace_path(
         paths["root"],
-        "workspace/semantic/request/model.yaml",
+        "workspace/semantic/model.yaml",
         writable=True,
         allow_semantic_snapshot_write=True,
     )
     assert snapshot.name == "model.yaml"
+
+
+@pytest.mark.asyncio
+async def test_replace_semantic_snapshot_overwrites_and_removes_stale_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
+    semantic_root = Path(paths["workspace"]) / "semantic"
+    semantic_root.mkdir()
+    (semantic_root / "old.yaml").write_text("old", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=paths["root"], user_id="user_a", backend="local"
+    )
+
+    result = await runtime.replace_semantic_snapshot([
+        ("workspace/semantic/new.yaml", "new"),
+    ])
+
+    assert not (semantic_root / "old.yaml").exists()
+    assert (semantic_root / "new.yaml").read_text(encoding="utf-8") == "new"
+    assert result[0]["file_path"] == "/workspace/semantic/new.yaml"
 
 
 @pytest.mark.asyncio
@@ -713,6 +752,9 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def write_text_file(self, *_args, **_kwargs):
             raise AssertionError("unexpected write")
+
+        async def replace_semantic_snapshot(self, *_args, **_kwargs):
+            raise AssertionError("unexpected semantic snapshot replace")
 
         async def write_tool_result(self, *_args, **_kwargs):
             raise AssertionError("unexpected tool result")

@@ -38,6 +38,10 @@ def test_convert_is_valid_ossie_pydantic_document():
     assert parsed.semantic_model[0].metrics[0].expression.dialects[0].expression == "SUM(orders.amount)"
     assert parsed.semantic_model[0].relationships[0].from_dataset == "orders"
     assert parsed.semantic_model[0].relationships[0].to == "users"
+    dataset = document["semantic_model"][0]["datasets"][0]
+    assert dataset["primary_key"] == []
+    assert dataset["unique_keys"] == [[]]
+    assert dataset["fields"]
 
 
 def test_convert_passes_official_json_schema():
@@ -51,14 +55,13 @@ def test_convert_passes_official_json_schema():
     relationship = document["semantic_model"][0]["relationships"][0]
     assert relationship["from"] == "users"
     assert relationship["to"] == "orders"
+    assert all(dataset["primary_key"] == [] for dataset in document["semantic_model"][0]["datasets"])
+    assert all(dataset["unique_keys"] == [[]] for dataset in document["semantic_model"][0]["datasets"])
 
 
-def test_invalid_many_to_many_is_not_emitted():
-    document = yaml.safe_load(ChatDataToOssieConverter().convert(_config("many_to_many")))
-    relationship = document["semantic_model"][0]["relationships"][0]
-    extensions = relationship["custom_extensions"][0]["data"]
-
-    assert json.loads(extensions)["relationship_type"] == "one_to_one"
+def test_invalid_relationship_type_is_rejected():
+    with pytest.raises(ValueError, match="unsupported_cardinality"):
+        ChatDataToOssieConverter().convert(_config("unsupported_cardinality"))
 
 
 def test_missing_config_id_fails():

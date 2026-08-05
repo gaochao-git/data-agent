@@ -1,4 +1,4 @@
-"""Materialize request-scoped Ossie semantic-model snapshots."""
+"""Materialize the fixed Ossie semantic-model snapshot for a conversation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import re
 from collections import OrderedDict
 from pathlib import PurePosixPath
 from typing import Any
-from uuid import uuid4
 
 from utils.logger import get_logger
 
@@ -102,15 +101,16 @@ async def materialize_runtime_semantic_models(
     user_id: str | None,
     source_type: str = "",
 ) -> dict[str, Any]:
-    """Write an immutable Ossie snapshot for the current request.
+    """Replace the conversation's fixed Ossie semantic snapshot.
 
-    The request directory is unique, while converted YAML text is cached by
-    the full normalized config content. This preserves request isolation and
-    avoids repeating conversion work when a model has not changed.
+    The database remains authoritative. Every request reloads the authorized
+    catalog, then overwrites ``workspace/semantic`` so changes and revoked
+    models take effect without creating version directories.
     """
     configs = await load_runtime_semantic_config_catalog(datasource_id, user_id)
-    request_id = uuid4().hex
-    root = PurePosixPath("workspace") / "semantic" / request_id
+    snapshot_id = "semantic"
+    root = PurePosixPath("workspace") / "semantic"
+    workspace_runtime.snapshot_id = snapshot_id
     converter = ChatDataToOssieConverter()
     entries: list[tuple[str, str]] = []
     directory: list[dict[str, Any]] = []
@@ -134,19 +134,18 @@ async def materialize_runtime_semantic_models(
         directory.append(_directory_item(config, f"/mnt/user-data/{path}"))
         cache_hits += int(hit)
 
-    if entries:
-        await workspace_runtime.write_text_files(entries)
+    await workspace_runtime.replace_semantic_snapshot(entries)
     logger.info(
-        "语义模型 Ossie 请求快照完成: datasource_id=%s configs=%s files=%s cache_hits=%s request_id=%s backend=%s",
+        "语义模型 Ossie 会话快照覆盖完成: datasource_id=%s configs=%s files=%s cache_hits=%s snapshot_id=%s backend=%s",
         datasource_id,
         len(configs),
         len(entries),
         cache_hits,
-        request_id,
+        snapshot_id,
         workspace_runtime.backend_name,
     )
     return {
-        "request_id": request_id,
+        "snapshot_id": snapshot_id,
         "directory": directory,
         "paths": {item["id"]: item["path"] for item in directory},
         "configs": { _config_id(config): config for config in configs },

@@ -7,6 +7,23 @@ from typing import Any, Dict, Set
 AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 LOGICAL_TYPE_VALUES = {"text", "number", "date", "datetime", "enum"}
+SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES = frozenset({
+    "one_to_one",
+    "one_to_many",
+    "many_to_one",
+})
+DEFAULT_SEMANTIC_RELATIONSHIP_TYPE = "one_to_one"
+
+
+def normalize_semantic_relationship_type(value: Any) -> str:
+    """Normalize a relationship cardinality and reject unsupported values."""
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return DEFAULT_SEMANTIC_RELATIONSHIP_TYPE
+    if normalized not in SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES:
+        supported = ", ".join(sorted(SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES))
+        raise ValueError(f"不支持的语义关系基数: {normalized}，仅支持: {supported}")
+    return normalized
 
 
 def _build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:

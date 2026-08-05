@@ -10,6 +10,8 @@ import json
 import re
 from typing import Any
 
+from .semantic_common import normalize_semantic_relationship_type
+
 
 _AGGREGATE_RE = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
 _DATATYPE_MAP = {
@@ -79,8 +81,7 @@ def _dialect_expression(expression: str) -> dict[str, Any]:
 
 
 def _relationship_type(value: Any) -> str:
-    normalized = _text(value).lower()
-    return normalized if normalized in {"one_to_one", "one_to_many", "many_to_one"} else "one_to_one"
+    return normalize_semantic_relationship_type(value)
 
 
 class ChatDataToOssieConverter:
@@ -189,7 +190,11 @@ class ChatDataToOssieConverter:
         return dataset_type(
             name=table,
             source=table,
-            fields=fields or None,
+            # Keep the official Ossie empty-value shape when key metadata has
+            # not been maintained yet; empty keys are not treated as facts.
+            primary_key=[],
+            unique_keys=[[]],
+            fields=fields,
             custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
         )
 

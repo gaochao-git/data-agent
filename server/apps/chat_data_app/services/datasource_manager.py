@@ -23,21 +23,16 @@ from .execution_permission import (
 from .hive_meta_http import get_hive_meta_schema_async, get_hive_meta_tables_async
 from .hive_sync import HiveSyncService
 from .mysql_sync import MySQLSyncService
-from .semantic_common import ensure_dimension_logical_type
+from .semantic_common import (
+    ensure_dimension_logical_type,
+    normalize_semantic_relationship_type,
+)
 
 logger = get_logger(__name__)
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _UNSET = object()
 SUPPORTED_QUERY_EXECUTOR_TYPES = {"direct", "http"}
-SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES = {
-    "one_to_one",
-    "one_to_many",
-    "many_to_one",
-}
-DEFAULT_SEMANTIC_RELATIONSHIP_TYPE = "one_to_one"
-
-
 def _read_positive_int_env(name: str, default: int) -> int:
     raw_value = str(os.getenv(name) or "").strip()
     if not raw_value:
@@ -328,10 +323,9 @@ class DataSourceManager:
                 next_rel["join_conditions"] = normalized_conditions
                 next_rel["left_column"] = normalized_conditions[0]["left_column"]
                 next_rel["right_column"] = normalized_conditions[0]["right_column"]
-                relationship_type = str(next_rel.get("relationship_type") or "").strip().lower()
-                if relationship_type not in SUPPORTED_SEMANTIC_RELATIONSHIP_TYPES:
-                    relationship_type = DEFAULT_SEMANTIC_RELATIONSHIP_TYPE
-                next_rel["relationship_type"] = relationship_type
+                next_rel["relationship_type"] = normalize_semantic_relationship_type(
+                    next_rel.get("relationship_type")
+                )
                 normalized_relationships.append(next_rel)
 
             config["relationships"] = normalized_relationships

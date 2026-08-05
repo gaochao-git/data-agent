@@ -72,6 +72,7 @@ class SandboxExecutionSession:
     workspace_root: str
     mode: str = "sandbox"
     runtime_skills_dir: Path | None = None
+    snapshot_id: str = ""
     cache_key: str = ""
     application_manifest: dict[str, tuple[int, int, str]] | None = None
     uploads_manifest: dict[str, tuple[int, int, str]] | None = None
@@ -364,6 +365,8 @@ def _mutable_application_manifest(workspace_root: Path) -> dict[str, tuple[int, 
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
+            if _is_semantic_snapshot_local_path(workspace_root, path):
+                continue
             manifest[f"{directory_name}/{relative}"] = _file_fingerprint(path)
     return manifest
 
@@ -374,6 +377,8 @@ def _mutable_application_metadata_manifest(workspace_root: Path) -> dict[str, tu
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
+            if _is_semantic_snapshot_local_path(workspace_root, path):
+                continue
             stat = path.stat()
             manifest[f"{directory_name}/{relative}"] = (stat.st_size, stat.st_mtime_ns)
     return manifest
@@ -385,16 +390,23 @@ async def _upload_application_tree(
     application_root: Path,
     sandbox_root: str,
     file_mode: int,
+    readonly_roots: tuple[str, ...] = (),
 ) -> tuple[int, int]:
     files = _iter_application_files(application_root)
     total_bytes = 0
     for relative, path in files:
         data = await asyncio.to_thread(path.read_bytes)
+        sandbox_path = f"{sandbox_root}/{relative}"
+        current_mode = (
+            _SANDBOX_READONLY_FILE_MODE
+            if any(_is_sandbox_descendant(sandbox_path, root) for root in readonly_roots)
+            else file_mode
+        )
         await _write_sandbox_file(
             sandbox=sandbox,
-            path=f"{sandbox_root}/{relative}",
+            path=sandbox_path,
             data=data,
-            mode=file_mode,
+            mode=current_mode,
         )
         total_bytes += len(data)
     return len(files), total_bytes
@@ -431,16 +443,30 @@ async def _initialize_sandbox_filesystem(
         f"{sandbox_outputs_dir()}/.tool-offload",
         sandbox_uploads_dir(),
     ])
+    writable_directories = [
+        path for path in user_data_directories
+        if not _is_semantic_snapshot_sandbox_path(path)
+    ]
+    readonly_directories = [
+        path for path in user_data_directories
+        if _is_semantic_snapshot_sandbox_path(path)
+    ]
     await _create_sandbox_directories(
         sandbox=session.sandbox,
-        paths=user_data_directories,
+        paths=writable_directories,
         mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+    )
+    await _create_sandbox_directories(
+        sandbox=session.sandbox,
+        paths=readonly_directories,
+        mode=_SANDBOX_READONLY_DIRECTORY_MODE,
     )
     user_data_count, user_data_bytes = await _upload_application_tree(
         sandbox=session.sandbox,
         application_root=application_root,
         sandbox_root=sandbox_thread_root(),
         file_mode=_SANDBOX_WRITABLE_FILE_MODE,
+        readonly_roots=(f"{sandbox_workspace_dir()}/semantic",),
     )
     skill_count = skill_bytes = 0
     if session.runtime_skills_dir is not None:
@@ -718,21 +744,38 @@ def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bo
     return path == hidden_root or hidden_root in path.parents
 
 
+def _is_semantic_snapshot_local_path(application_root: Path, path: Path) -> bool:
+    semantic_root = application_root / "workspace" / "semantic"
+    return path == semantic_root or semantic_root in path.parents
+
+
 async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
     """Persist the sandbox-owned mutable trees after commands with unknown file effects."""
     remote_files: list[str] = []
     remote_directories: list[str] = []
     for root in (sandbox_workspace_dir(), sandbox_outputs_dir()):
         files, directories = await _walk_sandbox_tree(session=session, root=root)
-        remote_files.extend(str(getattr(entry, "path", "") or "") for entry in files)
-        remote_directories.extend(str(getattr(entry, "path", "") or "") for entry in directories)
+        remote_files.extend(
+            str(getattr(entry, "path", "") or "")
+            for entry in files
+            if not _is_semantic_snapshot_sandbox_path(str(getattr(entry, "path", "") or ""))
+        )
+        remote_directories.extend(
+            str(getattr(entry, "path", "") or "")
+            for entry in directories
+            if not _is_semantic_snapshot_sandbox_path(str(getattr(entry, "path", "") or ""))
+        )
     remote_set = set(remote_files)
     remote_directory_set = set(remote_directories)
     application_root = _application_workspace_root(session.workspace_root)
     local_files: list[Path] = []
     local_directories: list[Path] = []
     for directory_name in ("workspace", "outputs"):
-        local_files.extend(path for _, path in _iter_application_files(application_root / directory_name))
+        local_files.extend(
+            path for _, path in _iter_application_files(application_root / directory_name)
+            if not _is_hidden_tool_results_local_path(application_root, path)
+            and not _is_semantic_snapshot_local_path(application_root, path)
+        )
         root = application_root / directory_name
         local_directories.extend(
             path
@@ -740,6 +783,7 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
             if path.is_dir()
             and not path.is_symlink()
             and not _is_hidden_tool_results_local_path(application_root, path)
+            and not _is_semantic_snapshot_local_path(application_root, path)
         )
     deleted_paths = [
         f"{sandbox_thread_root()}/{path.relative_to(application_root).as_posix()}"
@@ -825,6 +869,7 @@ async def prepare_workspace_execution_session(
     user_id: str = "system",
     mode: str = "sandbox",
     runtime_skills_dir: Path | None = None,
+    snapshot_id: str = "",
 ) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
@@ -849,7 +894,12 @@ async def prepare_workspace_execution_session(
         workspace_root=str(_application_workspace_root(workspace_root)),
         mode=mode,
         runtime_skills_dir=runtime_skills_dir,
-        cache_key=_workspace_session_cache_key(workspace_root, mode, runtime_skills_dir),
+        snapshot_id=str(snapshot_id or "").strip(),
+        cache_key=_workspace_session_cache_key(
+            workspace_root,
+            mode,
+            runtime_skills_dir,
+        ),
     )
     try:
         await _initialize_sandbox_filesystem(session=session)
@@ -864,13 +914,22 @@ async def get_workspace_execution_session(
     user_id: str = "system",
     mode: str = "sandbox",
     runtime_skills_dir: Path | None = None,
+    snapshot_id: str = "",
 ) -> SandboxExecutionSession:
-    cache_key = _workspace_session_cache_key(workspace_root, mode, runtime_skills_dir)
+    cache_key = _workspace_session_cache_key(
+        workspace_root,
+        mode,
+        runtime_skills_dir,
+    )
+    requested_snapshot_id = str(snapshot_id or "").strip()
     now = time.monotonic()
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
         async with cached.session.operation_lock:
-            if await _cached_session_matches_application(cached.session):
+            if (
+                cached.session.snapshot_id == requested_snapshot_id
+                and await _cached_session_matches_application(cached.session)
+            ):
                 await _sync_sandbox_uploads(cached.session)
                 return cached.session
 
@@ -879,7 +938,10 @@ async def get_workspace_execution_session(
         cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
         if cached is not None and cached.expires_at > now:
             async with cached.session.operation_lock:
-                if await _cached_session_matches_application(cached.session):
+                if (
+                    cached.session.snapshot_id == requested_snapshot_id
+                    and await _cached_session_matches_application(cached.session)
+                ):
                     await _sync_sandbox_uploads(cached.session)
                     return cached.session
         if cached is not None:
@@ -890,6 +952,7 @@ async def get_workspace_execution_session(
             user_id,
             mode,
             runtime_skills_dir,
+            snapshot_id,
         )
         _WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = CachedSandboxExecutionSession(
             session=session,
@@ -1751,17 +1814,32 @@ async def sandbox_write_text_files(
             for path, content in entries
         ]
         parents = [str(PurePosixPath(target).parent) for target, _ in targets]
+        semantic_parents = [path for path in parents if _is_semantic_snapshot_sandbox_path(path)]
+        writable_parents = [path for path in parents if not _is_semantic_snapshot_sandbox_path(path)]
         await _create_sandbox_directories(
             sandbox=session.sandbox,
-            paths=parents,
+            paths=writable_parents,
             mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        )
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=semantic_parents,
+            mode=_SANDBOX_READONLY_DIRECTORY_MODE,
         )
         _, _, WriteEntry = _import_opensandbox_filesystem_models()
         writer = getattr(getattr(session.sandbox, "files", None), "write_files", None)
         if not callable(writer):
             raise ValueError("当前 OpenSandbox SDK 不支持 files.write_files")
         await writer([
-            WriteEntry(path=target, data=content.encode("utf-8"), mode=_SANDBOX_WRITABLE_FILE_MODE)
+            WriteEntry(
+                path=target,
+                data=content.encode("utf-8"),
+                mode=(
+                    _SANDBOX_READONLY_FILE_MODE
+                    if _is_semantic_snapshot_sandbox_path(target)
+                    else _SANDBOX_WRITABLE_FILE_MODE
+                ),
+            )
             for target, content in targets
         ])
         await _persist_sandbox_paths(
@@ -1781,6 +1859,130 @@ async def sandbox_write_text_files(
             sum(item["bytes"] for item in results),
         )
         return results
+
+
+async def sandbox_replace_semantic_snapshot(
+    *,
+    session_ref: SandboxExecutionSessionRef,
+    entries: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Replace the fixed semantic snapshot through the OpenSandbox Files API."""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        semantic_root = sandbox_visible_path(
+            "workspace/semantic",
+            writable=True,
+            allow_semantic_snapshot_write=True,
+        )
+        targets = [
+            (
+                sandbox_visible_path(
+                    path,
+                    writable=True,
+                    allow_semantic_snapshot_write=True,
+                ),
+                str(content or ""),
+            )
+            for path, content in entries
+        ]
+        for target, _ in targets:
+            if (
+                target == semantic_root
+                or not target.startswith(f"{semantic_root}/")
+                or not target.endswith(".yaml")
+            ):
+                raise ValueError("语义快照只能写入 workspace/semantic/ 下的 YAML 文件")
+
+        old_files, old_directories = await _walk_sandbox_tree(
+            session=session,
+            root=semantic_root,
+        )
+        files_api = getattr(session.sandbox, "files", None)
+        delete_files = getattr(files_api, "delete_files", None)
+        delete_directories = getattr(files_api, "delete_directories", None)
+        old_file_paths = [str(getattr(entry, "path", "") or "") for entry in old_files]
+        if old_file_paths:
+            if not callable(delete_files):
+                raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_files")
+            await delete_files(old_file_paths)
+        old_directory_paths = sorted(
+            (str(getattr(entry, "path", "") or "") for entry in old_directories),
+            key=lambda path: len(PurePosixPath(path).parts),
+            reverse=True,
+        )
+        if old_directory_paths:
+            if not callable(delete_directories):
+                raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_directories")
+            await delete_directories(old_directory_paths)
+
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=[semantic_root],
+            mode=_SANDBOX_READONLY_DIRECTORY_MODE,
+        )
+        _, _, WriteEntry = _import_opensandbox_filesystem_models()
+        writer = getattr(files_api, "write_files", None)
+        if not callable(writer):
+            raise ValueError("当前 OpenSandbox SDK 不支持 files.write_files")
+        await writer([
+            WriteEntry(
+                path=target,
+                data=content.encode("utf-8"),
+                mode=_SANDBOX_READONLY_FILE_MODE,
+            )
+            for target, content in targets
+        ])
+
+        application_root = _application_workspace_root(session.workspace_root)
+        local_semantic_files = [
+            path
+            for _, path in _iter_application_files(application_root / "workspace" / "semantic")
+        ]
+        remote_targets = {target for target, _ in targets}
+        deleted_local_paths = [
+            f"{sandbox_thread_root()}/workspace/semantic/{path.relative_to(application_root / 'workspace' / 'semantic').as_posix()}"
+            for path in local_semantic_files
+            if f"{sandbox_thread_root()}/workspace/semantic/{path.relative_to(application_root / 'workspace' / 'semantic').as_posix()}"
+            not in remote_targets
+        ]
+        await _persist_sandbox_paths(
+            session=session,
+            changed_paths=[target for target, _ in targets],
+            deleted_paths=deleted_local_paths,
+        )
+        await asyncio.to_thread(_remove_empty_semantic_directories, application_root)
+        results = [
+            {
+                "operation": "write",
+                "file_path": sandbox_path_to_visible(target),
+                "mode": "overwrite",
+                "bytes": len(content.encode("utf-8")),
+            }
+            for target, content in targets
+        ]
+        logger.info(
+            "OpenSandbox 语义模型快照替换完成: sandbox_id=%s files=%s deleted_files=%s",
+            session.sandbox_id,
+            len(results),
+            len(old_file_paths),
+        )
+        return results
+
+
+def _remove_empty_semantic_directories(application_root: Path) -> None:
+    semantic_root = application_root / "workspace" / "semantic"
+    if not semantic_root.is_dir() or semantic_root.is_symlink():
+        return
+    for path in sorted(
+        (item for item in semantic_root.rglob("*") if item.is_dir() and not item.is_symlink()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        try:
+            path.rmdir()
+        except OSError:
+            continue
 
 
 def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_path: str) -> str:

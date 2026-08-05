@@ -697,7 +697,7 @@ def test_runtime_semantic_configs_empty_and_missing_group_fallbacks():
 
     assert asyncio.run(empty_manager.get_runtime_semantic_configs_async("ds_a")) == []
     assert asyncio.run(no_group_manager.get_runtime_semantic_configs_async("ds_a")) == [
-        {"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": [], "source_type": "mysql", "tables": []}
+        {"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": [], "source_type": "mysql", "tables": [], "relationships": []}
     ]
 
 
@@ -2174,8 +2174,8 @@ def test_datasource_manager_relationship_and_helper_fallback_branches(monkeypatc
             }],
         }],
     }
-    manager._normalize_semantic_relationships(invalid)
-    assert invalid["semantic_configs"][0]["relationships"][0]["relationship_type"] == "one_to_one"
+    with pytest.raises(ValueError, match="unknown"):
+        manager._normalize_semantic_relationships(invalid)
 
     merged = _merge_member_source_lines(
         current={},

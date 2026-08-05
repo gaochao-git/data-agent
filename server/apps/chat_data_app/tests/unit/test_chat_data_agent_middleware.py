@@ -470,10 +470,18 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
         system_prompt="智能问数系统提示词",
         state_schema=dict,
     )
-    update = await middleware.abefore_model({"messages": messages}, SimpleNamespace())
+    update = await middleware.abefore_model({
+        "messages": messages,
+        "workspace": {
+            "workspace_root": "/data/chat/threads/u1/c1/user-data",
+            "workspace_backend": "sandbox",
+            "snapshot_id": "request-123",
+        },
+    }, SimpleNamespace())
 
     event = update["context_compression_events"][0]
     assert update["context_compression"]["triggered"] is True
+    assert "workspace" not in update
     assert event["turn_id"] == "turn-current"
     assert event["anchor_message_id"] == "turn-current"
     assert streamed_events == [{

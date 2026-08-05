@@ -984,7 +984,7 @@ async def _generate_chat_data_stream(
         user_id=user_id or "system",
         backend=runtime_options.workspace_backend,
     )
-    semantic_snapshot = {"request_id": "", "directory": [], "paths": {}, "configs": {}}
+    semantic_snapshot = {"snapshot_id": "", "directory": [], "paths": {}, "configs": {}}
     if datasource_id:
         try:
             semantic_snapshot = await materialize_runtime_semantic_models(
@@ -1099,6 +1099,7 @@ async def _generate_chat_data_stream(
                 workspace={
                     "workspace_root": workspace_paths["root"],
                     "workspace_backend": runtime_options.workspace_backend,
+                    "snapshot_id": workspace_runtime.snapshot_id,
                 },
             )
             system_prompt = build_unified_system_prompt(

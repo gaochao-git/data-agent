@@ -32,7 +32,7 @@ def _semantic_snapshot(configs):
     indexed = {}
     for config in configs:
         config_id = config["id"]
-        path = f"/mnt/user-data/workspace/semantic/request/{config_id}.yaml"
+        path = f"/mnt/user-data/workspace/semantic/{config_id}.yaml"
         directory.append({
             "id": config_id,
             "name": config.get("name", config_id),
@@ -43,7 +43,7 @@ def _semantic_snapshot(configs):
         })
         paths[config_id] = path
         indexed[config_id] = config
-    return {"request_id": "request", "directory": directory, "paths": paths, "configs": indexed}
+    return {"snapshot_id": "semantic", "directory": directory, "paths": paths, "configs": indexed}
 
 
 def test_extract_datasource_id_from_state():
@@ -108,7 +108,9 @@ def test_format_semantic_config_directory_for_prompt_keeps_full_description():
     ])
 
     assert "## 当前可见指标集目录" in prompt
+    assert "ID：sc_order" in prompt
     assert "名称：订单分析" in prompt
+    assert "YAML路径：/mnt/user-data/workspace/semantic/sc_order.yaml" in prompt
     assert f"描述：{long_description}" in prompt
     assert "指标数：3；维度数：5" in prompt
     assert "无名称会跳过" not in prompt
@@ -197,6 +199,7 @@ def test_list_runtime_semantic_config_directory_falls_back_to_legacy_manager(mon
         "description": "历史描述",
         "metrics_total": 0,
         "dimensions_total": 0,
+        "path": "/mnt/user-data/workspace/semantic/sc_legacy.yaml",
     }]
 
 

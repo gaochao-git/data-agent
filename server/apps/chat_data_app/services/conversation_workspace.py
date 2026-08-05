@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Mapping, Protocol, runtime_checkable
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -53,6 +53,7 @@ from .workspace_execution import (
     sandbox_search_files,
     sandbox_visible_path,
     sandbox_replace_text_file,
+    sandbox_replace_semantic_snapshot,
     sandbox_write_text_file,
     sandbox_workspace_dir,
 )
@@ -94,6 +95,13 @@ class WorkspaceBackend(Protocol):
         content: str,
         mode: str,
     ) -> dict[str, Any]: ...
+
+    async def replace_semantic_snapshot(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]: ...
 
     async def write_tool_result(
         self,
@@ -225,6 +233,10 @@ class ConversationWorkspaceRuntime:
     workspace_root: str
     user_id: str
     backend: "WorkspaceBackend | str" = "local"
+    # Identifies the stable system-generated snapshot seeded into the backend.
+    # It is intentionally generic so other snapshot trees can share the same
+    # session lifecycle without adding fields to context compression.
+    snapshot_id: str = ""
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
@@ -343,6 +355,15 @@ class ConversationWorkspaceRuntime:
             )
             for path, content in normalized
         ]
+
+    async def replace_semantic_snapshot(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        """Replace the fixed workspace/semantic snapshot for this conversation."""
+        normalized = [
+            (str(path or "").strip(), str(content or ""))
+            for path, content in entries
+            if str(path or "").strip()
+        ]
+        return await self.backend.replace_semantic_snapshot(self, entries=normalized)
 
     async def replace_text_file(
         self,
@@ -464,6 +485,22 @@ class ConversationWorkspaceRuntime:
         )
 
 
+def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> ConversationWorkspaceRuntime:
+    """Rebuild a workspace runtime from serializable AgentState fields."""
+    values = state if isinstance(state, Mapping) else {}
+    workspace = values.get("workspace")
+    context = workspace if isinstance(workspace, Mapping) else {}
+    workspace_root = str(context.get("workspace_root") or "").strip()
+    if not workspace_root:
+        raise ValueError("当前请求缺少会话工作区")
+    return ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=str(values.get("user_id") or "system").strip() or "system",
+        backend="sandbox" if str(context.get("workspace_backend") or "").strip() == "sandbox" else "local",
+        snapshot_id=str(context.get("snapshot_id") or "").strip(),
+    )
+
+
 def _safe_segment(value: str) -> str:
     """规整路径段，避免会话 ID 造成目录越界。"""
     try:
@@ -565,7 +602,7 @@ def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
 
 
 def is_semantic_snapshot_workspace_path(workspace_root: str, path: Path) -> bool:
-    """Return whether a path belongs to request-scoped Ossie snapshots."""
+    """Return whether a path belongs to the system-owned Ossie snapshot."""
     snapshots_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
     target = path.resolve()
     return target == snapshots_root or snapshots_root in target.parents
@@ -1182,6 +1219,48 @@ def _write_local_text_file(
     }
 
 
+def _replace_local_semantic_snapshot(
+    workspace_root: str,
+    entries: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Replace the system-owned semantic directory, including stale snapshots."""
+    semantic_root = resolve_workspace_path(
+        workspace_root,
+        "workspace/semantic",
+        writable=True,
+        allow_semantic_snapshot_write=True,
+    )
+    normalized: list[tuple[Path, str]] = []
+    for file_path, content in entries:
+        target = resolve_workspace_path(
+            workspace_root,
+            file_path,
+            writable=True,
+            allow_semantic_snapshot_write=True,
+        )
+        if target == semantic_root or semantic_root not in target.parents or target.suffix != ".yaml":
+            raise ValueError("语义快照只能写入 workspace/semantic/ 下的 YAML 文件")
+        normalized.append((target, content))
+    if semantic_root.is_symlink():
+        raise ValueError("workspace/semantic/ 不允许为符号链接")
+    if semantic_root.exists():
+        if not semantic_root.is_dir():
+            raise ValueError("workspace/semantic/ 不是目录")
+        shutil.rmtree(semantic_root)
+    semantic_root.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for target, content in normalized:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        results.append({
+            "operation": "write",
+            "file_path": to_visible_path(workspace_root, target),
+            "mode": "overwrite",
+            "bytes": len(content.encode("utf-8")),
+        })
+    return results
+
+
 def _replace_local_text_file(
     workspace_root: str,
     file_path: str,
@@ -1585,6 +1664,18 @@ class LocalWorkspaceBackend:
 
         return await asyncio.to_thread(write_batch)
 
+    async def replace_semantic_snapshot(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            _replace_local_semantic_snapshot,
+            runtime.workspace_root,
+            entries,
+        )
+
     async def write_tool_result(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -1928,6 +2019,7 @@ class SandboxWorkspaceBackend:
                 runtime.workspace_root,
                 runtime.user_id,
                 runtime_skills_dir=runtime.runtime_skills_dir,
+                snapshot_id=runtime.snapshot_id,
             )
         return self.session_ref
 
@@ -1967,6 +2059,17 @@ class SandboxWorkspaceBackend:
         entries: list[tuple[str, str]],
     ) -> list[dict[str, Any]]:
         return await sandbox_write_text_files(
+            session_ref=await self._session_ref(runtime),
+            entries=entries,
+        )
+
+    async def replace_semantic_snapshot(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        return await sandbox_replace_semantic_snapshot(
             session_ref=await self._session_ref(runtime),
             entries=entries,
         )

@@ -57,12 +57,12 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
         sandbox_visible_path("outputs/.tool-offload/result_1.json", writable=True)
     with pytest.raises(ValueError, match="语义模型只读快照"):
-        sandbox_visible_path("workspace/semantic/request/model.yaml", writable=True)
+        sandbox_visible_path("workspace/semantic/model.yaml", writable=True)
     assert sandbox_visible_path(
-        "workspace/semantic/request/model.yaml",
+        "workspace/semantic/model.yaml",
         writable=True,
         allow_semantic_snapshot_write=True,
-    ) == "/mnt/user-data/workspace/semantic/request/model.yaml"
+    ) == "/mnt/user-data/workspace/semantic/model.yaml"
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
     with pytest.raises(ValueError, match="路径越界"):
@@ -605,6 +605,9 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     )
     FakeSandbox.files = FakeFiles()
     (workspace_root / "workspace" / "report.txt").write_text("report", encoding="utf-8")
+    semantic_file = workspace_root / "workspace" / "semantic" / "sc_order.yaml"
+    semantic_file.parent.mkdir(parents=True)
+    semantic_file.write_text("semantic_model: sc_order\n", encoding="utf-8")
     runtime_skills_dir = workspace_root.parent / "runtime-skills"
     (runtime_skills_dir / "demo-skill").mkdir(parents=True)
     (runtime_skills_dir / "demo-skill" / "SKILL.md").write_text("# Demo", encoding="utf-8")
@@ -617,6 +620,10 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     assert "network_policy" not in captured
     assert "volumes" not in captured
     assert uploaded["/mnt/user-data/workspace/report.txt"] == (b"report", 666)
+    assert uploaded["/mnt/user-data/workspace/semantic/sc_order.yaml"] == (
+        b"semantic_model: sc_order\n",
+        444,
+    )
     assert uploaded["/mnt/skills/demo-skill/SKILL.md"] == (b"# Demo", 444)
     permission_modes = {mode for _, mode in created_directories} | {
         mode for _, mode in uploaded.values()
