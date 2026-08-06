@@ -7,7 +7,7 @@ def test_policy_normalizes_shared_aliases_and_classifies_special_paths():
     workspace = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/semantic/order.yaml")
     outputs = WORKSPACE_PATH_POLICY.parse("outputs/.tool-offload/result.json")
     uploads = WORKSPACE_PATH_POLICY.parse("/uploads/source.csv")
-    skill = WORKSPACE_PATH_POLICY.parse("/mnt/skills/chart-processing/SKILL.md")
+    skill = WORKSPACE_PATH_POLICY.parse("/mnt/skills/officecli/SKILL.md")
 
     assert workspace.normalized == "workspace/semantic/order.yaml"
     assert workspace.is_semantic_model is True
@@ -18,7 +18,7 @@ def test_policy_normalizes_shared_aliases_and_classifies_special_paths():
         "/mnt/user-data/workspace/semantic/order.yaml"
     )
     assert WORKSPACE_PATH_POLICY.to_sandbox_path(skill) == (
-        "/mnt/skills/chart-processing/SKILL.md"
+        "/mnt/skills/officecli/SKILL.md"
     )
 
 

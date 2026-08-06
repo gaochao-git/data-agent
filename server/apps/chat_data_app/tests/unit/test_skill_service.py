@@ -115,15 +115,15 @@ def test_skill_service_reads_system_skill_file():
     clear_metadata_cache()
 
     file_data = asyncio.run(skill_service.read_skill_version_file_async(
-        "chart-processing",
+        "skill-creator",
         1,
         "scripts",
-        "join_results_chart.py",
+        "quick_validate.py",
         "test-user",
     ))
 
     assert file_data["dir_name"] == "scripts"
-    assert file_data["file_path"] == "scripts/join_results_chart.py"
+    assert file_data["file_path"] == "scripts/quick_validate.py"
     assert "def " in file_data["content"]
 
 
@@ -132,10 +132,10 @@ def test_skill_service_rejects_system_skill_file_write():
 
     try:
         asyncio.run(skill_service.save_skill_version_file_async(
-            "chart-processing",
+            "skill-creator",
             1,
             "scripts",
-            "join_results_chart.py",
+            "quick_validate.py",
             "# changed",
             "test-user",
         ))
