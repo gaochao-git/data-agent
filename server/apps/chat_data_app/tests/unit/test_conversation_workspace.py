@@ -39,20 +39,18 @@ present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agen
 filesystem_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.filesystem")
 
 
-def test_workspace_runtime_from_state_preserves_generic_snapshot_context(tmp_path):
+def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
     runtime = workspace_runtime_from_state({
         "user_id": "u1",
         "workspace": {
             "workspace_root": str(tmp_path),
             "workspace_backend": "local",
-            "snapshot_id": "request-123",
         },
     })
 
     assert runtime.workspace_root == str(tmp_path)
     assert runtime.user_id == "u1"
     assert runtime.backend_name == "local"
-    assert runtime.snapshot_id == "request-123"
 
 
 def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):

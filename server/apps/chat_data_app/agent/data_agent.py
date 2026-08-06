@@ -39,7 +39,7 @@ def assemble_tools(
     operator_name: str | None = None,
     model_id: str | None = None,
     datasource_group_context: str | None = None,
-    semantic_snapshot: dict | None = None,
+    source_type: str | None = None,
 ) -> list:
     """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
     search_dataset_tool = create_search_dataset_tool(
@@ -47,7 +47,8 @@ def assemble_tools(
         datasource_id=datasource_id,
         user_id=user_id,
         datasource_group_context=datasource_group_context,
-        semantic_snapshot=semantic_snapshot,
+        source_type=source_type,
+        workspace_runtime=workspace_runtime,
     )
     tools = [
         *create_filesystem_tools(workspace_runtime),
@@ -80,7 +81,7 @@ def create_data_agent(
     user_id: str | None = None,
     operator_name: str | None = None,
     datasource_group_context: str | None = None,
-    semantic_snapshot: dict | None = None,
+    source_type: str | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
 ):
     """创建唯一的 ``chat_data`` Agent。"""
@@ -102,7 +103,7 @@ def create_data_agent(
         operator_name=operator_name,
         model_id=model_id,
         datasource_group_context=datasource_group_context,
-        semantic_snapshot=semantic_snapshot,
+        source_type=source_type,
     )
     effective_system_prompt = system_prompt or build_unified_system_prompt(
         options,

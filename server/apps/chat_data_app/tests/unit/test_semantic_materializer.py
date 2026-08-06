@@ -12,10 +12,9 @@ class _FakeRuntime:
 
     def __init__(self):
         self.entries = []
-        self.snapshot_id = ""
 
-    async def replace_semantic_snapshot(self, entries):
-        self.entries = list(entries)
+    async def write_text_files(self, entries):
+        self.entries.extend(entries)
         return [{"file_path": path, "bytes": len(content.encode("utf-8"))} for path, content in entries]
 
 
@@ -27,6 +26,14 @@ class _FakeDatasourceManager:
         assert datasource_id == "ds_1"
         assert user_id == "user_1"
         return self.configs
+
+    async def get_datasource_async(self, datasource_id):
+        return {"id": datasource_id, "source_type": "mysql"}
+
+    async def get_runtime_semantic_config_async(self, datasource_id, config_id, user_id=""):
+        assert datasource_id == "ds_1"
+        assert user_id == "user_1"
+        return next((config for config in self.configs if config["id"] == config_id), None)
 
 
 def _config(config_id="sc_order", enabled=True):
@@ -46,6 +53,7 @@ def _materialize(runtime):
         datasource_id="ds_1",
         user_id="user_1",
         source_type="mysql",
+        semantic_config_ids=["sc_order", "sc_disabled"],
     ))
 
 
@@ -70,15 +78,10 @@ def test_materializer_overwrites_fixed_snapshot_and_reuses_conversion_cache(monk
     first = _materialize(first_runtime)
     second = _materialize(second_runtime)
 
-    assert first["snapshot_id"] == "semantic"
-    assert second["snapshot_id"] == "semantic"
-    assert first_runtime.snapshot_id == "semantic"
-    assert second_runtime.snapshot_id == "semantic"
     assert len(first["directory"]) == 1
     assert first["directory"][0]["metrics_total"] == 1
     assert first["directory"][0]["dimensions_total"] == 1
     assert first["directory"][0]["path"] == first["paths"]["sc_order"]
-    assert first_runtime.entries[0][0].startswith("workspace/semantic/")
     assert first_runtime.entries[0][0] == "workspace/semantic/sc_order.yaml"
     assert second_runtime.entries[0][1] == first_runtime.entries[0][1]
     assert calls == [("sc_order", "mysql")]
@@ -101,7 +104,9 @@ def test_materializer_cache_key_includes_config_content(monkeypatch):
     monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
     _materialize(_FakeRuntime())
     configs[0]["description"] = "订单模型（已更新）"
-    _materialize(_FakeRuntime())
+    runtime = _FakeRuntime()
+    semantic_materializer._YAML_CACHE.clear()
+    _materialize(runtime)
 
     assert calls == ["订单分析", "订单模型（已更新）"]
 
@@ -115,7 +120,13 @@ def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     )
     runtime = _FakeRuntime()
 
-    result = _materialize(runtime)
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=[],
+    ))
 
     assert result["directory"] == []
     assert result["paths"] == {}
@@ -123,7 +134,7 @@ def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     assert runtime.entries == []
 
 
-def test_materializer_removes_config_that_is_no_longer_authorized(monkeypatch):
+def test_materializer_only_overwrites_selected_models(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     configs = [_config("sc_old"), _config("sc_keep")]
     monkeypatch.setattr(
@@ -137,9 +148,13 @@ def test_materializer_removes_config_that_is_no_longer_authorized(monkeypatch):
 
     monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
     runtime = _FakeRuntime()
-    _materialize(runtime)
-    configs[:] = [_config("sc_keep")]
-    result = _materialize(runtime)
+    result = asyncio.run(semantic_materializer.materialize_runtime_semantic_models(
+        workspace_runtime=runtime,
+        datasource_id="ds_1",
+        user_id="user_1",
+        source_type="mysql",
+        semantic_config_ids=["sc_keep"],
+    ))
 
     assert [path for path, _ in runtime.entries] == ["workspace/semantic/sc_keep.yaml"]
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/sc_keep.yaml"}

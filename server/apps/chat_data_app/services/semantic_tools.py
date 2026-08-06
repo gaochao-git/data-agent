@@ -5,7 +5,6 @@
 供 LangGraph Agent 调用。
 """
 
-import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage
@@ -56,7 +55,7 @@ def _is_semantic_config_directory_query(query: str) -> bool:
 
 
 def _semantic_config_directory_item(config: Dict[str, Any]) -> Dict[str, Any]:
-    """构造面向模型的指标集目录项，包含稳定定位信息和规模。"""
+    """构造面向模型的指标集目录项，只包含模型选择信息。"""
     config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
     metrics = config.get("metrics") if isinstance(config.get("metrics"), list) else []
     dimensions = config.get("dimensions") if isinstance(config.get("dimensions"), list) else []
@@ -66,22 +65,13 @@ def _semantic_config_directory_item(config: Dict[str, Any]) -> Dict[str, Any]:
         "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
         "metrics_total": len(metrics),
         "dimensions_total": len(dimensions),
-        "path": _semantic_snapshot_path(config_id),
     }
 
 
-def _semantic_snapshot_path(config_id: str) -> str:
-    """Return the fixed model-readable path for one semantic config."""
-    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(config_id or "").strip()).strip("._")
-    return f"/mnt/user-data/workspace/semantic/{safe_id}.yaml" if safe_id else ""
-
-
 def _normalize_directory_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    """Add the stable snapshot path to a lightweight DAO directory item."""
+    """Normalize a lightweight DAO directory item without adding a YAML path."""
     normalized = dict(item)
-    config_id = str(normalized.get("id") or normalized.get("semantic_config_id") or "").strip()
-    if config_id and not normalized.get("path"):
-        normalized["path"] = _semantic_snapshot_path(config_id)
+    normalized.pop("path", None)
     return normalized
 
 
@@ -114,21 +104,17 @@ def format_semantic_config_directory_for_prompt(directory: List[Dict[str, Any]])
             "description": _prompt_text(item.get("description")) or "未填写",
             "metrics_total": _safe_count(item.get("metrics_total")),
             "dimensions_total": _safe_count(item.get("dimensions_total")),
-            "path": _prompt_text(item.get("path")) or _semantic_snapshot_path(
-                str(item.get("id") or item.get("semantic_config_id") or "").strip()
-            ),
         })
     if not normalized_items:
         return ""
 
     lines = [
-        "## 当前可见指标集目录",
-        "以下是当前数据源组下可见的启用指标集轻量目录，只包含 ID、名称、YAML 路径、描述、指标数量和维度数量；用于选择模型和定位对应语义文件，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先用 ID 选择，再通过 file_read/file_grep 按路径读取 YAML。",
+        "## 当前可见语义模型目录",
+        "以下是当前数据源组下可见的启用语义模型轻量目录，只包含 ID、名称、描述、指标数量和维度数量；用于选择模型，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先调用 search_dataset，工具会返回选中模型的实际语义文件路径，再通过 file_read/file_grep 读取。",
     ]
     for index, item in enumerate(normalized_items, start=1):
         lines.append(f"{index}. ID：{item['id'] or '未填写'}")
         lines.append(f"   名称：{item['name']}")
-        lines.append(f"   YAML路径：{item['path'] or '未生成'}")
         lines.append(f"   描述：{item['description']}")
         lines.append(f"   指标数：{item['metrics_total']}；维度数：{item['dimensions_total']}")
     return "\n".join(lines)
@@ -238,7 +224,7 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
         "message": (
-            "已返回相关指标集的轻量引用。必须使用每项 path 对应的 Ossie YAML，通过 file_grep/file_read 按需读取真实指标、维度、关系和口径；"
+            "已返回相关语义模型的轻量引用。必须使用每项 path 对应的语义 YAML，通过 file_grep/file_read 按需读取真实指标、维度、关系和口径；"
             "在完成必要读取前，不得生成 DSL 或猜测字段。每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
             if returned_ids else
             "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。"
@@ -248,10 +234,17 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
 
 def _semantic_config_directory_to_tool_payload(directory: List[Dict[str, Any]]) -> Dict[str, Any]:
     """将指标集目录转为工具返回结构。"""
+    normalized_directory = []
+    for item in directory or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_item = dict(item)
+        normalized_item.pop("path", None)
+        normalized_directory.append(normalized_item)
     return {
         "success": True,
         "directory": True,
         "semantic_config_ids": [],
-        "semantic_config_directory": directory,
-        "message": "当前可见指标集目录已返回；请基于 semantic_config_directory 用自然语言列出名称、描述和指标/维度数量，不要编造不存在的指标集。",
+        "semantic_config_directory": normalized_directory,
+        "message": "当前可见语义模型目录已返回；请基于 semantic_config_directory 用自然语言列出名称、描述和指标/维度数量，不要编造不存在的语义模型。需要读取具体定义时，先选择模型后再次调用 search_dataset。",
     }

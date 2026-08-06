@@ -37,7 +37,6 @@ class ConversationWorkspaceContext(TypedDict, total=False):
 
     workspace_root: str
     workspace_backend: str
-    snapshot_id: str
 
 
 class ChatDataAgentState(AgentState, total=False):

@@ -475,7 +475,6 @@ async def test_context_compression_middleware_persists_and_streams_visible_event
         "workspace": {
             "workspace_root": "/data/chat/threads/u1/c1/user-data",
             "workspace_backend": "sandbox",
-            "snapshot_id": "request-123",
         },
     }, SimpleNamespace())
 

@@ -233,10 +233,6 @@ class ConversationWorkspaceRuntime:
     workspace_root: str
     user_id: str
     backend: "WorkspaceBackend | str" = "local"
-    # Identifies the stable system-generated snapshot seeded into the backend.
-    # It is intentionally generic so other snapshot trees can share the same
-    # session lifecycle without adding fields to context compression.
-    snapshot_id: str = ""
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
@@ -497,7 +493,6 @@ def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> Conversatio
         workspace_root=workspace_root,
         user_id=str(values.get("user_id") or "system").strip() or "system",
         backend="sandbox" if str(context.get("workspace_backend") or "").strip() == "sandbox" else "local",
-        snapshot_id=str(context.get("snapshot_id") or "").strip(),
     )
 
 
@@ -2019,7 +2014,6 @@ class SandboxWorkspaceBackend:
                 runtime.workspace_root,
                 runtime.user_id,
                 runtime_skills_dir=runtime.runtime_skills_dir,
-                snapshot_id=runtime.snapshot_id,
             )
         return self.session_ref
 

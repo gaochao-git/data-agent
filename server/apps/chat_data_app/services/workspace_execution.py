@@ -72,7 +72,6 @@ class SandboxExecutionSession:
     workspace_root: str
     mode: str = "sandbox"
     runtime_skills_dir: Path | None = None
-    snapshot_id: str = ""
     cache_key: str = ""
     application_manifest: dict[str, tuple[int, int, str]] | None = None
     uploads_manifest: dict[str, tuple[int, int, str]] | None = None
@@ -869,7 +868,6 @@ async def prepare_workspace_execution_session(
     user_id: str = "system",
     mode: str = "sandbox",
     runtime_skills_dir: Path | None = None,
-    snapshot_id: str = "",
 ) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
@@ -894,7 +892,6 @@ async def prepare_workspace_execution_session(
         workspace_root=str(_application_workspace_root(workspace_root)),
         mode=mode,
         runtime_skills_dir=runtime_skills_dir,
-        snapshot_id=str(snapshot_id or "").strip(),
         cache_key=_workspace_session_cache_key(
             workspace_root,
             mode,
@@ -914,22 +911,17 @@ async def get_workspace_execution_session(
     user_id: str = "system",
     mode: str = "sandbox",
     runtime_skills_dir: Path | None = None,
-    snapshot_id: str = "",
 ) -> SandboxExecutionSession:
     cache_key = _workspace_session_cache_key(
         workspace_root,
         mode,
         runtime_skills_dir,
     )
-    requested_snapshot_id = str(snapshot_id or "").strip()
     now = time.monotonic()
     cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
     if cached is not None and cached.expires_at > now:
         async with cached.session.operation_lock:
-            if (
-                cached.session.snapshot_id == requested_snapshot_id
-                and await _cached_session_matches_application(cached.session)
-            ):
+            if await _cached_session_matches_application(cached.session):
                 await _sync_sandbox_uploads(cached.session)
                 return cached.session
 
@@ -938,10 +930,7 @@ async def get_workspace_execution_session(
         cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
         if cached is not None and cached.expires_at > now:
             async with cached.session.operation_lock:
-                if (
-                    cached.session.snapshot_id == requested_snapshot_id
-                    and await _cached_session_matches_application(cached.session)
-                ):
+                if await _cached_session_matches_application(cached.session):
                     await _sync_sandbox_uploads(cached.session)
                     return cached.session
         if cached is not None:
@@ -952,7 +941,6 @@ async def get_workspace_execution_session(
             user_id,
             mode,
             runtime_skills_dir,
-            snapshot_id,
         )
         _WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = CachedSandboxExecutionSession(
             session=session,
