@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Literal, Mapping, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -31,6 +31,13 @@ from .runtime_skill_snapshot import (
     runtime_skills_snapshot_dir_from_workspace,
 )
 from .semantic_common import AGENT_ID
+from .workspace_path_policy import WORKSPACE_PATH_POLICY
+from .workspace_special_services import (
+    semantic_model_workspace_service,
+    workspace_artifact_service,
+    workspace_office_preview_service,
+    workspace_tool_result_service,
+)
 from .workspace_execution import (
     OPENSANDBOX_BACKEND,
     SandboxExecutionSessionRef,
@@ -49,11 +56,10 @@ from .workspace_execution import (
     sandbox_render_office_html,
     sandbox_write_tool_result,
     sync_sandbox_working_trees,
-    sandbox_write_text_files,
+    sandbox_write_internal_text_files,
     sandbox_search_files,
     sandbox_visible_path,
     sandbox_replace_text_file,
-    sandbox_replace_semantic_snapshot,
     sandbox_write_text_file,
     sandbox_workspace_dir,
 )
@@ -96,21 +102,6 @@ class WorkspaceBackend(Protocol):
         mode: str,
     ) -> dict[str, Any]: ...
 
-    async def replace_semantic_snapshot(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-        *,
-        entries: list[tuple[str, str]],
-    ) -> list[dict[str, Any]]: ...
-
-    async def write_tool_result(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-        *,
-        file_path: str,
-        content: str,
-    ) -> dict[str, Any]: ...
-
     async def replace_text_file(
         self,
         runtime: "ConversationWorkspaceRuntime",
@@ -118,21 +109,6 @@ class WorkspaceBackend(Protocol):
         file_path: str,
         old_content: str,
         new_content: str,
-    ) -> dict[str, Any]: ...
-
-    async def artifact_payload(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-        *,
-        file_path: str,
-    ) -> dict[str, Any]: ...
-
-    async def render_office_html(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-        *,
-        file_path: str,
-        max_chars: int,
     ) -> dict[str, Any]: ...
 
     async def list_dir(
@@ -195,10 +171,11 @@ class WorkspaceBackend(Protocol):
         max_chars: int,
     ) -> dict[str, Any]: ...
 
-    async def get_sandbox_session_ref(
-        self,
-        runtime: "ConversationWorkspaceRuntime",
-    ) -> SandboxExecutionSessionRef: ...
+
+
+@runtime_checkable
+class ExecutableWorkspaceBackend(WorkspaceBackend, Protocol):
+    """Workspace backend extension whose commands share the file environment."""
 
     async def validate_bash_paths(
         self,
@@ -309,9 +286,10 @@ class ConversationWorkspaceRuntime:
             visible += "/" + "/".join(relative_parts)
         return target, visible
 
-    async def get_sandbox_session_ref(self) -> SandboxExecutionSessionRef:
-        """Return the execution session for ``bash_run`` when the backend supports it."""
-        return await self.backend.get_sandbox_session_ref(self)
+    def _executable_backend(self) -> ExecutableWorkspaceBackend:
+        if not isinstance(self.backend, ExecutableWorkspaceBackend):
+            raise ValueError("当前工作区后端不支持命令执行")
+        return self.backend
 
     async def read_text_file(
         self,
@@ -328,38 +306,9 @@ class ConversationWorkspaceRuntime:
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
         return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
-    async def write_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
-        """Write system-generated request snapshots through the active backend."""
-        normalized = [
-            (str(path or "").strip(), str(content or ""))
-            for path, content in entries
-            if str(path or "").strip()
-        ]
-        if not normalized:
-            return []
-        batch_writer = getattr(self.backend, "write_text_files", None)
-        if callable(batch_writer):
-            return await batch_writer(self, entries=normalized)
-        return [
-            await asyncio.to_thread(
-                _write_local_text_file,
-                self.workspace_root,
-                path,
-                content,
-                "overwrite",
-                allow_semantic_snapshot_write=True,
-            )
-            for path, content in normalized
-        ]
-
-    async def replace_semantic_snapshot(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
-        """Replace the fixed workspace/semantic snapshot for this conversation."""
-        normalized = [
-            (str(path or "").strip(), str(content or ""))
-            for path, content in entries
-            if str(path or "").strip()
-        ]
-        return await self.backend.replace_semantic_snapshot(self, entries=normalized)
+    async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        """Write system-owned semantic model files through the active backend."""
+        return await semantic_model_workspace_service.write_files(self, entries)
 
     async def replace_text_file(
         self,
@@ -377,13 +326,17 @@ class ConversationWorkspaceRuntime:
 
     async def write_tool_result(self, *, file_path: str, content: str) -> dict[str, Any]:
         """Persist a middleware-owned hidden tool result through the active backend."""
-        return await self.backend.write_tool_result(self, file_path=file_path, content=content)
+        return await workspace_tool_result_service.write(
+            self,
+            file_path=file_path,
+            content=content,
+        )
 
     async def artifact_payload(self, *, file_path: str) -> dict[str, Any]:
-        return await self.backend.artifact_payload(self, file_path=file_path)
+        return await workspace_artifact_service.load(self, file_path=file_path)
 
     async def render_office_html(self, *, file_path: str, max_chars: int) -> dict[str, Any]:
-        return await self.backend.render_office_html(
+        return await workspace_office_preview_service.render_html(
             self,
             file_path=file_path,
             max_chars=max_chars,
@@ -456,7 +409,7 @@ class ConversationWorkspaceRuntime:
         )
 
     async def validate_bash_paths(self, *, command: str) -> None:
-        await self.backend.validate_bash_paths(self, command=command)
+        await self._executable_backend().validate_bash_paths(self, command=command)
 
     async def run_bash(
         self,
@@ -465,7 +418,7 @@ class ConversationWorkspaceRuntime:
         cwd: str | None,
         timeout_seconds: int,
     ) -> dict[str, Any]:
-        return await self.backend.run_bash(
+        return await self._executable_backend().run_bash(
             self, command=command, cwd=cwd, timeout_seconds=timeout_seconds
         )
 
@@ -476,7 +429,7 @@ class ConversationWorkspaceRuntime:
         cwd: str | None,
         timeout_seconds: int,
     ) -> dict[str, Any]:
-        return await self.backend.run_officecli(
+        return await self._executable_backend().run_officecli(
             self, args=args, cwd=cwd, timeout_seconds=timeout_seconds
         )
 
@@ -489,10 +442,11 @@ def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> Conversatio
     workspace_root = str(context.get("workspace_root") or "").strip()
     if not workspace_root:
         raise ValueError("当前请求缺少会话工作区")
+    backend_name = str(context.get("workspace_backend") or "local").strip().lower() or "local"
     return ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
         user_id=str(values.get("user_id") or "system").strip() or "system",
-        backend="sandbox" if str(context.get("workspace_backend") or "").strip() == "sandbox" else "local",
+        backend=backend_name,
     )
 
 
@@ -541,33 +495,22 @@ def resolve_workspace_path(
     path: str,
     *,
     writable: bool = False,
-    allow_semantic_snapshot_write: bool = False,
+    allow_managed_semantic_model_write: bool = False,
 ) -> Path:
     """解析模型可见路径并按解析后的真实路径实施目录边界。"""
     root = Path(workspace_root).resolve()
-    raw = str(path or "").strip()
-    while raw.startswith("./"):
-        raw = raw[2:]
-    if not raw:
-        raise ValueError("必须指定 workspace、outputs 或 uploads 下的路径")
+    logical_path = WORKSPACE_PATH_POLICY.parse(path)
+    if logical_path.is_skill:
+        raise ValueError(f"技能路径必须通过技能快照读取: {path}")
+    if writable:
+        WORKSPACE_PATH_POLICY.assert_writable(
+            logical_path,
+            allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+        )
+    else:
+        WORKSPACE_PATH_POLICY.assert_readable(logical_path)
 
-    alias_map = {
-        "/mnt/user-data/workspace": "workspace",
-        "/mnt/user-data/outputs": "outputs",
-        "/mnt/user-data/uploads": "uploads",
-        "/workspace": "workspace",
-        "/outputs": "outputs",
-        "/uploads": "uploads",
-    }
-    for prefix, alias in alias_map.items():
-        if raw == prefix or raw.startswith(f"{prefix}/"):
-            raw = f"{alias}/{raw[len(prefix):].lstrip('/')}"
-            break
-
-    if os.path.isabs(raw):
-        raise ValueError(f"只允许访问当前会话目录内的相对路径: {path}")
-
-    target = (root / raw).resolve()
+    target = (root / logical_path.normalized).resolve()
     if root not in target.parents:
         raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
 
@@ -576,16 +519,14 @@ def resolve_workspace_path(
         raise ValueError("只允许访问 workspace/、outputs/ 或 uploads/")
 
     if writable:
-        writable_roots = [(root / "workspace").resolve(), (root / "outputs").resolve()]
-        if not any(target == item or item in target.parents for item in writable_roots):
-            raise ValueError("只允许写入 workspace/ 或 outputs/")
         if is_tool_result_workspace_path(str(root), target):
             raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
         if (
-            is_semantic_snapshot_workspace_path(str(root), target)
-            and not allow_semantic_snapshot_write
+            is_managed_semantic_model_workspace_path(str(root), target)
+            and not allow_managed_semantic_model_write
         ):
             raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+
     return target
 
 
@@ -596,11 +537,11 @@ def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
     return target == results_root or results_root in target.parents
 
 
-def is_semantic_snapshot_workspace_path(workspace_root: str, path: Path) -> bool:
-    """Return whether a path belongs to the system-owned Ossie snapshot."""
-    snapshots_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a path belongs to the system-owned semantic model directory."""
+    semantic_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
     target = path.resolve()
-    return target == snapshots_root or snapshots_root in target.parents
+    return target == semantic_root or semantic_root in target.parents
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
@@ -1193,7 +1134,7 @@ def _write_local_text_file(
     content: str,
     mode: str,
     *,
-    allow_semantic_snapshot_write: bool = False,
+    allow_managed_semantic_model_write: bool = False,
 ) -> dict[str, Any]:
     if mode != "overwrite":
         raise ValueError("内部文件写入只支持 overwrite")
@@ -1201,59 +1142,39 @@ def _write_local_text_file(
         workspace_root,
         file_path,
         writable=True,
-        allow_semantic_snapshot_write=allow_semantic_snapshot_write,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
     )
+    if allow_managed_semantic_model_write and (
+        not is_managed_semantic_model_workspace_path(workspace_root, target)
+        or target.suffix.lower() != ".yaml"
+    ):
+        raise ValueError("内部语义模型写入只能覆盖 workspace/semantic/ 下的 YAML 文件")
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8") as file_obj:
-        file_obj.write(content)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            temporary_path = Path(file_obj.name)
+            file_obj.write(content)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return {
         "operation": "write",
         "file_path": to_visible_path(workspace_root, target),
         "mode": mode,
         "bytes": len(content.encode("utf-8")),
     }
-
-
-def _replace_local_semantic_snapshot(
-    workspace_root: str,
-    entries: list[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    """Replace the system-owned semantic directory, including stale snapshots."""
-    semantic_root = resolve_workspace_path(
-        workspace_root,
-        "workspace/semantic",
-        writable=True,
-        allow_semantic_snapshot_write=True,
-    )
-    normalized: list[tuple[Path, str]] = []
-    for file_path, content in entries:
-        target = resolve_workspace_path(
-            workspace_root,
-            file_path,
-            writable=True,
-            allow_semantic_snapshot_write=True,
-        )
-        if target == semantic_root or semantic_root not in target.parents or target.suffix != ".yaml":
-            raise ValueError("语义快照只能写入 workspace/semantic/ 下的 YAML 文件")
-        normalized.append((target, content))
-    if semantic_root.is_symlink():
-        raise ValueError("workspace/semantic/ 不允许为符号链接")
-    if semantic_root.exists():
-        if not semantic_root.is_dir():
-            raise ValueError("workspace/semantic/ 不是目录")
-        shutil.rmtree(semantic_root)
-    semantic_root.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    for target, content in normalized:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        results.append({
-            "operation": "write",
-            "file_path": to_visible_path(workspace_root, target),
-            "mode": "overwrite",
-            "bytes": len(content.encode("utf-8")),
-        })
-    return results
 
 
 def _replace_local_text_file(
@@ -1639,7 +1560,7 @@ class LocalWorkspaceBackend:
     ) -> dict[str, Any]:
         return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
 
-    async def write_text_files(
+    async def write_internal_text_files(
         self,
         runtime: ConversationWorkspaceRuntime,
         *,
@@ -1652,24 +1573,12 @@ class LocalWorkspaceBackend:
                     path,
                     content,
                     "overwrite",
-                    allow_semantic_snapshot_write=True,
+                    allow_managed_semantic_model_write=True,
                 )
                 for path, content in entries
             ]
 
         return await asyncio.to_thread(write_batch)
-
-    async def replace_semantic_snapshot(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-        *,
-        entries: list[tuple[str, str]],
-    ) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(
-            _replace_local_semantic_snapshot,
-            runtime.workspace_root,
-            entries,
-        )
 
     async def write_tool_result(
         self,
@@ -1834,12 +1743,6 @@ class LocalWorkspaceBackend:
             max_results,
             max_chars,
         )
-
-    async def get_sandbox_session_ref(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-    ) -> SandboxExecutionSessionRef:
-        raise ValueError("当前工作区后端不支持 OpenSandbox 执行")
 
     async def validate_bash_paths(
         self,
@@ -2046,24 +1949,13 @@ class SandboxWorkspaceBackend:
             session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
         )
 
-    async def write_text_files(
+    async def write_internal_text_files(
         self,
         runtime: ConversationWorkspaceRuntime,
         *,
         entries: list[tuple[str, str]],
     ) -> list[dict[str, Any]]:
-        return await sandbox_write_text_files(
-            session_ref=await self._session_ref(runtime),
-            entries=entries,
-        )
-
-    async def replace_semantic_snapshot(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-        *,
-        entries: list[tuple[str, str]],
-    ) -> list[dict[str, Any]]:
-        return await sandbox_replace_semantic_snapshot(
+        return await sandbox_write_internal_text_files(
             session_ref=await self._session_ref(runtime),
             entries=entries,
         )
@@ -2213,12 +2105,6 @@ class SandboxWorkspaceBackend:
             max_chars=max_chars,
         )
 
-    async def get_sandbox_session_ref(
-        self,
-        runtime: ConversationWorkspaceRuntime,
-    ) -> SandboxExecutionSessionRef:
-        return await self._session_ref(runtime)
-
     async def validate_bash_paths(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -2324,9 +2210,20 @@ class SandboxWorkspaceBackend:
         }
 
 
+_WORKSPACE_BACKEND_FACTORIES: dict[str, Callable[[], WorkspaceBackend]] = {
+    "local": LocalWorkspaceBackend,
+    "sandbox": SandboxWorkspaceBackend,
+}
+
+
 def create_workspace_backend(name: str) -> WorkspaceBackend:
-    """Create a backend once at runtime construction; invalid input falls back to local."""
-    return SandboxWorkspaceBackend() if str(name or "").strip().lower() == "sandbox" else LocalWorkspaceBackend()
+    """Create a server-registered backend; unknown names fail closed."""
+    backend_name = str(name or "").strip().lower()
+    factory = _WORKSPACE_BACKEND_FACTORIES.get(backend_name)
+    if factory is None:
+        supported = ", ".join(sorted(_WORKSPACE_BACKEND_FACTORIES))
+        raise ValueError(f"不支持的工作区后端: {name}；可用后端: {supported}")
+    return factory()
 
 
 def _absolute_command_path_tokens(command: str, *, tool_name: str = "bash_run") -> list[str]:

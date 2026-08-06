@@ -176,7 +176,7 @@ async def materialize_runtime_semantic_models(
         directory.append(_directory_item(rendered_config, f"/mnt/user-data/{path}"))
         cache_hits += int(hit)
 
-    await workspace_runtime.write_text_files(entries)
+    await workspace_runtime.write_internal_text_files(entries)
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s selected_ids=%s files=%s cache_hits=%s backend=%s",
         datasource_id,

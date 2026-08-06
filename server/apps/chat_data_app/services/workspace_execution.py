@@ -14,7 +14,6 @@ import re
 import shlex
 import time
 from typing import Any, Literal
-from urllib.parse import unquote
 from uuid import uuid4
 
 from utils.crypto import decrypt_env_value
@@ -22,6 +21,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
 from .artifact_registry import parse_output_artifact
+from .workspace_path_policy import WORKSPACE_PATH_POLICY
 
 logger = get_logger(__name__)
 
@@ -36,6 +36,8 @@ _SANDBOX_WRITABLE_FILE_MODE = 666
 _SANDBOX_WRITABLE_DIRECTORY_MODE = 777
 _SANDBOX_READONLY_FILE_MODE = 444
 _SANDBOX_READONLY_DIRECTORY_MODE = 555
+_SANDBOX_COMMAND_UID = 65534
+_SANDBOX_COMMAND_GID = 65534
 
 
 def _sandbox_root() -> str:
@@ -364,7 +366,10 @@ def _mutable_application_manifest(workspace_root: Path) -> dict[str, tuple[int, 
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
-            if _is_semantic_snapshot_local_path(workspace_root, path):
+            if (
+                _is_hidden_tool_results_local_path(workspace_root, path)
+                or _is_managed_semantic_model_local_path(workspace_root, path)
+            ):
                 continue
             manifest[f"{directory_name}/{relative}"] = _file_fingerprint(path)
     return manifest
@@ -376,7 +381,10 @@ def _mutable_application_metadata_manifest(workspace_root: Path) -> dict[str, tu
     for directory_name in ("workspace", "outputs"):
         directory = workspace_root / directory_name
         for relative, path in _iter_application_files(directory):
-            if _is_semantic_snapshot_local_path(workspace_root, path):
+            if (
+                _is_hidden_tool_results_local_path(workspace_root, path)
+                or _is_managed_semantic_model_local_path(workspace_root, path)
+            ):
                 continue
             stat = path.stat()
             manifest[f"{directory_name}/{relative}"] = (stat.st_size, stat.st_mtime_ns)
@@ -444,11 +452,17 @@ async def _initialize_sandbox_filesystem(
     ])
     writable_directories = [
         path for path in user_data_directories
-        if not _is_semantic_snapshot_sandbox_path(path)
+        if not _is_managed_semantic_model_sandbox_path(path)
+        and not _is_tool_results_sandbox_path(path)
+        and not _is_uploads_sandbox_path(path)
     ]
     readonly_directories = [
         path for path in user_data_directories
-        if _is_semantic_snapshot_sandbox_path(path)
+        if (
+            _is_managed_semantic_model_sandbox_path(path)
+            or _is_tool_results_sandbox_path(path)
+            or _is_uploads_sandbox_path(path)
+        )
     ]
     await _create_sandbox_directories(
         sandbox=session.sandbox,
@@ -465,7 +479,11 @@ async def _initialize_sandbox_filesystem(
         application_root=application_root,
         sandbox_root=sandbox_thread_root(),
         file_mode=_SANDBOX_WRITABLE_FILE_MODE,
-        readonly_roots=(f"{sandbox_workspace_dir()}/semantic",),
+        readonly_roots=(
+            f"{sandbox_workspace_dir()}/semantic",
+            f"{sandbox_outputs_dir()}/.tool-offload",
+            sandbox_uploads_dir(),
+        ),
     )
     skill_count = skill_bytes = 0
     if session.runtime_skills_dir is not None:
@@ -517,7 +535,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
     await _create_sandbox_directories(
         sandbox=session.sandbox,
         paths=_sandbox_tree_directories(uploads_root, sandbox_uploads_dir()),
-        mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        mode=_SANDBOX_READONLY_DIRECTORY_MODE,
     )
     previous_manifest = session.uploads_manifest or {}
     changed_files = sorted(
@@ -530,7 +548,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
             sandbox=session.sandbox,
             path=f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}",
             data=await asyncio.to_thread(path.read_bytes),
-            mode=_SANDBOX_WRITABLE_FILE_MODE,
+            mode=_SANDBOX_READONLY_FILE_MODE,
         )
 
     remote_files, _ = await _walk_sandbox_tree(
@@ -743,7 +761,7 @@ def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bo
     return path == hidden_root or hidden_root in path.parents
 
 
-def _is_semantic_snapshot_local_path(application_root: Path, path: Path) -> bool:
+def _is_managed_semantic_model_local_path(application_root: Path, path: Path) -> bool:
     semantic_root = application_root / "workspace" / "semantic"
     return path == semantic_root or semantic_root in path.parents
 
@@ -757,12 +775,14 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
         remote_files.extend(
             str(getattr(entry, "path", "") or "")
             for entry in files
-            if not _is_semantic_snapshot_sandbox_path(str(getattr(entry, "path", "") or ""))
+            if not _is_managed_semantic_model_sandbox_path(str(getattr(entry, "path", "") or ""))
+            and not _is_tool_results_sandbox_path(str(getattr(entry, "path", "") or ""))
         )
         remote_directories.extend(
             str(getattr(entry, "path", "") or "")
             for entry in directories
-            if not _is_semantic_snapshot_sandbox_path(str(getattr(entry, "path", "") or ""))
+            if not _is_managed_semantic_model_sandbox_path(str(getattr(entry, "path", "") or ""))
+            and not _is_tool_results_sandbox_path(str(getattr(entry, "path", "") or ""))
         )
     remote_set = set(remote_files)
     remote_directory_set = set(remote_directories)
@@ -773,7 +793,7 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
         local_files.extend(
             path for _, path in _iter_application_files(application_root / directory_name)
             if not _is_hidden_tool_results_local_path(application_root, path)
-            and not _is_semantic_snapshot_local_path(application_root, path)
+            and not _is_managed_semantic_model_local_path(application_root, path)
         )
         root = application_root / directory_name
         local_directories.extend(
@@ -782,7 +802,7 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
             if path.is_dir()
             and not path.is_symlink()
             and not _is_hidden_tool_results_local_path(application_root, path)
-            and not _is_semantic_snapshot_local_path(application_root, path)
+            and not _is_managed_semantic_model_local_path(application_root, path)
         )
     deleted_paths = [
         f"{sandbox_thread_root()}/{path.relative_to(application_root).as_posix()}"
@@ -849,7 +869,12 @@ async def run_command_in_sandbox(
 ) -> tuple[int, str, str]:
     """Run a controlled OpenSandbox Commands API operation."""
     _, _, RunCommandOpts, _ = _import_opensandbox_sdk()
-    options: dict[str, Any] = {"timeout": timedelta(seconds=max(1, timeout_seconds))}
+    options: dict[str, Any] = {
+        "timeout": timedelta(seconds=max(1, timeout_seconds)),
+        "uid": _SANDBOX_COMMAND_UID,
+        "gid": _SANDBOX_COMMAND_GID,
+        "envs": {"HOME": "/tmp", "LANG": "C.UTF-8"},
+    }
     execution = await session.sandbox.commands.run(command, opts=RunCommandOpts(**options))
     command_status = None
     status_lookup_error = ""
@@ -1009,60 +1034,18 @@ def sandbox_visible_path(
     path: str,
     *,
     writable: bool = False,
-    allow_semantic_snapshot_write: bool = False,
+    allow_managed_semantic_model_write: bool = False,
 ) -> str:
-    raw = unquote(str(path or "").strip())
-    while raw.startswith("./"):
-        raw = raw[2:]
-    if not raw:
+    if not str(path or "").strip():
         return sandbox_thread_root()
-    if "\x00" in raw:
-        raise ValueError("路径不能包含空字节")
-    mappings = (
-        ("/mnt/user-data/workspace", sandbox_workspace_dir()),
-        ("/mnt/user-data/outputs", sandbox_outputs_dir()),
-        ("/mnt/user-data/uploads", sandbox_uploads_dir()),
-        ("/workspace", sandbox_workspace_dir()),
-        ("/outputs", sandbox_outputs_dir()),
-        ("/uploads", sandbox_uploads_dir()),
-        (sandbox_skills_root(), sandbox_skills_root()),
-    )
-    sandbox_path = ""
-    for prefix, target_prefix in mappings:
-        if raw == prefix:
-            sandbox_path = target_prefix
-            break
-        if raw.startswith(f"{prefix}/"):
-            sandbox_path = f"{target_prefix}{raw[len(prefix):]}"
-            break
-    if not sandbox_path:
-        if raw.startswith("/"):
-            raise ValueError(f"只允许访问当前会话目录内的路径: {path}")
-        sandbox_path = f"{sandbox_thread_root()}/{raw.lstrip('/')}"
-    if ".." in PurePosixPath(sandbox_path).parts:
-        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
-    # 沙箱快照使用固定虚拟根：/mnt/user-data（可写）和 /mnt/skills（只读）。
-    workspace_roots = (sandbox_workspace_dir(), sandbox_outputs_dir(), sandbox_uploads_dir())
-    readable_roots = workspace_roots + (sandbox_skills_root(),)
-    if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in readable_roots):
-        raise ValueError(f"只允许访问 workspace/、outputs/、uploads/ 或技能路径: {path}")
-    if (
-        sandbox_path == sandbox_skills_root()
-        or (
-            sandbox_path.startswith(f"{sandbox_skills_root()}/")
-            and len(PurePosixPath(sandbox_path).parts) < 4
-        )
-    ):
-        raise ValueError(f"技能路径必须包含技能名: {path}")
+    logical_path = WORKSPACE_PATH_POLICY.parse(path)
+    WORKSPACE_PATH_POLICY.assert_readable(logical_path)
     if writable:
-        writable_roots = (sandbox_workspace_dir(), sandbox_outputs_dir())
-        if not any(sandbox_path == root or sandbox_path.startswith(f"{root}/") for root in writable_roots):
-            raise ValueError("只允许写入 workspace/ 或 outputs/")
-        if _is_tool_results_sandbox_path(sandbox_path):
-            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
-        if _is_semantic_snapshot_sandbox_path(sandbox_path) and not allow_semantic_snapshot_write:
-            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
-    return sandbox_path
+        WORKSPACE_PATH_POLICY.assert_writable(
+            logical_path,
+            allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+        )
+    return WORKSPACE_PATH_POLICY.to_sandbox_path(logical_path)
 
 
 def sandbox_path_to_visible(path: str) -> str:
@@ -1090,7 +1073,12 @@ def _is_tool_results_sandbox_path(path: str) -> bool:
     return path == root or path.startswith(f"{root}/")
 
 
-def _is_semantic_snapshot_sandbox_path(path: str) -> bool:
+def _is_uploads_sandbox_path(path: str) -> bool:
+    root = sandbox_uploads_dir()
+    return path == root or path.startswith(f"{root}/")
+
+
+def _is_managed_semantic_model_sandbox_path(path: str) -> bool:
     root = f"{sandbox_workspace_dir()}/semantic"
     return path == root or path.startswith(f"{root}/")
 
@@ -1778,7 +1766,12 @@ async def sandbox_write_text_file(*, session_ref: SandboxExecutionSessionRef, fi
             mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
         )
         data = content.encode("utf-8")
-        await _write_sandbox_file(sandbox=session.sandbox, path=target, data=data)
+        await _write_sandbox_file(
+            sandbox=session.sandbox,
+            path=target,
+            data=data,
+            mode=_SANDBOX_WRITABLE_FILE_MODE,
+        )
         await _persist_sandbox_paths(session=session, changed_paths=[target])
         return {
             "operation": "write",
@@ -1788,7 +1781,7 @@ async def sandbox_write_text_file(*, session_ref: SandboxExecutionSessionRef, fi
         }
 
 
-async def sandbox_write_text_files(
+async def sandbox_write_internal_text_files(
     *,
     session_ref: SandboxExecutionSessionRef,
     entries: list[tuple[str, str]],
@@ -1802,8 +1795,8 @@ async def sandbox_write_text_files(
             for path, content in entries
         ]
         parents = [str(PurePosixPath(target).parent) for target, _ in targets]
-        semantic_parents = [path for path in parents if _is_semantic_snapshot_sandbox_path(path)]
-        writable_parents = [path for path in parents if not _is_semantic_snapshot_sandbox_path(path)]
+        semantic_parents = [path for path in parents if _is_managed_semantic_model_sandbox_path(path)]
+        writable_parents = [path for path in parents if not _is_managed_semantic_model_sandbox_path(path)]
         await _create_sandbox_directories(
             sandbox=session.sandbox,
             paths=writable_parents,
@@ -1824,7 +1817,7 @@ async def sandbox_write_text_files(
                 data=content.encode("utf-8"),
                 mode=(
                     _SANDBOX_READONLY_FILE_MODE
-                    if _is_semantic_snapshot_sandbox_path(target)
+                    if _is_managed_semantic_model_sandbox_path(target)
                     else _SANDBOX_WRITABLE_FILE_MODE
                 ),
             )
@@ -1849,139 +1842,15 @@ async def sandbox_write_text_files(
         return results
 
 
-async def sandbox_replace_semantic_snapshot(
-    *,
-    session_ref: SandboxExecutionSessionRef,
-    entries: list[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    """Replace the fixed semantic snapshot through the OpenSandbox Files API."""
-    session = require_sandbox_session(session_ref)
-    async with session.operation_lock:
-        await _recover_pending_persistence(session)
-        semantic_root = sandbox_visible_path(
-            "workspace/semantic",
-            writable=True,
-            allow_semantic_snapshot_write=True,
-        )
-        targets = [
-            (
-                sandbox_visible_path(
-                    path,
-                    writable=True,
-                    allow_semantic_snapshot_write=True,
-                ),
-                str(content or ""),
-            )
-            for path, content in entries
-        ]
-        for target, _ in targets:
-            if (
-                target == semantic_root
-                or not target.startswith(f"{semantic_root}/")
-                or not target.endswith(".yaml")
-            ):
-                raise ValueError("语义快照只能写入 workspace/semantic/ 下的 YAML 文件")
-
-        old_files, old_directories = await _walk_sandbox_tree(
-            session=session,
-            root=semantic_root,
-        )
-        files_api = getattr(session.sandbox, "files", None)
-        delete_files = getattr(files_api, "delete_files", None)
-        delete_directories = getattr(files_api, "delete_directories", None)
-        old_file_paths = [str(getattr(entry, "path", "") or "") for entry in old_files]
-        if old_file_paths:
-            if not callable(delete_files):
-                raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_files")
-            await delete_files(old_file_paths)
-        old_directory_paths = sorted(
-            (str(getattr(entry, "path", "") or "") for entry in old_directories),
-            key=lambda path: len(PurePosixPath(path).parts),
-            reverse=True,
-        )
-        if old_directory_paths:
-            if not callable(delete_directories):
-                raise ValueError("当前 OpenSandbox SDK 不支持 files.delete_directories")
-            await delete_directories(old_directory_paths)
-
-        await _create_sandbox_directories(
-            sandbox=session.sandbox,
-            paths=[semantic_root],
-            mode=_SANDBOX_READONLY_DIRECTORY_MODE,
-        )
-        _, _, WriteEntry = _import_opensandbox_filesystem_models()
-        writer = getattr(files_api, "write_files", None)
-        if not callable(writer):
-            raise ValueError("当前 OpenSandbox SDK 不支持 files.write_files")
-        await writer([
-            WriteEntry(
-                path=target,
-                data=content.encode("utf-8"),
-                mode=_SANDBOX_READONLY_FILE_MODE,
-            )
-            for target, content in targets
-        ])
-
-        application_root = _application_workspace_root(session.workspace_root)
-        local_semantic_files = [
-            path
-            for _, path in _iter_application_files(application_root / "workspace" / "semantic")
-        ]
-        remote_targets = {target for target, _ in targets}
-        deleted_local_paths = [
-            f"{sandbox_thread_root()}/workspace/semantic/{path.relative_to(application_root / 'workspace' / 'semantic').as_posix()}"
-            for path in local_semantic_files
-            if f"{sandbox_thread_root()}/workspace/semantic/{path.relative_to(application_root / 'workspace' / 'semantic').as_posix()}"
-            not in remote_targets
-        ]
-        await _persist_sandbox_paths(
-            session=session,
-            changed_paths=[target for target, _ in targets],
-            deleted_paths=deleted_local_paths,
-        )
-        await asyncio.to_thread(_remove_empty_semantic_directories, application_root)
-        results = [
-            {
-                "operation": "write",
-                "file_path": sandbox_path_to_visible(target),
-                "mode": "overwrite",
-                "bytes": len(content.encode("utf-8")),
-            }
-            for target, content in targets
-        ]
-        logger.info(
-            "OpenSandbox 语义模型快照替换完成: sandbox_id=%s files=%s deleted_files=%s",
-            session.sandbox_id,
-            len(results),
-            len(old_file_paths),
-        )
-        return results
-
-
-def _remove_empty_semantic_directories(application_root: Path) -> None:
-    semantic_root = application_root / "workspace" / "semantic"
-    if not semantic_root.is_dir() or semantic_root.is_symlink():
-        return
-    for path in sorted(
-        (item for item in semantic_root.rglob("*") if item.is_dir() and not item.is_symlink()),
-        key=lambda item: len(item.parts),
-        reverse=True,
-    ):
-        try:
-            path.rmdir()
-        except OSError:
-            continue
-
-
 def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_path: str) -> str:
     """Resolve a generated workspace path before the batch Files API call."""
     target = sandbox_visible_path(
         file_path,
         writable=True,
-        allow_semantic_snapshot_write=True,
+        allow_managed_semantic_model_write=True,
     )
-    if not _is_semantic_snapshot_sandbox_path(target):
-        raise ValueError("系统批量写入仅允许 workspace/semantic/ 语义模型快照")
+    if not _is_managed_semantic_model_sandbox_path(target):
+        raise ValueError("系统批量写入仅允许 workspace/semantic/ 下的 YAML 语义模型文件")
     return target
 
 
@@ -2050,7 +1919,12 @@ async def sandbox_write_tool_result(
         else:
             raise ValueError("工具结果文件已存在")
         data = content.encode("utf-8")
-        await _write_sandbox_file(sandbox=session.sandbox, path=target, data=data)
+        await _write_sandbox_file(
+            sandbox=session.sandbox,
+            path=target,
+            data=data,
+            mode=_SANDBOX_READONLY_FILE_MODE,
+        )
         await _persist_sandbox_paths(session=session, changed_paths=[target])
         return {"file_path": sandbox_path_to_visible(target), "bytes": len(data)}
 

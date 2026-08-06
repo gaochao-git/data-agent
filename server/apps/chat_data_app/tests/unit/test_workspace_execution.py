@@ -61,7 +61,7 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     assert sandbox_visible_path(
         "workspace/semantic/model.yaml",
         writable=True,
-        allow_semantic_snapshot_write=True,
+        allow_managed_semantic_model_write=True,
     ) == "/mnt/user-data/workspace/semantic/model.yaml"
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
@@ -226,6 +226,65 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
     assert payload["operation"] == "edit"
     assert payload["replaced_count"] == 1
     assert target.read_text(encoding="utf-8") == "status=new"
+
+
+@pytest.mark.parametrize(
+    ("writer", "file_path", "expected_mode"),
+    [
+        (workspace_execution.sandbox_write_text_file, "workspace/report.txt", 666),
+        (
+            workspace_execution.sandbox_write_tool_result,
+            "outputs/.tool-offload/result.txt",
+            444,
+        ),
+    ],
+)
+def test_sandbox_writers_use_expected_file_mode(
+    writer,
+    file_path,
+    expected_mode,
+    monkeypatch,
+):
+    captured = {}
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=object()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    async def fake_resolve(**_kwargs):
+        return f"/mnt/user-data/{file_path}"
+
+    async def fake_write(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_read(**_kwargs):
+        raise FileNotFoundError
+
+    async def fake_persist(**_kwargs):
+        return None
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_write_sandbox_file", fake_write)
+    monkeypatch.setattr(workspace_execution, "_read_sandbox_file_bytes", fake_read)
+    monkeypatch.setattr(workspace_execution, "_persist_sandbox_paths", fake_persist)
+    monkeypatch.setattr(
+        workspace_execution,
+        "_create_sandbox_directories",
+        lambda **_kwargs: asyncio.sleep(0),
+    )
+
+    kwargs = {
+        "session_ref": session_ref,
+        "file_path": file_path,
+        "content": "content",
+    }
+    if writer is workspace_execution.sandbox_write_text_file:
+        kwargs["mode"] = "overwrite"
+    asyncio.run(writer(**kwargs))
+
+    assert captured["mode"] == expected_mode
 
 
 def test_sandbox_file_copy_reads_source_and_persists_destination(monkeypatch, tmp_path):
@@ -567,6 +626,44 @@ def test_sandbox_bash_uses_files_api_snapshot_paths(monkeypatch, tmp_path):
     assert "/mnt/skills/dashboard-generation/SKILL.md" in calls[0]
 
 
+def test_sandbox_commands_run_as_unprivileged_user(monkeypatch):
+    captured = {}
+
+    class FakeRunCommandOpts:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeCommands:
+        async def run(self, command, *, opts):
+            captured["command"] = command
+            captured["opts"] = opts
+            return SimpleNamespace(id="", logs=SimpleNamespace(stdout=[], stderr=[]), error=None)
+
+    monkeypatch.setattr(
+        workspace_execution,
+        "_import_opensandbox_sdk",
+        lambda: (None, None, FakeRunCommandOpts, None),
+    )
+    session = SandboxExecutionSession(
+        sandbox=SimpleNamespace(commands=FakeCommands()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    exit_code, stdout, stderr = asyncio.run(
+        workspace_execution.run_command_in_sandbox(
+            session=session,
+            command="id",
+            timeout_seconds=5,
+        )
+    )
+
+    assert (exit_code, stdout, stderr) == (0, "", "")
+    assert captured["uid"] == 65534
+    assert captured["gid"] == 65534
+    assert captured["envs"] == {"HOME": "/tmp", "LANG": "C.UTF-8"}
+
+
 def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tmp_path, monkeypatch):
     captured = {}
 
@@ -605,6 +702,7 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     )
     FakeSandbox.files = FakeFiles()
     (workspace_root / "workspace" / "report.txt").write_text("report", encoding="utf-8")
+    (workspace_root / "uploads" / "source.csv").write_text("id\n1\n", encoding="utf-8")
     semantic_file = workspace_root / "workspace" / "semantic" / "sc_order.yaml"
     semantic_file.parent.mkdir(parents=True)
     semantic_file.write_text("semantic_model: sc_order\n", encoding="utf-8")
@@ -624,6 +722,7 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
         b"semantic_model: sc_order\n",
         444,
     )
+    assert uploaded["/mnt/user-data/uploads/source.csv"] == (b"id\n1\n", 444)
     assert uploaded["/mnt/skills/demo-skill/SKILL.md"] == (b"# Demo", 444)
     permission_modes = {mode for _, mode in created_directories} | {
         mode for _, mode in uploaded.values()
@@ -663,7 +762,22 @@ def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypa
 
     asyncio.run(workspace_execution._sync_sandbox_uploads(session))
 
-    assert uploaded_paths == [("/mnt/user-data/uploads/new.txt", b"new", 666)]
+    assert uploaded_paths == [("/mnt/user-data/uploads/new.txt", b"new", 444)]
+
+
+def test_mutable_application_manifest_excludes_hidden_results_and_semantic_models(tmp_path):
+    workspace_root = _workspace_root(tmp_path)
+    (workspace_root / "workspace" / "report.txt").write_text("report", encoding="utf-8")
+    (workspace_root / "workspace" / "semantic").mkdir(parents=True)
+    (workspace_root / "workspace" / "semantic" / "model.yaml").write_text("model", encoding="utf-8")
+    (workspace_root / "outputs" / ".tool-offload").mkdir(parents=True)
+    (workspace_root / "outputs" / ".tool-offload" / "result.json").write_text(
+        "result", encoding="utf-8"
+    )
+
+    manifest = workspace_execution._mutable_application_manifest(workspace_root)
+
+    assert set(manifest) == {"workspace/report.txt"}
 
 
 def test_cached_sandbox_is_reused_only_while_application_trees_match(tmp_path, monkeypatch):

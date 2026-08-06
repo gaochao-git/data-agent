@@ -13,7 +13,7 @@ class _FakeRuntime:
     def __init__(self):
         self.entries = []
 
-    async def write_text_files(self, entries):
+    async def write_internal_text_files(self, entries):
         self.entries.extend(entries)
         return [{"file_path": path, "bytes": len(content.encode("utf-8"))} for path, content in entries]
 
@@ -57,7 +57,7 @@ def _materialize(runtime):
     ))
 
 
-def test_materializer_overwrites_fixed_snapshot_and_reuses_conversion_cache(monkeypatch):
+def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     configs = [_config(), _config("sc_disabled", enabled=False)]
     monkeypatch.setattr(

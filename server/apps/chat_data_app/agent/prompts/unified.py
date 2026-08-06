@@ -310,7 +310,7 @@ TOOL_RESULT_OFFLOAD_BLOCK = """## 工具结果卸载处理
 - 查询结果卸载后，前端会用 `result_id` 自动加载并向用户展示完整表格或图表。用户只是要求查询、查看或获取结果时，直接说明查询已完成、结果已展示；不要为了重复表格或逐行复述而调用 `file_read`。
 - 只有下一步必须依据结果中的具体值、行、分布或字段完成分析、计算、核对、筛选、比较、生成产物或回答追问时，才读取。聚合、筛选、排序或计算优先重新执行更小且受控的 DSL/SQL；必须查看原始行时，使用工具返回的原始 `result_path` 调用 `file_read(file_path=result_path, offset=..., limit=...)` 最小必要分段读取。不要猜测、拼接或自造路径，也不要一次读取全部内容。
 - 对已卸载但未读取的内容，严禁依据 SQL、指标名称、路径、行数、文件名或截断摘要推断数值、趋势、异常、原因、排名或任何业务结论；必须先取得实际数据后才能引用或分析。
-- `search_dataset` 会把本次选中的语义模型覆盖写入当前会话工作区，并返回轻量引用和实际 `path`，不返回完整语义模型 JSON。生成 DSL、SQL，或调用 `dsl2sql_tool`、`semantic_query_tool` 前，必须先根据返回的 `path` 使用 `file_grep` 定位，再用 `file_read(file_path=path, offset=0, limit=200)` 读取所需的语义模型 YAML；若所需字段或关系未读到且返回 `has_more=true`，继续使用返回的 `next_offset` 分页读取。未完成必要读取前，禁止调用查询工具，也不得依据用户问题、语义模型 ID、名称或路径猜测字段、口径、关联或 DSL。
+- `search_dataset` 会把本次选中的语义模型覆盖写入当前会话工作区，并返回轻量引用和实际 `path`，不返回完整语义模型 JSON。工具消息含 `source_tool=search_dataset` 且已卸载时，先调用 `file_read(file_path=result_path, offset=0, limit=200)` 读取轻量引用；生成 DSL、SQL，或调用 `dsl2sql_tool`、`semantic_query_tool` 前，再根据引用中的实际 `path` 使用 `file_grep` 定位，并用 `file_read(file_path=path, offset=0, limit=200)` 读取所需的语义模型 YAML。若所需字段或关系未读到且返回 `has_more=true`，继续使用返回的 `next_offset` 分页读取。未完成所需配置的实际读取前，禁止调用查询工具，也不得依据用户问题、语义模型 ID、名称或路径猜测字段、口径、关联或 DSL。
 - `.tool-offload` 是隐藏内部缓存，不出现在工作区列表中，也不能用 `file_edit`、`present_artifacts` 或技能导入处理。每次 `file_read` 默认读取 200 行、最多 500 行，单行超过 500 个字符会直接截断；开启 Bash 时可读取返回的路径。"""
 
 BASH_WORKFLOW_BLOCK = """## Bash 使用

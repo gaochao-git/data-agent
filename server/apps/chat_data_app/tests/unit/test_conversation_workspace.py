@@ -25,6 +25,7 @@ from apps.chat_data_app.services.workspace_execution import _artifact_payload_fr
 
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
+    create_workspace_backend,
     _render_local_office_html,
     ensure_conversation_workspace,
     list_workspace_files,
@@ -51,6 +52,66 @@ def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
     assert runtime.workspace_root == str(tmp_path)
     assert runtime.user_id == "u1"
     assert runtime.backend_name == "local"
+
+
+def test_workspace_backend_factory_fails_for_unknown_backend():
+    with pytest.raises(ValueError, match="不支持的工作区后端"):
+        create_workspace_backend("unknown-backend")
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_execution_for_file_only_backend(tmp_path):
+    class FileOnlyBackend:
+        name = "file-only"
+
+        async def read_text_file(self, *_args, **_kwargs):
+            return {}
+
+        async def write_text_file(self, *_args, **_kwargs):
+            return {}
+
+        async def replace_text_file(self, *_args, **_kwargs):
+            return {}
+
+        async def list_dir(self, *_args, **_kwargs):
+            return []
+
+        async def create_dir(self, *_args, **_kwargs):
+            return {}
+
+        async def delete_path(self, *_args, **_kwargs):
+            return {}
+
+        async def move_path(self, *_args, **_kwargs):
+            return {}
+
+        async def copy_path(self, *_args, **_kwargs):
+            return {}
+
+        async def search_files(self, *_args, **_kwargs):
+            return []
+
+        async def grep_text(self, *_args, **_kwargs):
+            return {}
+
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(tmp_path),
+        user_id="u1",
+        backend=FileOnlyBackend(),
+    )
+    with pytest.raises(ValueError, match="不支持命令执行"):
+        await runtime.run_bash(command="pwd", cwd="workspace", timeout_seconds=1)
+    with pytest.raises(ValueError, match="不支持语义模型物料化"):
+        await runtime.write_internal_text_files([("workspace/semantic/model.yaml", "model")])
+    with pytest.raises(ValueError, match="不支持隐藏工具结果存储"):
+        await runtime.write_tool_result(
+            file_path="outputs/.tool-offload/result.txt",
+            content="result",
+        )
+    with pytest.raises(ValueError, match="不支持产物读取"):
+        await runtime.artifact_payload(file_path="outputs/report.txt")
+    with pytest.raises(ValueError, match="不支持Office 预览"):
+        await runtime.render_office_html(file_path="outputs/report.docx", max_chars=100)
 
 
 def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
@@ -137,13 +198,13 @@ def test_resolve_workspace_path_restricts_writes():
         paths["root"],
         "workspace/semantic/model.yaml",
         writable=True,
-        allow_semantic_snapshot_write=True,
+        allow_managed_semantic_model_write=True,
     )
     assert snapshot.name == "model.yaml"
 
 
 @pytest.mark.asyncio
-async def test_replace_semantic_snapshot_overwrites_and_removes_stale_files(tmp_path, monkeypatch):
+async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_path, monkeypatch):
     monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
@@ -154,11 +215,11 @@ async def test_replace_semantic_snapshot_overwrites_and_removes_stale_files(tmp_
         workspace_root=paths["root"], user_id="user_a", backend="local"
     )
 
-    result = await runtime.replace_semantic_snapshot([
+    result = await runtime.write_internal_text_files([
         ("workspace/semantic/new.yaml", "new"),
     ])
 
-    assert not (semantic_root / "old.yaml").exists()
+    assert (semantic_root / "old.yaml").read_text(encoding="utf-8") == "old"
     assert (semantic_root / "new.yaml").read_text(encoding="utf-8") == "new"
     assert result[0]["file_path"] == "/workspace/semantic/new.yaml"
 
@@ -751,8 +812,8 @@ async def test_file_read_delegates_to_runtime_backend():
         async def write_text_file(self, *_args, **_kwargs):
             raise AssertionError("unexpected write")
 
-        async def replace_semantic_snapshot(self, *_args, **_kwargs):
-            raise AssertionError("unexpected semantic snapshot replace")
+        async def write_internal_text_files(self, *_args, **_kwargs):
+            raise AssertionError("unexpected internal semantic model write")
 
         async def write_tool_result(self, *_args, **_kwargs):
             raise AssertionError("unexpected tool result")
@@ -768,9 +829,6 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def list_dir(self, *_args, **_kwargs):
             raise AssertionError("unexpected list")
-
-        async def get_sandbox_session_ref(self, *_args, **_kwargs):
-            raise AssertionError("unexpected sandbox session")
 
         async def validate_bash_paths(self, *_args, **_kwargs):
             raise AssertionError("unexpected bash validation")
