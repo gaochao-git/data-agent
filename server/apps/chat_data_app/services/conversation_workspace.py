@@ -1909,15 +1909,27 @@ class SandboxWorkspaceBackend:
 
     name: str = "sandbox"
     session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
+    _session_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _session_error: str = field(default="", init=False, repr=False)
 
     async def _session_ref(self, runtime: ConversationWorkspaceRuntime) -> SandboxExecutionSessionRef:
-        if self.session_ref.current is None:
+        if self.session_ref.current is not None:
+            return self.session_ref
+        async with self._session_lock:
+            if self.session_ref.current is not None:
+                return self.session_ref
+            if self._session_error:
+                raise ValueError(self._session_error)
             await runtime._ensure_snapshot_async()
-            self.session_ref.current = await get_workspace_execution_session(
-                runtime.workspace_root,
-                runtime.user_id,
-                runtime_skills_dir=runtime.runtime_skills_dir,
-            )
+            try:
+                self.session_ref.current = await get_workspace_execution_session(
+                    runtime.workspace_root,
+                    runtime.user_id,
+                    runtime_skills_dir=runtime.runtime_skills_dir,
+                )
+            except Exception as exc:
+                self._session_error = str(exc) or "OpenSandbox 执行环境初始化失败"
+                raise
         return self.session_ref
 
     async def read_text_file(

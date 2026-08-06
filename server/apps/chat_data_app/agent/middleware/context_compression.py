@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from langchain.agents.middleware import before_model
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
@@ -31,6 +31,7 @@ from ...services.llm_config import (
 from ...services.runtime_config import get_context_compression_config
 from ..prompts.context_compression import build_context_compression_summary_prompt
 from ..tool_results import tool_result_recovery
+from .message_integrity import complete_message_boundaries
 
 logger = get_logger(__name__)
 
@@ -819,21 +820,7 @@ def _select_current_turn_tail_start(
 
 def _complete_boundaries(messages: list[BaseMessage]) -> list[int]:
     """返回消息前缀中所有不含未完成工具调用的边界。"""
-    boundaries: list[int] = []
-    pending_tool_calls: set[str] = set()
-    for index, message in enumerate(messages):
-        if isinstance(message, AIMessage):
-            for tool_call in getattr(message, "tool_calls", None) or []:
-                call_id = str((tool_call or {}).get("id") or "").strip()
-                if call_id:
-                    pending_tool_calls.add(call_id)
-        elif isinstance(message, ToolMessage):
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
-            if tool_call_id:
-                pending_tool_calls.discard(tool_call_id)
-        if isinstance(message, (AIMessage, ToolMessage)) and not pending_tool_calls:
-            boundaries.append(index + 1)
-    return boundaries
+    return complete_message_boundaries(messages)
 
 
 def _recent_completed_round_start(
@@ -865,19 +852,8 @@ def _last_human_index(messages: list[BaseMessage]) -> int:
 
 def _last_complete_boundary(messages: list[BaseMessage]) -> int:
     boundary = 0
-    pending_tool_calls: set[str] = set()
-    for index, message in enumerate(messages):
-        if isinstance(message, AIMessage):
-            for tool_call in getattr(message, "tool_calls", None) or []:
-                call_id = str((tool_call or {}).get("id") or "").strip()
-                if call_id:
-                    pending_tool_calls.add(call_id)
-        elif isinstance(message, ToolMessage):
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
-            if tool_call_id:
-                pending_tool_calls.discard(tool_call_id)
-        if isinstance(message, (AIMessage, ToolMessage)) and not pending_tool_calls:
-            boundary = index + 1
+    for candidate in complete_message_boundaries(messages):
+        boundary = max(boundary, candidate)
     return boundary
 
 

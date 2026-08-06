@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage
 from utils.logger import get_logger
 from ..services.llm_config import get_chat_data_llm
 from .middleware.tool_error import create_tool_error_middleware
-from .middleware.tool_result import create_tool_result_middleware
 
 logger = get_logger(__name__)
 
@@ -75,11 +74,14 @@ def build_standard_agent_middleware(
     context_compression_middleware: Any | None = None,
     context_usage_middleware: Any | None = None,
     tool_result_middleware: Any | None = None,
+    tool_call_history_repair_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。"""
     middleware: list[Any] = []
+    if tool_call_history_repair_middleware is not None:
+        middleware.append(tool_call_history_repair_middleware)
     if context_compression_middleware is not None:
         middleware.append(context_compression_middleware)
     if context_usage_middleware is not None:

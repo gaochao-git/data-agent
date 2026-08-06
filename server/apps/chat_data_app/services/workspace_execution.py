@@ -10,11 +10,12 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import shlex
 import time
 from typing import Any, Literal
 from uuid import uuid4
+
+import httpx
 
 from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
@@ -233,7 +234,7 @@ def _application_workspace_root(workspace_root: str) -> Path:
 
 
 
-def _connection_config(timeout_seconds: int) -> Any:
+def _connection_config(request_timeout_seconds: int) -> Any:
     _, ConnectionConfig, _, _ = _import_opensandbox_sdk()
     sandbox_url = str(os.getenv("OPENSANDBOX_URL") or "").strip()
     if not sandbox_url:
@@ -241,9 +242,30 @@ def _connection_config(timeout_seconds: int) -> Any:
     return ConnectionConfig(
         domain=sandbox_url,
         api_key=decrypt_env_value("OPENSANDBOX_API_KEY") or None,
-        request_timeout=timedelta(seconds=max(30, timeout_seconds)),
+        request_timeout=timedelta(seconds=max(1, request_timeout_seconds)),
         use_server_proxy=_str_to_bool(os.getenv("OPENSANDBOX_USE_SERVER_PROXY"), False),
     )
+
+
+def _has_exception_type(exc: BaseException, expected_types: tuple[type[BaseException], ...]) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, expected_types):
+            return True
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _raise_sandbox_create_error(exc: Exception) -> None:
+    if _has_exception_type(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        raise ValueError(
+            "OpenSandbox 服务不可达，请检查服务状态、OPENSANDBOX_URL 和网络连通性"
+        ) from exc
+    if _has_exception_type(exc, (httpx.TimeoutException,)):
+        raise ValueError("OpenSandbox 控制面请求超时，请检查服务状态和网络质量") from exc
+    raise exc
 
 
 def _build_network_policy() -> Any | None:
@@ -896,21 +918,37 @@ async def prepare_workspace_execution_session(
 ) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
-    timeout_seconds = _env_int("OPENSANDBOX_TIMEOUT_SECONDS", 600)
+    lifetime_seconds = _env_int("OPENSANDBOX_TIMEOUT_SECONDS", 600)
+    request_timeout = _env_int("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", 10)
     ready_timeout = _env_int("OPENSANDBOX_READY_TIMEOUT_SECONDS", 60, minimum=10)
+    create_timeout = _env_int(
+        "OPENSANDBOX_CREATE_TIMEOUT_SECONDS",
+        ready_timeout + request_timeout * 3 + 10,
+        minimum=ready_timeout,
+    )
     image = str(os.getenv("OPENSANDBOX_IMAGE") or "ubuntu").strip() or "ubuntu"
     create_kwargs = {
         "image": image,
-        "timeout": timedelta(seconds=timeout_seconds),
+        "timeout": timedelta(seconds=lifetime_seconds),
         "ready_timeout": timedelta(seconds=ready_timeout),
         "entrypoint": ["sleep", "infinity"],
-        "connection_config": _connection_config(timeout_seconds),
+        "connection_config": _connection_config(request_timeout),
         "metadata": {"managed_by": "fxcjg", "module": "chat_data_app", "workspace_backend": OPENSANDBOX_BACKEND, "sandbox_mode": mode},
     }
     network_policy = _build_network_policy()
     if network_policy is not None:
         create_kwargs["network_policy"] = network_policy
-    sandbox = await Sandbox.create(**create_kwargs)
+    try:
+        sandbox = await asyncio.wait_for(
+            Sandbox.create(**create_kwargs),
+            timeout=create_timeout,
+        )
+    except TimeoutError as exc:
+        raise ValueError(
+            f"OpenSandbox 创建超时（{create_timeout} 秒），请检查服务状态、镜像和网络连通性"
+        ) from exc
+    except Exception as exc:
+        _raise_sandbox_create_error(exc)
     session = SandboxExecutionSession(
         sandbox=sandbox,
         sandbox_id=str(getattr(sandbox, "id", "") or ""),

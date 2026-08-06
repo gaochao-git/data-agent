@@ -60,6 +60,39 @@ def test_workspace_backend_factory_fails_for_unknown_backend():
 
 
 @pytest.mark.asyncio
+async def test_sandbox_backend_reuses_initialization_error_within_runtime(tmp_path, monkeypatch):
+    attempts = 0
+
+    async def no_op():
+        return None
+
+    async def fail_to_create_session(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("OpenSandbox 服务不可达")
+
+    backend = conversation_workspace_module.SandboxWorkspaceBackend()
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=str(tmp_path),
+        user_id="u1",
+        backend=backend,
+    )
+    monkeypatch.setattr(runtime, "_ensure_snapshot_async", no_op)
+    monkeypatch.setattr(
+        conversation_workspace_module,
+        "get_workspace_execution_session",
+        fail_to_create_session,
+    )
+
+    with pytest.raises(ValueError, match="OpenSandbox 服务不可达"):
+        await backend._session_ref(runtime)
+    with pytest.raises(ValueError, match="OpenSandbox 服务不可达"):
+        await backend._session_ref(runtime)
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
 async def test_runtime_rejects_execution_for_file_only_backend(tmp_path):
     class FileOnlyBackend:
         name = "file-only"

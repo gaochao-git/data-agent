@@ -87,7 +87,7 @@ def parse_officecli_args(raw_args: list[str]) -> OfficeCliCommand:
         raise ValueError("args 第一个元素必须是 OfficeCLI 子命令或全局选项")
 
     file_indices: set[int] = set()
-    if subcommand in {"view", "get", "query", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}:
+    if subcommand in {"view", "get", "query", "validate", "set", "add", "remove", "move", "swap", "raw", "raw-set", "add-part", "save", "refresh", "create", "batch"}:
         if len(args) < 2:
             raise ValueError(f"officecli {subcommand} 缺少文件路径")
         if _looks_like_selector(args[1]):

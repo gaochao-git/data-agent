@@ -91,13 +91,14 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 6
-    assert captured["middleware"][0].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][1] == {"context_model": "primary-model"}
-    assert captured["middleware"][2].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][3].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][4].name == "ToolResultMiddleware"
-    assert captured["middleware"][5].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 7
+    assert captured["middleware"][0].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][1].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][2] == {"context_model": "primary-model"}
+    assert captured["middleware"][3].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][4].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][5].name == "ToolResultMiddleware"
+    assert captured["middleware"][6].name == "ToolErrorMiddleware"
     assert context_kwargs["tools"] == []
     assert context_kwargs["state_schema"] is ChatDataAgentState
     assert bound == [(agent, {"context_model": "primary-model"})]

@@ -114,6 +114,12 @@ def test_officecli_schema_marks_refresh_mutating_and_selectors_non_files():
         (1, "/mnt/user-data/workspace/report.docx")
     ]
 
+    validate = parse_officecli_args(["validate", "/mnt/user-data/uploads/report.docx"])
+    assert validate.mutates is False
+    assert command_path_values(validate, "/mnt/user-data/workspace") == [
+        (1, "/mnt/user-data/uploads/report.docx")
+    ]
+
 
 def test_officecli_schema_reports_missing_file_before_path_validation():
     with pytest.raises(ValueError, match="缺少文件路径.*文档选择器"):
@@ -378,8 +384,9 @@ async def test_uploads_cwd_rejects_mutating_subcommands(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_uploads_reads_allowed_for_readonly_subcommands(monkeypatch, tmp_path):
-    """view/get/query/validate 可读取 uploads，调用应正常到达后端。"""
+@pytest.mark.parametrize("subcommand_args", [("view", "outline"), ("validate",)])
+async def test_uploads_reads_allowed_for_readonly_subcommands(monkeypatch, tmp_path, subcommand_args):
+    """view/validate 可读取 uploads，调用应正常到达后端。"""
     log_path = tmp_path / "args.log"
     fake_bin = _write_fake_officecli(tmp_path, log_path)
     monkeypatch.setattr(cw.shutil, "which", lambda *a, **k: fake_bin)
@@ -387,7 +394,7 @@ async def test_uploads_reads_allowed_for_readonly_subcommands(monkeypatch, tmp_p
     (Path(runtime.workspace_root) / "uploads" / "original.docx").write_bytes(b"")
 
     result = await run_officecli_command(
-        args=["view", "/mnt/user-data/uploads/original.docx", "outline"],
+        args=[subcommand_args[0], "/mnt/user-data/uploads/original.docx", *subcommand_args[1:]],
         cwd="/mnt/user-data/workspace",
         timeout_seconds=30,
         workspace_runtime=runtime,

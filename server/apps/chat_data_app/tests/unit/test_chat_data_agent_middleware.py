@@ -16,6 +16,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent import data_agent, sql_assist_agent
 from apps.chat_data_app.agent.agent_runtime import normalize_response_tool_call_names
 from apps.chat_data_app.agent.middleware import context_compression, context_usage
+from apps.chat_data_app.agent.middleware import message_integrity, tool_call_history_repair
 from apps.chat_data_app.agent.middleware.context_compression import build_context_compression_update, compress_messages_for_state
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
@@ -1044,13 +1045,14 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "calculator_tool",
         "officecli_run",
     ]
-    assert len(captured["middleware"]) == 6
-    assert captured["middleware"][0].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][1].name == "ContextUsageMiddleware"
-    assert captured["middleware"][2].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][3].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][4].name == "ToolResultMiddleware"
-    assert captured["middleware"][5].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 7
+    assert captured["middleware"][0].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][1].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][2].name == "ContextUsageMiddleware"
+    assert captured["middleware"][3].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][4].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][5].name == "ToolResultMiddleware"
+    assert captured["middleware"][6].name == "ToolErrorMiddleware"
     assert data_agent.create_data_agent(AgentRuntimeOptions(), model_id="m1").name == "agent"
     assert "智能问数与数据分析助手" in captured["system_prompt"]
 
@@ -1070,6 +1072,90 @@ async def test_tool_error_middleware_returns_error_tool_message(monkeypatch):
     assert message.name == "semantic_query_tool"
     assert message.tool_call_id == "call_1"
     assert message.status == "error"
+
+
+def test_message_integrity_keeps_complete_tool_groups_and_removes_orphans():
+    messages = [
+        HumanMessage(content="继续分析", id="turn-1"),
+        AIMessage(
+            content="",
+            id="assistant-1",
+            tool_calls=[
+                {"id": "call-a", "name": "file_read", "args": {}},
+                {"id": "call-b", "name": "calculator_tool", "args": {}},
+            ],
+        ),
+        ToolMessage(content="结果A", tool_call_id="call-a"),
+        ToolMessage(content="结果B", tool_call_id="call-b"),
+        ToolMessage(content="孤立结果", tool_call_id="orphan"),
+        AIMessage(content="最终回答", id="assistant-final"),
+    ]
+
+    repaired, report = message_integrity.repair_tool_call_messages(messages)
+
+    assert [getattr(message, "id", None) for message in repaired[:4]] == [
+        "turn-1", "assistant-1", repaired[2].id, repaired[3].id,
+    ]
+    assert [getattr(message, "content", None) for message in repaired] == [
+        "继续分析", "", "结果A", "结果B", "最终回答",
+    ]
+    assert report["removed_call_ids"] == ()
+    assert report["removed_message_count"] == 1
+
+
+def test_message_integrity_removes_interrupted_single_tool_call_tail():
+    messages = [
+        HumanMessage(content="重新开始", id="turn-2"),
+        AIMessage(
+            content="",
+            id="assistant-tool",
+            tool_calls=[{"id": "call-pending", "name": "semantic_query_tool", "args": {}}],
+        ),
+    ]
+
+    repaired, report = message_integrity.repair_tool_call_messages(messages)
+
+    assert repaired == [messages[0]]
+    assert report["removed_call_ids"] == ("call-pending",)
+    assert report["removed_message_count"] == 1
+
+
+def test_message_integrity_removes_partially_completed_parallel_tool_group():
+    messages = [
+        HumanMessage(content="继续", id="turn-3"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "call-done", "name": "file_read", "args": {}},
+                {"id": "call-pending", "name": "bash_run", "args": {}},
+            ],
+        ),
+        ToolMessage(content="已完成", tool_call_id="call-done"),
+    ]
+
+    repaired, report = message_integrity.repair_tool_call_messages(messages)
+
+    assert repaired == [messages[0]]
+    assert report["removed_call_ids"] == ("call-done", "call-pending")
+    assert report["removed_message_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_call_history_repair_middleware_replaces_state_messages(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(tool_call_history_repair.logger, "warning", lambda *args, **kwargs: warnings.append(args))
+    middleware = tool_call_history_repair.create_tool_call_history_repair_middleware(state_schema=dict)
+    messages = [
+        HumanMessage(content="继续", id="turn-4"),
+        AIMessage(content="", tool_calls=[{"id": "call-pending", "name": "file_read", "args": {}}]),
+    ]
+
+    update = await middleware.abefore_model({"messages": messages}, SimpleNamespace())
+
+    assert isinstance(update["messages"][0], RemoveMessage)
+    assert update["messages"][0].id == REMOVE_ALL_MESSAGES
+    assert update["messages"][1:] == [messages[0]]
+    assert warnings
 
 
 def test_sql_assist_agent_uses_create_agent(monkeypatch):

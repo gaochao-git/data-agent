@@ -1,9 +1,11 @@
 import asyncio
+from datetime import timedelta
 import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -695,6 +697,9 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
     monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
     monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
+    monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("OPENSANDBOX_CREATE_TIMEOUT_SECONDS", "80")
     monkeypatch.setattr(
         workspace_execution,
         "_import_opensandbox_sdk",
@@ -717,6 +722,8 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     assert session.sandbox_id == "sbx_1"
     assert "network_policy" not in captured
     assert "volumes" not in captured
+    assert captured["timeout"] == timedelta(seconds=600)
+    assert captured["connection_config"].kwargs["request_timeout"] == timedelta(seconds=7)
     assert uploaded["/mnt/user-data/workspace/report.txt"] == (b"report", 666)
     assert uploaded["/mnt/user-data/workspace/semantic/sc_order.yaml"] == (
         b"semantic_model: sc_order\n",
@@ -729,6 +736,70 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     }
     assert permission_modes == {444, 555, 666, 777}
     assert permission_modes.isdisjoint({292, 365, 438, 511})
+
+
+def test_prepare_workspace_execution_session_reports_unreachable_control_plane(tmp_path, monkeypatch):
+    class FakeSandbox:
+        @staticmethod
+        async def create(**_kwargs):
+            request = httpx.Request("POST", "http://opensandbox.invalid/v1/sandboxes")
+            raise httpx.ConnectError("connection failed", request=request)
+
+    class FakeConnectionConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    chat_data_home = tmp_path / "chat-data"
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.invalid")
+    monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
+    monkeypatch.setattr(
+        workspace_execution,
+        "_import_opensandbox_sdk",
+        lambda: (FakeSandbox, FakeConnectionConfig, None, (None, None)),
+    )
+
+    with pytest.raises(ValueError, match="OpenSandbox 服务不可达"):
+        asyncio.run(workspace_execution.prepare_workspace_execution_session(str(workspace_root)))
+
+
+def test_prepare_workspace_execution_session_has_total_create_timeout(tmp_path, monkeypatch):
+    captured = {}
+
+    class FakeSandbox:
+        @staticmethod
+        async def create(**_kwargs):
+            return None
+
+    class FakeConnectionConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    async def fail_on_wait(awaitable, *, timeout):
+        captured["timeout"] = timeout
+        awaitable.close()
+        raise TimeoutError
+
+    chat_data_home = tmp_path / "chat-data"
+    workspace_root = _workspace_root(tmp_path)
+    monkeypatch.setattr(workspace_execution, "CHAT_DATA_HOME", str(chat_data_home))
+    monkeypatch.setenv("OPENSANDBOX_URL", "http://opensandbox.example.com")
+    monkeypatch.setenv("OPENSANDBOX_NETWORK_DEFAULT_ACTION", "allow")
+    monkeypatch.setenv("OPENSANDBOX_READY_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", "10")
+    monkeypatch.delenv("OPENSANDBOX_CREATE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(
+        workspace_execution,
+        "_import_opensandbox_sdk",
+        lambda: (FakeSandbox, FakeConnectionConfig, None, (None, None)),
+    )
+    monkeypatch.setattr(workspace_execution.asyncio, "wait_for", fail_on_wait)
+
+    with pytest.raises(ValueError, match="OpenSandbox 创建超时（100 秒）"):
+        asyncio.run(workspace_execution.prepare_workspace_execution_session(str(workspace_root)))
+
+    assert captured["timeout"] == 100
 
 
 def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypatch):
