@@ -84,6 +84,16 @@ def test_skill_service_get_skill_returns_content_and_files():
     assert "examples/comprehensive-dashboard.json" in skill["assets"]
 
 
+def test_officecli_system_skill_includes_internal_report_template():
+    clear_metadata_cache()
+
+    skill = asyncio.run(skill_service.get_skill_async("officecli"))
+
+    assert skill is not None
+    assert "internal-management-report" in skill["references"]
+    assert "internal-management-report-template.docx" in skill["assets"]
+
+
 def test_skill_service_gets_skill_creator_system_skill():
     clear_metadata_cache()
 
