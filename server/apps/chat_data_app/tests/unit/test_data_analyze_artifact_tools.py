@@ -97,6 +97,24 @@ def test_output_artifact_registry_accepts_office_presentation():
     }
 
 
+def test_output_artifact_registry_accepts_markdown_and_reserves_skill_file():
+    artifact = parse_output_artifact(
+        visible_path="/mnt/user-data/outputs/语义模型分析报告.md",
+        data=b"# Report\n",
+    )
+
+    assert artifact == {
+        "file_path": "/mnt/user-data/outputs/语义模型分析报告.md",
+        "artifact_type": "markdown",
+        "renderer": "markdown",
+        "artifact_version": "v1",
+    }
+    assert parse_output_artifact(
+        visible_path="/outputs/invalid-skill/SKILL.md",
+        data=b"# Not a skill\n",
+    ) == {}
+
+
 def test_chart_artifact_payload_only_reads_valid_outputs_specs(tmp_path):
     root = tmp_path
     output = root / "outputs" / "chart.json"

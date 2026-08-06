@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { PropType } from 'vue'
 
-type OfficeArtifactType = 'document' | 'spreadsheet' | 'presentation'
+type PresentedFileArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown'
 
 interface PresentedFileArtifact {
   path: string
   name: string
-  artifactType: OfficeArtifactType
+  artifactType: PresentedFileArtifactType
 }
 
 interface ArtifactDisplayMeta {
@@ -27,7 +27,7 @@ const emit = defineEmits<{
   download: [artifact: PresentedFileArtifact]
 }>()
 
-const displayMeta: Record<OfficeArtifactType, ArtifactDisplayMeta> = {
+const displayMeta: Record<PresentedFileArtifactType, ArtifactDisplayMeta> = {
   document: {
     label: 'Word 文档',
     icon: 'fa-file-word',
@@ -43,9 +43,14 @@ const displayMeta: Record<OfficeArtifactType, ArtifactDisplayMeta> = {
     icon: 'fa-file-powerpoint',
     iconClass: 'bg-orange-600 text-white',
   },
+  markdown: {
+    label: 'Markdown 文档',
+    icon: 'fa-file-lines',
+    iconClass: 'bg-slate-700 text-white',
+  },
 }
 
-const getDisplayMeta = (artifactType: OfficeArtifactType): ArtifactDisplayMeta => displayMeta[artifactType]
+const getDisplayMeta = (artifactType: PresentedFileArtifactType): ArtifactDisplayMeta => displayMeta[artifactType]
 </script>
 
 <template>

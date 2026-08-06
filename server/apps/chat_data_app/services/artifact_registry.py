@@ -86,6 +86,11 @@ def _matches_json(path: PurePosixPath) -> bool:
     return path.name.lower().endswith(".json")
 
 
+def _matches_markdown(path: PurePosixPath) -> bool:
+    """Accept regular Markdown outputs but reserve SKILL.md for skill import."""
+    return path.name.lower().endswith(".md") and path.name.lower() != "skill.md"
+
+
 def _matches_suffixes(*suffixes: str) -> ArtifactMatcher:
     return lambda path: path.name.lower().endswith(suffixes)
 
@@ -132,6 +137,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
     ArtifactDefinition("presentation", "presentation", _matches_suffixes(".pptx"), _generic_artifact),
     ArtifactDefinition("pdf", "pdf", _matches_suffixes(".pdf"), _generic_artifact),
     ArtifactDefinition("image", "image", _matches_suffixes(".png", ".jpg", ".jpeg", ".gif", ".webp"), _generic_artifact),
+    ArtifactDefinition("markdown", "markdown", _matches_markdown, _generic_artifact),
     ArtifactDefinition("dashboard_spec", "dashboard", _matches_json, _dashboard_artifact),
     ArtifactDefinition("chart_spec", "chart", _matches_json, _chart_artifact),
 )

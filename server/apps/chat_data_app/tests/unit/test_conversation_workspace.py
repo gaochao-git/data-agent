@@ -627,6 +627,29 @@ async def test_present_artifacts_returns_office_document(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_present_artifacts_returns_markdown_document(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_present_markdown_{uuid.uuid4().hex}")
+    markdown_path = Path(paths["outputs"]) / "语义模型分析报告.md"
+    markdown_path.write_text("# 语义模型分析报告\n", encoding="utf-8")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+
+    result = await tools["present_artifacts"].ainvoke({
+        "files": ["/mnt/user-data/outputs/语义模型分析报告.md"],
+    })
+
+    payload = json.loads(result.replace("[present_artifacts]\n", "", 1))
+    assert payload["errors"] == []
+    assert payload["artifacts"] == [{
+        "file_path": "/outputs/语义模型分析报告.md",
+        "artifact_type": "markdown",
+        "renderer": "markdown",
+        "artifact_version": "v1",
+        "name": "语义模型分析报告",
+        "mime_type": "text/markdown",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_present_artifacts_returns_valid_output_skill(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_present_skill_{uuid.uuid4().hex}")
     skill_dir = Path(paths["outputs"]) / "sales-analysis"

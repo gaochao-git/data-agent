@@ -24,6 +24,7 @@ import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
+import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -646,26 +647,27 @@ const getPresentedArtifactTools = (message: Message, artifactType: string): Tool
   return tools
 }
 
-type PresentedOfficeArtifactType = 'document' | 'spreadsheet' | 'presentation'
+type PresentedDeliveryArtifactType = 'document' | 'spreadsheet' | 'presentation' | 'markdown'
 
-interface PresentedOfficeArtifact {
+interface PresentedDeliveryArtifact {
   path: string
   name: string
-  artifactType: PresentedOfficeArtifactType
+  artifactType: PresentedDeliveryArtifactType
 }
 
-const PRESENTED_OFFICE_ARTIFACT_TYPES = new Set<PresentedOfficeArtifactType>([
+const PRESENTED_DELIVERY_ARTIFACT_TYPES = new Set<PresentedDeliveryArtifactType>([
   'document',
   'spreadsheet',
   'presentation',
+  'markdown',
 ])
 
-const getPresentedOfficeArtifacts = (message: Message): PresentedOfficeArtifact[] => {
-  const artifacts = new Map<string, PresentedOfficeArtifact>()
+const getPresentedDeliveryArtifacts = (message: Message): PresentedDeliveryArtifact[] => {
+  const artifacts = new Map<string, PresentedDeliveryArtifact>()
   for (const tool of message.toolCalls || []) {
     for (const artifact of getPresentedArtifacts(tool)) {
-      const artifactType = String(artifact.artifact_type || '').trim() as PresentedOfficeArtifactType
-      if (!PRESENTED_OFFICE_ARTIFACT_TYPES.has(artifactType)) continue
+      const artifactType = String(artifact.artifact_type || '').trim() as PresentedDeliveryArtifactType
+      if (!PRESENTED_DELIVERY_ARTIFACT_TYPES.has(artifactType)) continue
       const path = normalizeVisiblePath(artifact.file_path)
       if (!path.startsWith('outputs/')) continue
       const name = path.split('/').pop() || ''
@@ -1133,6 +1135,7 @@ const selectedConsoleFileExt = computed(() => {
 })
 const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pdf')
 const selectedConsoleIsOfficeFile = computed(() => OFFICE_HTML_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
+const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
 const workspaceFilePreviewHeightClass = computed(() => (
   isWorkspaceFilePreviewFullscreen.value ? 'h-[calc(100vh-48px)]' : 'h-[46vh]'
 ))
@@ -1299,7 +1302,7 @@ const handleOpenAttachment = async (attachment: MessageAttachment) => {
   await loadWorkspaceFileContent(conversationId, relativePath)
 }
 
-const handleOpenPresentedOfficeArtifact = async (artifact: PresentedOfficeArtifact) => {
+const handleOpenPresentedArtifact = async (artifact: PresentedDeliveryArtifact) => {
   await handleOpenAttachment({
     file_id: `presented:${artifact.path}`,
     filename: artifact.name,
@@ -1308,7 +1311,7 @@ const handleOpenPresentedOfficeArtifact = async (artifact: PresentedOfficeArtifa
   })
 }
 
-const handleDownloadPresentedOfficeArtifact = async (artifact: PresentedOfficeArtifact) => {
+const handleDownloadPresentedArtifact = async (artifact: PresentedDeliveryArtifact) => {
   const conversationId = localConversationId.value
   if (!conversationId) {
     ElMessage.warning('会话未就绪，无法下载文件')
@@ -1528,7 +1531,12 @@ watch(selectedConsoleFilePath, (path) => {
 })
 
 watch(
-  () => [selectedConsoleFilePath.value, Boolean(selectedConsoleChartSpec.value), Boolean(hasSelectedConsoleTable.value)] as const,
+  () => [
+    selectedConsoleFilePath.value,
+    Boolean(selectedConsoleChartSpec.value),
+    Boolean(hasSelectedConsoleTable.value),
+    selectedConsoleIsMarkdown.value,
+  ] as const,
   () => {
     if (selectedConsoleChartSpec.value) {
       consoleFilePreviewMode.value = 'render'
@@ -1536,6 +1544,10 @@ watch(
     }
     if (hasSelectedConsoleTable.value) {
       consoleFilePreviewMode.value = 'table'
+      return
+    }
+    if (selectedConsoleIsMarkdown.value) {
+      consoleFilePreviewMode.value = 'render'
       return
     }
     consoleFilePreviewMode.value = 'source'
@@ -2083,10 +2095,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
         >
           <template #assistant-extra="{ message: msg }">
             <PresentedFileArtifacts
-              v-if="getPresentedOfficeArtifacts(msg).length"
-              :artifacts="getPresentedOfficeArtifacts(msg)"
-              @preview="handleOpenPresentedOfficeArtifact"
-              @download="handleDownloadPresentedOfficeArtifact"
+              v-if="getPresentedDeliveryArtifacts(msg).length"
+              :artifacts="getPresentedDeliveryArtifacts(msg)"
+              @preview="handleOpenPresentedArtifact"
+              @download="handleDownloadPresentedArtifact"
             />
             <div v-if="getPresentedSkillArtifacts(msg).length" class="mt-3 space-y-2">
               <div
@@ -2364,7 +2376,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 {{ selectedConsoleFile?.displayPath }}
               </div>
               <div class="flex shrink-0 items-center gap-2">
-                <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+                <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
                   <button
                     v-if="selectedConsoleChartSpec"
                     type="button"
@@ -2386,6 +2398,17 @@ const handleKeyDown = (event: KeyboardEvent) => {
                     @click="consoleFilePreviewMode = 'table'"
                   >
                     表格
+                  </button>
+                  <button
+                    v-if="selectedConsoleIsMarkdown"
+                    type="button"
+                    :class="[
+                      'h-6 rounded px-2 text-[10px] transition-colors',
+                      consoleFilePreviewMode === 'render' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
+                    ]"
+                    @click="consoleFilePreviewMode = 'render'"
+                  >
+                    预览
                   </button>
                   <button
                     type="button"
@@ -2423,6 +2446,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <ChartSpecRenderer
                 v-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
                 :spec="selectedConsoleChartSpec"
+              />
+              <MarkdownFilePreview
+                v-else-if="selectedConsoleIsMarkdown && consoleFilePreviewMode === 'render'"
+                :content="selectedConsoleFileText"
+                :class="workspaceFilePreviewHeightClass"
               />
               <div v-else-if="hasSelectedConsoleTable && consoleFilePreviewMode === 'table'" :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] overflow-auto rounded-md border border-slate-100 bg-white' : 'max-h-[46vh] overflow-auto rounded-md border border-slate-100 bg-white'">
                 <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
