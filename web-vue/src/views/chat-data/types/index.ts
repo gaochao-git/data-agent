@@ -314,6 +314,7 @@ export interface ConversationItem {
   created_at: string
   updated_at?: string
   agent_id?: string
+  is_favorited?: boolean
 }
 
 // 消息

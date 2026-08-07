@@ -191,8 +191,11 @@ async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None
             logger.warning(f"获取 {agent_id} 会话列表失败: {e}")
             continue
 
-    # 按更新时间倒序排序
-    all_conversations.sort(key=lambda x: x.get("update_time", ""), reverse=True)
+    # 收藏会话置顶，其次按更新时间倒序排序
+    all_conversations.sort(
+        key=lambda x: (bool(x.get("is_favorited")), x.get("update_time", "")),
+        reverse=True,
+    )
 
     # 限制总数量
     return all_conversations[:limit]

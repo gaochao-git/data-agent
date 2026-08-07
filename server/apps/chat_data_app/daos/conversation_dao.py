@@ -70,7 +70,7 @@ class ConversationDao:
             query = select(UserThread).where(UserThread.agent_id == agent_id, UserThread.delete_flag == 0)
             if user_id:
                 query = query.where(UserThread.user_id == user_id)
-            query = query.order_by(UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
+            query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
             result = await session.execute(query)
             return list(result.scalars().all())
 
@@ -86,7 +86,7 @@ class ConversationDao:
             query = select(UserThread).where(UserThread.agent_id.in_(agent_ids), UserThread.delete_flag == 0)
             if user_id:
                 query = query.where(UserThread.user_id == user_id)
-            query = query.order_by(UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
+            query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
             result = await session.execute(query)
             return list(result.scalars().all())
 

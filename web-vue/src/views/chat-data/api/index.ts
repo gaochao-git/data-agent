@@ -887,6 +887,16 @@ export function generateConversationTitle(conversationId: string): Promise<ApiRe
   })
 }
 
+/** 切换会话收藏状态（收藏的会话置顶显示） */
+export function toggleConversationFavorite(
+  conversationId: string
+): Promise<ApiResponse<{ id: string; is_favorited: boolean }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/favorite`,
+    method: 'post'
+  })
+}
+
 // ============ 语义配置 API ============
 
 /** 获取语义配置列表 */

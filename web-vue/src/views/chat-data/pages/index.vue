@@ -601,6 +601,7 @@ const normalizeConversationResponse = (
       created_at: conv.update_time || conv.create_time || conv.created_at || '',
       updated_at: conv.update_time || conv.updated_at || conv.create_time || conv.created_at || '',
       agent_id: conv.agent_id || fallbackAgentId,
+      is_favorited: Boolean(conv.is_favorited),
     }
   }).filter((conv) => !!conv.id)
   const hasMore = !Array.isArray(payload) && Boolean(payloadObj?.has_more)
@@ -625,7 +626,12 @@ const loadConversations = async (page = 1) => {
       : { items: [], hasMore: false }
     const merged = isFirstPage ? items : [...conversations.value, ...items]
     const deduped = Array.from(new Map<string, ConversationItem>(merged.map(item => [item.id, item])).values())
-    conversations.value = deduped.sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
+    conversations.value = deduped.sort((a, b) => {
+      const fa = a.is_favorited ? 1 : 0
+      const fb = b.is_favorited ? 1 : 0
+      if (fa !== fb) return fb - fa
+      return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
+    })
     conversationPage.value = page
     hasMoreConversations.value = hasMore
     conversationsLoaded.value = true
@@ -699,10 +705,20 @@ const groupedConversations = computed(() => {
     return '更早'
   }
 
+  // 收藏的会话单独置顶分组
+  const favoritedItems: ConversationItem[] = []
   for (const conv of conversations.value) {
+    if (conv.is_favorited) {
+      favoritedItems.push(conv)
+      continue
+    }
     const label = getGroupLabel(conv.created_at)
     if (!groupMap[label]) groupMap[label] = []
     groupMap[label].push(conv)
+  }
+
+  if (favoritedItems.length > 0) {
+    groups.push({ label: '置顶', items: favoritedItems })
   }
 
   const order = ['7天内', '30天内', '半年内', '更早']
@@ -811,6 +827,20 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   if (currentConversationId.value === conversationId) {
     currentConversationTitle.value = title
   }
+}
+
+// 切换会话置顶（复用 is_favorited 收藏能力），更新本地状态并重排使置顶项浮到顶部
+const handleToggleConversationFavorite = (conversationId: string, isFavorited: boolean) => {
+  const conv = conversations.value.find((c) => c.id === conversationId)
+  if (conv) {
+    conv.is_favorited = isFavorited
+  }
+  conversations.value = [...conversations.value].sort((a, b) => {
+    const fa = a.is_favorited ? 1 : 0
+    const fb = b.is_favorited ? 1 : 0
+    if (fa !== fb) return fb - fa
+    return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
+  })
 }
 
 // 首条消息完成后的回调
@@ -1559,6 +1589,7 @@ onUnmounted(() => {
                 @new-conversation="handleNewConversation"
                 @load-more-conversations="loadMoreConversations"
                 @update-conversation-title="handleUpdateConversationTitle"
+                @toggle-conversation-favorite="handleToggleConversationFavorite"
               />
             </div>
           </div>

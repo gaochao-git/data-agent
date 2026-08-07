@@ -5,7 +5,7 @@
  * 看板已提取为独立的 DashboardPanel 组件
  */
 import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
-import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle } from '../../api'
+import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
 import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
 import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
 import {
@@ -22,6 +22,7 @@ interface ConversationItem {
   id: string
   title: string
   created_at: string
+  is_favorited?: boolean
 }
 
 interface ConversationGroup {
@@ -82,6 +83,7 @@ const emit = defineEmits<{
   newConversation: []
   loadMoreConversations: []
   updateConversationTitle: [conversationId: string, title: string]
+  toggleConversationFavorite: [conversationId: string, isFavorited: boolean]
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
@@ -314,6 +316,9 @@ const editingTitle = ref('')
 const editingInputRef = ref<HTMLInputElement | null>(null)
 const isSavingTitle = ref(false)
 
+// 会话置顶（收藏）切换状态
+const favoritingId = ref<string | null>(null)
+
 // v-for 内的字符串 ref 会被 Vue 3 收集为数组，改用函数 ref 确保拿到单个 DOM 元素
 const setEditingInputRef = (el: Element | ComponentPublicInstance | null) => {
   editingInputRef.value = (el as HTMLInputElement) || null
@@ -379,6 +384,23 @@ const handleEditTitleKeydown = (convId: string, event: KeyboardEvent) => {
     event.preventDefault()
     event.stopPropagation()
     cancelEditConversationTitle()
+  }
+}
+
+// 切换会话置顶（复用后端 is_favorited 收藏能力，置顶 = 收藏并排序到顶部）
+const toggleConversationFavoriteState = async (conv: ConversationItem) => {
+  if (favoritingId.value === conv.id) return
+  favoritingId.value = conv.id
+  try {
+    const res = await apiToggleConversationFavorite(conv.id)
+    if (res.status === 'success') {
+      const isFavorited = Boolean(res.data?.is_favorited)
+      emit('toggleConversationFavorite', conv.id, isFavorited)
+    }
+  } catch (err) {
+    console.error('切换置顶状态失败:', err)
+  } finally {
+    favoritingId.value = null
   }
 }
 
@@ -637,6 +659,18 @@ onUnmounted(() => {
                 <!-- 标题展示态 -->
                 <template v-else>
                   <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 flex h-6 w-6 items-center justify-center rounded transition-all duration-150"
+                    :class="conv.is_favorited
+                      ? 'text-amber-500 opacity-100 hover:bg-amber-100 hover:text-amber-600'
+                      : 'text-gray-400 opacity-0 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100'"
+                    :title="conv.is_favorited ? '取消置顶' : '置顶'"
+                    :disabled="favoritingId === conv.id"
+                    @click.stop="toggleConversationFavoriteState(conv)"
+                  >
+                    <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
+                  </button>
                   <button
                     type="button"
                     class="shrink-0 flex h-6 w-6 items-center justify-center rounded text-gray-400 opacity-0 transition-all duration-150 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100"
