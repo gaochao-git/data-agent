@@ -18,7 +18,7 @@ from .middleware.context_usage import (
 )
 from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
-from .prompts.unified import build_unified_system_prompt
+from .prompts.chat_data import build_unified_system_prompt
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
 from .tools.dsl2sql import create_dsl2sql_tool

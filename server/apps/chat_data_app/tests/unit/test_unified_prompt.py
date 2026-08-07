@@ -7,7 +7,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
-from apps.chat_data_app.agent.prompts.unified import build_unified_system_prompt
+from apps.chat_data_app.agent.prompts.chat_data import build_unified_system_prompt
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.skills.loader import format_skills_prompt
 

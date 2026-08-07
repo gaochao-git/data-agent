@@ -5,7 +5,7 @@ ChatData 单一 Agent
 - data_agent.py: 单一智能体定义
 - runtime_options.py: 工作区后端和 Bash 运行选项
 - agent_runtime.py: 共享运行时工具
-- prompts/unified.py: 统一 system prompt 构建
+- prompts/chat_data.py: ChatData system prompt 构建
 - middleware/: create_agent middleware
 - prompts/: 提示词包
 - tools/: 工具包
@@ -24,7 +24,7 @@ from .data_agent import (
     get_data_agent_graph,
 )
 from .prompts.nl2sql import SQL_GENERATOR_PROMPT_GENERATE
-from .prompts.unified import build_unified_system_prompt
+from .prompts.chat_data import build_unified_system_prompt
 from utils.checkpoint import get_checkpointer, DB_PATH
 
 __all__ = [

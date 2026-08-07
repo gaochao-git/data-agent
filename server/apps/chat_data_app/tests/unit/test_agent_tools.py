@@ -17,7 +17,6 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 from apps.chat_data_app.agent.tools import calculator_tool
 from apps.chat_data_app.agent.tools import semantic_query as agent_tools
 from apps.chat_data_app.agent.tools.current_time import get_current_time_payload, get_current_time_tool
-from apps.chat_data_app.agent.prompts.semantic_layer import build_semantic_prompt
 from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services import sql_assist_context
@@ -137,21 +136,6 @@ def test_calculator_tool_covers_empty_division_and_unary_branches():
     assert payload["results"][2]["result"] == "1"
 
 
-def test_build_semantic_prompt_includes_ontology_rules():
-    prompt = build_semantic_prompt({
-        "description": "订单指标集",
-        "ontology_rules": "有效订单仅统计已支付且未退款订单",
-        "metrics": [{"name": "订单金额", "expression": "SUM(pay_amount)", "description": "实付金额"}],
-        "dimensions": [{"name": "订单状态", "expression": "orders.status", "description": "状态枚举"}],
-        "relationships": [],
-    })
-
-    assert "**配置说明**: 订单指标集" in prompt
-    assert "**业务描述**: 有效订单仅统计已支付且未退款订单" in prompt
-    assert "订单金额" in prompt
-    assert "订单状态" in prompt
-
-
 def test_table_metadata_formatters_cover_empty_and_selected_tables():
     tables = [
         {
@@ -181,68 +165,6 @@ def test_table_metadata_formatters_cover_empty_and_selected_tables():
     )
     assert "    id TEXT" in no_comment
     assert "--" not in no_comment
-
-
-def test_build_semantic_prompt_includes_dialect_types_allowed_values_and_relationships():
-    prompt = build_semantic_prompt({
-        "source_type": "hive",
-        "metrics": [
-            {"name": "订单数", "label": "订单数量", "aggregation": "COUNT", "field": "order_id", "mysql_type": "bigint", "metadata_supplement": "同义词：订单量"},
-            {"name": "销售额", "expression": "SUM(amount)", "data_type": "decimal"},
-        ],
-        "dimensions": [
-            {"name": "订单状态", "table": "orders", "column": "status", "hive_type": "string", "allowed_values": ["paid", "cancelled"], "metadata_supplement": "枚举值：paid=已支付，cancelled=已取消"},
-            {"name": "用户ID", "field": "orders.user_id", "columnType": "bigint"},
-        ],
-        "relationships": [
-            {
-                "left_table": "orders",
-                "right_table": "users",
-                "join_type": "inner",
-                "relationship_type": "many_to_one",
-                "join_conditions": [
-                    {"left_column": "user_id", "right_column": "user_id"},
-                    {"left_column": "bad"},
-                ],
-            },
-            {"left_table": "orders", "right_table": "items", "join_conditions": []},
-        ],
-        "tables": [
-            {
-                "table_name": "orders",
-                "description": "订单主表",
-                "columns": [
-                    {"name": "order_id", "type": "bigint", "description": "订单ID"},
-                    {"name": "status", "type": "string", "description": "订单状态"},
-                ],
-            },
-            {
-                "table_name": "users",
-                "description": "用户表",
-                "columns": [{"name": "user_id", "type": "bigint", "description": "用户ID"}],
-            },
-            {
-                "table_name": "unrelated",
-                "description": "无关表",
-                "columns": [{"name": "secret_col", "type": "string"}],
-            },
-        ],
-    })
-
-    assert "**SQL方言**: HIVE" in prompt
-    assert prompt.index("### 可用维度/字段（可用于返回、筛选、分组）") < prompt.index("### 可用指标（仅用于明确聚合口径）")
-    assert "COUNT(order_id)" in prompt
-    assert "类型: bigint" in prompt
-    assert "元数据补充: 同义词：订单量" in prompt
-    assert "元数据补充: 枚举值：paid=已支付，cancelled=已取消" in prompt
-    assert "可选值: [paid、cancelled]" in prompt
-    assert "### 相关表和原始字段（用于补充字段理解和 SQL 回退）" in prompt
-    assert "**orders**：订单主表" in prompt
-    assert "order_id，类型: bigint，备注: 订单ID" in prompt
-    assert "**users**：用户表" in prompt
-    assert "secret_col" not in prompt
-    assert "**orders** → **users**: orders.user_id = users.user_id (INNER JOIN, many_to_one)" in prompt
-    assert "orders** → **items" not in prompt
 
 
 def test_get_all_tables_async_reads_single_or_all_datasources(monkeypatch):
@@ -1297,22 +1219,3 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
     assert executed_sql == ["select 1"]
     assert '"sql": "select 1"' in result
 
-
-def test_sql_tool_remaining_helpers_cover_prompt_alias_branch():
-    prompt = build_semantic_prompt({
-        "metrics": [
-            {"name": "无表指标", "expression": "COUNT(*)", "table": "", "description": ""},
-            {"name": "同表指标", "expression": "SUM(amount)", "table": "orders", "table_alias": "orders"},
-        ],
-        "dimensions": [
-            {"name": "别名维度", "table": "", "table_alias": "alias_only", "column": "", "description": ""},
-            {"name": "空表达式", "table": "", "column": "", "description": ""},
-        ],
-        "relationships": [],
-    })
-
-    assert "无表指标" in prompt
-    assert "无表指标，表达式: COUNT(*)，表" not in prompt
-    assert "**同表指标**，表达式: SUM(amount)，表: orders" in prompt
-    assert "表: alias_only" in prompt
-    assert "表达式: -" in prompt

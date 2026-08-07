@@ -116,7 +116,7 @@ def _build_file_attachment_text(file_attachments: list[dict[str, Any]]) -> str:
     仅输出短占位 ``[attachment] /mnt/user-data/uploads/<原始文件>`` 或
     ``[attachment] /mnt/user-data/outputs/<已转文件>``，不再附加大段说明；
     agent 处理用户附件的策略（先 file_read，读不了再 parse_document）由
-    ``agent/prompts/unified.py`` 的工作区流程块统一提供，重复说明反而冗余。
+    ``agent/prompts/chat_data.py`` 的工作区流程块统一提供，重复说明反而冗余。
     前端识别该占位并在消息气泡中隐藏，避免查看历史会话时再次渲染冗长文本。
     """
     if not file_attachments:
