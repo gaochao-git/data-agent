@@ -654,6 +654,14 @@ def test_semantic_query_input_rejects_invalid_json_dsl_string():
         SemanticQueryInput.model_validate({**base_payload, "dsl": "[]"})
 
 
+def test_semantic_query_save_as_description_is_explicitly_opt_in():
+    description = SemanticQueryInput.model_fields["save_as"].description or ""
+
+    assert "常规查询不要传" in description
+    assert "二次分析" in description
+    assert "workspace/ 下的 .json 文件" in description
+
+
 def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
     from langchain_core.messages import HumanMessage
 

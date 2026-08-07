@@ -1,9 +1,5 @@
 """提示词统一导出。"""
 
-from .analysis_guidance import (
-    MULTI_STEP_FEWSHOT_PROMPT,
-    SEMANTIC_FEWSHOT_PROMPT,
-)
 from .context_compression import (
     CONTEXT_COMPRESSION_SUMMARY_PROMPT,
     build_context_compression_summary_prompt,
@@ -20,8 +16,6 @@ from .security_prompt import SECURITY_PROMPT
 from .semantic_layer import build_semantic_prompt
 
 __all__ = [
-    "MULTI_STEP_FEWSHOT_PROMPT",
-    "SEMANTIC_FEWSHOT_PROMPT",
     "CONTEXT_COMPRESSION_SUMMARY_PROMPT",
     "SECURITY_PROMPT",
     "SQL_GENERATOR_PROMPT_GENERATE",

@@ -290,7 +290,8 @@ async def semantic_query_tool(
 
     常规查询传入语义 DSL，服务端先编译为 SQL 再执行；只有 DSL 无法表达查询结构时，
     才传入只读 SQL 直接执行。两种模式都必须指定语义模型和执行对象范围。
-    DSL和SQL只能传递一个
+    DSL 和 SQL 只能传递一个。常规查询不要传 save_as；仅当用户、技能或后续流程明确要求
+    将完整结果保留到磁盘用于二次分析、脚本处理或产物生成时使用 save_as。
     """
     return await _run_semantic_query_tool(
         dsl=dsl,
