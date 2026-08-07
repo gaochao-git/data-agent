@@ -15,6 +15,7 @@ def _config(relationship_type="many_to_one"):
         "id": "sc_order",
         "name": "订单分析",
         "description": "订单经营分析",
+        "ontology_rules": "用户下单后生成订单，支付成功后计入有效成交。",
         "update_time": "2026-08-05 10:00:00",
         "metrics": [{"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"}],
         "dimensions": [{"name": "城市", "table": "orders", "column": "city", "logical_type": "string"}],
@@ -35,6 +36,7 @@ def test_convert_is_valid_ossie_pydantic_document():
     parsed = OSIDocument.model_validate(document)
 
     assert parsed.semantic_model[0].name == "订单分析"
+    assert parsed.semantic_model[0].ai_context == "用户下单后生成订单，支付成功后计入有效成交。"
     assert parsed.semantic_model[0].metrics[0].expression.dialects[0].expression == "SUM(orders.amount)"
     assert parsed.semantic_model[0].relationships[0].from_dataset == "orders"
     assert parsed.semantic_model[0].relationships[0].to == "users"
@@ -53,6 +55,7 @@ def test_convert_passes_official_json_schema():
 
     validate(document, schema)
     relationship = document["semantic_model"][0]["relationships"][0]
+    assert document["semantic_model"][0]["ai_context"] == "用户下单后生成订单，支付成功后计入有效成交。"
     assert relationship["from"] == "users"
     assert relationship["to"] == "orders"
     assert all(dataset["primary_key"] == [] for dataset in document["semantic_model"][0]["datasets"])

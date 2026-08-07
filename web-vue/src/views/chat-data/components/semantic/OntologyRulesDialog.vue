@@ -30,10 +30,7 @@ const splitOntologyRules = (text: string) => {
 }
 
 const buildOntologyRulesText = () => {
-  const businessFlow = editingBusinessFlowText.value.trim()
-  const sections: string[] = []
-  if (businessFlow) sections.push(`【业务运转说明】\n${businessFlow}`)
-  return sections.join('\n\n')
+  return editingBusinessFlowText.value.trim()
 }
 
 watch(visible, (value) => {
