@@ -15,10 +15,7 @@ from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
 from utils.response import business_response
-from ..agent.prompts.dim_metric_auto_prefill import (
-    build_auto_prefill_knowledge_prompt,
-    build_metric_recommendation_prompt,
-)
+from ..agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from ..schema import (
     SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
@@ -203,78 +200,6 @@ def _dedupe_prefill_display_names(items: List[Dict[str, str]]) -> List[Dict[str,
     return items
 
 
-def _normalize_prefill_item(item: Dict) -> Optional[Dict]:
-    """标准化 LLM 预填项。"""
-    table_name = (item.get("table") or "").strip()
-    column_name = (item.get("column") or "").strip()
-    if not table_name or not column_name:
-        return None
-    role = str(item.get("role") or "").strip().lower()
-    if role not in ("metric", "dimension"):
-        if item.get("is_metric") is True:
-            role = "metric"
-        elif item.get("is_dimension") is True:
-            role = "dimension"
-        else:
-            return None
-
-    return {
-        "table": table_name,
-        "column": column_name,
-        "role": role,
-        "expression": _quote_identifier(column_name),
-    }
-
-
-def _normalize_prefill_table_model_type(table_model_type: Any) -> str:
-    """标准化自动预填的表建模类型。"""
-    normalized = str(table_model_type or "detail").strip().lower()
-    return normalized if normalized in {"detail", "aggregated"} else "detail"
-
-
-def _filter_prefill_knowledge(raw_knowledge: Any, generate_business_flow: bool = False) -> Dict[str, str]:
-    """只保留本次请求允许生成的业务知识。"""
-    if not isinstance(raw_knowledge, dict):
-        return {}
-    knowledge: Dict[str, str] = {}
-    if generate_business_flow:
-        business_flow = str(raw_knowledge.get("business_flow") or "").strip()
-        if business_flow:
-            knowledge["business_flow"] = business_flow
-    return knowledge
-
-
-def _normalize_prefill_knowledge(parsed: Dict[str, Any], generate_business_flow: bool = False) -> Dict[str, str]:
-    """标准化自动预填生成的业务知识。"""
-    raw_knowledge = parsed.get("knowledge") if isinstance(parsed, dict) else None
-    return _filter_prefill_knowledge(raw_knowledge, generate_business_flow)
-
-
-def _parse_prefill_response(content: str, generate_business_flow: bool = False) -> Dict[str, Any]:
-    """解析自动预填模型返回。"""
-    parsed = parse_llm_json(str(content))
-    raw_fields = parsed.get("fields", []) if isinstance(parsed, dict) else []
-    normalized_map = {}
-    if isinstance(raw_fields, list):
-        for item in raw_fields:
-            if not isinstance(item, dict):
-                continue
-            normalized = _normalize_prefill_item(item)
-            if not normalized:
-                continue
-            key = f"{normalized['table']}.{normalized['column']}"
-            normalized_map[key] = normalized
-    return {
-        "fields": normalized_map,
-        "knowledge": _normalize_prefill_knowledge(parsed, generate_business_flow),
-    }
-
-
-def _parse_prefill_fields(content: str) -> Dict[str, Dict]:
-    """解析自动预填模型返回字段。"""
-    return _parse_prefill_response(content).get("fields", {})
-
-
 def _build_prefill_table_payload(tables: List[Dict]) -> List[Dict[str, Any]]:
     """构造自动预填使用的紧凑表结构。"""
     table_payload = []
@@ -456,62 +381,17 @@ async def _call_metric_recommendation_llm(
     return _parse_prefill_recommendation_response(str(content), table_payload, max_metrics, table_alias_map)
 
 
-async def _call_prefill_llm(prompt: str, generate_business_flow: bool = False) -> Dict[str, Any]:
-    """调用大模型并解析自动预填字段。"""
-    llm = get_chat_data_llm(streaming=False, max_tokens=4000)
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:
-        emit_llm_connection_alarm_if_needed(
-            exc,
-            ext1={"purpose": "semantic_prefill"},
-        )
-        raise
-    content = response.content if hasattr(response, "content") else str(response)
-    return _parse_prefill_response(str(content), generate_business_flow)
-
-
-def _prefill_knowledge_missing(knowledge: Dict[str, str], generate_business_flow: bool = False) -> bool:
-    """判断哪些业务知识仍需生成。"""
-    need_business_flow = bool(generate_business_flow and not str((knowledge or {}).get("business_flow") or "").strip())
-    return need_business_flow
-
-
-async def _fill_missing_prefill_knowledge(
-    *,
-    table_payload: List[Dict],
-    knowledge: Dict[str, str],
-    generate_business_flow: bool,
-) -> Dict[str, str]:
-    """补问大模型生成缺失的业务知识。"""
-    knowledge = _filter_prefill_knowledge(knowledge, generate_business_flow)
-    need_business_flow = _prefill_knowledge_missing(knowledge, generate_business_flow)
-    if not need_business_flow:
-        return knowledge
-    prompt = build_auto_prefill_knowledge_prompt(
-        table_payload=table_payload,
-        generate_business_flow=need_business_flow,
-    )
-    result = await _call_prefill_llm(prompt, need_business_flow)
-    filled = dict(knowledge or {})
-    filled.update(result.get("knowledge", {}))
-    return _filter_prefill_knowledge(filled, generate_business_flow)
-
-
 async def _prefill_by_llm(
     tables: List[Dict],
-    table_model_type: str = "detail",
-    generate_business_flow: bool = False,
     business_context: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """预填字段角色：物理字段全维度，大模型只推荐少量原子指标。"""
+    """优化字段显示名称，并推荐少量高置信度原子指标。"""
     if not tables:
-        return {"fields": [], "knowledge": {}}
-    _normalize_prefill_table_model_type(table_model_type)
+        return {"fields": []}
     table_alias_map = _build_prefill_alias_map(tables)
     table_payload = _build_prefill_table_payload(tables)
     if not table_payload:
-        return {"fields": [], "knowledge": {}}
+        return {"fields": []}
     fields = _build_prefill_dimension_fields(table_payload, table_alias_map)
     try:
         recommendation = await _call_metric_recommendation_llm(
@@ -528,7 +408,7 @@ async def _prefill_by_llm(
     except Exception as e:
         logger.warning("自动预填调用大模型失败: %s", e)
         metric_fields = []
-    return {"fields": _dedupe_prefill_display_names(fields + metric_fields), "knowledge": {}}
+    return {"fields": _dedupe_prefill_display_names(fields + metric_fields)}
 
 
 def _resolve_prefill_tables(datasource: Dict, selected_tables: List[str]) -> List[Dict]:
@@ -684,15 +564,13 @@ async def _auto_prefill_semantic_fields_route(
 
         prefill_result = await _prefill_by_llm(
             target_tables,
-            payload.table_model_type,
-            payload.generate_business_flow,
             payload.business_context or "",
         )
         if prefill_result is None:
             return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
         fields = prefill_result.get("fields", [])
 
-        return business_response(data={"fields": fields, "total": len(fields), "knowledge": prefill_result.get("knowledge", {})}, msg="自动预填完成")
+        return business_response(data={"fields": fields, "total": len(fields)}, msg="自动预填完成")
     except Exception as e:
         logger.error(f"自动预填字段失败: {str(e)}", exc_info=True)
         return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -730,15 +608,13 @@ async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Requ
         target_tables = [table.model_dump() for table in payload.tables]
         prefill_result = await _prefill_by_llm(
             target_tables,
-            payload.table_model_type,
-            payload.generate_business_flow,
             payload.business_context or "",
         )
         if prefill_result is None:
             return business_response(msg="自动预填失败：大模型返回结果不完整或不可解析，请重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
         fields = prefill_result.get("fields", [])
 
-        return business_response(data={"fields": fields, "total": len(fields), "knowledge": prefill_result.get("knowledge", {})}, msg="自动预填完成")
+        return business_response(data={"fields": fields, "total": len(fields)}, msg="自动预填完成")
     except Exception as e:
         logger.error(f"语义字段预填失败: {str(e)}", exc_info=True)
         return business_response(msg=f"自动预填失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")

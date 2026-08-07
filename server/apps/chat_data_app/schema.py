@@ -520,8 +520,6 @@ class AccuracyEvaluationDraftCaseRequest(BaseModel):
 class SemanticAutoPrefillRequest(BaseModel):
     """语义字段自动预填请求"""
     selected_tables: List[str] = Field(default_factory=list, description="当前指标集已选择的数据表")
-    table_model_type: Literal["detail", "aggregated"] = Field(default="detail", description="表建模类型：detail 明细表，aggregated 预聚合表")
-    generate_business_flow: bool = Field(default=False, description="是否生成业务运转说明")
     business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
 
 
@@ -547,8 +545,6 @@ class SemanticPrefillRequest(BaseModel):
     datasource_id: str = Field(..., description="数据源 ID")
     config_id: str = Field(..., description="语义配置 ID")
     tables: List[SemanticPrefillTable] = Field(default_factory=list, description="当前待预填的数据表列表")
-    table_model_type: Literal["detail", "aggregated"] = Field(default="detail", description="表建模类型：detail 明细表，aggregated 预聚合表")
-    generate_business_flow: bool = Field(default=False, description="是否生成业务运转说明")
     business_context: Optional[str] = Field(default=None, description="本次自动预填的业务补充上下文")
 
 

@@ -1879,7 +1879,6 @@ const handleAutoPrefillFields = async (businessContext: string) => {
     const res = await autoPrefillSemanticFields({
       datasource_id: props.datasourceId,
       config_id: activeConfig.value.id,
-      table_model_type: 'detail',
       business_context: businessContext,
       tables: targetTables,
     }, { adminMode: props.adminMode })

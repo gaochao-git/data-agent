@@ -15,11 +15,7 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from utils.error_codes import ErrorCode
 from apps.chat_data_app.routers import semantic_config
-from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import (
-    build_auto_prefill_knowledge_prompt,
-    build_auto_prefill_prompt,
-    build_prefill_model_guidance,
-)
+from apps.chat_data_app.agent.prompts.dim_metric_auto_prefill import build_metric_recommendation_prompt
 from apps.chat_data_app.schema import (
     SemanticAutoPrefillRequest,
     SemanticConfigCreateRequest,
@@ -328,7 +324,6 @@ def test_prefill_parse_and_alias_helpers_cover_edge_cases():
             {"table": "orders", "column": "amount", "agg": "UNSAFE", "name": "跳过"},
             "skip",
         ],
-        "knowledge": {"business_flow": "下单 -> 支付", "other": "drop"},
     }
 
     assert semantic_config._normalize_prefill_display_name("订单金额，越长越好", "amount") == "订单金额"
@@ -350,20 +345,10 @@ def test_prefill_parse_and_alias_helpers_cover_edge_cases():
     assert [item["table_alias"] for item in metrics] == ["buyer_orders", "seller_orders"]
     assert len(metrics) == 2
     assert semantic_config._parse_metric_items({"metrics": "bad"}, table_payload) == []
-    assert semantic_config._filter_prefill_knowledge(parsed["knowledge"], generate_business_flow=False) == {}
-    assert semantic_config._filter_prefill_knowledge(parsed["knowledge"], generate_business_flow=True) == {"business_flow": "下单 -> 支付"}
-    assert semantic_config._filter_prefill_knowledge("bad", True) == {}
-    assert semantic_config._normalize_prefill_knowledge(parsed, True) == {"business_flow": "下单 -> 支付"}
-    assert semantic_config._prefill_knowledge_missing({}, True) is True
-    assert semantic_config._prefill_knowledge_missing({"business_flow": "已生成"}, True) is False
-    assert semantic_config._normalize_prefill_item({"table": "", "column": "id", "role": "dimension"}) is None
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "role": "bad"}) is None
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_metric": True})["role"] == "metric"
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "is_dimension": True})["role"] == "dimension"
     assert semantic_history_learning_service._extract_expression_columns("SUM(.amount) + ` ` + t.price + orders.") == {"amount", "price"}
 
 
-def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
+def test_prefill_helpers_use_business_context(monkeypatch):
     tables = [{"table_name": "orders", "columns": [{"name": "amount"}, {"name": "city"}]}]
     calls = []
 
@@ -378,36 +363,18 @@ def test_prefill_helpers_for_detail_and_aggregated(monkeypatch):
         }
 
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_metric_recommendation)
-    detail = asyncio.run(semantic_config._prefill_by_llm(tables, "detail"))
-    aggregated = asyncio.run(semantic_config._prefill_by_llm(tables, "aggregated", business_context="订单金额常做汇总"))
+    default_result = asyncio.run(semantic_config._prefill_by_llm(tables))
+    contextual_result = asyncio.run(semantic_config._prefill_by_llm(tables, business_context="订单金额常做汇总"))
 
     assert len(calls) == 2
     assert calls[1]["business_context"] == "订单金额常做汇总"
-    assert detail["fields"] == [
+    assert default_result["fields"] == [
         {"table": "orders", "table_alias": "orders", "column": "amount", "role": "dimension", "expression": "`amount`", "name": "订单金额"},
         {"table": "orders", "table_alias": "orders", "column": "city", "role": "dimension", "expression": "`city`", "name": "城市"},
         {"table": "orders", "table_alias": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"},
     ]
-    assert aggregated["fields"][0]["role"] == "dimension"
-    assert aggregated["fields"][-1]["role"] == "metric"
-
-
-def test_auto_prefill_prompt_generation_request_branches():
-    prompt = build_auto_prefill_prompt(
-        model_guidance=build_prefill_model_guidance("detail"),
-        table_payload=[{"table": "orders", "columns": [{"name": "amount"}]}],
-        generate_business_flow=True,
-    )
-    knowledge_prompt = build_auto_prefill_knowledge_prompt(
-        table_payload=[{"table": "orders", "columns": [{"name": "amount"}]}],
-        generate_business_flow=True,
-    )
-
-    assert '"generation_request": {"business_flow": true}' in prompt
-    assert '"business_flow":"业务运转说明"' in prompt
-    assert "business_flow 面向业务整体" in prompt
-    assert '"generation_request": {"business_flow": true}' in knowledge_prompt
-    assert '"business_flow":"业务运转说明"' in knowledge_prompt
+    assert contextual_result["fields"][0]["role"] == "dimension"
+    assert contextual_result["fields"][-1]["role"] == "metric"
 
 
 def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
@@ -420,12 +387,12 @@ def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
 
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}], "knowledge": {}}))
+    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
 
     response = asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=["orders"], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=["orders"]),
         object(),
     ))
     payload = json.loads(response.body.decode("utf-8"))
@@ -450,7 +417,6 @@ def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch)
         datasource_id="ds_a",
         config_id="cfg_a",
         tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
-        table_model_type="aggregated",
     ), object()))
     payload = json.loads(response.body.decode("utf-8"))
 
@@ -1036,37 +1002,21 @@ def test_generate_history_learning_suggestions_by_llm(monkeypatch):
 
 
 def test_prefill_parse_and_error_branches(monkeypatch):
-    assert semantic_config._normalize_prefill_item({"table": "", "column": "id", "role": "dimension"}) is None
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "id", "role": "bad"}) is None
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "amount", "is_metric": True})["role"] == "metric"
-    assert semantic_config._normalize_prefill_item({"table": "orders", "column": "city", "is_dimension": True})["role"] == "dimension"
-    assert semantic_config._normalize_prefill_table_model_type("bad") == "detail"
-    assert semantic_config._parse_prefill_fields('{"fields": "bad"}') == {}
-    assert semantic_config._parse_prefill_fields(json.dumps({"fields": [{"table": "orders", "column": "amount", "role": "metric"}, "bad"]}))["orders.amount"]["role"] == "metric"
-    parsed_with_metadata = semantic_config._parse_prefill_response(
-        json.dumps({
-            "fields": [{"table": "orders", "column": "amount", "role": "metric", "metadata_supplement": "1）金额单位为元"}],
-            "knowledge": {"business_flow": "订单支付后形成成交", "metadata_supplement": "旧全局元数据"},
-        }, ensure_ascii=False),
-        generate_business_flow=True,
-    )
-    assert "metadata_supplement" not in parsed_with_metadata["fields"]["orders.amount"]
-    assert parsed_with_metadata["knowledge"] == {"business_flow": "订单支付后形成成交"}
-    assert asyncio.run(semantic_config._prefill_by_llm([], "detail")) == {"fields": [], "knowledge": {}}
-    assert asyncio.run(semantic_config._prefill_by_llm([{"columns": [{"name": "id"}]}], "detail")) == {"fields": [], "knowledge": {}}
+    assert asyncio.run(semantic_config._prefill_by_llm([])) == {"fields": []}
+    assert asyncio.run(semantic_config._prefill_by_llm([{"columns": [{"name": "id"}]}])) == {"fields": []}
 
     async def fake_raise(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_raise)
-    fallback_result = asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}], "aggregated"))
-    assert fallback_result == {"fields": [{"table": "orders", "table_alias": "orders", "column": "id", "role": "dimension", "expression": "`id`", "name": "id"}], "knowledge": {}}
+    fallback_result = asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}]))
+    assert fallback_result == {"fields": [{"table": "orders", "table_alias": "orders", "column": "id", "role": "dimension", "expression": "`id`", "name": "id"}]}
 
     async def fake_incomplete(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_incomplete)
-    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}], "aggregated")) == fallback_result
+    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "orders", "columns": [{"name": "id"}]}])) == fallback_result
 
     datasource = {"ds_tables": [{"table_name": ""}, {"table_name": "orders"}, {"table_name": "users"}]}
     assert [item["table_name"] for item in semantic_config._resolve_prefill_tables(datasource, ["users"])] == ["users"]
@@ -1085,7 +1035,6 @@ def test_prefill_prompt_includes_business_context(monkeypatch):
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
     result = asyncio.run(semantic_config._prefill_by_llm(
         [{"table_name": "orders", "columns": [{"name": "amount_sum", "type": "decimal"}]}],
-        "aggregated",
         business_context="销售额用于经营分析",
     ))
 
@@ -1096,40 +1045,14 @@ def test_prefill_prompt_includes_business_context(monkeypatch):
 
 
 def test_prefill_prompt_builders_cover_guidance_branches():
-    table_payload = [{"table_name": "orders", "columns": [{"name": "amount", "type": "decimal"}]}]
-    aggregated_guidance = build_prefill_model_guidance("aggregated")
-    detail_guidance = build_prefill_model_guidance("detail")
-
-    assert "预聚合表" in aggregated_guidance
-    assert "明细表" in detail_guidance
-    assert "generation_request" not in build_auto_prefill_prompt(
-        model_guidance=detail_guidance,
-        table_payload=table_payload,
-        generate_business_flow=False,
+    prompt = build_metric_recommendation_prompt(
+        table_payload=[{"table": "orders", "columns": [{"name": "amount", "type": "decimal"}]}],
+        business_context="金额按元统计",
+        max_metrics=3,
     )
-    assert '"knowledge":' not in build_auto_prefill_prompt(
-        model_guidance=detail_guidance,
-        table_payload=table_payload,
-        generate_business_flow=False,
-    )
-    knowledge_without_business = build_auto_prefill_knowledge_prompt(
-        table_payload=table_payload,
-        generate_business_flow=False,
-    )
-    assert '"knowledge":{}' in knowledge_without_business
-    assert '"business_flow"' not in knowledge_without_business
-    assert '"generation_request":' not in knowledge_without_business
-    with_business = build_auto_prefill_prompt(
-        model_guidance=aggregated_guidance,
-        table_payload=table_payload,
-        generate_business_flow=True,
-    )
-    assert '"generation_request": {"business_flow": true}' in with_business
-    assert "business_flow 面向业务整体" in with_business
-    assert '"knowledge":{"business_flow":"业务运转说明"}' in build_auto_prefill_knowledge_prompt(
-        table_payload=table_payload,
-        generate_business_flow=True,
-    )
+    assert "金额按元统计" in prompt
+    assert "最多推荐 3 个" in prompt
+    assert '"tables"' in prompt
 
 
 def test_metric_recommendation_parser_filters_invalid_items():
@@ -1238,110 +1161,47 @@ def test_prefill_dimension_names_are_deduped_by_table_alias(monkeypatch):
     assert all(name.endswith("订单编号") or name.endswith("订单编号2") for name in names)
 
 
-def test_prefill_knowledge_only_returns_requested_sections(monkeypatch):
-    captured = {}
-
-    async def fake_recommend(table_payload, business_context="", max_metrics=10, **_kwargs):
-        captured["table_payload"] = table_payload
-        captured["business_context"] = business_context
-        captured["max_metrics"] = max_metrics
-        return [{"table": "orders", "column": "amount", "source_column": "amount", "role": "metric", "field_name": "amount_sum", "name": "金额合计", "agg": "SUM", "expression": "SUM(`amount`)"}]
-
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
-    result = asyncio.run(semantic_config._prefill_by_llm(
-        [{"table_name": "orders", "columns": [{"name": "amount", "type": "decimal"}]}],
-        "aggregated",
-        True,
-    ))
-
-    assert captured["table_payload"][0]["table"] == "orders"
-    assert result["knowledge"] == {}
-
-
-def test_prefill_knowledge_is_not_generated_when_missing(monkeypatch):
-    calls = []
-
-    async def fake_recommend(*_args, **_kwargs):
-        calls.append((_args, _kwargs))
-        return []
-
-    monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_recommend)
-    result = asyncio.run(semantic_config._prefill_by_llm(
-        [{"table_name": "orders", "columns": [{"name": "amount", "type": "decimal", "description": "订单金额"}]}],
-        "aggregated",
-        True,
-    ))
-
-    assert len(calls) == 1
-    assert result["knowledge"] == {}
-    assert "metadata_supplement" not in result["fields"][0]
-
-
-def test_call_prefill_llm_uses_human_message(monkeypatch):
-    captured = {}
-
-    class FakeLlm:
-        async def ainvoke(self, messages):
-            captured["messages"] = messages
-            return SimpleNamespace(content=json.dumps({
-                "fields": [{
-                    "table": "orders",
-                    "column": "amount",
-                    "role": "metric",
-                }],
-            }, ensure_ascii=False))
-
-    monkeypatch.setattr(semantic_config, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
-    result = asyncio.run(semantic_config._call_prefill_llm("生成字段配置"))
-
-    assert getattr(captured["messages"][0], "type", "") == "human"
-    assert result["fields"]["orders.amount"]["role"] == "metric"
-
-
 def test_semantic_prefill_routes_missing_and_success(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
-    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}], "knowledge": {}}))
+    monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
 
     auto_missing_ds = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "missing",
         "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=[]),
         object(),
     )))
     auto_missing_config = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "missing",
-        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=[]),
         object(),
     )))
     short_missing_ds = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="missing",
         config_id="cfg_a",
         tables=[],
-        table_model_type="detail",
     ), object())))
     short_missing_config = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="missing",
         tables=[],
-        table_model_type="detail",
     ), object())))
     short_success = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="cfg_a",
         tables=[{"table_name": "orders", "columns": [{"name": "id"}]}],
-        table_model_type="detail",
     ), object())))
     public_denied = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "cfg_public",
-        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=[]),
         object(),
     )))
     admin_public_success = _response_payload(asyncio.run(semantic_config.auto_prefill_admin_semantic_fields(
         "ds_a",
         "cfg_public",
-        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=[]),
         object(),
     )))
 
@@ -1416,14 +1276,13 @@ def test_semantic_route_exception_branches(monkeypatch):
     prefill_error = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=[], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=[]),
         object(),
     )))
     short_prefill_error = _response_payload(asyncio.run(semantic_config.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="cfg_a",
         tables=[],
-        table_model_type="detail",
     ), object())))
     update_error = _response_payload(asyncio.run(semantic_config.update_semantic_config("ds_a", "cfg_a", SemanticConfigUpdateRequest(name="x"), object())))
     assert list_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
@@ -1580,7 +1439,7 @@ def test_semantic_config_low_level_helper_branches(monkeypatch):
     assert asyncio.run(semantic_config._load_history_conversation_context("conv_agent", "user_a")) is None
 
 
-def test_prefill_dedupe_and_parse_response_extra_branches():
+def test_prefill_dedupe_and_recommendation_parse_extra_branches():
     long_alias = "ods_marketing_channel_role_name"
     items = [
         {"name": "金额", "table_alias": long_alias, "table": "orders"},
@@ -1597,20 +1456,6 @@ def test_prefill_dedupe_and_parse_response_extra_branches():
     assert names[2] == "orders_金额2"
     assert names[3] == ""
     assert names[4] == "2"
-    assert semantic_config._normalize_prefill_table_model_type("aggregated") == "aggregated"
-    assert semantic_config._normalize_prefill_table_model_type("unknown") == "detail"
-
-    parsed = semantic_config._parse_prefill_response(json.dumps({
-        "fields": [
-            {"table": "orders", "column": "amount", "role": "metric"},
-            "bad",
-            {"table": "orders", "column": "", "role": "dimension"},
-        ],
-        "knowledge": {"business_flow": "下单-支付"},
-    }, ensure_ascii=False), generate_business_flow=True)
-    assert parsed["fields"]["orders.amount"]["expression"] == "`amount`"
-    assert parsed["knowledge"] == {"business_flow": "下单-支付"}
-
     table_payload = [{"table": "orders", "columns": [{"name": "amount"}]}]
     recommendation = semantic_config._parse_prefill_recommendation_response(json.dumps({
         "fields": [{"table": "orders", "column": "amount", "name": "订单金额"}],
@@ -1635,47 +1480,18 @@ def test_prefill_by_llm_handles_empty_recommendation_list_and_failure(monkeypatc
         return [{"table": "orders", "table_alias": "orders", "column": "amount", "role": "metric", "name": "销售额", "expression": "SUM(`amount`)"}]
 
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", fake_list_recommendation)
-    list_result = asyncio.run(semantic_config._prefill_by_llm(tables, "detail"))
+    list_result = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert [item["role"] for item in list_result["fields"]].count("metric") == 1
 
     async def raise_recommendation(*_args, **_kwargs):
         raise RuntimeError("llm failed")
 
     monkeypatch.setattr(semantic_config, "_call_metric_recommendation_llm", raise_recommendation)
-    fallback = asyncio.run(semantic_config._prefill_by_llm(tables, "detail"))
+    fallback = asyncio.run(semantic_config._prefill_by_llm(tables))
     assert fallback["fields"]
     assert all(item["role"] == "dimension" for item in fallback["fields"])
-    assert asyncio.run(semantic_config._prefill_by_llm([], "detail")) == {"fields": [], "knowledge": {}}
-    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "", "columns": []}], "detail")) == {"fields": [], "knowledge": {}}
-
-
-def test_fill_missing_prefill_knowledge_branches(monkeypatch):
-    existing = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
-        table_payload=[],
-        knowledge={"business_flow": "已有"},
-        generate_business_flow=True,
-    ))
-    disabled = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
-        table_payload=[],
-        knowledge={"business_flow": "忽略"},
-        generate_business_flow=False,
-    ))
-
-    async def fake_call_prefill_llm(prompt, generate_business_flow=False):
-        assert generate_business_flow is True
-        assert "business_flow" in prompt
-        return {"knowledge": {"business_flow": "补充业务流"}}
-
-    monkeypatch.setattr(semantic_config, "_call_prefill_llm", fake_call_prefill_llm)
-    filled = asyncio.run(semantic_config._fill_missing_prefill_knowledge(
-        table_payload=[{"table": "orders", "columns": []}],
-        knowledge={},
-        generate_business_flow=True,
-    ))
-
-    assert existing == {"business_flow": "已有"}
-    assert disabled == {}
-    assert filled == {"business_flow": "补充业务流"}
+    assert asyncio.run(semantic_config._prefill_by_llm([])) == {"fields": []}
+    assert asyncio.run(semantic_config._prefill_by_llm([{"table_name": "", "columns": []}])) == {"fields": []}
 
 
 def test_history_learning_normalization_duplicate_and_review_branches():
@@ -1857,7 +1673,7 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
     auto_incomplete = _response_payload(asyncio.run(semantic_config.auto_prefill_semantic_fields(
         "ds_a",
         "cfg_a",
-        SemanticAutoPrefillRequest(selected_tables=["orders"], table_model_type="detail"),
+        SemanticAutoPrefillRequest(selected_tables=["orders"]),
         object(),
     )))
     assert auto_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR

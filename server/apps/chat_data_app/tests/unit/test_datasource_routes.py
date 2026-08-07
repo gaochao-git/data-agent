@@ -1464,7 +1464,7 @@ def test_datasource_semantic_health_reports_physical_schema_drift(monkeypatch):
     assert "physical_table_added" not in schema_issue_types
 
 
-def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
+def test_semantic_prefill_passes_tables_and_business_context_to_llm(monkeypatch):
     from apps.chat_data_app.schema import SemanticPrefillRequest
 
     manager = _FakeDatasourceManager()
@@ -1474,19 +1474,17 @@ def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
 
     captured = {}
 
-    async def _fake_prefill(tables, table_model_type="detail", generate_business_flow=False, business_context=""):
+    async def _fake_prefill(tables, business_context=""):
         captured["tables"] = tables
-        captured["table_model_type"] = table_model_type
-        captured["generate_business_flow"] = generate_business_flow
         captured["business_context"] = business_context
-        return {"fields": [{"table": "orders", "column": "amount_sum", "role": "metric", "expression": "`amount_sum`"}], "knowledge": {}}
+        return {"fields": [{"table": "orders", "column": "amount_sum", "role": "metric", "expression": "`amount_sum`"}]}
 
     monkeypatch.setattr(semantic_config_routes, "_prefill_by_llm", _fake_prefill)
 
     resp = asyncio.run(semantic_config_routes.semantic_prefill(SemanticPrefillRequest(
         datasource_id="ds_a",
         config_id="sc_a",
-        table_model_type="aggregated",
+        business_context="销售额用于经营分析",
         tables=[{
             "table_name": "orders",
             "columns": [{"name": "amount_sum", "type": "decimal", "description": "销售额合计"}],
@@ -1495,8 +1493,8 @@ def test_semantic_prefill_passes_table_model_type_to_llm(monkeypatch):
     data = _payload(resp)
 
     assert data["status"] == "success"
-    assert captured["table_model_type"] == "aggregated"
     assert captured["tables"][0]["table_name"] == "orders"
+    assert captured["business_context"] == "销售额用于经营分析"
 
 
 def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
@@ -1522,7 +1520,7 @@ def test_prefill_by_llm_detail_mode_uses_llm_display_names(monkeypatch):
             {"name": "order_id", "type": "bigint"},
             {"name": "amount", "type": "decimal"},
         ],
-    }], "detail"))
+    }]))
 
     assert captured["table_payload"][0]["table"] == "orders"
     assert result["fields"] == [

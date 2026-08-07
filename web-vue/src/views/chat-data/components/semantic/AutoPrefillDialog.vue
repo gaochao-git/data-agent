@@ -26,7 +26,7 @@ const handleSubmit = () => {
   <el-dialog v-model="visible" width="820px" title="自动预填">
     <div class="space-y-4">
       <div class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm leading-6 text-blue-700">
-        将所选表的物理字段预填为维度，并结合字段说明和业务补充推荐最多 10 个常用原子指标。
+        根据所选表的字段说明和业务补充优化显示名称，并推荐最多 10 个常用原子指标。
       </div>
       <div>
         <div class="mb-2 flex items-center justify-between">

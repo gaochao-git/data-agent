@@ -993,13 +993,11 @@ export function toggleAdminSemanticConfig(datasourceId: string, configId: string
   })
 }
 
-/** 语义字段自动预填（规则版） */
+/** 优化语义字段显示名称并推荐原子指标 */
 export function autoPrefillSemanticFields(
   data: {
     datasource_id: string
     config_id: string
-    table_model_type?: 'detail' | 'aggregated'
-    generate_business_flow?: boolean
     business_context?: string
     tables: Array<{
       table_name: string
@@ -1028,7 +1026,6 @@ export function autoPrefillSemanticFields(
     agg?: string
   }>
   total: number
-  knowledge?: { business_flow?: string }
 }>> {
   return request({
     url: options?.adminMode ? `/agents/api/chatdata/admin/semantic/prefill` : `/agents/api/chatdata/semantic/prefill`,
