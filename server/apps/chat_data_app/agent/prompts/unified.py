@@ -112,26 +112,11 @@ def _extract_source_type(data_context: dict) -> str:
 
 def build_dialect_prompt_context(
     data_context: dict,
-    *,
-    semantic_query_skill_available: bool = False,
 ) -> str:
-    """返回当前方言规则；旧会话无 semantic-query 快照时保留最小兜底。"""
+    """返回运行时当前方言，不在系统层展开方言细节。"""
     source_type = _extract_source_type(data_context)
     dialect = "MySQL" if source_type == "mysql" else "Hive"
-    if semantic_query_skill_available:
-        return (
-            f"当前数据库方言：{dialect}。涉及时间格式或原生 SQL 时，先读取 "
-            "`/mnt/skills/semantic-query/references/dialect.md`；DSL 中只写 `time_grain`。"
-        )
-    if dialect == "MySQL":
-        return (
-            "当前数据库方言：MySQL。DSL 中只写 `time_grain`；原生 SQL 的日期格式使用 "
-            "`%Y-%m`、`%Y-%m-%d`、`%H`，不要使用 Hive 的 `yyyy-MM` 格式。"
-        )
-    return (
-        "当前数据库方言：Hive。DSL 中只写 `time_grain`；原生 SQL 的日期格式使用 "
-        "`yyyy-MM`、`yyyy-MM-dd`、`HH`，不要使用 MySQL 的 `%Y-%m` 格式。"
-    )
+    return f"当前数据库方言：{dialect}。DSL 中只写 `time_grain`。"
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +255,7 @@ def build_unified_system_prompt(
         SEMANTIC_QUERY_CORE_BLOCK,
     ])
 
-    skills_xml = available_skills_xml if available_skills_xml is not None else EMPTY_AVAILABLE_SKILLS_XML
-    dialect_context_text = build_dialect_prompt_context(
-        data_context or {},
-        semantic_query_skill_available="<name>semantic-query</name>" in skills_xml,
-    )
+    dialect_context_text = build_dialect_prompt_context(data_context or {})
     if dialect_context_text:
         sections.append(DIALECT_BLOCK.format(dialect_context_text=dialect_context_text))
     sections.append(PRIORITY_BLOCK)

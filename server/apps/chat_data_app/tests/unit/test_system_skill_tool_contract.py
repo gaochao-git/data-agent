@@ -84,6 +84,8 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "`save_as` 默认不传" in semantic_query
     assert "不要为普通查询" in semantic_query
     assert "/mnt/skills/semantic-query/references/dialect.md" in semantic_query
+    assert "## 必读资料" in semantic_query
+    assert "DSL 查询只使用 `time_grain`" in semantic_query
     assert "DATE_FORMAT(time_col, 'yyyy-MM')" in semantic_query
     assert "DATE_FORMAT(time_col, '%Y-%m')" in semantic_query
     assert "### 1. 判断场景" not in semantic_query

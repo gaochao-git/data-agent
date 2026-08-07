@@ -16,6 +16,12 @@ metadata:
 
 本技能只负责语义模型选择、查询规划、DSL/SQL 选择和结果分析；文件和产物任务遵循其各自的工具协议。
 
+## 必读资料
+
+- 当前数据库方言为 Hive 或涉及原生 SQL 的日期、字符串、窗口等方言差异时，读取：
+  `/mnt/skills/semantic-query/references/dialect.md`
+- DSL 查询只使用 `time_grain`，不要把 SQL 日期格式串写入 DSL。
+
 ## 必须遵守的总原则
 
 - 所有业务查询先确认语义模型和字段定义，不凭常识编造指标、维度、表、字段、枚举或查询结果。
@@ -163,7 +169,7 @@ SQL 路径必须同时传入 `semantic_config_id` 和 `member_datasource_ids`，
 
 SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度中维护的原始表名、原始列名和 `relationships` 中确认的关联关系；关联字段只用于连接路径，不能当作未暴露业务字段随意查询或过滤。已维护指标的表达式代表业务口径，不能擅自改写。不能因为指标、维度或口径不清就回退 SQL。
 
-涉及时间格式或原生 SQL 方言时，读取 `/mnt/skills/semantic-query/references/dialect.md`；DSL 中仍然只写 `time_grain`，不要写 SQL 日期格式串。
+涉及时间格式或原生 SQL 方言时，按“必读资料”读取 `/mnt/skills/semantic-query/references/dialect.md`；DSL 中仍然只写 `time_grain`，不要写 SQL 日期格式串。
 
 ## 多步分析与结果处理
 
