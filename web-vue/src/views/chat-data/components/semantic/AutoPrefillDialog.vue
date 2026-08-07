@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { parseSemanticPrefillContextFile } from '../../api'
 
 defineProps<{
   loading: boolean
@@ -14,56 +12,10 @@ const emit = defineEmits<{
 const visible = defineModel<boolean>('visible', { default: false })
 
 const autoPrefillBusinessContext = ref('')
-const autoPrefillContextFileInputRef = ref<HTMLInputElement | null>(null)
-const parsingPrefillContextFile = ref(false)
 
 watch(visible, (value) => {
   if (value) autoPrefillBusinessContext.value = ''
 })
-
-const appendAutoPrefillBusinessContext = (text: string, filename?: string) => {
-  const normalized = (text || '').trim()
-  if (!normalized) return
-  const prefix = filename ? `【${filename}】\n` : ''
-  const current = autoPrefillBusinessContext.value.trim()
-  autoPrefillBusinessContext.value = (current ? `${current}\n\n${prefix}${normalized}` : `${prefix}${normalized}`).slice(0, 20000)
-}
-
-const selectAutoPrefillContextFiles = () => {
-  autoPrefillContextFileInputRef.value?.click()
-}
-
-const handleAutoPrefillContextFilesChange = async (event: Event) => {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || [])
-  input.value = ''
-  if (files.length === 0) return
-  const oversized = files.find(file => file.size > 10 * 1024 * 1024)
-  if (oversized) {
-    ElMessage.warning(`文件不能超过 10MB：${oversized.name}`)
-    return
-  }
-  parsingPrefillContextFile.value = true
-  try {
-    let successCount = 0
-    for (const file of files) {
-      const res = await parseSemanticPrefillContextFile(file)
-      if (res.status !== 'success') {
-        ElMessage.warning(res.msg || `解析失败：${file.name}`)
-        continue
-      }
-      appendAutoPrefillBusinessContext(res.data?.text || '', res.data?.filename || file.name)
-      successCount += 1
-    }
-    if (successCount > 0) {
-      ElMessage.success(`已上传并解析 ${successCount} 个文件`)
-    }
-  } catch (err) {
-    ElMessage.error('解析文件失败')
-  } finally {
-    parsingPrefillContextFile.value = false
-  }
-}
 
 const handleSubmit = () => {
   emit('submit', autoPrefillBusinessContext.value.trim())
@@ -79,20 +31,6 @@ const handleSubmit = () => {
       <div>
         <div class="mb-2 flex items-center justify-between">
           <span class="text-sm font-medium text-gray-700">业务补充</span>
-          <div class="flex items-center gap-2">
-            <input
-              ref="autoPrefillContextFileInputRef"
-              class="hidden"
-              type="file"
-              multiple
-              accept=".txt,.docx,.pdf"
-              @change="handleAutoPrefillContextFilesChange"
-            />
-            <el-button size="small" :loading="parsingPrefillContextFile" @click="selectAutoPrefillContextFiles">
-              <i class="fa-solid fa-paperclip mr-1"></i>
-              上传文件
-            </el-button>
-          </div>
         </div>
         <el-input
           v-model="autoPrefillBusinessContext"
@@ -100,9 +38,8 @@ const handleSubmit = () => {
           :rows="8"
           maxlength="20000"
           show-word-limit
-          placeholder="可补充业务口径、常分析的字段、金额/数量等指标习惯。支持上传 txt、docx、pdf 文件后追加到这里。"
+          placeholder="可补充业务口径、常分析的字段、金额/数量等指标习惯。"
         />
-        <div class="mt-1 text-xs text-gray-400">文件仅用于本次解析，不会保存；单个文件不能超过 10MB。</div>
       </div>
     </div>
     <template #footer>

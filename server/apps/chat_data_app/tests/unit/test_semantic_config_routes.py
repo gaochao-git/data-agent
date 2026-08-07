@@ -27,7 +27,6 @@ from apps.chat_data_app.schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from apps.chat_data_app.services.file_text_extractor import extract_text_from_file_bytes
 from apps.chat_data_app.services import semantic_config_validator
 from apps.chat_data_app.services import semantic_history_learning_service
 from apps.chat_data_app.services.semantic_history_learning_service import build_semantic_history_learning_service
@@ -492,26 +491,6 @@ def test_semantic_prefill_additional_edge_branches(monkeypatch):
         table_alias_map={"orders": ["买方订单", "卖方订单"]},
     )
     assert len(metrics) == 1
-
-    class FakeFile:
-        filename = "big.txt"
-
-        async def read(self):
-            return b"x" * (semantic_config.SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE + 1)
-
-    too_big = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(FakeFile())))
-    assert too_big["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
-
-    class BadFile:
-        filename = "bad.bin"
-
-        async def read(self):
-            return b"abc"
-
-    monkeypatch.setattr(semantic_config, "extract_text_from_file_bytes", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad file")))
-    bad = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(BadFile())))
-    assert bad["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
-
 
 def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
     manager = _patch_semantic_route_user_and_manager(monkeypatch)
@@ -1298,15 +1277,6 @@ def test_prefill_knowledge_is_not_generated_when_missing(monkeypatch):
     assert "metadata_supplement" not in result["fields"][0]
 
 
-def test_prefill_context_file_extracts_text_and_rejects_suffix():
-    result = extract_text_from_file_bytes("rules.txt", "状态 1 表示有效".encode("utf-8"))
-
-    assert result == "状态 1 表示有效"
-
-    with pytest.raises(ValueError):
-        extract_text_from_file_bytes("rules.xlsx", b"bad")
-
-
 def test_call_prefill_llm_uses_human_message(monkeypatch):
     captured = {}
 
@@ -1892,25 +1862,6 @@ def test_semantic_config_prefill_call_llm_and_route_error_branches(monkeypatch):
     )))
     assert auto_incomplete["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
-    class FileOk:
-        filename = "rules.txt"
-
-        async def read(self):
-            return b"abcdef"
-
-    monkeypatch.setattr(semantic_config, "extract_text_from_file_bytes", lambda *_args, **_kwargs: "x" * (semantic_config.SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH + 10))
-    ok_file = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(FileOk())))
-    assert ok_file["data"]["size"] == 6
-    assert len(ok_file["data"]["text"]) == semantic_config.SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH
-
-    class RaisingFile:
-        filename = "rules.txt"
-
-        async def read(self):
-            raise RuntimeError("read failed")
-
-    failed_file = _response_payload(asyncio.run(semantic_config.semantic_prefill_context_file(RaisingFile())))
-    assert failed_file["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
     assert manager.config["id"] == "cfg_a"
 
 

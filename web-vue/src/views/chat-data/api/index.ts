@@ -1037,25 +1037,6 @@ export function autoPrefillSemanticFields(
   })
 }
 
-/** 上传并解析自动预填业务补充文件 */
-export function parseSemanticPrefillContextFile(file: File): Promise<ApiResponse<{ filename: string; size: number; text: string }>> {
-  const data = new FormData()
-  data.append('file', file)
-  return request({
-    url: `/agents/api/chatdata/semantic/prefill/context-file`,
-    method: 'post',
-    data,
-    headers: { repeatSubmit: false },
-    transformRequest: [(formData: FormData, headers?: Record<string, unknown>) => {
-      if (headers) {
-        delete (headers as Record<string, unknown>)['Content-Type']
-        delete (headers as Record<string, unknown>)['content-type']
-      }
-      return formData
-    }],
-  })
-}
-
 export interface SemanticHistoryLearningSample {
   execution_id: string
   task_id: string

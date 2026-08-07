@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, Request
 from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
@@ -27,7 +27,6 @@ from ..schema import (
     SemanticPrefillRequest,
 )
 from ..services.datasource_manager import get_datasource_manager
-from ..services.file_text_extractor import extract_text_from_file_bytes
 from ..services.llm_config import get_chat_data_llm
 from ..services.semantic_history_learning_service import (
     SemanticHistoryLearningService,
@@ -48,8 +47,6 @@ from .dependencies import _get_current_user
 logger = get_logger(__name__)
 router = APIRouter()
 
-SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE = 10 * 1024 * 1024
-SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH = 20000
 PREFILL_MAX_RECOMMENDED_METRICS = 10
 PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}
 PREFILL_DISPLAY_NAME_MAX_LENGTH = 15
@@ -712,29 +709,6 @@ async def auto_prefill_admin_semantic_fields(datasource_id: str, config_id: str,
     """后台按公共指标集自动预填维度/指标/表达式。"""
     _get_current_user(request)
     return await _auto_prefill_semantic_fields_route(datasource_id, config_id, payload, request, admin_manage=True)
-
-
-@router.post("/semantic/prefill/context-file")
-async def semantic_prefill_context_file(file: UploadFile = File(...)):
-    """解析自动预填业务补充文件，不持久化文件。"""
-    try:
-        data = await file.read()
-        if len(data) > SEMANTIC_PREFILL_CONTEXT_FILE_MAX_SIZE:
-            return business_response(msg="文件大小不能超过 10MB", code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
-        text = extract_text_from_file_bytes(file.filename or "", data).strip()
-        return business_response(
-            data={
-                "filename": file.filename or "",
-                "size": len(data),
-                "text": text[:SEMANTIC_PREFILL_CONTEXT_TEXT_MAX_LENGTH],
-            },
-            msg="解析成功",
-        )
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
-    except Exception as e:
-        logger.error("解析自动预填业务补充文件失败: %s", e, exc_info=True)
-        return business_response(msg=f"解析失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 async def _semantic_prefill_route(payload: SemanticPrefillRequest, request: Request, *, admin_manage: bool = False):
