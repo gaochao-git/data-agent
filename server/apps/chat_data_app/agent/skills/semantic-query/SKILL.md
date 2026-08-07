@@ -35,7 +35,7 @@ metadata:
 
 ### 1. 检索语义模型
 
-1. 调用 `semantic_tool(operation="search_models", query="...")`。`query` 只保留业务意图，不带机构名称、机构编码或 `member_datasource_id`。
+1. 每个业务问题原则上只调用一次 `semantic_tool(operation="search_models", query="...")`。工具会在当前用户可见的全部启用语义模型中检索，并可一次返回多个候选；`query` 保留完整业务意图，但不带机构名称、机构编码或 `member_datasource_id`。不要按指标、维度或分析子问题拆成多个重复或并行的 `search_models`。
 2. 根据返回候选模型、描述、字段数量和相关性选择候选；手动选择的模型只是优先参考，不代表锁定。
 3. 对准备使用的候选调用 `semantic_tool(operation="list_fields", semantic_config_id="...", field_type="all")`，必要时用 `field_type="metric"` 或 `"dimension"` 分页。
 4. `list_fields` 只是轻量字段索引，单页 `limit` 为 1 至 200。需要确认指标表达式、维度表达式、表列、关系、枚举或完整口径时，必须按工具返回的实际 `path` 使用 `file_grep` 定位，再用 `file_read` 分页读取 YAML。不能根据模型名称、文件名或字段相似性猜测。

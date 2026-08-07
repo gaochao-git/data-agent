@@ -27,6 +27,14 @@ from apps.chat_data_app.services.semantic_tools import (
 )
 
 
+def test_semantic_tool_description_requires_one_complete_model_search():
+    description = create_semantic_tool(datasource_id="ds_a").description
+
+    assert "当前用户可见的全部启用语义模型" in description
+    assert "同一业务问题只需调用一次" in description
+    assert "不要按指标、维度或子问题拆成多个并行搜索" in description
+
+
 def test_extract_datasource_id_from_state():
     assert extract_datasource_id({"datasource_id": "ds_001"}) == "ds_001"
     assert extract_datasource_id({"datasource_id": "  ds_002  "}) == "ds_002"

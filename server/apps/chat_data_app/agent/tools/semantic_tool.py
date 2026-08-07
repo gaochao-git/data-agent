@@ -167,7 +167,8 @@ def create_semantic_tool(
     ) -> str:
         """搜索语义模型，或分页列出模型中的指标和维度。
 
-        - search_models：传 query；返回候选语义模型并把对应 Ossie YAML 写入会话工作区。
+        - search_models：在当前用户可见的全部启用语义模型中，按完整业务意图检索并返回一个或多个候选，
+          同时把候选 Ossie YAML 写入会话工作区。同一业务问题只需调用一次，不要按指标、维度或子问题拆成多个并行搜索。
         - list_fields：传 semantic_config_id；可用 field_type=all/metric/dimension 和 offset/limit 分页。
         字段完整定义和模型结构不由本工具返回；使用返回的 path 配合 file_grep/file_read。
         """
