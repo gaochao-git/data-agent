@@ -98,6 +98,8 @@ const PARAM_LABELS: Record<string, string> = {
   dashboard_spec: '看板规格',
   query: '用户问题',
   user_query: '用户问题',
+  operation: '操作',
+  field_type: '字段类型',
   datasource_id: '数据源',
   member_datasource_id: '执行机构',
   member_datasource_ids: '执行机构'
@@ -105,6 +107,7 @@ const PARAM_LABELS: Record<string, string> = {
 
 type SemanticSelectionResult = {
   success?: boolean
+  operation?: string
   directory?: boolean
   semantic_config_ids?: string[]
   semantic_configs?: Record<string, Record<string, unknown>>
@@ -300,11 +303,14 @@ function cleanResult(result: string): string {
 }
 
 function parseSemanticSelectionResult(result?: string): SemanticSelectionResult | null {
-  if (props.toolCall.tool_name !== 'search_dataset') return null
-  const cleaned = cleanResult(String(result || '')).replace(/^\[search_dataset\]\s*/, '').trim()
+  const toolName = props.toolCall.tool_name
+  if (toolName !== 'semantic_tool' && toolName !== 'search_dataset') return null
+  const cleaned = cleanResult(String(result || '')).replace(/^\[(?:semantic_tool|search_dataset)\]\s*/, '').trim()
   if (!cleaned) return null
   try {
-    return JSON.parse(cleaned) as SemanticSelectionResult
+    const parsed = JSON.parse(cleaned) as SemanticSelectionResult
+    if (toolName === 'semantic_tool' && parsed.operation !== 'search_models') return null
+    return parsed
   } catch {
     return null
   }
@@ -349,7 +355,7 @@ function formatQueryResultJson(result: string): string {
 
 // 解析结果内容，将 SQL 代码块、JSON 与普通文本分离
 function parseResultContent(result: string): ResultPart[] {
-  if (props.toolCall.tool_name === 'search_dataset' && semanticSelectionResult.value) return []
+  if ((props.toolCall.tool_name === 'semantic_tool' || props.toolCall.tool_name === 'search_dataset') && semanticSelectionResult.value) return []
   if (props.toolCall.tool_name === 'semantic_query_tool' && !props.renderQueryResultPreview) {
     const jsonText = formatQueryResultJson(result)
     if (jsonText) return [{ type: 'json', content: jsonText }]

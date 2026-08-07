@@ -182,7 +182,7 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
         async def astream(self, *_args, **_kwargs):
             yield "custom", {"type": "token_usage", "usage": {"total_tokens": 7}}
             yield "custom", {"type": "context_compression", "event": {"id": "context-compression-1"}}
-            yield "messages", (FakeChunk(additional_kwargs={"reasoning_content": "调用 search_dataset"}), {"langgraph_node": "model"})
+            yield "messages", (FakeChunk(additional_kwargs={"reasoning_content": "调用 semantic_tool"}), {"langgraph_node": "model"})
             yield "messages", (FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_query_tool", "args": {"dsl": {}}}]), {"langgraph_node": "model"})
             yield "messages", (FakeChunk(content="{}", msg_type="tool", tool_call_id="tc1"), {"langgraph_node": "tools"})
             yield "messages", (FakeChunk(content="完成", msg_type="ai"), {"langgraph_node": "model"})
@@ -208,7 +208,7 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
 
     assert "event: token_usage" in text
     assert "event: context_compression" in text
-    assert "搜索指标集" in text
+    assert "语义检索" in text
     assert "event: tool" in text
     assert "semantic_query_tool" in text
     assert "event: message" in text
@@ -429,11 +429,11 @@ async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeyp
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(content="skip", msg_type="ai"), {"langgraph_node": "tools"}
             yield FakeChunk(), {"langgraph_node": "model"}
-            yield FakeChunk(tool_calls=[{"id": "tc1", "name": "search_dataset"}]), {"langgraph_node": "model"}
-            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "search_dataset", "args": '{"query":'}]), {"langgraph_node": "model"}
+            yield FakeChunk(tool_calls=[{"id": "tc1", "name": "semantic_tool"}]), {"langgraph_node": "model"}
+            yield FakeChunk(tool_call_chunks=[{"id": "tc1", "name": "semantic_tool", "args": '{"query":'}]), {"langgraph_node": "model"}
             yield FakeChunk(tool_call_chunks=[{"id": None, "args": '"查销售额"}'}]), {"langgraph_node": "model"}
             yield FakeChunk(
-                content='[search_dataset] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集", "metrics": [{"name": "销售额"}]}}}',
+                content='[semantic_tool] {"success": true, "semantic_config_ids": ["cfg"], "semantic_configs": {"cfg": {"id": "cfg", "name": "指标集", "metrics": [{"name": "销售额"}]}}}',
                 msg_type="tool",
                 tool_call_id="tc1",
             ), {"langgraph_node": "tools"}
@@ -682,9 +682,9 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
         async def astream(self, *_args, **_kwargs):
             yield FakeChunk(tool_call_chunks=[{"id": None, "args": '{"forced":true}'}]), {"langgraph_node": "model"}
             yield FakeChunk(content="forced done", msg_type="tool", tool_call_id="forced"), {"langgraph_node": "tools"}
-            yield FakeChunk(tool_calls=[{"id": "tc_select", "name": "search_dataset"}]), {"langgraph_node": "model"}
+            yield FakeChunk(tool_calls=[{"id": "tc_select", "name": "semantic_tool"}]), {"langgraph_node": "model"}
             yield FakeChunk(
-                content='[search_dataset] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
+                content='[semantic_tool] {"success": true, "semantic_config_ids": [], "semantic_configs": {}}',
                 msg_type="tool",
                 tool_call_id="tc_select",
             ), {"langgraph_node": "tools"}
@@ -719,9 +719,9 @@ async def test_generate_chat_data_stream_thinking_with_content_and_untracked_too
                 additional_kwargs={"reasoning_content": "先想一下"},
             ), {"langgraph_node": "model"}
             yield FakeChunk(content="untracked tool", msg_type="tool", tool_call_id="missing"), {"langgraph_node": "tools"}
-            yield FakeChunk(tool_calls=[{"id": "tc_select_bad", "name": "search_dataset"}]), {"langgraph_node": "model"}
+            yield FakeChunk(tool_calls=[{"id": "tc_select_bad", "name": "semantic_tool"}]), {"langgraph_node": "model"}
             yield FakeChunk(
-                content="[search_dataset] not-json",
+                content="[semantic_tool] not-json",
                 msg_type="tool",
                 tool_call_id="tc_select_bad",
             ), {"langgraph_node": "tools"}

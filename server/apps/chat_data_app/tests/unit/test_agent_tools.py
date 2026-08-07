@@ -1084,7 +1084,7 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
         "state": {},
     }))
 
-    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 search_dataset 后显式传入 semantic_config_id"
+    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 semantic_tool 搜索语义模型后显式传入 semantic_config_id"
     assert bad_dsl == "semantic_query_tool 执行失败: dsl 必须是对象"
     assert mixed_payload == "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
 

@@ -603,12 +603,43 @@ OrFilter.model_rebuild()
 
 # ============ 语义工具输入模型 ============
 
-class SelectSemanticConfigInput(BaseModel):
-    """指标集搜索工具的输入参数"""
+class SemanticToolInput(BaseModel):
+    """语义模型检索和字段查看工具的输入参数。"""
+    operation: Literal["search_models", "list_fields"] = Field(
+        ...,
+        description="操作类型：搜索相关模型或分页列出模型字段",
+    )
     query: Optional[str] = Field(
         default=None,
-        description="用户问题；可包含只读技能路由后追加的简短业务限定、查询类型或粒度要求；不传时使用当前会话最近一条用户消息",
+        description="search_models 使用的用户问题；不传时使用当前会话最近一条用户消息",
     )
+    semantic_config_id: Optional[str] = Field(
+        default=None,
+        description="list_fields 使用的语义模型 ID，必须来自 search_models 返回结果",
+    )
+    field_type: Literal["all", "metric", "dimension"] = Field(
+        default="all",
+        description="list_fields 的字段范围",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="list_fields 分页起点",
+    )
+    limit: int = Field(
+        default=100,
+        ge=1,
+        le=200,
+        description="list_fields 单次最多返回的字段数",
+    )
+
+    @model_validator(mode="after")
+    def validate_operation_parameters(self):
+        if self.operation == "search_models":
+            return self
+        if not str(self.semantic_config_id or "").strip():
+            raise ValueError(f"{self.operation} 必须传 semantic_config_id")
+        return self
 
 
 class ExecuteSemanticInput(BaseModel):
@@ -617,7 +648,7 @@ class ExecuteSemanticInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次 DSL 使用的指标集 ID，必须来自本轮 search_dataset 返回结果",
+        description="本次 DSL 使用的指标集 ID，必须来自本轮 semantic_tool search_models 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -652,7 +683,7 @@ class SemanticQueryInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次查询使用的指标集 ID，必须来自本轮 search_dataset 返回结果",
+        description="本次查询使用的指标集 ID，必须来自本轮 semantic_tool search_models 返回结果",
     )
     member_datasource_ids: List[str] = Field(
         ...,

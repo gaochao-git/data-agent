@@ -25,6 +25,7 @@ import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
+import SaveToPanelModal from './SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
@@ -300,6 +301,28 @@ const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
 
 const selectedDatasource = computed(() => props.selectedDatasourceId || props.datasource?.id || '')
+const showSaveModal = ref(false)
+const saveSql = ref('')
+const saveChartType = ref('table')
+const saveMemberDatasourceId = ref('')
+const saveMemberDatasourceIds = ref<string[]>([])
+const handleSaveToDashboard = (
+  sql: string,
+  chartType: string,
+  memberDatasourceId?: string,
+  memberDatasourceIds?: string[],
+) => {
+  saveSql.value = sql
+  saveChartType.value = chartType || 'table'
+  saveMemberDatasourceId.value = String(memberDatasourceId || '').trim()
+  const executedMemberIds = (memberDatasourceIds || [])
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+  saveMemberDatasourceIds.value = executedMemberIds.length > 1
+    ? executedMemberIds
+    : (saveMemberDatasourceId.value ? [saveMemberDatasourceId.value] : [])
+  showSaveModal.value = true
+}
 const recommendationPage = ref(0)
 const recommendationPageSize = 5
 const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)
@@ -2087,6 +2110,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :execution-targets="props.executionTargets"
           :active-tool-call-id="activeToolCallId"
           :conversation-id="localConversationId"
+          :on-save="handleSaveToDashboard"
           :display-content="getConversationDisplayContent"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
@@ -2532,5 +2556,16 @@ const handleKeyDown = (event: KeyboardEvent) => {
         <SkillManager :initial-skill-id="importedSkillIdForManager" />
       </div>
     </el-dialog>
+
+    <SaveToPanelModal
+      v-model:visible="showSaveModal"
+      :sql="saveSql"
+      :chart-type="saveChartType"
+      :source-thread-id="localConversationId || undefined"
+      :datasource-id="selectedDatasource"
+      :member-datasource-id="saveMemberDatasourceId"
+      :member-datasource-ids="saveMemberDatasourceIds"
+      :execution-targets="props.executionTargets"
+    />
   </div>
 </template>

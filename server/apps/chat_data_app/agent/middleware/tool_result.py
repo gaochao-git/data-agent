@@ -54,8 +54,8 @@ async def _finalize_tool_message(
     content = _tool_message_text(message.content)
     if content is None:
         return message
-    if tool_name == "search_dataset":
-        externalized, recovery = await _persist_search_dataset_result(content, request)
+    if tool_name in {"semantic_tool", "search_dataset"}:
+        externalized, recovery = await _persist_semantic_tool_result(content, request, tool_name)
         if recovery is None:
             if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:
                 return message
@@ -221,24 +221,25 @@ async def _externalize_generic_text(
     ), recovery
 
 
-async def _persist_search_dataset_result(
+async def _persist_semantic_tool_result(
     content: str,
     request: Any,
+    tool_name: str,
 ) -> tuple[str, dict[str, Any] | None]:
-    """Persist exact semantic config data so later compaction can reference it."""
+    """Persist exact semantic tool data so later compaction can reference it."""
     try:
         record = await _write_private_tool_result(content=content, suffix=".txt", request=request)
     except Exception as exc:
-        logger.error("保存指标集搜索结果恢复副本失败: %s", exc, exc_info=True)
+        logger.error("保存语义工具结果恢复副本失败: %s", exc, exc_info=True)
         return content, None
     recovery = build_tool_result_recovery(
-        source_tool="search_dataset",
+        source_tool=tool_name,
         result_path=record.virtual_path,
         result_size_chars=len(content),
         result_id=record.result_id,
     )
     return _build_offloaded_tool_result_message(
-        tool_name="search_dataset",
+        tool_name=tool_name,
         result_path=record.virtual_path,
         result_size_chars=len(content),
         preview=None,

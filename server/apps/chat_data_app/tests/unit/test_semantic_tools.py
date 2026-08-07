@@ -13,8 +13,9 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAu
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from apps.chat_data_app.agent.tools.search_dataset import create_search_dataset_tool
+from apps.chat_data_app.agent.tools.semantic_tool import create_semantic_tool
 from apps.chat_data_app.services.semantic_tools import (
+    build_semantic_field_index,
     extract_datasource_id,
     extract_datasource_group_context,
     extract_user_query,
@@ -37,7 +38,7 @@ def test_extract_datasource_id_from_state():
     assert extract_datasource_group_context(None) == ""
 
 
-def test_search_dataset_uses_bound_datasource_group_context(monkeypatch):
+def test_semantic_tool_uses_bound_datasource_group_context(monkeypatch):
     captured = {}
 
     async def fake_select_semantic_config_for_query(**kwargs):
@@ -45,15 +46,15 @@ def test_search_dataset_uses_bound_datasource_group_context(monkeypatch):
         return {"semantic_config_ids": []}
 
     monkeypatch.setattr(
-        "apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query",
+        "apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query",
         fake_select_semantic_config_for_query,
     )
-    tool = create_search_dataset_tool(
+    tool = create_semantic_tool(
         datasource_id="ds_bound",
         datasource_group_context="仅查询已授权机构",
     )
 
-    asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
+    asyncio.run(tool.ainvoke({"operation": "search_models", "query": "查询订单金额"}))
 
     assert captured["datasource_id"] == "ds_bound"
     assert captured["datasource_group_context"] == "仅查询已授权机构"
@@ -124,7 +125,7 @@ def test_selection_to_tool_payload_branches():
     assert "cross_config_required" not in payload
 
 
-def test_search_dataset_returns_full_directory_for_directory_query(monkeypatch):
+def test_semantic_tool_returns_full_directory_for_directory_query(monkeypatch):
     captured = {}
 
     class FakeDatasourceManager:
@@ -144,11 +145,11 @@ def test_search_dataset_returns_full_directory_for_directory_query(monkeypatch):
         raise AssertionError("directory query should not call selector llm")
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_tools.get_datasource_manager", lambda: FakeDatasourceManager())
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fail_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", fail_select_semantic_config_for_query)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound", user_id="u1")
-    result = asyncio.run(tool.ainvoke({"query": "你现在能看到哪些指标集"}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
+    tool = create_semantic_tool(datasource_id="ds_bound", user_id="u1")
+    result = asyncio.run(tool.ainvoke({"operation": "search_models", "query": "你现在能看到哪些指标集"}))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
 
     assert captured["user_id"] == "u1"
     assert payload["directory"] is True
@@ -234,7 +235,7 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
     assert fallback["joins"] == [{"left_table": "kept"}]
 
 
-def test_search_dataset_uses_bound_datasource_id(monkeypatch):
+def test_semantic_tool_uses_bound_datasource_id(monkeypatch):
     captured = {}
 
     async def fake_select_semantic_config_for_query(
@@ -254,7 +255,7 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
         })
         return {"semantic_config_ids": ["sc_a"]}
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", fake_select_semantic_config_for_query)
     class FakeRuntime:
         pass
 
@@ -271,9 +272,9 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
             }],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.materialize_runtime_semantic_models", fake_materialize)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models", fake_materialize)
 
-    tool = create_search_dataset_tool(
+    tool = create_semantic_tool(
         model_id="model_a",
         datasource_id="ds_bound",
         user_id="u1",
@@ -281,9 +282,10 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
         workspace_runtime=FakeRuntime(),
     )
     result = asyncio.run(tool.ainvoke({
+        "operation": "search_models",
         "query": "查询订单金额",
     }))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
 
     assert captured["datasource_id"] == "ds_bound"
     assert captured["user_query"] == "查询订单金额"
@@ -296,23 +298,23 @@ def test_search_dataset_uses_bound_datasource_id(monkeypatch):
     assert payload["semantic_configs"]["sc_a"]["path"].endswith("/sc_a.yaml")
 
 
-def test_search_dataset_returns_lightweight_references_for_all_selected_configs(monkeypatch):
+def test_semantic_tool_returns_lightweight_references_for_all_selected_configs(monkeypatch):
     async def fake_select_semantic_config_for_query(datasource_id, user_query, **_kwargs):
         assert datasource_id == "ds_bound"
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", fake_select_semantic_config_for_query)
     async def fake_materialize(**_kwargs):
         return {"directory": [
             {"id": "sc_order", "name": "订单分析", "metrics_total": 1, "dimensions_total": 0, "path": "/mnt/user-data/workspace/semantic/sc_order.yaml"},
             {"id": "sc_user", "name": "用户分析", "metrics_total": 1, "dimensions_total": 0, "path": "/mnt/user-data/workspace/semantic/sc_user.yaml"},
         ]}
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.materialize_runtime_semantic_models", fake_materialize)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models", fake_materialize)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound", workspace_runtime=object())
-    result = asyncio.run(tool.ainvoke({"query": "查询订单金额和用户数"}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
+    tool = create_semantic_tool(datasource_id="ds_bound", workspace_runtime=object())
+    result = asyncio.run(tool.ainvoke({"operation": "search_models", "query": "查询订单金额和用户数"}))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
 
     assert payload["semantic_config_ids"] == ["sc_order", "sc_user"]
     assert payload["semantic_configs"]["sc_order"]["metrics_total"] == 1
@@ -321,7 +323,7 @@ def test_search_dataset_returns_lightweight_references_for_all_selected_configs(
     assert all("metrics_total" in item and "dimensions_total" in item for item in payload["semantic_configs"].values())
 
 
-def test_search_dataset_returns_selected_reference_without_full_config(monkeypatch):
+def test_semantic_tool_returns_selected_reference_without_full_config(monkeypatch):
     async def fake_select_semantic_config_for_query(**_kwargs):
         return {"semantic_config_ids": ["sc_order"]}
 
@@ -335,7 +337,7 @@ def test_search_dataset_returns_selected_reference_without_full_config(monkeypat
         "tables": [{"table_name": "orders", "columns": [{"name": "amount"}]}],
     }
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", fake_select_semantic_config_for_query)
     async def fake_materialize(**_kwargs):
         return {"directory": [{
             "id": "sc_order",
@@ -345,11 +347,11 @@ def test_search_dataset_returns_selected_reference_without_full_config(monkeypat
             "path": "/mnt/user-data/workspace/semantic/sc_order.yaml",
         }]}
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.materialize_runtime_semantic_models", fake_materialize)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models", fake_materialize)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound", workspace_runtime=object())
-    result = asyncio.run(tool.ainvoke({"query": "查询订单金额"}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
+    tool = create_semantic_tool(datasource_id="ds_bound", workspace_runtime=object())
+    result = asyncio.run(tool.ainvoke({"operation": "search_models", "query": "查询订单金额"}))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
 
     selected_config = payload["semantic_configs"]["sc_order"]
     assert set(selected_config) == {"id", "name", "metrics_total", "dimensions_total", "path"}
@@ -358,7 +360,7 @@ def test_search_dataset_returns_selected_reference_without_full_config(monkeypat
     assert selected_config["path"].endswith("/sc_order.yaml")
 
 
-def test_search_dataset_returns_all_selected_configs_without_own_context_budget(monkeypatch):
+def test_semantic_tool_returns_all_selected_configs_without_own_context_budget(monkeypatch):
     async def fake_select_semantic_config_for_query(**_kwargs):
         return {"semantic_config_ids": ["sc_order", "sc_user"]}
 
@@ -370,34 +372,187 @@ def test_search_dataset_returns_all_selected_configs_without_own_context_budget(
             "dimensions": [],
         }
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", fake_select_semantic_config_for_query)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", fake_select_semantic_config_for_query)
     async def fake_materialize(**_kwargs):
         return {"directory": [
             {"id": "sc_order", "name": "sc_order", "metrics_total": 1, "dimensions_total": 0, "path": "/mnt/user-data/workspace/semantic/sc_order.yaml"},
             {"id": "sc_user", "name": "sc_user", "metrics_total": 1, "dimensions_total": 0, "path": "/mnt/user-data/workspace/semantic/sc_user.yaml"},
         ]}
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.materialize_runtime_semantic_models", fake_materialize)
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models", fake_materialize)
 
-    tool = create_search_dataset_tool(datasource_id="ds_bound", workspace_runtime=object())
-    result = asyncio.run(tool.ainvoke({"query": "查询订单和用户", "state": {"messages": []}}))
-    payload = json.loads(result.replace("[search_dataset]", "", 1).strip())
+    tool = create_semantic_tool(datasource_id="ds_bound", workspace_runtime=object())
+    result = asyncio.run(tool.ainvoke({"operation": "search_models", "query": "查询订单和用户", "state": {"messages": []}}))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
 
     assert payload["semantic_config_ids"] == ["sc_order", "sc_user"]
     assert list(payload["semantic_configs"]) == ["sc_order", "sc_user"]
 
 
-def test_search_dataset_error_branches(monkeypatch):
-    select_tool = create_search_dataset_tool(datasource_id="ds_a")
+def test_build_semantic_field_index_is_lightweight_and_stable():
+    long_description = "指标口径" * 100
+    config = {
+        "metrics": [
+            {
+                "name": "订单总额",
+                "description": long_description,
+                "expression": "SUM(orders.amount)",
+                "table": "orders",
+                "column": "amount",
+            },
+            {"name": "订单总数", "metadata_supplement": "去重订单数"},
+        ],
+        "dimensions": [
+            {
+                "name": "下单时间",
+                "logical_type": "datetime",
+                "expression": "orders.created_at",
+                "table": "orders",
+                "column": "created_at",
+            },
+        ],
+        "relationships": [{"left_table": "orders", "right_table": "users"}],
+    }
 
-    missing_datasource = asyncio.run(create_search_dataset_tool().ainvoke({"query": "查询订单"}))
-    missing_query = asyncio.run(select_tool.ainvoke({"query": ""}))
+    fields = build_semantic_field_index(config)
+
+    assert [item["name"] for item in fields] == ["订单总额", "订单总数", "下单时间"]
+    assert [item["field_type"] for item in fields] == ["metric", "metric", "dimension"]
+    assert fields[0]["description"].endswith("...")
+    assert len(fields[0]["description"]) == 243
+    assert fields[1]["description"] == "去重订单数"
+    assert fields[2]["logical_type"] == "datetime"
+    assert all(
+        forbidden not in item
+        for item in fields
+        for forbidden in ("expression", "table", "column", "relationships", "joins")
+    )
+    assert [item["name"] for item in build_semantic_field_index(config, field_type="metric")] == ["订单总额", "订单总数"]
+    assert [item["name"] for item in build_semantic_field_index(config, field_type="dimension")] == ["下单时间"]
+
+
+def test_semantic_tool_list_fields_reauthorizes_materializes_and_paginates(monkeypatch):
+    captured = {}
+    config = {
+        "id": "sc_order",
+        "name": "订单模型",
+        "metrics": [
+            {"name": "订单总额", "description": "订单金额之和", "expression": "SUM(amount)"},
+            {"name": "订单总数", "description": "订单数量", "expression": "COUNT(*)"},
+        ],
+        "dimensions": [
+            {"name": "下单时间", "logical_type": "datetime", "table": "orders", "column": "created_at"},
+            {"name": "订单状态", "table": "orders", "column": "status"},
+        ],
+    }
+    reference = {
+        "id": "sc_order",
+        "name": "订单模型",
+        "metrics_total": 2,
+        "dimensions_total": 2,
+        "path": "/mnt/user-data/workspace/semantic/sc_order.yaml",
+    }
+
+    async def fake_materialize(**kwargs):
+        captured.update(kwargs)
+        return {"configs": {"sc_order": config}, "directory": [reference]}
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models",
+        fake_materialize,
+    )
+    runtime = object()
+    tool = create_semantic_tool(
+        datasource_id="ds_bound",
+        user_id="u1",
+        source_type="hive",
+        workspace_runtime=runtime,
+    )
+
+    result = asyncio.run(tool.ainvoke({
+        "operation": "list_fields",
+        "semantic_config_id": "sc_order",
+        "offset": 1,
+        "limit": 2,
+    }))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
+
+    assert captured == {
+        "workspace_runtime": runtime,
+        "datasource_id": "ds_bound",
+        "user_id": "u1",
+        "source_type": "hive",
+        "semantic_config_ids": ["sc_order"],
+    }
+    assert payload["operation"] == "list_fields"
+    assert payload["semantic_config"]["path"] == reference["path"]
+    assert payload["metrics_total"] == 2
+    assert payload["dimensions_total"] == 2
+    assert payload["total"] == 4
+    assert payload["offset"] == 1
+    assert payload["has_more"] is True
+    assert payload["next_offset"] == 3
+    assert [item["name"] for item in payload["fields"]] == ["订单总数", "下单时间"]
+    assert "file_grep/file_read" in payload["message"]
+
+
+def test_semantic_tool_list_fields_filters_and_rejects_inaccessible_model(monkeypatch):
+    async def fake_materialize(**kwargs):
+        if kwargs["semantic_config_ids"] == ["missing"]:
+            return {"configs": {}, "directory": []}
+        return {
+            "configs": {
+                "sc_order": {
+                    "id": "sc_order",
+                    "metrics": [{"name": "订单总数"}],
+                    "dimensions": [{"name": "下单时间"}, {"name": "订单状态"}],
+                },
+            },
+            "directory": [{
+                "id": "sc_order",
+                "name": "订单模型",
+                "metrics_total": 1,
+                "dimensions_total": 2,
+                "path": "/mnt/user-data/workspace/semantic/sc_order.yaml",
+            }],
+        }
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.tools.semantic_tool.materialize_runtime_semantic_models",
+        fake_materialize,
+    )
+    tool = create_semantic_tool(datasource_id="ds_bound", user_id="u1", workspace_runtime=object())
+
+    result = asyncio.run(tool.ainvoke({
+        "operation": "list_fields",
+        "semantic_config_id": "sc_order",
+        "field_type": "dimension",
+        "limit": 1,
+    }))
+    payload = json.loads(result.replace("[semantic_tool]", "", 1).strip())
+    missing = asyncio.run(tool.ainvoke({
+        "operation": "list_fields",
+        "semantic_config_id": "missing",
+    }))
+
+    assert payload["field_type"] == "dimension"
+    assert payload["total"] == 2
+    assert payload["next_offset"] == 1
+    assert payload["fields"] == [{"field_type": "dimension", "name": "下单时间"}]
+    assert "未找到当前用户可用的语义模型 missing" in missing
+
+
+def test_semantic_tool_error_branches(monkeypatch):
+    select_tool = create_semantic_tool(datasource_id="ds_a")
+
+    missing_datasource = asyncio.run(create_semantic_tool().ainvoke({"operation": "search_models", "query": "查询订单"}))
+    missing_query = asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": ""}))
 
     async def boom_select_semantic_config_for_query(**_kwargs):
         raise RuntimeError("selector failed")
 
-    monkeypatch.setattr("apps.chat_data_app.agent.tools.search_dataset.select_semantic_config_for_query", boom_select_semantic_config_for_query)
-    failed = asyncio.run(select_tool.ainvoke({"query": "查询订单"}))
+    monkeypatch.setattr("apps.chat_data_app.agent.tools.semantic_tool.select_semantic_config_for_query", boom_select_semantic_config_for_query)
+    failed = asyncio.run(select_tool.ainvoke({"operation": "search_models", "query": "查询订单"}))
 
     assert "未绑定数据源" in missing_datasource
     assert "缺少用户问题" in missing_query

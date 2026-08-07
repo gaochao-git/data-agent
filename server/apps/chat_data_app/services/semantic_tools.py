@@ -5,7 +5,7 @@
 供 LangGraph Agent 调用。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
 
@@ -89,6 +89,49 @@ def _safe_count(value: Any) -> int:
     return max(count, 0)
 
 
+def _compact_field_text(value: Any, max_length: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + "..."
+
+
+def _field_index_item(item: Dict[str, Any], field_type: Literal["metric", "dimension"]) -> Dict[str, Any]:
+    """构造模型选择用字段索引，不携带执行表达式和物理表列。"""
+    result = {
+        "field_type": field_type,
+        "name": str(item.get("name") or "").strip(),
+        "description": _compact_field_text(
+            item.get("description") or item.get("metadata_supplement") or "",
+            240,
+        ),
+        "logical_type": str(item.get("logical_type") or "").strip(),
+    }
+    return {key: value for key, value in result.items() if value}
+
+
+def build_semantic_field_index(
+    config: Dict[str, Any],
+    *,
+    field_type: Literal["all", "metric", "dimension"] = "all",
+) -> List[Dict[str, Any]]:
+    """按指标、维度顺序构造一个可分页的轻量字段索引。"""
+    fields: List[Dict[str, Any]] = []
+    if field_type in {"all", "metric"}:
+        fields.extend(
+            _field_index_item(item, "metric")
+            for item in config.get("metrics") or []
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        )
+    if field_type in {"all", "dimension"}:
+        fields.extend(
+            _field_index_item(item, "dimension")
+            for item in config.get("dimensions") or []
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        )
+    return fields
+
+
 def format_semantic_config_directory_for_prompt(directory: List[Dict[str, Any]]) -> str:
     """将当前可见指标集轻量目录格式化为 system prompt 文本。"""
     normalized_items = []
@@ -110,7 +153,7 @@ def format_semantic_config_directory_for_prompt(directory: List[Dict[str, Any]])
 
     lines = [
         "## 当前可见语义模型目录",
-        "以下是当前数据源组下可见的启用语义模型轻量目录，只包含 ID、名称、描述、指标数量和维度数量；用于选择模型，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先调用 search_dataset，工具会返回选中模型的实际语义文件路径，再通过 file_read/file_grep 读取。",
+        "以下是当前数据源组下可见的启用语义模型轻量目录，只包含 ID、名称、描述、指标数量和维度数量；用于选择模型，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先调用 semantic_tool 的 search_models 和 list_fields，再按返回路径使用 file_grep/file_read 按需读取。",
     ]
     for index, item in enumerate(normalized_items, start=1):
         lines.append(f"{index}. ID：{item['id'] or '未填写'}")
@@ -224,8 +267,8 @@ def _selection_to_tool_payload(selection: Optional[Dict[str, Any]], semantic_con
         "semantic_config_ids": returned_ids,
         "semantic_configs": {config_id: summaries[config_id] for config_id in returned_ids},
         "message": (
-            "已返回相关语义模型的轻量引用。必须使用每项 path 对应的语义 YAML，通过 file_grep/file_read 按需读取真实指标、维度、关系和口径；"
-            "在完成必要读取前，不得生成 DSL 或猜测字段。每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
+            "已返回相关语义模型的轻量引用。先对候选模型调用 list_fields；需要确认字段完整定义、关系、原始表列或模型整体结构时，"
+            "使用每项 path 配合 file_grep/file_read。每次 dsl2sql_tool 或 semantic_query_tool 只能传入一个 semantic_config_id。"
             if returned_ids else
             "未检索到相关指标集。请根据用户问题说明当前指标体系的限制，或向用户澄清业务范围。"
         ),
@@ -246,5 +289,5 @@ def _semantic_config_directory_to_tool_payload(directory: List[Dict[str, Any]]) 
         "directory": True,
         "semantic_config_ids": [],
         "semantic_config_directory": normalized_directory,
-        "message": "当前可见语义模型目录已返回；请基于 semantic_config_directory 用自然语言列出名称、描述和指标/维度数量，不要编造不存在的语义模型。需要读取具体定义时，先选择模型后再次调用 search_dataset。",
+        "message": "当前可见语义模型目录已返回；请基于 semantic_config_directory 用自然语言列出名称、描述和指标/维度数量，不要编造不存在的语义模型。需要读取具体定义时，对选定模型调用 list_fields，再按返回路径使用 file_grep/file_read。",
     }

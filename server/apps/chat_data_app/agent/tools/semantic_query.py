@@ -161,7 +161,7 @@ async def _resolve_tool_context(
     datasource_id = _get_datasource_id_from_state(state)
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     if not normalized_semantic_config_id:
-        return _tool_error("缺少指标集ID，请先调用 search_dataset 后显式传入 semantic_config_id")
+        return _tool_error("缺少指标集ID，请先调用 semantic_tool 搜索语义模型后显式传入 semantic_config_id")
     if not datasource_id:
         return _tool_error("当前会话未绑定数据源")
 
