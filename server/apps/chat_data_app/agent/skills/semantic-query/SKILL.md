@@ -97,12 +97,14 @@ DSL 顶层只使用以下字段：
 - `dimensions` 普通维度写字符串；时间分组写 `{"name":"已确认的时间维度","time_grain":"month"}`。
 - 时间粒度可用 `year`、`quarter`、`month`、`week`、`day`、`hour`。
 - 时间过滤值必须与已确认的维度表达式和原始存储格式一致；`time_grain` 只控制分组展示，不改变过滤口径。显式时间范围优先使用半开区间，避免结束日漏数。
-- `filters` 用于行级维度过滤，固定值过滤字段为 `dimension`、`operator`、`value`、`value_type`；`value_type` 只允许 `literal` 或 `sql_function`。单个值类型适用于全部值；多值过滤可传与 `value` 等长的类型列表，按位置逐项对应。`having` 只用于聚合结果过滤。
+- `filters` 用于行级维度过滤。固定值过滤字段为 `dimension`、`operator`、`value`、`value_type`；`value_type` 只允许 `literal` 或 `sql_function`。单个值类型适用于全部值；多值过滤可传与 `value` 等长的类型列表，按位置逐项对应。`having` 只用于聚合结果过滤。
 - `order_by.field` 只能是当前 DSL 已输出的指标或维度；普通查询不要设置 `offset`。
 
 固定值过滤的操作符使用 SQL 风格：`=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`、`IN`、`NOT IN`、`LIKE`、`NOT LIKE`、`STARTS WITH`、`ENDS WITH`、`BETWEEN`、`IS NULL`、`IS NOT NULL`、`EMPTY STRING`。不要使用 `equals`、`notEquals`。
 
-复杂条件使用 `and` / `or` 树；如果 `or` 条件还要叠加其他条件，必须用顶层 `and` 包住整个组合。字段间比较使用结构化 `left` / `right`：外层 `operator` 只能是 `=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`，`IN`、`LIKE`、`BETWEEN` 等只用于固定值过滤；`left` 只允许 `{"type":"dimension","name":"维度名"}`，`right` 可以是维度、字面量或 `binary` 表达式，`binary.operator` 只能是 `+`、`-`、`*`、`/`。不要把“维度B * 10”作为固定值字符串。
+复杂条件使用 `and` / `or` 树；如果 `or` 条件还要叠加其他条件，必须用顶层 `and` 包住整个组合。字段间比较优先使用结构化 `left` / `right`：外层 `operator` 只能是 `=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`，`left` 只允许 `{"type":"dimension","name":"维度名"}`，`right` 可以是维度、字面量或 `binary` 表达式，`binary.operator` 只能是 `+`、`-`、`*`、`/`。不要把“维度B * 10”作为固定值字符串。
+
+日期函数、计算式或只读子查询等无法用结构化 `right` 表达的右侧内容，可在普通维度过滤或 HAVING 中同时使用 `valueType: "expression"` 和非空 `rightExpression`。普通比较会直接使用该表达式；`IN` / `NOT IN` 会将表达式作为子查询或集合表达式并自动包裹括号。表达式叶子可以放入 `and` / `or` 树。禁止分号、SQL 注释和写操作；不能借此引用未确认的表列、绕过语义模型或弥补不明确的业务口径。涉及方言时先读取方言资料。
 
 `having` 固定值过滤使用 `metric`、`operator`、`value`；指标间比较使用结构化 `left` / `right`，`left` 只允许 `{"type":"metric","name":"指标名"}`，`right` 只能是指标、字面量或 `binary` 表达式，`binary.operator` 只能是 `+`、`-`、`*`、`/`。不要把“指标B * 10”作为固定值字符串，也不要把指标结果条件放进 `filters`。
 
@@ -138,6 +140,18 @@ DSL 顶层只使用以下字段：
 
 ```json
 {"metrics":[],"dimensions":["字段A","字段B"],"filters":[{"left":{"type":"dimension","name":"字段A"},"operator":">","right":{"type":"dimension","name":"字段B"}}]}
+```
+
+日期函数右侧表达式（复杂日期运算先按当前方言替换表达式）：
+
+```json
+{"metrics":["指标A"],"dimensions":[],"filters":[{"dimension":"时间维度","operator":"<","valueType":"expression","rightExpression":"CURRENT_DATE"}]}
+```
+
+只读子查询右侧表达式：
+
+```json
+{"metrics":[],"dimensions":["字段A"],"filters":[{"dimension":"字段A","operator":"IN","valueType":"expression","rightExpression":"SELECT 字段A FROM 已确认的表 WHERE 条件字段 = '值1'"}]}
 ```
 
 条件组合：

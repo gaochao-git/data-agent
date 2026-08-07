@@ -72,6 +72,11 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "value_type" in semantic_query
     assert "literal" in semantic_query
     assert "sql_function" in semantic_query
+    assert 'valueType: "expression"' in semantic_query
+    assert "rightExpression" in semantic_query
+    assert "结构化 `left` / `right`" in semantic_query
+    assert "禁止分号、SQL 注释和写操作" in semantic_query
+    assert "IN` / `NOT IN`" in semantic_query
     assert "与 `value` 等长的类型列表" in semantic_query
     assert '"type":"dimension"' in semantic_query
     assert '"type":"metric"' in semantic_query

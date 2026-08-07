@@ -164,10 +164,12 @@ class SemanticSQLGenerator:
 
     @staticmethod
     def _copy_filter_value_type(source: Dict[str, Any], target: Dict[str, Any]):
-        """语义 DSL 只允许透传固定值的 value_type，不透传自由 SQL 表达式。"""
-        for key in ("value_type",):
-            if key in source:
-                target[key] = source.get(key)
+        """透传固定值类型或已通过输入校验的自由右侧表达式。"""
+        if "value_type" in source:
+            target["value_type"] = source.get("value_type")
+        if source.get("valueType") == "expression" and "rightExpression" in source:
+            target["valueType"] = "expression"
+            target["rightExpression"] = source.get("rightExpression")
 
     def _filter_leaf_to_builder_node(self, fil: Dict[str, Any], dim_cfg: Dict[str, Any]) -> Dict[str, Any]:
         node = {

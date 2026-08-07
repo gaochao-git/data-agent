@@ -415,8 +415,8 @@ def test_literal_value_type_is_preserved_for_sql_like_function_text():
     assert "`order_time` <= 'current_date()'" in sql
 
 
-def test_legacy_free_right_expression_is_not_exposed_by_semantic_dsl():
-    result = generate_result(
+def test_free_right_expression_is_supported_by_semantic_dsl():
+    sql = generate(
         build_config(),
         {
             "metrics": ["订单数"],
@@ -431,13 +431,11 @@ def test_legacy_free_right_expression_is_not_exposed_by_semantic_dsl():
         },
     )
 
-    assert result["success"] is False
-    assert "不支持字段 rightExpression, valueType" in result["error"]
-    assert "结构化 left/right" in result["error"]
+    assert "`order_time` >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)" in sql
 
 
-def test_tree_filter_does_not_preserve_free_right_expression():
-    result = generate_result(
+def test_tree_filter_preserves_free_right_expression():
+    sql = generate(
         build_config(),
         {
             "metrics": ["订单数"],
@@ -457,8 +455,36 @@ def test_tree_filter_does_not_preserve_free_right_expression():
         },
     )
 
-    assert result["success"] is False
-    assert "不支持字段 rightExpression, valueType" in result["error"]
+    assert "`status` = 'paid'" in sql
+    assert "`order_time` >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)" in sql
+
+
+def test_free_right_expression_supports_in_subquery_and_having():
+    sql = generate(
+        build_config(),
+        {
+            "metrics": ["订单数"],
+            "filters": [
+                {
+                    "dimension": "订单状态",
+                    "operator": "IN",
+                    "valueType": "expression",
+                    "rightExpression": "SELECT status FROM valid_status",
+                }
+            ],
+            "having": [
+                {
+                    "metric": "订单数",
+                    "operator": ">",
+                    "valueType": "expression",
+                    "rightExpression": "10 + 1",
+                }
+            ],
+        },
+    )
+
+    assert "`status` IN (SELECT status FROM valid_status)" in sql
+    assert "COUNT(DISTINCT order_id) > 10 + 1" in sql
 
 
 def test_structured_expression_filter_compares_dimension_to_binary_expression():

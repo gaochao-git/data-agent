@@ -333,7 +333,7 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
     assert "left 只支持 dimension" in validator.validate_filters([
         {"left": {"type": "literal", "value": "x"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
     ])[1]
-    assert "不支持字段 rightExpression, valueType" in validator.validate_filters([
+    assert "不能混用" in validator.validate_filters([
         {
             "left": {"type": "dimension", "name": "出金金额"},
             "operator": ">",
@@ -342,6 +342,31 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
             "rightExpression": "1 + 1",
         }
     ])[1]
+    free_expression, err = validator.validate_filters([
+        {
+            "dimension": "出金金额",
+            "operator": ">",
+            "valueType": "expression",
+            "rightExpression": "1 + 1",
+        }
+    ])
+    assert err is None
+    assert free_expression[0]["rightExpression"] == "1 + 1"
+    assert "必须同时使用" in validator.validate_filters([
+        {"dimension": "出金金额", "operator": ">", "rightExpression": "1 + 1"}
+    ])[1]
+    assert "非空字符串" in validator.validate_filters([
+        {"dimension": "出金金额", "operator": ">", "valueType": "expression", "rightExpression": ""}
+    ])[1]
+    for unsafe_expression in ("1; DROP TABLE orders", "1 -- comment", "DELETE FROM orders"):
+        assert "只允许单条只读 SQL 表达式" in validator.validate_filters([
+            {
+                "dimension": "出金金额",
+                "operator": ">",
+                "valueType": "expression",
+                "rightExpression": unsafe_expression,
+            }
+        ])[1]
     assert "过滤条件中的维度 '未知维度' 不存在" in validator.validate_filters([
         {"left": {"type": "dimension", "name": "未知维度"}, "operator": "=", "right": {"type": "literal", "value": "paid"}}
     ])[1]

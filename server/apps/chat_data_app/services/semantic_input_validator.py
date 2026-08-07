@@ -21,10 +21,16 @@ FILTER_OPERATORS = {
     'BETWEEN', 'EMPTY STRING',
 }
 EXPRESSION_OPERATORS = {'=', '!=', '<>', '>', '<', '>=', '<='}
+FREE_EXPRESSION_OPERATORS = EXPRESSION_OPERATORS | {'IN', 'NOT IN'}
 BINARY_OPERATORS = {'+', '-', '*', '/'}
 LIKE_OPERATORS = {'LIKE', 'NOT LIKE', 'STARTS WITH', 'ENDS WITH'}
-BUILDER_ONLY_FILTER_FIELDS = {'valueType', 'rightExpression', 'rightTable', 'rightTableAlias', 'rightColumn'}
+BUILDER_ONLY_FILTER_FIELDS = {'rightTable', 'rightTableAlias', 'rightColumn'}
 FILTER_VALUE_TYPES = {'literal', 'sql_function'}
+FREE_EXPRESSION_VALUE_TYPE = 'expression'
+UNSAFE_EXPRESSION_PATTERN = re.compile(
+    r";|--|/\*|\*/|\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE|CALL|EXECUTE)\b",
+    re.IGNORECASE,
+)
 LOGICAL_TYPES = {'text', 'number', 'date', 'datetime', 'enum'}
 DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 DATETIME_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
@@ -182,6 +188,8 @@ class InputValidator:
         if builder_only_fields:
             return f"错误：语义 DSL 过滤条件不支持字段 {', '.join(sorted(builder_only_fields))}；字段间比较请使用结构化 left/right 表达"
         if self._is_expression_filter(filter_node):
+            if {'valueType', 'rightExpression'} & set(filter_node.keys()):
+                return "错误：结构化 left/right 与自由 rightExpression 不能混用"
             return self._validate_expression_filter(filter_node)
         if 'dimension' in filter_node:
             dim_name = filter_node.get('dimension')
@@ -190,6 +198,9 @@ class InputValidator:
             operator = str(filter_node.get('operator', '=')).upper()
             if operator not in FILTER_OPERATORS:
                 return f"错误：过滤条件操作符 '{operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
+            err = self._validate_free_right_expression(filter_node)
+            if err:
+                return err
             err = self._validate_filter_value_type(filter_node)
             if err:
                 return err
@@ -204,6 +215,10 @@ class InputValidator:
 
     @staticmethod
     def _validate_filter_value_type(filter_node: Dict) -> Optional[str]:
+        if 'valueType' in filter_node:
+            if filter_node.get('valueType') != FREE_EXPRESSION_VALUE_TYPE:
+                return "错误：valueType 仅支持 expression"
+            return None
         if 'value_type' not in filter_node:
             return None
         value_type = filter_node.get('value_type')
@@ -213,6 +228,24 @@ class InputValidator:
         for item in values:
             if not isinstance(item, str) or item.strip().lower() not in FILTER_VALUE_TYPES:
                 return "错误：value_type 仅支持 literal 或 sql_function"
+        return None
+
+    @staticmethod
+    def _validate_free_right_expression(node: Dict) -> Optional[str]:
+        has_value_type = 'valueType' in node
+        has_expression = 'rightExpression' in node
+        if not has_value_type and not has_expression:
+            return None
+        if node.get('valueType') != FREE_EXPRESSION_VALUE_TYPE or not has_expression:
+            return "错误：自由右侧表达式必须同时使用 valueType='expression' 和 rightExpression"
+        operator = str(node.get('operator', '=')).upper()
+        if operator not in FREE_EXPRESSION_OPERATORS:
+            return f"错误：自由右侧表达式不支持操作符 '{operator}'。可选值：{', '.join(sorted(FREE_EXPRESSION_OPERATORS))}"
+        expression = node.get('rightExpression')
+        if not isinstance(expression, str) or not expression.strip():
+            return "错误：rightExpression 必须是非空字符串"
+        if UNSAFE_EXPRESSION_PATTERN.search(expression):
+            return "错误：rightExpression 只允许单条只读 SQL 表达式，不允许注释、分号或写操作"
         return None
 
     @staticmethod
@@ -521,6 +554,8 @@ class InputValidator:
             if not isinstance(h, dict):
                 return [], "错误：HAVING 条件格式错误，必须是对象"
             if self._is_expression_having(h):
+                if {'valueType', 'rightExpression'} & set(h.keys()):
+                    return [], "错误：结构化 left/right 与自由 rightExpression 不能混用"
                 err = self._validate_expression_having(h)
                 if err:
                     return [], err
@@ -528,6 +563,9 @@ class InputValidator:
                 continue
             metric_name = h.get('metric')
             if metric_name and metric_name in self.metrics_map:
+                err = self._validate_free_right_expression(h)
+                if err:
+                    return [], err
                 validated_having.append(h)
             elif metric_name:
                 return [], f"错误：HAVING 条件中的指标 '{metric_name}' 不存在。可用指标：{', '.join(self.metrics_map.keys())}"
