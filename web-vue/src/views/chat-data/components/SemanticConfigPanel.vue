@@ -33,7 +33,7 @@ import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } f
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
 import OntologyRulesDialog from './semantic/OntologyRulesDialog.vue'
-import ColumnDictDialog from './semantic/ColumnDictDialog.vue'
+import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
 import AutoPrefillDialog from './semantic/AutoPrefillDialog.vue'
 import TablePreviewDialog from './semantic/TablePreviewDialog.vue'
 import MetricExpandDialog from './semantic/MetricExpandDialog.vue'
@@ -701,7 +701,7 @@ const showAutoPrefillModeDialog = ref(false)
 const previewingTableName = ref('')
 const showTablePreviewDialog = ref(false)
 const tablePreviewTarget = ref('')
-const showColumnDictDialog = ref(false)
+const showColumnDictEditDialog = ref(false)
 const columnDictTarget = ref({ tableName: '', columnName: '' })
 const columnDictVisibleMap = ref<Record<string, boolean>>({})
 const columnDictEnumVisibleMap = ref<Record<string, boolean>>({})
@@ -2127,7 +2127,7 @@ const refreshFieldColumnDictVisibleMap = async () => {
   columnDictEnumVisibleMap.value = Object.fromEntries(flattened.map(([key, value]) => [key, value.enumVisible]))
 }
 
-const viewColumnDict = (row: FieldConfigRow) => {
+const editColumnDict = (row: FieldConfigRow) => {
   const tableName = String(row.table || '').trim()
   const columnName = getFieldPhysicalColumn(row)
   if (!props.datasourceId || !tableName || !columnName || row.isMissingPhysical) {
@@ -2135,7 +2135,11 @@ const viewColumnDict = (row: FieldConfigRow) => {
     return
   }
   columnDictTarget.value = { tableName, columnName }
-  showColumnDictDialog.value = true
+  showColumnDictEditDialog.value = true
+}
+
+const handleColumnDictSaved = async () => {
+  await refreshFieldColumnDictVisibleMap()
 }
 
 const buildFieldRows = (configId: string, applyDefaultDimensions = true) => {
@@ -3127,13 +3131,16 @@ const saveOntologyRules = (ontologyRules: string) => {
                           </td>
                           <td class="px-3 py-2 border border-gray-200 text-center">
                             <button
-                              v-if="hasFieldColumnDict(row)"
-                              class="h-7 px-2 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"
+                              v-if="!row.isCustom"
+                              class="h-7 w-20 border rounded bg-white text-[11px] disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"
+                              :class="hasFieldColumnDict(row)
+                                ? 'border-blue-200 text-blue-600 hover:border-blue-400 hover:bg-blue-50'
+                                : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'"
                               :disabled="row.isMissingPhysical || !row.table || !getFieldPhysicalColumn(row)"
-                              :title="row.isMissingPhysical ? '物理字段不存在' : `查看 ${row.table}.${getFieldPhysicalColumn(row)} 的字段字典`"
-                              @click="viewColumnDict(row)"
+                              :title="row.isMissingPhysical ? '物理字段不存在' : (hasFieldColumnDict(row) ? `编辑 ${row.table}.${getFieldPhysicalColumn(row)} 的字段字典` : `为 ${row.table}.${getFieldPhysicalColumn(row)} 新增字段字典`)"
+                              @click="editColumnDict(row)"
                             >
-                              查看
+                              {{ hasFieldColumnDict(row) ? '编辑' : '新增字典' }}
                             </button>
                             <span v-else class="text-gray-300">-</span>
                           </td>
@@ -3227,11 +3234,12 @@ const saveOntologyRules = (ontologyRules: string) => {
       :table-name="tablePreviewTarget"
     />
 
-    <ColumnDictDialog
-      v-model:visible="showColumnDictDialog"
+    <ColumnDictEditDialog
+      v-model:visible="showColumnDictEditDialog"
       :datasource-id="props.datasourceId"
       :table-name="columnDictTarget.tableName"
       :column-name="columnDictTarget.columnName"
+      @saved="handleColumnDictSaved"
     />
 
   </div>
