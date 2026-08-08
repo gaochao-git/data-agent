@@ -433,7 +433,14 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
         async def get_semantic_config_async(self, datasource_id, config_id):
             return {"id": config_id, "enabled": True, "joins": [], "relationships": [{"left_table": "x"}]}
 
-    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: RuntimeManager())
+    runtime_manager = RuntimeManager()
+
+    class RuntimeSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await runtime_manager.get_runtime_semantic_config_async(datasource_id, config_id)
+
+    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: runtime_manager)
+    monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: RuntimeSemanticService())
 
     with pytest.raises(ValueError, match="缺少"):
         await compiler_module.load_runtime_semantic_config("", "cfg")
@@ -452,7 +459,14 @@ async def test_load_runtime_semantic_config_branches(monkeypatch):
     assert "joins" not in plain
     assert plain["source_type"] == "hive"
 
-    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: FallbackManager())
+    fallback_manager = FallbackManager()
+
+    class FallbackSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await fallback_manager.get_semantic_config_async(datasource_id, config_id)
+
+    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: fallback_manager)
+    monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: FallbackSemanticService())
     fallback = await compiler_module.load_runtime_semantic_config("ds_b", "cfg_b")
     assert "source_type" not in fallback
     assert fallback["joins"] == [{"left_table": "x"}]
@@ -488,7 +502,14 @@ async def test_load_runtime_semantic_config_rejects_other_users_private_config(m
                 return {"id": config_id, "enabled": True, "metrics": [], "dimensions": []}
             return None
 
-    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: PrivateConfigManager())
+    private_manager = PrivateConfigManager()
+
+    class PrivateSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await private_manager.get_runtime_semantic_config_async(datasource_id, config_id, user_id)
+
+    monkeypatch.setattr(compiler_module, "get_datasource_manager", lambda: private_manager)
+    monkeypatch.setattr(compiler_module, "get_semantic_config_service", lambda: PrivateSemanticService())
 
     owner_config = await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="owner_user")
     assert owner_config["id"] == "cfg_private"

@@ -12,7 +12,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import sql_executor
+from apps.chat_data_app.services import datasource_credentials, sql_executor
 import apps.chat_data_app.services.sql_parser as sql_parser
 from apps.chat_data_app.services.sql_parser import prepare_sql_for_execution, validate_single_sql_statement
 
@@ -127,9 +127,9 @@ def test_http_payload_extractors_and_normalizers():
 
 def test_http_auth_token_is_decrypted_from_existing_env_name(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_HTTP_AUTH_TOKEN", "encrypted-token")
-    monkeypatch.setattr(sql_executor, "decrypt_password", lambda value: f"plain:{value}")
+    monkeypatch.setattr(datasource_credentials, "decrypt_password", lambda value: f"plain:{value}")
 
-    assert sql_executor._get_http_auth_token() == "plain:encrypted-token"
+    assert datasource_credentials.get_http_auth_token() == "plain:encrypted-token"
 
 
 def test_http_auth_token_empty_env_skips_decrypt(monkeypatch):
@@ -141,9 +141,9 @@ def test_http_auth_token_empty_env_skips_decrypt(monkeypatch):
         raise AssertionError("empty token should not decrypt")
 
     monkeypatch.delenv("CHAT_DATA_HTTP_AUTH_TOKEN", raising=False)
-    monkeypatch.setattr(sql_executor, "decrypt_password", fail_decrypt)
+    monkeypatch.setattr(datasource_credentials, "decrypt_password", fail_decrypt)
 
-    assert sql_executor._get_http_auth_token() == ""
+    assert datasource_credentials.get_http_auth_token() == ""
     assert called is False
 
 
@@ -1390,7 +1390,7 @@ def test_hive_http_execute_deadline_timeout_and_value_error(monkeypatch):
 
 
 def test_get_executor_fills_direct_credentials(monkeypatch):
-    monkeypatch.setattr(sql_executor, "resolve_mysql_credentials", lambda config: {"user": "mysql_user", "password": "mysql_pwd"})
+    monkeypatch.setattr(datasource_credentials, "resolve_mysql_credentials", lambda config: {"user": "mysql_user", "password": "mysql_pwd"})
     mysql_executor = sql_executor.get_executor({"source_type": "mysql", "source_config": {"host": "h", "port": 3306, "database": "d"}})
     explicit_mysql_executor = sql_executor.get_executor({"source_type": "mysql", "source_config": {"host": "h", "port": 3306, "database": "d", "user": "explicit", "password": "pwd"}})
     assert isinstance(mysql_executor, sql_executor.MySQLExecutor)
@@ -1399,7 +1399,7 @@ def test_get_executor_fills_direct_credentials(monkeypatch):
     assert explicit_mysql_executor.user == "explicit"
     assert explicit_mysql_executor.password == "pwd"
 
-    monkeypatch.setattr(sql_executor, "resolve_hive_credentials", lambda: {"username": "hive_user", "password": "hive_pwd"})
+    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"username": "hive_user", "password": "hive_pwd"})
     hive_executor = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "port": 10000, "database": "d"}})
     explicit_hive_executor = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "port": 10000, "database": "d", "username": "explicit", "password": "pwd"}})
     assert isinstance(hive_executor, sql_executor.HiveExecutor)
@@ -1408,12 +1408,12 @@ def test_get_executor_fills_direct_credentials(monkeypatch):
     assert explicit_hive_executor.username == "explicit"
     assert explicit_hive_executor.password == "pwd"
 
-    monkeypatch.setattr(sql_executor, "resolve_hive_credentials", lambda: {"username": "hive_only"})
+    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"username": "hive_only"})
     hive_username_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "password": ""}})
     assert hive_username_only.username == "hive_only"
     assert hive_username_only.password is None
 
-    monkeypatch.setattr(sql_executor, "resolve_hive_credentials", lambda: {"password": "pwd_only"})
+    monkeypatch.setattr(datasource_credentials, "resolve_hive_credentials", lambda config=None: {"password": "pwd_only"})
     hive_password_only = sql_executor.get_executor({"source_type": "hive", "source_config": {"host": "h", "database": "d", "username": ""}})
     assert hive_password_only.username == ""
     assert hive_password_only.password == "pwd_only"

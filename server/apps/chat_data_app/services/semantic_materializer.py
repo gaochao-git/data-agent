@@ -13,7 +13,7 @@ from typing import Any
 from utils.logger import get_logger
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
-from .datasource_manager import get_datasource_manager
+from .semantic_config_service import get_semantic_config_service
 
 logger = get_logger(__name__)
 
@@ -71,25 +71,11 @@ async def _load_selected_semantic_config(
     normalized_user_id = str(user_id or "").strip()
     if not normalized_datasource_id or not normalized_config_id:
         return None
-    manager = get_datasource_manager()
-    loader = getattr(manager, "get_runtime_semantic_config_async", None)
-    if callable(loader):
-        try:
-            config = await loader(normalized_datasource_id, normalized_config_id, normalized_user_id)
-        except TypeError as exc:
-            if "user_id" not in str(exc):
-                raise
-            config = await loader(normalized_datasource_id, normalized_config_id)
-    else:
-        loader = getattr(manager, "get_semantic_config_async", None)
-        if not callable(loader):
-            return None
-        try:
-            config = await loader(normalized_datasource_id, normalized_config_id, normalized_user_id)
-        except TypeError as exc:
-            if "user_id" not in str(exc):
-                raise
-            config = await loader(normalized_datasource_id, normalized_config_id)
+    config = await get_semantic_config_service().get_runtime_config_async(
+        normalized_datasource_id,
+        normalized_config_id,
+        normalized_user_id,
+    )
     if not isinstance(config, dict) or not config.get("enabled", True):
         return None
     result = dict(config)

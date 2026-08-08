@@ -433,10 +433,12 @@ def test_auto_prefill_endpoint_uses_detail_default(monkeypatch):
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id, "ds_tables": [{"table_name": "orders", "columns": [{"name": "id"}]}]}
 
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
 
-    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+    manager = FakeManager()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result={"fields": [{"table": "orders", "column": "id", "role": "dimension", "expression": "`id`"}]}))
 
@@ -457,10 +459,12 @@ def test_semantic_prefill_endpoint_returns_error_for_incomplete_llm(monkeypatch)
         async def get_datasource_async(self, datasource_id):
             return {"id": datasource_id}
 
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             return {"id": config_id, "scope_type": "private", "create_by": "user_a"}
 
-    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+    manager = FakeManager()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a"))
     monkeypatch.setattr(semantic_config, "_prefill_by_llm", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
 
@@ -525,12 +529,12 @@ def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
         object(),
     )))
 
-    original_update = manager.update_semantic_config_async
+    original_update = manager.update_async
 
     async def update_missing_after_validate(**kwargs):
         return None
 
-    manager.update_semantic_config_async = update_missing_after_validate
+    manager.update_async = update_missing_after_validate
     vanished_update = _response_payload(asyncio.run(semantic_config.update_semantic_config(
         "ds_a",
         "cfg_a",
@@ -539,12 +543,12 @@ def test_semantic_config_update_delete_toggle_error_edges(monkeypatch):
     )))
     vanished_toggle = _response_payload(asyncio.run(semantic_config.toggle_semantic_config("ds_a", "cfg_a", True, object())))
 
-    manager.update_semantic_config_async = original_update
+    manager.update_async = original_update
 
     async def delete_returns_false(datasource_id, config_id, update_by="", update_by_name=""):
         return False
 
-    manager.delete_semantic_config_async = delete_returns_false
+    manager.delete_async = delete_returns_false
     vanished_delete = _response_payload(asyncio.run(semantic_config.delete_semantic_config("ds_a", "cfg_a", object())))
 
     assert missing_ds["code"] == ErrorCode.CHATDATA_NOT_FOUND
@@ -602,7 +606,7 @@ class _FakeSemanticManager:
     async def get_datasource_async(self, datasource_id):
         return self.datasource if datasource_id == "ds_a" else None
 
-    async def get_semantic_configs_async(self, datasource_id, user_id=""):
+    async def get_configs_async(self, datasource_id, user_id=""):
         if datasource_id != "ds_a":
             return []
         configs = [dict(self.public_config), dict(self.config)]
@@ -614,7 +618,7 @@ class _FakeSemanticManager:
             or (config.get("scope_type") == "private" and config.get("create_by") == user_id)
         ]
 
-    async def get_semantic_config_async(self, datasource_id, config_id):
+    async def get_config_async(self, datasource_id, config_id):
         if datasource_id != "ds_a":
             return None
         if config_id == "cfg_a":
@@ -623,11 +627,11 @@ class _FakeSemanticManager:
             return dict(self.public_config)
         return None
 
-    async def create_semantic_config_async(self, **kwargs):
+    async def create_async(self, **kwargs):
         self.created_kwargs = dict(kwargs)
         return {"id": "cfg_new", "create_by": kwargs.get("create_by"), "scope_type": kwargs.get("scope_type"), **kwargs}
 
-    async def update_semantic_config_async(self, **kwargs):
+    async def update_async(self, **kwargs):
         self.updated_kwargs = dict(kwargs)
         if kwargs.get("config_id") == "cfg_a":
             result = dict(self.config)
@@ -638,7 +642,7 @@ class _FakeSemanticManager:
         result.update({key: value for key, value in kwargs.items() if key not in {"datasource_id", "config_id"}})
         return result
 
-    async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
+    async def delete_async(self, datasource_id, config_id, update_by="", update_by_name=""):
         self.deleted = (datasource_id, config_id)
         return datasource_id == "ds_a" and config_id in {"cfg_a", "cfg_public"}
 
@@ -647,6 +651,7 @@ def _patch_semantic_route_user_and_manager(monkeypatch, manager=None, user_id="u
     fake_manager = manager or _FakeSemanticManager()
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id=user_id))
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: fake_manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: fake_manager)
     return fake_manager
 
 
@@ -874,7 +879,7 @@ def test_history_learning_route_validates_sources_and_missing_objects(monkeypatc
 
 def test_semantic_helper_edge_cases():
     class FakeManager:
-        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+        async def get_configs_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_a"
             assert user_id == "user_a"
             return [
@@ -908,13 +913,15 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
             assert datasource_id == "ds_a"
             return True
 
-        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+        async def get_configs_async(self, datasource_id, user_id=""):
             captured["datasource_id"] = datasource_id
             captured["user_id"] = user_id
             return [{"id": "public", "scope_type": "public"}, {"id": "mine", "scope_type": "private", "create_by": "user_a"}]
 
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: SimpleNamespace(user_id="user_a", username="张三"))
-    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: FakeManager())
+    manager = FakeManager()
+    monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
 
     payload = _response_payload(asyncio.run(semantic_config.list_semantic_configs("ds_a", object())))
 
@@ -1268,15 +1275,15 @@ def test_semantic_prefill_routes_missing_and_success(monkeypatch):
 
 def test_semantic_config_route_failure_branches(monkeypatch):
     class FailingCreateManager(_FakeSemanticManager):
-        async def create_semantic_config_async(self, **kwargs):
+        async def create_async(self, **kwargs):
             self.created_kwargs = kwargs
             return None
 
-        async def update_semantic_config_async(self, **kwargs):
+        async def update_async(self, **kwargs):
             self.updated_kwargs = kwargs
             return None
 
-        async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
+        async def delete_async(self, datasource_id, config_id, update_by="", update_by_name=""):
             return False
 
     manager = _patch_semantic_route_user_and_manager(monkeypatch, FailingCreateManager())
@@ -1343,10 +1350,10 @@ def test_semantic_route_exception_branches(monkeypatch):
     assert update_error["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
     class RaisingMutationManager(_FakeSemanticManager):
-        async def delete_semantic_config_async(self, datasource_id, config_id, update_by="", update_by_name=""):
+        async def delete_async(self, datasource_id, config_id, update_by="", update_by_name=""):
             raise RuntimeError("delete failed")
 
-        async def update_semantic_config_async(self, **kwargs):
+        async def update_async(self, **kwargs):
             raise RuntimeError("toggle failed")
 
     _patch_semantic_route_user_and_manager(monkeypatch, RaisingMutationManager())
@@ -1760,7 +1767,7 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
     assert manager.updated_kwargs["relationships"][0]["join_type"] == "inner"
 
     class MissingConfigManager(_FakeSemanticManager):
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             return None
 
     _patch_semantic_route_user_and_manager(monkeypatch, MissingConfigManager())

@@ -11,9 +11,11 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import hive_sync, mysql_sync, query_metadata
-from apps.chat_data_app.services.hive_sync import HiveSyncService
-from apps.chat_data_app.services.mysql_sync import MySQLSyncService
+from apps.chat_data_app.services import datasource_metadata, query_metadata
+from apps.chat_data_app.services.datasource_metadata import HiveSyncService, MySQLSyncService
+
+hive_sync = datasource_metadata
+mysql_sync = datasource_metadata
 from utils.models import ChatDataQueryTask, SqlQueryHistory
 
 
@@ -44,14 +46,14 @@ def test_hive_identifier_validation_and_socket_timeout():
             self.timeout_ms = value
 
     transport = Transport()
-    hive_sync._apply_socket_timeout(transport, 3)
+    hive_sync.apply_hive_socket_timeout(transport, 3)
 
     assert transport.timeout_ms == 3000
     assert transport.handle.timeout == 3
     assert transport.nested_timeout_ms == 3000
 
-    hive_sync._apply_socket_timeout(None, 3)
-    hive_sync._apply_socket_timeout(transport, 0)
+    hive_sync.apply_hive_socket_timeout(None, 3)
+    hive_sync.apply_hive_socket_timeout(transport, 0)
 
 
 def test_hive_socket_timeout_ignores_nested_transport_failures():
@@ -67,7 +69,7 @@ def test_hive_socket_timeout_ignores_nested_transport_failures():
         def setTimeout(self, _value):
             raise RuntimeError("transport fail")
 
-    hive_sync._apply_socket_timeout(BadTransport(), 2)
+    hive_sync.apply_hive_socket_timeout(BadTransport(), 2)
 
 
 def test_hive_socket_timeout_skips_none_nested_and_handle_fallbacks():
@@ -78,7 +80,7 @@ def test_hive_socket_timeout_skips_none_nested_and_handle_fallbacks():
             self.handle = SimpleNamespace(settimeout=lambda value: setattr(self, "handle_timeout", value))
 
     transport = Transport()
-    hive_sync._apply_socket_timeout(transport, 5)
+    hive_sync.apply_hive_socket_timeout(transport, 5)
     assert transport.handle_timeout == 5
 
 
@@ -411,7 +413,7 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
     connections = [table_conn, schema_conn]
 
     async def fake_connect(**kwargs):
-        assert kwargs["connect_timeout"] == mysql_sync.CONNECT_TIMEOUT_SECONDS
+        assert kwargs["connect_timeout"] == mysql_sync.MYSQL_CONNECT_TIMEOUT_SECONDS
         return connections.pop(0)
 
     monkeypatch.setattr(mysql_sync.aiomysql, "connect", fake_connect)

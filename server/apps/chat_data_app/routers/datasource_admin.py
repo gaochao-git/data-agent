@@ -28,6 +28,7 @@ from ..schema import (
 )
 from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
+from ..services.semantic_config_service import get_semantic_config_service
 from .dependencies import _get_current_user
 from .datasource_helpers import (
     _build_datasource_schema_health,
@@ -314,7 +315,7 @@ async def get_datasource_semantic_health(datasource_id: str, request: Request):
         datasource = await ds_manager.get_datasource_async(datasource_id)
         if not datasource:
             return business_response(msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-        configs = await ds_manager.get_semantic_configs_async(datasource_id)
+        configs = await get_semantic_config_service().get_configs_async(datasource_id)
         schema_health = None
         if datasource.get("source_type") in ("mysql", "hive"):
             try:

@@ -124,18 +124,25 @@ def test_selection_to_tool_payload_branches():
     assert "cross_config_required" not in payload
 
 
-def test_list_runtime_semantic_config_directory_falls_back_to_legacy_manager(monkeypatch):
+def test_list_runtime_semantic_config_directory_uses_semantic_service(monkeypatch):
     captured = {}
 
-    class LegacyDatasourceManager:
-        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+    class FakeSemanticService:
+        async def get_directory_async(self, datasource_id, user_id=""):
             assert datasource_id == "ds_legacy"
             captured["user_id"] = user_id
             return [
-                {"semantic_config_id": "sc_legacy", "semantic_config_name": "历史指标集", "semantic_config_desc": "历史描述", "enabled": True},
+                {
+                    "id": "sc_legacy",
+                    "name": "历史指标集",
+                    "description": "历史描述",
+                    "enabled": True,
+                    "metrics_total": 0,
+                    "dimensions_total": 0,
+                },
             ]
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_datasource_manager", lambda: LegacyDatasourceManager())
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_semantic_config_service", lambda: FakeSemanticService())
 
     directory = asyncio.run(list_runtime_semantic_config_directory("ds_legacy", "u2"))
 
@@ -144,6 +151,7 @@ def test_list_runtime_semantic_config_directory_falls_back_to_legacy_manager(mon
         "id": "sc_legacy",
         "name": "历史指标集",
         "description": "历史描述",
+        "enabled": True,
         "metrics_total": 0,
         "dimensions_total": 0,
     }]
@@ -176,7 +184,16 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
         async def get_semantic_config_async(self, datasource_id, semantic_config_id):
             return {"id": semantic_config_id, "enabled": True, "joins": [{"left_table": "kept"}]}
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_datasource_manager", lambda: RuntimeManager())
+    runtime_manager = RuntimeManager()
+
+    class RuntimeSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            if datasource_id == "missing":
+                return None
+            return await runtime_manager.get_runtime_semantic_config_async(datasource_id, config_id)
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_datasource_manager", lambda: runtime_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_semantic_config_service", lambda: RuntimeSemanticService())
 
     assert asyncio.run(load_runtime_semantic_config(None, "cfg")) is None
     assert asyncio.run(load_runtime_semantic_config("ds", None)) is None
@@ -194,7 +211,14 @@ def test_load_runtime_semantic_config_branches(monkeypatch):
     assert "source_type" not in no_source_type
     assert no_id["id"] == "no_id"
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_datasource_manager", lambda: FallbackManager())
+    fallback_manager = FallbackManager()
+
+    class FallbackSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await fallback_manager.get_semantic_config_async(datasource_id, config_id)
+
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_datasource_manager", lambda: fallback_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_model_repository.get_semantic_config_service", lambda: FallbackSemanticService())
     fallback = asyncio.run(load_runtime_semantic_config("ds", "cfg_b"))
     assert fallback["source_type"] == "mysql"
     assert fallback["joins"] == [{"left_table": "kept"}]

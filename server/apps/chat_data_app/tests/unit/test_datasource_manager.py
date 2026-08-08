@@ -17,7 +17,6 @@ from apps.chat_data_app.services.datasource_manager import (
     _build_member_source_text_line,
     _build_meta_source_config,
     _build_source_line,
-    _format_time,
     _get_template_member_source_config,
     _normalize_member_source_config,
     _normalize_query_executor_type,
@@ -26,6 +25,7 @@ from apps.chat_data_app.services.datasource_manager import (
     _validate_member_source_configs,
     DataSourceManager,
 )
+from apps.chat_data_app.services.datasource_metadata import MetadataAdapterNotFoundError
 
 
 class _FakeStore:
@@ -172,6 +172,9 @@ class _FakeStore:
     async def get_default_datasource_async(self):
         return self.get_default_datasource()
 
+    def transaction_async(self):
+        return _AsyncNullContext()
+
     def get_group_member_count(self, datasource_id: str):
         return self.group_member_count_map.get(datasource_id, 0)
 
@@ -212,18 +215,23 @@ class _FakeStore:
     async def replace_datasource_tables_async(self, group_id: str, tables: list[dict], **kwargs):
         self.replace_datasource_tables(group_id, tables, **kwargs)
 
-    def soft_delete_semantic_config(self, config_id: str, update_by: str = "", update_by_name: str = ""):
-        self.deleted_config_id = config_id
-
-    async def soft_delete_semantic_config_async(self, config_id: str, update_by: str = "", update_by_name: str = ""):
-        self.soft_delete_semantic_config(config_id, update_by=update_by, update_by_name=update_by_name)
-
-
 def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager = DataSourceManager.__new__(DataSourceManager)
     manager.base_dir = None
     manager.datasource_dao = fake_store
     return manager
+
+
+def _execution_config_resolver(credentials=None):
+    def resolve(source_type, query_executor_type, source_config, *, org_code="", org_name=""):
+        result = dict(source_config or {})
+        if query_executor_type == "http":
+            result.update({"org_code": org_code, "org_name": org_name})
+        else:
+            result.update(credentials or {})
+        return result
+
+    return resolve
 
 
 def test_normalize_org_codes_accepts_string_list_only():
@@ -418,25 +426,6 @@ def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
     ) is None
 
 
-def test_create_semantic_config_rejects_active_duplicate_name():
-    store = _FakeStore()
-    store.semantic_configs["group_ds_a"] = [{"id": "sc_old", "name": "订单分析基线", "enabled": True}]
-    manager = _build_manager(store)
-
-    with pytest.raises(ValueError, match="语义配置名称已存在"):
-        asyncio.run(manager.create_semantic_config_async("ds_a", "订单分析基线"))
-
-
-def test_create_semantic_config_allows_name_after_soft_delete():
-    store = _FakeStore()
-    store.semantic_configs["group_ds_a"] = []
-    manager = _build_manager(store)
-
-    config = asyncio.run(manager.create_semantic_config_async("ds_a", "订单分析基线"))
-
-    assert config["name"] == "订单分析基线"
-
-
 class _SaveStore:
     def __init__(self):
         self.saved_kwargs = None
@@ -535,222 +524,6 @@ def test_get_all_datasources_supports_lightweight_mode():
     assert all(item["ds_tables"] == [] for item in datasources)
 
 
-def test_get_semantic_config_enriches_source_type_from_datasource():
-    fake_store = _FakeStore()
-    fake_store.datasources["ds_a"]["source_type"] = "hive"
-    fake_store.semantic_configs["group_ds_a"] = [{"id": "sc_a", "metrics": [], "dimensions": [], "relationships": []}]
-    manager = _build_manager(fake_store)
-
-    config = asyncio.run(manager.get_semantic_config_async("ds_a", "sc_a"))
-
-    assert config["source_type"] == "hive"
-
-
-def test_runtime_semantic_config_merges_column_dict_without_persisting():
-    class DictStore(_FakeStore):
-        async def get_column_dicts_by_group_id_async(self, group_id: str):
-            assert group_id == "group_ds_a"
-            return {
-                ("orders", "status"): {
-                    "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
-                    "synonyms": ["订单状态"],
-                    "storage_format": "",
-                    "unit": "",
-                },
-                ("orders", "amount"): {
-                    "enum_values": [],
-                    "synonyms": ["销售额"],
-                    "storage_format": "",
-                    "unit": "元",
-                },
-            }
-
-    fake_store = DictStore()
-    fake_store.datasources["ds_a"]["ds_tables"] = [{"table_name": "orders", "columns": [{"name": "status"}, {"name": "amount"}]}]
-    fake_store.semantic_configs["group_ds_a"] = [{
-        "id": "sc_a",
-        "group_id": "group_ds_a",
-        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)", "metadata_supplement": "统计实付金额"}],
-        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
-        "relationships": [],
-    }]
-    manager = _build_manager(fake_store)
-
-    normal_config = asyncio.run(manager.get_semantic_config_async("ds_a", "sc_a"))
-    runtime_config = asyncio.run(manager.get_runtime_semantic_config_async("ds_a", "sc_a"))
-
-    assert normal_config["dimensions"][0].get("allowed_values") is None
-    assert runtime_config["dimensions"][0]["allowed_values"] == ["有效", "无效"]
-    assert runtime_config["dimensions"][0]["mapping"] == {"有效": "1", "无效": "0"}
-    assert runtime_config["dimensions"][0]["logical_type"] == "enum"
-    assert "枚举值：1=有效；0=无效" in runtime_config["dimensions"][0]["metadata_supplement"]
-    assert "同义词：订单状态" not in runtime_config["dimensions"][0]["metadata_supplement"]
-    assert runtime_config["metrics"][0]["metadata_supplement"] == "统计实付金额\n单位：元"
-    assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
-
-
-def test_runtime_semantic_configs_merge_column_dicts_for_selector_context():
-    class DictStore(_FakeStore):
-        async def get_column_dicts_by_group_id_async(self, group_id: str):
-            assert group_id == "group_ds_a"
-            return {
-                ("orders", "status"): {
-                    "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
-                    "synonyms": [],
-                    "storage_format": "tinyint",
-                    "unit": "",
-                },
-                ("orders", "amount"): {
-                    "enum_values": [],
-                    "synonyms": [],
-                    "storage_format": "",
-                    "unit": "元",
-                },
-            }
-
-    fake_store = DictStore()
-    fake_store.semantic_configs["group_ds_a"] = [{
-        "id": "sc_a",
-        "group_id": "group_ds_a",
-        "enabled": True,
-        "metrics": [{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
-        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
-        "relationships": [],
-    }]
-    manager = _build_manager(fake_store)
-
-    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
-
-    assert configs[0]["dimensions"][0]["allowed_values"] == ["有效", "无效"]
-    assert configs[0]["dimensions"][0]["mapping"] == {"有效": "1", "无效": "0"}
-    assert configs[0]["dimensions"][0]["logical_type"] == "enum"
-    assert configs[0]["dimensions"][0]["metadata_supplement"] == "枚举值：1=有效；0=无效\n存储格式：tinyint"
-    assert configs[0]["metrics"][0]["metadata_supplement"] == "单位：元"
-    assert "allowed_values" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
-
-
-def test_semantic_config_directory_uses_lightweight_dao_read_only():
-    class DirectoryStore:
-        async def get_semantic_config_directory_by_group_id_async(self, group_id: str, user_id: str = ""):
-            assert group_id == "ds_a"
-            assert user_id == "u1"
-            return [{
-                "id": "sc_public",
-                "name": "公共指标集",
-                "description": "轻量目录",
-                "enabled": True,
-                "metrics_total": 2,
-                "dimensions_total": 3,
-            }]
-
-    manager = DataSourceManager.__new__(DataSourceManager)
-    manager.datasource_dao = DirectoryStore()
-
-    async def fail_get_datasource(*_args, **_kwargs):
-        raise AssertionError("directory must not load datasource runtime fields")
-
-    manager.get_datasource_async = fail_get_datasource
-
-    assert asyncio.run(manager.get_semantic_config_directory_async("ds_a", "u1")) == [{
-        "id": "sc_public",
-        "name": "公共指标集",
-        "description": "轻量目录",
-        "enabled": True,
-        "metrics_total": 2,
-        "dimensions_total": 3,
-    }]
-    assert asyncio.run(manager.get_semantic_config_directory_async("", "u1")) == []
-
-
-def test_runtime_semantic_configs_fallback_when_column_dict_read_fails():
-    class FailingDictStore(_FakeStore):
-        async def get_column_dicts_by_group_id_async(self, group_id: str):
-            raise RuntimeError("dict unavailable")
-
-    fake_store = FailingDictStore()
-    fake_store.semantic_configs["group_ds_a"] = [{
-        "id": "sc_a",
-        "group_id": "group_ds_a",
-        "enabled": True,
-        "metrics": [],
-        "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
-        "relationships": [],
-    }]
-    manager = _build_manager(fake_store)
-
-    configs = asyncio.run(manager.get_runtime_semantic_configs_async("ds_a"))
-
-    assert configs[0]["dimensions"][0]["logical_type"] == "text"
-    assert "allowed_values" not in configs[0]["dimensions"][0]
-    assert "logical_type" not in fake_store.semantic_configs["group_ds_a"][0]["dimensions"][0]
-
-
-def test_runtime_semantic_configs_empty_and_missing_group_fallbacks():
-    empty_store = _FakeStore()
-    empty_store.semantic_configs["group_ds_a"] = []
-    empty_manager = _build_manager(empty_store)
-
-    no_group_store = _FakeStore()
-    no_group_store.datasources["ds_a"]["group_id"] = ""
-    no_group_store.semantic_configs[""] = [{"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": []}]
-    no_group_manager = _build_manager(no_group_store)
-
-    assert asyncio.run(empty_manager.get_runtime_semantic_configs_async("ds_a")) == []
-    assert asyncio.run(no_group_manager.get_runtime_semantic_configs_async("ds_a")) == [
-        {"id": "sc_no_group", "enabled": True, "metrics": [], "dimensions": [], "source_type": "mysql", "tables": [], "relationships": []}
-    ]
-
-
-def test_datasource_manager_column_dict_helper_branches():
-    manager = DataSourceManager.__new__(DataSourceManager)
-
-    assert manager._extract_metric_source_column({"expression": "SUM(orders.amount)"}) == "amount"
-    assert manager._extract_metric_source_column({"expression": "`orders.status`"}) == "status"
-    assert manager._extract_metric_source_column({"expression": "amount + tax", "field": "`orders.amount`"}) == "amount"
-    assert manager._extract_metric_source_column({"expression": "amount + tax"}) == ""
-    assert manager._format_column_dict_supplement({"enum_values": [], "synonyms": [], "storage_format": "yyyyMMdd", "unit": "万元"}) == "存储格式：yyyyMMdd\n单位：万元"
-    assert manager._merge_metadata_supplement("", "枚举值：1=有效") == "枚举值：1=有效"
-    assert manager._merge_metadata_supplement("已有说明", "") == "已有说明"
-    assert manager._merge_metadata_supplement("已有说明\n枚举值：1=有效", "枚举值：1=有效") == "已有说明\n枚举值：1=有效"
-    assert manager._merge_metadata_supplement("已有说明", "单位：元") == "已有说明\n单位：元"
-
-    merged = manager._merge_column_dict_into_semantic_config(
-        {
-            "dimensions": [
-                {"table": "orders", "column": "status", "allowed_values": ["Y"], "metadata_supplement": "已有说明"},
-                {"table": "orders", "field_name": "city"},
-            ],
-            "metrics": [
-                {"table": "orders", "expression": "SUM(amount)"},
-                {"table": "orders", "expression": "amount + tax"},
-            ],
-        },
-        {
-            ("orders", "status"): {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "tinyint", "unit": ""},
-            ("orders", "amount"): {"enum_values": [], "synonyms": [], "storage_format": "", "unit": "元"},
-        },
-    )
-
-    assert merged["dimensions"][0]["allowed_values"] == ["Y"]
-    assert merged["dimensions"][0]["metadata_supplement"] == "已有说明\n枚举值：1=有效\n存储格式：tinyint"
-    assert "metadata_supplement" not in merged["dimensions"][1]
-    assert merged["metrics"][0]["metadata_supplement"] == "单位：元"
-    assert "metadata_supplement" not in merged["metrics"][1]
-
-    empty_supplement_merged = manager._merge_column_dict_into_semantic_config(
-        {
-            "dimensions": [{"table": "orders", "column": "status"}],
-            "metrics": [{"table": "orders", "expression": "SUM(amount)"}],
-        },
-        {
-            ("orders", "status"): {"enum_values": [], "storage_format": "", "unit": ""},
-            ("orders", "amount"): {"enum_values": [], "storage_format": "", "unit": ""},
-        },
-    )
-    assert "metadata_supplement" not in empty_supplement_merged["dimensions"][0]
-    assert "metadata_supplement" not in empty_supplement_merged["metrics"][0]
-
-
 def test_datasource_manager_column_dict_async_boundaries():
     class DictStore(_FakeStore):
         async def get_column_dict_async(self, group_id: str, table_name: str, column_name: str):
@@ -800,29 +573,6 @@ def test_datasource_manager_column_dict_async_boundaries():
     assert store.saved_column_dict["update_by_name"] == "用户1"
 
 
-def test_datasource_manager_runtime_column_dict_fallbacks():
-    manager = DataSourceManager.__new__(DataSourceManager)
-
-    class NoGroupStore:
-        async def get_datasource_async(self, datasource_id: str):
-            return {}
-
-    manager.datasource_dao = NoGroupStore()
-    config = {"id": "sc_a", "metrics": [], "dimensions": []}
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) == config
-
-    class NoColumnDictMethodStore:
-        async def get_datasource_async(self, datasource_id: str):
-            return {"group_id": "group_a"}
-
-    manager.datasource_dao = NoColumnDictMethodStore()
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", config)) == config
-
-    manager = _build_manager(_FakeStore())
-    assert asyncio.run(manager.get_runtime_semantic_config_async("ds_a", "missing")) is None
-    assert asyncio.run(manager._enrich_semantic_config_column_dict_async("ds_a", {"id": "sc_a", "group_id": "group_ds_a"})) == {"id": "sc_a", "group_id": "group_ds_a", "dimensions": []}
-
-
 def test_has_datasource_delegates_to_store():
     fake_store = _FakeStore()
     manager = _build_manager(fake_store)
@@ -856,8 +606,8 @@ def test_get_execution_datasources_injects_unified_mysql_credentials(monkeypatch
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials",
-        lambda _config: {"user": "db_query_ro", "password": "secret"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"user": "db_query_ro", "password": "secret"}),
     )
 
     execution_targets = asyncio.run(manager.get_execution_datasources_async("ds_a"))
@@ -885,8 +635,8 @@ def test_get_execution_datasources_keeps_hive_http_executor_type(monkeypatch):
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "hive_user"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"username": "hive_user"}),
     )
 
     execution_targets = asyncio.run(manager.get_execution_datasources_async("ds_a"))
@@ -916,8 +666,8 @@ def test_get_execution_datasources_keeps_mysql_http_executor_type(monkeypatch):
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials",
-        lambda _config: {"user": "db_query_ro", "password": "secret"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"user": "db_query_ro", "password": "secret"}),
     )
 
     execution_targets = asyncio.run(manager.get_execution_datasources_async("ds_a"))
@@ -1125,8 +875,8 @@ def test_get_execution_datasources_supports_hive_http_org_code_selection(monkeyp
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "hive_user"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"username": "hive_user"}),
     )
 
     execution_targets = asyncio.run(manager.get_execution_datasources_async("ds_a", ["ORG_B"]))
@@ -1179,7 +929,10 @@ def test_merge_member_source_lines_keeps_new_template_first_and_existing_members
 
 
 def test_build_execution_datasource_targets_defaults_template_and_adds_credentials(monkeypatch):
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda cfg: {"user": "mysql_user", "password": "mysql_pwd"})
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"user": "mysql_user", "password": "mysql_pwd"}),
+    )
     manager = DataSourceManager.__new__(DataSourceManager)
     datasource = {
         "template_datasource_id": "ORG_A",
@@ -1240,36 +993,6 @@ def test_replace_table_groups_filters_missing_tables_and_dedupes():
     }
 
 
-def test_create_and_update_semantic_config_enforce_name_scope_and_relationships():
-    manager = DataSourceManager.__new__(DataSourceManager)
-    configs = []
-    datasource = {"group_id": "group_a", "semantic_configs": configs}
-
-    class FakeStore:
-        async def upsert_semantic_config_async(self, datasource_id, config):
-            configs[:] = [item for item in configs if item["id"] != config["id"]]
-            configs.append(dict(config))
-
-    manager.datasource_dao = FakeStore()
-    manager.get_datasource_async = lambda _datasource_id: asyncio.sleep(0, result=datasource)
-    manager.get_semantic_configs_async = lambda _datasource_id, user_id="": asyncio.sleep(0, result=list(configs))
-    manager.get_semantic_config_async = lambda _datasource_id, config_id: asyncio.sleep(0, result=next((item for item in configs if item["id"] == config_id), None))
-
-    created = asyncio.run(manager.create_semantic_config_async(
-        "ds_a",
-        "订单分析",
-        relationships=[{"left_table": "orders", "right_table": "items", "left_column": "order_id", "right_column": "order_id"}],
-        create_by="u1",
-    ))
-    updated = asyncio.run(manager.update_semantic_config_async("ds_a", created["id"], name="订单分析新版", enabled=False, update_by="u2"))
-
-    assert created["scope_type"] == "private"
-    assert created["relationships"][0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
-    assert updated["name"] == "订单分析新版"
-    assert updated["enabled"] is False
-    assert updated["update_by"] == "u2"
-
-
 def test_save_datasource_persists_group_and_tables_in_transaction():
     manager = DataSourceManager.__new__(DataSourceManager)
     calls = []
@@ -1323,11 +1046,6 @@ class _AsyncNullContext:
 def test_datasource_manager_table_groups_and_visibility_filters():
     store = _FakeStore()
     store.datasources["ds_a"]["ds_tables"] = [{"table_name": "orders"}, {"table_name": "items"}]
-    store.semantic_configs["group_ds_a"] = [
-        {"id": "public", "name": "公共", "scope_type": "public", "enabled": True},
-        {"id": "mine", "name": "我的", "scope_type": "private", "create_by": "u1", "enabled": False},
-        {"id": "other", "name": "别人的", "scope_type": "private", "create_by": "u2", "enabled": True},
-    ]
     manager = _build_manager(store)
 
     assert asyncio.run(manager.get_table_groups_async("ds_a")) == [{"table_group_name": "订单域", "table_names": ["orders"]}]
@@ -1335,37 +1053,15 @@ def test_datasource_manager_table_groups_and_visibility_filters():
         {"table_group_name": "订单域", "table_names": ["orders", "missing", "orders"]},
     ], operator="u1")) is True
     assert store.replaced_table_groups["groups"] == [{"table_group_name": "订单域", "table_names": ["orders"]}]
-    assert [item["id"] for item in asyncio.run(manager.get_semantic_configs_async("ds_a", user_id="u1"))] == ["public", "mine"]
-    enabled_configs = [item for item in asyncio.run(manager.get_semantic_configs_async("ds_a")) if item.get("enabled", True)]
-    assert [item["id"] for item in enabled_configs] == ["public", "other"]
     tables = asyncio.run(manager.get_datasource_async("ds_a"))["ds_tables"]
     assert next((table for table in tables if table.get("table_name") == "items"), None) == {"table_name": "items"}
     assert next((table for table in tables if table.get("table_name") == "missing"), None) is None
 
 
-def test_datasource_manager_semantic_config_validation_delete_and_default_failures():
+def test_datasource_manager_default_failure_paths():
     store = _FakeStore()
     manager = _build_manager(store)
 
-    assert asyncio.run(manager.create_semantic_config_async("missing", "订单分析")) is None
-    with pytest.raises(ValueError, match="语义配置名称不能为空"):
-        asyncio.run(manager.create_semantic_config_async("ds_a", ""))
-    with pytest.raises(ValueError, match="只能是 public 或 private"):
-        asyncio.run(manager.create_semantic_config_async("ds_a", "订单分析", scope_type="bad"))
-
-    store.semantic_configs["group_ds_a"] = [
-        {"id": "sc_a", "name": "订单分析", "scope_type": "public", "enabled": True, "metrics": [], "dimensions": [], "relationships": []},
-        {"id": "sc_b", "name": "销售分析", "scope_type": "public", "enabled": True, "metrics": [], "dimensions": [], "relationships": []},
-    ]
-    with pytest.raises(ValueError, match="语义配置名称已存在"):
-        asyncio.run(manager.update_semantic_config_async("ds_a", "sc_a", name="销售分析"))
-    with pytest.raises(ValueError, match="语义配置名称不能为空"):
-        asyncio.run(manager.update_semantic_config_async("ds_a", "sc_a", name=""))
-
-    assert asyncio.run(manager.update_semantic_config_async("ds_a", "missing", name="x")) is None
-    assert asyncio.run(manager.delete_semantic_config_async("ds_a", "missing")) is False
-    assert asyncio.run(manager.delete_semantic_config_async("ds_a", "sc_a")) is True
-    assert store.deleted_config_id == "sc_a"
     assert asyncio.run(manager.set_default_datasource_async("missing")) is False
     store.datasources["ds_a"]["is_default"] = False
     assert asyncio.run(manager.clear_default_datasource_async("ds_a")) is False
@@ -1497,7 +1193,7 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
     async def run_checks():
         assert await manager.has_datasource_async("ds_a") is True
         assert (await manager.get_all_datasources_async(include_tables=False))[0]["ds_tables"] == []
-        assert (await manager.get_datasource_async("ds_a"))["semantic_configs"][0]["source_type"] == "mysql"
+        assert "semantic_configs" not in (await manager.get_datasource_async("ds_a"))
         assert (await manager.get_datasource_by_group_name_async("数据源A"))["id"] == "ds_a"
         assert (await manager.get_execution_datasources_async("ds_a"))[0]["member_datasource_id"] == "phy_shared"
         assert await manager.get_table_groups_async("ds_a") == [{"table_group_name": "订单域", "table_names": ["orders"]}]
@@ -1506,14 +1202,12 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
         assert await manager.set_default_datasource_async("ds_b") is True
         store.datasources["ds_b"]["is_default"] = True
         assert await manager.clear_default_datasource_async("ds_b") is True
-        assert await manager.delete_semantic_config_async("ds_a", "missing") is False
-        assert await manager.delete_semantic_config_async("ds_a", "sc_a") is True
         assert await manager.delete_datasource_async("missing") is False
         assert await manager.delete_datasource_async("ds_a") is True
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials",
-        lambda _config: {"user": "u", "password": "p"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"user": "u", "password": "p"}),
     )
     asyncio.run(run_checks())
 
@@ -1523,48 +1217,53 @@ def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypa
     store.datasources["ds_a"]["ds_tables"] = [{"table_name": "orders"}, {"table_name": "users"}]
     manager = _build_manager(store)
 
-    class FakeMySQLSyncService:
-        def __init__(self, **kwargs):
-            FakeMySQLSyncService.kwargs = kwargs
+    calls = []
 
-        async def get_full_schema_async(self, table_names):
-            return [{"table_name": table_names[0] if table_names else "orders"}]
+    class FakeAdapter:
+        def __init__(self, source_type, access_type, source_config, user_id, username):
+            self.source_type = source_type
+            self.access_type = access_type
+            self.source_config = source_config
+            self.user_id = user_id
+            self.username = username
 
-    class FakeHiveSyncService:
-        def __init__(self, **kwargs):
-            FakeHiveSyncService.kwargs = kwargs
+        async def load_schema(self, table_names):
+            table_name = table_names[0] if table_names else "orders"
+            if self.access_type == "http":
+                return [{
+                    "table_name": table_name,
+                    "org_code": self.source_config["org_code"],
+                    "org_name": self.source_config["org_name"],
+                }]
+            return [{"table_name": table_name}]
 
-        async def get_full_schema_async(self, table_names):
-            return [{"table_name": table_names[0] if table_names else "hive_orders"}]
+    class FakeRegistry:
+        def create(self, source_type, access_type, source_config, *, user_id=None, username=None):
+            if (source_type, access_type) not in {("mysql", "direct"), ("hive", "direct"), ("hive", "http")}:
+                raise MetadataAdapterNotFoundError(source_type, access_type)
+            calls.append((source_type, access_type, dict(source_config), user_id, username))
+            return FakeAdapter(source_type, access_type, source_config, user_id, username)
 
-    async def fake_hive_http_schema(source_config, table_names, user_id=None, username=None):
-        assert user_id == "user_a"
-        assert username == "测试用户"
-        return [{"table_name": table_names[0], "org_code": source_config["org_code"], "org_name": source_config["org_name"]}]
-
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
+    manager.metadata_adapter_registry = FakeRegistry()
 
     async def run_checks():
         assert await manager.get_cached_schema_async("ds_a", table_names=["users"]) == [{"table_name": "users"}]
         mysql_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert mysql_schema == [{"table_name": "orders"}]
-        assert FakeMySQLSyncService.kwargs["user"] == "mysql_user"
+        assert calls[-1][:2] == ("mysql", "direct")
 
         store.datasources["ds_a"]["source_type"] = "hive"
         store.datasources["ds_a"]["query_executor_type"] = "direct"
         store.datasources["ds_a"]["source_config"] = {"host": "127.0.0.1", "port": 10000, "database": "dw"}
         hive_schema = await manager.get_live_schema_async("ds_a", table_names=["orders"])
         assert hive_schema == [{"table_name": "orders"}]
-        assert FakeHiveSyncService.kwargs["username"] == "hive_user"
+        assert calls[-1][:2] == ("hive", "direct")
 
         store.datasources["ds_a"]["query_executor_type"] = "http"
         store.datasources["ds_a"]["member_sources"] = [{"member_datasource_id": "ORG_A", "org_name": "机构A", "org_code": "ORG_A", "query_executor_type": "http"}]
         store.datasources["ds_a"]["template_datasource_id"] = "ORG_A"
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_schema_async", fake_hive_http_schema)
         assert await manager.get_live_schema_async("ds_a", table_names=["orders"], user_id="user_a", username="测试用户") == [{"table_name": "orders", "org_code": "ORG_A", "org_name": "机构A"}]
+        assert calls[-1][3:] == ("user_a", "测试用户")
 
         assert await manager.get_cached_schema_async("ds_a", table_names=["missing"]) == []
         with pytest.raises(ValueError, match="数据源不存在"):
@@ -1585,33 +1284,30 @@ def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
     manager = _build_manager(store)
     calls = []
 
-    class FakeMySQLSyncService:
-        def __init__(self, **kwargs):
-            calls.append(("mysql_init", kwargs))
+    class FakeAdapter:
+        def __init__(self, source_type, access_type):
+            self.source_type = source_type
+            self.access_type = access_type
 
-        async def get_tables_async(self):
-            return ["orders", "users"]
-
-    class FakeHiveSyncService:
-        def __init__(self, **kwargs):
-            calls.append(("hive_init", kwargs))
-
-        async def get_tables_async(self):
+        async def list_tables(self):
+            if self.access_type == "http":
+                return ["http_orders"]
+            if self.source_type == "mysql":
+                return ["orders", "users"]
             return [{"table_name": "hive_orders"}]
 
-    async def fake_hive_http_tables(source_config, user_id=None, username=None):
-        calls.append(("hive_http_tables", dict(source_config), user_id, username))
-        return ["http_orders"]
+    class FakeRegistry:
+        def create(self, source_type, access_type, source_config, *, user_id=None, username=None):
+            if (source_type, access_type) not in {("mysql", "direct"), ("hive", "direct"), ("hive", "http")}:
+                raise MetadataAdapterNotFoundError(source_type, access_type)
+            calls.append(("adapter", source_type, access_type, dict(source_config), user_id, username))
+            return FakeAdapter(source_type, access_type)
+
+    manager.metadata_adapter_registry = FakeRegistry()
 
     async def fake_live_schema(datasource_id, table_names=None, **kwargs):
         calls.append(("live_schema", datasource_id, list(table_names or []), kwargs))
         return [{"table_name": name, "columns": [{"name": "id"}]} for name in table_names or []]
-
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "mysql_user", "password": "mysql_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_hive_credentials", lambda _config: {"username": "hive_user", "password": "hive_pwd"})
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FakeMySQLSyncService)
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.HiveSyncService", FakeHiveSyncService)
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.get_hive_meta_tables_async", fake_hive_http_tables)
 
     async def run_checks():
         mysql_tables = await manager.get_physical_table_names_async(
@@ -1619,14 +1315,14 @@ def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
             {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"},
         )
         assert mysql_tables == ["orders", "users"]
-        assert calls[-1] == ("mysql_init", {"host": "127.0.0.1", "port": 3307, "database": "demo", "user": "mysql_user", "password": "mysql_pwd"})
+        assert calls[-1] == ("adapter", "mysql", "direct", {"host": "127.0.0.1", "port": 3307, "database": "demo", "query_executor_type": "direct"}, None, None)
 
         hive_tables = await manager.get_physical_table_names_async(
             "hive",
             {"host": "127.0.0.2", "port": 10001, "database": "dw", "query_executor_type": "direct"},
         )
         assert hive_tables == [{"table_name": "hive_orders"}]
-        assert calls[-1] == ("hive_init", {"host": "127.0.0.2", "port": 10001, "database": "dw", "username": "hive_user", "password": "hive_pwd"})
+        assert calls[-1][:3] == ("adapter", "hive", "direct")
 
         http_tables = await manager.get_physical_table_names_async(
             "hive",
@@ -1635,7 +1331,7 @@ def test_datasource_manager_physical_table_names_and_schema_sync(monkeypatch):
             username="测试用户",
         )
         assert http_tables == ["http_orders"]
-        assert calls[-1] == ("hive_http_tables", {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"}, "user_a", "测试用户")
+        assert calls[-1] == ("adapter", "hive", "http", {"database": "dw", "org_code": "ORG_A", "org_name": "机构A", "query_executor_type": "http"}, "user_a", "测试用户")
 
         manager.get_live_schema_async = fake_live_schema
         synced = await manager.sync_datasource_schema_from_source_async(
@@ -1664,30 +1360,30 @@ def test_datasource_manager_get_schema_timeout_and_connection_error(monkeypatch)
     store = _FakeStore()
     manager = _build_manager(store)
 
-    class TimeoutMySQLSyncService:
-        def __init__(self, **_kwargs):
-            pass
-
-        async def get_full_schema_async(self, table_names):
+    class TimeoutAdapter:
+        async def load_schema(self, table_names):
             await asyncio.sleep(0.01)
             return []
 
-    class FailingMySQLSyncService:
-        def __init__(self, **_kwargs):
-            pass
-
-        async def get_full_schema_async(self, table_names):
+    class FailingAdapter:
+        async def load_schema(self, table_names):
             raise RuntimeError("连接失败")
+
+    class FakeRegistry:
+        def __init__(self, adapter):
+            self.adapter = adapter
+
+        def create(self, *_args, **_kwargs):
+            return self.adapter
 
     async def run_checks():
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.resolve_mysql_credentials", lambda _config: {"user": "u", "password": "p"})
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", TimeoutMySQLSyncService)
+        manager.metadata_adapter_registry = FakeRegistry(TimeoutAdapter())
         with pytest.raises(ConnectionError, match="数据库连接超时"):
             await manager.get_live_schema_async("ds_a")
 
         monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.MySQLSyncService", FailingMySQLSyncService)
+        manager.metadata_adapter_registry = FakeRegistry(FailingAdapter())
         with pytest.raises(ConnectionError, match="数据库连接失败"):
             await manager.get_live_schema_async("ds_a")
 
@@ -1716,7 +1412,6 @@ def test_datasource_manager_helper_edge_cases(monkeypatch):
     monkeypatch.setenv("CHATDATA_INT_ENV", "7")
     assert _read_positive_int_env("CHATDATA_INT_ENV", 9) == 7
 
-    assert _format_time(_FixedDatetime.now()) == "20260602101112"
     with pytest.raises(ValueError, match="不支持的查询执行方式"):
         _normalize_query_executor_type("mysql", "bad")
     with pytest.raises(ValueError, match="数据源连接信息不完整"):
@@ -1883,52 +1578,6 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
     asyncio.run(run_checks())
 
 
-def test_datasource_manager_async_semantic_config_lifecycle(monkeypatch):
-    store = _FakeStore()
-    manager = _build_manager(store)
-    configs = [
-        {"id": "public", "group_id": "group_ds_a", "name": "公共", "scope_type": "public", "create_by": "admin", "enabled": True, "metrics": [], "dimensions": [], "relationships": []},
-        {"id": "mine", "group_id": "group_ds_a", "name": "我的", "scope_type": "private", "create_by": "u1", "enabled": True, "metrics": [], "dimensions": [], "relationships": []},
-        {"id": "other", "group_id": "group_ds_a", "name": "别人的", "scope_type": "private", "create_by": "u2", "enabled": True, "metrics": [], "dimensions": [], "relationships": []},
-    ]
-    store.semantic_configs["group_ds_a"] = configs
-
-    async def run_checks():
-        assert [item["id"] for item in await manager.get_semantic_configs_async("ds_a", user_id="u1")] == ["public", "mine"]
-        assert await manager.get_semantic_config_async("ds_a", "missing") is None
-        assert await manager._semantic_config_name_exists_async("ds_a", "", scope_type="public") is False
-        assert await manager._semantic_config_name_exists_async("ds_a", "公共", scope_type="private", create_by="u1") is True
-        assert await manager._semantic_config_name_exists_async("ds_a", "我的", exclude_config_id="mine", scope_type="private", create_by="u1") is False
-        assert await manager.create_semantic_config_async("missing", "新配置") is None
-        with pytest.raises(ValueError, match="语义配置名称不能为空"):
-            await manager.create_semantic_config_async("ds_a", "")
-        with pytest.raises(ValueError, match="只能是 public 或 private"):
-            await manager.create_semantic_config_async("ds_a", "新配置", scope_type="bad")
-        with pytest.raises(ValueError, match="语义配置名称已存在"):
-            await manager.create_semantic_config_async("ds_a", "公共", scope_type="private", create_by="u1")
-
-        created = await manager.create_semantic_config_async(
-            "ds_a",
-            "新配置",
-            relationships=[{"left_table": "orders", "right_table": "items", "left_column": "order_id", "right_column": "order_id"}],
-            create_by="u1",
-        )
-        assert created["name"] == "新配置"
-        assert created["relationships"][0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
-
-        assert await manager.update_semantic_config_async("ds_a", "missing", name="x") is None
-        with pytest.raises(ValueError, match="语义配置名称不能为空"):
-            await manager.update_semantic_config_async("ds_a", "mine", name="")
-        with pytest.raises(ValueError, match="语义配置名称已存在"):
-            await manager.update_semantic_config_async("ds_a", "mine", name="公共")
-        updated = await manager.update_semantic_config_async("ds_a", "mine", description="更新", enabled=False, update_by="u3")
-        assert updated["description"] == "更新"
-        assert updated["enabled"] is False
-        assert updated["update_by"] == "u3"
-
-    asyncio.run(run_checks())
-
-
 def test_datasource_manager_get_default_enriches_semantic_configs():
     store = _FakeStore()
     store.semantic_configs["group_ds_a"] = [{"id": "sc_a", "name": "订单分析"}]
@@ -1936,13 +1585,13 @@ def test_datasource_manager_get_default_enriches_semantic_configs():
 
     default = asyncio.run(manager.get_default_datasource_async())
     assert default["id"] == "ds_a"
-    assert default["semantic_configs"] == [{"id": "sc_a", "name": "订单分析"}]
+    assert "semantic_configs" not in default
 
 
 def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypatch):
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "hive_user", "password": "hive_pwd"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"username": "hive_user", "password": "hive_pwd"}),
     )
     manager = DataSourceManager.__new__(DataSourceManager)
     hive_direct = manager._build_execution_datasource_targets({
@@ -2016,8 +1665,8 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     manager = DataSourceManager.__new__(DataSourceManager)
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "", "password": ""},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver(),
     )
     no_credential_target = manager._build_execution_datasource_targets({
         "source_type": "hive",
@@ -2028,8 +1677,8 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     assert "password" not in no_credential_target["source_config"]
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "hive_user", "password": ""},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"username": "hive_user"}),
     )
     username_only_target = manager._build_execution_datasource_targets({
         "source_type": "hive",
@@ -2040,8 +1689,8 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     assert "password" not in username_only_target["source_config"]
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "", "password": "hive_pwd"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"password": "hive_pwd"}),
     )
     password_only_target = manager._build_execution_datasource_targets({
         "source_type": "hive",
@@ -2075,30 +1724,14 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     assert table["table_name"] == "orders"
 
 
-def test_datasource_manager_name_scope_and_column_finder_edges():
+def test_datasource_manager_column_finder_edges():
     store = _FakeStore()
-    store.semantic_configs["group_ds_a"] = [
-        {"id": "public", "name": "公共", "scope_type": "public", "create_by": "admin"},
-        {"id": "private_other", "name": "私有", "scope_type": "private", "create_by": "u2"},
-    ]
     manager = _build_manager(store)
-
-    async def run_checks():
-        return (
-            await manager._semantic_config_name_exists_async("ds_a", "私有", scope_type="public", create_by="u1"),
-            await manager._semantic_config_name_exists_async("ds_a", "新名称", scope_type="public", create_by="u1"),
-        )
-
-    public_scope_sees_private_name, missing_name = asyncio.run(run_checks())
-
-    assert public_scope_sees_private_name is True
-    assert missing_name is False
     assert manager._find_table_column(None, "orders", "id") is None
     assert manager._find_table_column({"ds_tables": [{"table_name": "orders", "columns": []}]}, "orders", "id") is None
 
-    async_default = asyncio.run(manager.get_default_datasource_async())
-    assert [item["id"] for item in async_default["semantic_configs"]] == ["public", "private_other"]
-
+    store.datasources["ds_a"]["is_default"] = True
+    assert asyncio.run(manager.get_default_datasource_async())["id"] == "ds_a"
     store.datasources["ds_a"]["is_default"] = False
     assert asyncio.run(manager.get_default_datasource_async()) is None
 
@@ -2123,60 +1756,8 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
     assert isinstance(first.datasource_dao, FakeDatasourceDao)
 
 
-def test_datasource_manager_relationship_and_helper_fallback_branches(monkeypatch):
+def test_datasource_manager_helper_fallback_branches(monkeypatch):
     manager = DataSourceManager.__new__(DataSourceManager)
-    datasource = {
-        "semantic_configs": [
-            {
-                "relationships": [
-                    {
-                        "left_table": "orders",
-                        "right_table": "items",
-                        "join_conditions": [
-                            {"left_column": "order_id"},
-                            {"left_column": "order_id", "right_column": "order_id"},
-                        ],
-                    },
-                    {"left_column": "user_id", "right_column": "user_id"},
-                    {"left_column": "", "right_column": ""},
-                ]
-            }
-        ]
-    }
-
-    manager._normalize_semantic_relationships(datasource)
-
-    relationships = datasource["semantic_configs"][0]["relationships"]
-    assert len(relationships) == 2
-    assert relationships[0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
-    assert relationships[0]["relationship_type"] == "one_to_one"
-    assert relationships[1]["join_conditions"] == [{"left_column": "user_id", "right_column": "user_id"}]
-
-    for relationship_type in ("one_to_one", "one_to_many", "many_to_one"):
-        candidate = {
-            "semantic_configs": [{
-                "relationships": [{
-                    "left_column": "id",
-                    "right_column": "id",
-                    "relationship_type": relationship_type,
-                }],
-            }],
-        }
-        manager._normalize_semantic_relationships(candidate)
-        assert candidate["semantic_configs"][0]["relationships"][0]["relationship_type"] == relationship_type
-
-    invalid = {
-        "semantic_configs": [{
-            "relationships": [{
-                "left_column": "id",
-                "right_column": "id",
-                "relationship_type": "unknown",
-            }],
-        }],
-    }
-    with pytest.raises(ValueError, match="unknown"):
-        manager._normalize_semantic_relationships(invalid)
-
     merged = _merge_member_source_lines(
         current={},
         next_template_source_config={"org_name": "机构A", "org_code": "ORG_A", "host": "h", "port": 1, "database": "d"},
@@ -2278,8 +1859,8 @@ def test_datasource_manager_lookup_and_table_failure_paths(monkeypatch):
     ]
     store.datasources["ds_a"]["template_datasource_id"] = "ORG_HIVE"
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_hive_credentials",
-        lambda _config: {"username": "hive_user", "password": "hive_pwd"},
+        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        _execution_config_resolver({"username": "hive_user", "password": "hive_pwd"}),
     )
 
     async def run_async_checks():
@@ -2287,7 +1868,6 @@ def test_datasource_manager_lookup_and_table_failure_paths(monkeypatch):
         assert await manager.get_datasource_by_group_name_async("不存在") is None
         assert await manager.get_table_groups_async("missing") == []
         assert await manager.replace_table_groups_async("missing", []) is False
-        assert await manager.get_semantic_configs_async("missing") == []
         assert await manager.set_default_datasource_async("missing") is False
         assert await manager.clear_default_datasource_async("missing") is False
         assert await manager.delete_datasource_async("missing") is False
@@ -2329,34 +1909,3 @@ def test_datasource_manager_async_default_and_cache_schema_branches():
         assert store.datasources["ds_b"]["is_default"] is True
 
     asyncio.run(run_checks())
-
-
-def test_datasource_manager_semantic_name_scope_helpers():
-    store = _FakeStore()
-    store.semantic_configs["group_ds_a"] = [
-        {"id": "public_a", "name": "订单分析", "scope_type": "public", "create_by": "admin"},
-        {"id": "private_a", "name": "个人分析", "scope_type": "private", "create_by": "u1"},
-        {"id": "private_b", "name": "个人分析", "scope_type": "private", "create_by": "u2"},
-    ]
-    manager = _build_manager(store)
-
-    async def run_checks():
-        assert await manager._semantic_config_name_exists_async("ds_a", "") is False
-        assert await manager._semantic_config_name_exists_async("ds_a", "不存在") is False
-        assert await manager._semantic_config_name_exists_async("ds_a", "订单分析", scope_type="private", create_by="u1") is True
-        assert await manager._semantic_config_name_exists_async("ds_a", "个人分析", scope_type="private", create_by="u1") is True
-        assert await manager._semantic_config_name_exists_async("ds_a", "个人分析", scope_type="private", create_by="u3") is False
-        assert await manager._semantic_config_name_exists_async("ds_a", "个人分析", scope_type="public") is True
-
-    asyncio.run(run_checks())
-
-
-def test_datasource_manager_semantic_name_private_ignores_other_private_until_public():
-    store = _FakeStore()
-    store.semantic_configs["group_ds_a"] = [
-        {"id": "private_other", "name": "同名", "scope_type": "private", "create_by": "u2"},
-        {"id": "public_same", "name": "同名", "scope_type": "public", "create_by": "admin"},
-    ]
-    manager = _build_manager(store)
-
-    assert asyncio.run(manager._semantic_config_name_exists_async("ds_a", "同名", scope_type="private", create_by="u1")) is True

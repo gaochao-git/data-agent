@@ -8,28 +8,30 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 from ..daos.datasource_dao import DataSourceDao
-from .datasource_credentials import resolve_hive_credentials, resolve_mysql_credentials, sanitize_source_config
+from .datasource_credentials import resolve_execution_source_config, sanitize_source_config
+from .datasource_metadata import (
+    DataSourceMetadataAdapter,
+    DataSourceMetadataAdapterRegistry,
+    MetadataAdapterNotFoundError,
+    get_metadata_adapter_registry,
+)
 from .execution_permission import (
     filter_datasource_members_by_allowed_org_codes,
     filter_datasources_by_allowed_org_codes,
     get_allowed_org_codes_by_executor,
 )
-from .hive_meta_http import get_hive_meta_schema_async, get_hive_meta_tables_async
-from .hive_sync import HiveSyncService
-from .mysql_sync import MySQLSyncService
-from .semantic_core.common import ensure_dimension_logical_type, normalize_relationship_type
 
 logger = get_logger(__name__)
 
-TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _UNSET = object()
 SUPPORTED_QUERY_EXECUTOR_TYPES = {"direct", "http"}
+
+
 def _read_positive_int_env(name: str, default: int) -> int:
     raw_value = str(os.getenv(name) or "").strip()
     if not raw_value:
@@ -46,13 +48,6 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 
 DATASOURCE_SYNC_TIMEOUT_SECONDS = _read_positive_int_env("CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
-
-
-def _format_time(dt: Optional[datetime] = None) -> str:
-    """格式化时间为 YYYY-MM-DD HH:MM:SS。"""
-    if dt is None:
-        dt = datetime.now()
-    return dt.strftime(TIME_FORMAT)
 
 
 def _normalize_query_executor_type(source_type: str, query_executor_type: Optional[str] = None) -> str:
@@ -288,44 +283,13 @@ def _build_meta_source_config(datasource: dict) -> Dict[str, Any]:
 class DataSourceManager:
     """数据源管理器。"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        metadata_adapter_registry: Optional[DataSourceMetadataAdapterRegistry] = None,
+    ):
         self.datasource_dao = DataSourceDao()
+        self.metadata_adapter_registry = metadata_adapter_registry or get_metadata_adapter_registry()
         logger.info("数据源 DAO 已启用")
-
-    def _normalize_semantic_relationships(self, datasource: dict):
-        """规范化语义关系并补齐缺失的关系基数。"""
-        configs = datasource.get("semantic_configs", [])
-        for config in configs:
-            relationships = config.get("relationships", [])
-            normalized_relationships = []
-            for rel in relationships:
-                next_rel = dict(rel or {})
-                join_conditions = next_rel.get("join_conditions") or []
-                normalized_conditions = []
-                for cond in join_conditions:
-                    left_col = (cond or {}).get("left_column")
-                    right_col = (cond or {}).get("right_column")
-                    if left_col and right_col:
-                        normalized_conditions.append({"left_column": left_col, "right_column": right_col})
-
-                if not normalized_conditions:
-                    left_col = next_rel.get("left_column")
-                    right_col = next_rel.get("right_column")
-                    if left_col and right_col:
-                        normalized_conditions.append({"left_column": left_col, "right_column": right_col})
-
-                if not normalized_conditions:
-                    continue
-
-                next_rel["join_conditions"] = normalized_conditions
-                next_rel["left_column"] = normalized_conditions[0]["left_column"]
-                next_rel["right_column"] = normalized_conditions[0]["right_column"]
-                next_rel["relationship_type"] = normalize_relationship_type(
-                    next_rel.get("relationship_type")
-                )
-                normalized_relationships.append(next_rel)
-
-            config["relationships"] = normalized_relationships
 
     async def _get_datasource_or_raise_async(self, datasource_id: str) -> dict:
         """异步读取数据源，不存在时抛错。"""
@@ -342,23 +306,11 @@ class DataSourceManager:
         return datasource
 
     async def _load_datasource_async(self, datasource_id: str) -> dict:
-        """异步读取最新数据源并补充语义配置。"""
+        """异步读取最新数据源。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             raise ValueError(f"数据源写入后读取失败: {datasource_id}")
-        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
-        self._enrich_semantic_runtime_fields(datasource)
         return datasource
-
-    def _enrich_semantic_runtime_fields(self, datasource: dict):
-        """补齐语义配置运行时字段，供 DSL2SQL 识别方言和表结构。"""
-        source_type = datasource.get("source_type") or "mysql"
-        tables = datasource.get("ds_tables") or []
-        for config in datasource.get("semantic_configs") or []:
-            config["source_type"] = config.get("source_type") or source_type
-            config["tables"] = config.get("tables") or tables
-            if config.get("relationships") and not config.get("joins"):
-                config["joins"] = config.get("relationships")
 
     def _build_physical_metadata_source_config(self, datasource: Dict[str, Any]) -> Dict[str, Any]:
         """构建物理元数据读取使用的模板源配置。"""
@@ -366,6 +318,32 @@ class DataSourceManager:
         if source_type == "hive":
             return _build_meta_source_config(datasource)
         return dict(datasource.get("source_config") or {})
+
+    def _create_metadata_adapter(
+        self,
+        source_type: str,
+        source_config: Dict[str, Any],
+        *,
+        operation: str,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> DataSourceMetadataAdapter:
+        if not source_config:
+            raise ValueError("数据源连接配置不完整")
+        access_type = str(source_config.get("query_executor_type") or "direct").strip().lower() or "direct"
+        registry = getattr(self, "metadata_adapter_registry", None) or get_metadata_adapter_registry()
+        try:
+            return registry.create(
+                source_type,
+                access_type,
+                source_config,
+                user_id=user_id,
+                username=username,
+            )
+        except MetadataAdapterNotFoundError as exc:
+            if exc.access_type == "http" and exc.source_type != "hive":
+                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源") from exc
+            raise ValueError(f"不支持{operation}: {source_type}，只支持 mysql/hive") from exc
 
     async def _load_physical_schema_async(
         self,
@@ -376,39 +354,15 @@ class DataSourceManager:
         username: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """按物理连接配置读取完整表结构。"""
-        if source_type not in ("mysql", "hive"):
-            raise ValueError(f"不支持实时获取: {source_type}，只支持 mysql/hive")
-        if not source_config:
-            raise ValueError("数据源连接配置不完整")
-        if str(source_config.get("query_executor_type") or "direct").strip().lower() == "http":
-            if source_type != "hive":
-                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-            return await get_hive_meta_schema_async(source_config, table_names, user_id=user_id, username=username)
-
-        if source_type == "mysql":
-            mysql_credentials = resolve_mysql_credentials(source_config)
-            service = MySQLSyncService(
-                host=source_config.get("host", "localhost"),
-                port=source_config.get("port", 3306),
-                database=source_config.get("database", ""),
-                user=mysql_credentials["user"],
-                password=mysql_credentials["password"],
-            )
-            return await asyncio.wait_for(
-                service.get_full_schema_async(table_names),
-                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-            )
-
-        hive_credentials = resolve_hive_credentials(source_config)
-        service = HiveSyncService(
-            host=source_config.get("host", "localhost"),
-            port=source_config.get("port", 10000),
-            database=source_config.get("database", "default"),
-            username=hive_credentials.get("username"),
-            password=hive_credentials.get("password"),
+        adapter = self._create_metadata_adapter(
+            source_type,
+            source_config,
+            operation="实时获取",
+            user_id=user_id,
+            username=username,
         )
         return await asyncio.wait_for(
-            service.get_full_schema_async(table_names),
+            adapter.load_schema(table_names),
             timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
         )
 
@@ -420,174 +374,17 @@ class DataSourceManager:
         username: Optional[str] = None,
     ) -> List[Any]:
         """按物理连接配置读取表名列表。"""
-        if source_type not in ("mysql", "hive"):
-            raise ValueError(f"不支持获取表列表: {source_type}，只支持 mysql/hive")
-        if not source_config:
-            raise ValueError("数据源连接配置不完整")
-        if str(source_config.get("query_executor_type") or "direct").strip().lower() == "http":
-            if source_type != "hive":
-                raise ValueError("HTTP 元数据模式当前仅支持 Hive 数据源")
-            return await get_hive_meta_tables_async(source_config, user_id=user_id, username=username)
-
-        if source_type == "mysql":
-            mysql_credentials = resolve_mysql_credentials(source_config)
-            service = MySQLSyncService(
-                host=source_config.get("host", "localhost"),
-                port=source_config.get("port", 3306),
-                database=source_config.get("database", ""),
-                user=mysql_credentials["user"],
-                password=mysql_credentials["password"],
-            )
-            return await asyncio.wait_for(
-                service.get_tables_async(),
-                timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
-            )
-
-        hive_credentials = resolve_hive_credentials(source_config)
-        service = HiveSyncService(
-            host=source_config.get("host", "localhost"),
-            port=source_config.get("port", 10000),
-            database=source_config.get("database", "default"),
-            username=hive_credentials.get("username"),
-            password=hive_credentials.get("password"),
+        adapter = self._create_metadata_adapter(
+            source_type,
+            source_config,
+            operation="获取表列表",
+            user_id=user_id,
+            username=username,
         )
         return await asyncio.wait_for(
-            service.get_tables_async(),
+            adapter.list_tables(),
             timeout=DATASOURCE_SYNC_TIMEOUT_SECONDS,
         )
-
-    def _extract_metric_source_column(self, metric: Dict[str, Any]) -> str:
-        """从指标表达式中提取单字段物理列名。"""
-        expression = str(metric.get("expression") or "").strip()
-        match = re.match(r"^(?:COUNT|SUM|AVG|MAX|MIN)\s*\(\s*(?:DISTINCT\s+)?`?([^`(),\s]+)`?\s*\)$", expression, re.IGNORECASE)
-        if match:
-            return match.group(1).split(".")[-1].strip("`")
-        match = re.match(r"^`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`?$", expression)
-        if match:
-            return match.group(1).split(".")[-1].strip("`")
-        field_name = str(metric.get("field") or "").strip()
-        if field_name:
-            return field_name.split(".")[-1].strip("`")
-        return ""
-
-    def _format_column_dict_supplement(self, column_dict: Dict[str, Any]) -> str:
-        """将字段数据字典格式化为模型可读的字段补充说明。"""
-        parts: List[str] = []
-        enum_values = [
-            f"{item.get('value')}={item.get('label')}" if item.get("label") else str(item.get("value"))
-            for item in column_dict.get("enum_values") or []
-            if item.get("value")
-        ]
-        if enum_values:
-            parts.append(f"枚举值：{'；'.join(enum_values[:30])}")
-        storage_format = str(column_dict.get("storage_format") or "").strip()
-        if storage_format:
-            parts.append(f"存储格式：{storage_format}")
-        unit = str(column_dict.get("unit") or "").strip()
-        if unit:
-            parts.append(f"单位：{unit}")
-        return "\n".join(parts)
-
-    def _merge_metadata_supplement(self, current: Any, column_dict_supplement: str) -> str:
-        """合并指标集补充和物理字段字典补充，仅用于运行时提示词。"""
-        current_text = str(current or "").strip()
-        dict_text = str(column_dict_supplement or "").strip()
-        if not current_text:
-            return dict_text
-        if not dict_text or dict_text in current_text:
-            return current_text
-        return f"{current_text}\n{dict_text}"
-
-    @staticmethod
-    def _column_dict_enum_allowed_values(column_dict: Dict[str, Any]) -> List[str]:
-        return [
-            str(enum_item.get("label") or enum_item.get("value")).strip()
-            for enum_item in column_dict.get("enum_values") or []
-            if str(enum_item.get("label") or enum_item.get("value") or "").strip()
-        ]
-
-    @staticmethod
-    def _column_dict_enum_mapping(column_dict: Dict[str, Any]) -> Dict[str, str]:
-        return {
-            str(enum_item.get("label") or enum_item.get("value")).strip(): str(enum_item.get("value")).strip()
-            for enum_item in column_dict.get("enum_values") or []
-            if str(enum_item.get("label") or enum_item.get("value") or "").strip() and str(enum_item.get("value") or "").strip()
-        }
-
-    @staticmethod
-    def _enum_mapping_covers_allowed_values(allowed_values: Any, mapping: Any) -> bool:
-        allowed_set = {str(item).strip() for item in allowed_values or [] if str(item or "").strip()} if isinstance(allowed_values, list) else set()
-        mapping_keys = {str(key).strip() for key, value in (mapping or {}).items() if str(key or "").strip() and str(value or "").strip()} if isinstance(mapping, dict) else set()
-        return bool(allowed_set and allowed_set <= mapping_keys)
-
-    def _merge_column_dict_enum_config(self, dimension: Dict[str, Any], column_dict: Dict[str, Any]) -> None:
-        allowed_values = self._column_dict_enum_allowed_values(column_dict)
-        mapping = self._column_dict_enum_mapping(column_dict)
-        if allowed_values and not dimension.get("allowed_values"):
-            dimension["allowed_values"] = allowed_values
-        if mapping and not dimension.get("mapping"):
-            dimension["mapping"] = mapping
-        if not dimension.get("logical_type") and self._enum_mapping_covers_allowed_values(dimension.get("allowed_values"), dimension.get("mapping")):
-            dimension["logical_type"] = "enum"
-
-    def _merge_dimension_column_dict(self, dimension: Dict[str, Any], column_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        if not column_dict:
-            return ensure_dimension_logical_type(dimension)
-        self._merge_column_dict_enum_config(dimension, column_dict)
-        dimension = ensure_dimension_logical_type(dimension)
-        supplement = self._format_column_dict_supplement(column_dict)
-        if supplement:
-            dimension["metadata_supplement"] = self._merge_metadata_supplement(dimension.get("metadata_supplement"), supplement)
-        return dimension
-
-    @staticmethod
-    def _normalize_runtime_semantic_config(config: Dict[str, Any]) -> Dict[str, Any]:
-        next_config = dict(config or {})
-        next_config["dimensions"] = [ensure_dimension_logical_type(item) for item in next_config.get("dimensions") or []]
-        return next_config
-
-    def _merge_metric_column_dict(self, metric: Dict[str, Any], column_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        if not column_dict:
-            return metric
-        supplement = self._format_column_dict_supplement(column_dict)
-        if supplement:
-            metric["metadata_supplement"] = self._merge_metadata_supplement(metric.get("metadata_supplement"), supplement)
-        return metric
-
-    def _merge_column_dict_into_semantic_config(self, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]) -> Dict[str, Any]:
-        """把物理字段数据字典临时合并到语义配置运行时对象。"""
-        next_config = dict(config or {})
-        next_dimensions: List[Dict[str, Any]] = []
-        for item in next_config.get("dimensions") or []:
-            dimension = dict(item or {})
-            key = (str(dimension.get("table") or "").strip(), str(dimension.get("column") or dimension.get("field_name") or "").strip())
-            next_dimensions.append(self._merge_dimension_column_dict(dimension, column_dicts.get(key)))
-
-        next_metrics: List[Dict[str, Any]] = []
-        for item in next_config.get("metrics") or []:
-            metric = dict(item or {})
-            key = (str(metric.get("table") or "").strip(), self._extract_metric_source_column(metric))
-            next_metrics.append(self._merge_metric_column_dict(metric, column_dicts.get(key)))
-
-        next_config["dimensions"] = next_dimensions
-        next_config["metrics"] = next_metrics
-        return next_config
-
-    async def _enrich_semantic_config_column_dict_async(self, datasource_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """按物理字段字典增强单个语义配置运行时对象。"""
-        group_id = str((config or {}).get("group_id") or "").strip()
-        if not group_id:
-            datasource = await self.datasource_dao.get_datasource_async(datasource_id)
-            group_id = str((datasource or {}).get("group_id") or "").strip()
-        if not group_id:
-            return self._normalize_runtime_semantic_config(config)
-        try:
-            column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
-        except AttributeError:
-            column_dicts = {}
-        if not column_dicts:
-            return self._normalize_runtime_semantic_config(config)
-        return self._merge_column_dict_into_semantic_config(config, column_dicts)
 
     async def _save_datasource_async(
         self,
@@ -683,12 +480,7 @@ class DataSourceManager:
 
     async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
         """异步获取指定数据源。"""
-        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
-        if not datasource:
-            return None
-        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
-        self._enrich_semantic_runtime_fields(datasource)
-        return datasource
+        return await self.datasource_dao.get_datasource_async(datasource_id)
 
     async def get_datasource_meta_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
         """异步获取数据源轻量元信息，不加载表结构和语义配置。"""
@@ -740,21 +532,13 @@ class DataSourceManager:
                 "port": member.get("port"),
                 "database": member.get("database"),
             }
-            if query_executor_type == "http":
-                if not org_code:
-                    raise ValueError("HTTP 执行对象缺少机构编码")
-                source_config["org_code"] = org_code
-                source_config["org_name"] = str(member.get("org_name") or "").strip()
-            elif source_type == "mysql":
-                credentials = resolve_mysql_credentials(source_config)
-                source_config["user"] = credentials["user"]
-                source_config["password"] = credentials["password"]
-            elif source_type == "hive" and query_executor_type == "direct":
-                credentials = resolve_hive_credentials(source_config)
-                if credentials.get("username"):
-                    source_config["username"] = credentials["username"]
-                if credentials.get("password"):
-                    source_config["password"] = credentials["password"]
+            source_config = resolve_execution_source_config(
+                source_type,
+                query_executor_type,
+                source_config,
+                org_code=org_code,
+                org_name=member.get("org_name") or "",
+            )
             result.append({
                 "id": member_id,
                 "member_datasource_id": member_id,
@@ -803,12 +587,7 @@ class DataSourceManager:
 
     async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
         """异步根据数据源组名称获取数据源。"""
-        datasource = await self.datasource_dao.get_datasource_by_group_name_async(group_name)
-        if not datasource:
-            return None
-        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
-        self._enrich_semantic_runtime_fields(datasource)
-        return datasource
+        return await self.datasource_dao.get_datasource_by_group_name_async(group_name)
 
     async def get_table_groups_async(self, datasource_id: str) -> List[Dict[str, Any]]:
         """异步获取数据源内的表分组关系。"""
@@ -908,6 +687,14 @@ class DataSourceManager:
         column_names.discard("")
         column_dicts = await self.datasource_dao.get_column_dicts_by_table_async(datasource.get("group_id") or "", normalized_table_name)
         return {column_name: column_dict for column_name, column_dict in column_dicts.items() if column_name in column_names}
+
+    async def get_datasource_column_dicts_async(self, datasource_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+        """异步获取数据源下全部已维护字段字典。"""
+        datasource = await self.get_datasource_meta_async(datasource_id)
+        group_id = str((datasource or {}).get("group_id") or "").strip()
+        if not group_id:
+            return {}
+        return await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
 
     async def replace_column_dict_async(
         self,
@@ -1155,206 +942,13 @@ class DataSourceManager:
         if not datasource:
             return False
 
-        await self.datasource_dao.soft_delete_group_async(datasource.get("group_id") or datasource_id, update_by=update_by or "", update_by_name=update_by_name or "")
-        logger.info("删除数据源: %s, force=%s", datasource_id, force)
-        return True
-
-    async def get_semantic_configs_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
-        """异步获取数据源的所有语义配置。"""
-        datasource = await self.get_datasource_async(datasource_id)
-        if not datasource:
-            return []
-        configs = datasource.get("semantic_configs") or []
-        # 兼容历史配置：读取时补齐关系基数，但不在本次读取中回写数据库。
-        self._normalize_semantic_relationships({"semantic_configs": configs})
-        normalized_user_id = str(user_id or "").strip()
-        if not normalized_user_id:
-            return configs
-        return [
-            config for config in configs
-            if config.get("scope_type", "public") == "public"
-            or (
-                config.get("scope_type") == "private"
-                and str(config.get("create_by") or "").strip() == normalized_user_id
+        async with self.datasource_dao.transaction_async():
+            await self.datasource_dao.soft_delete_group_async(
+                datasource.get("group_id") or datasource_id,
+                update_by=update_by or "",
+                update_by_name=update_by_name or "",
             )
-        ]
-
-    async def get_semantic_config_directory_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
-        """读取当前用户可见的轻量指标集目录，不加载数据源运行态字段。"""
-        normalized_datasource_id = str(datasource_id or "").strip()
-        if not normalized_datasource_id:
-            return []
-        return await self.datasource_dao.get_semantic_config_directory_by_group_id_async(
-            normalized_datasource_id,
-            user_id,
-        )
-
-    async def get_runtime_semantic_configs_async(self, datasource_id: str, user_id: str = "") -> List[dict]:
-        """异步获取智能问数运行时语义配置列表，并临时合并物理字段字典。"""
-        configs = await self.get_semantic_configs_async(datasource_id, user_id)
-        if not configs:
-            return []
-        try:
-            datasource = await self.datasource_dao.get_datasource_async(datasource_id)
-            group_id = str((datasource or {}).get("group_id") or "").strip()
-            if not group_id:
-                return [self._normalize_runtime_semantic_config(config) for config in configs]
-            column_dicts = await self.datasource_dao.get_column_dicts_by_group_id_async(group_id)
-        except AttributeError:
-            column_dicts = {}
-        except Exception as e:
-            logger.warning("读取字段数据字典失败，指标集选择降级使用原始配置: datasource_id=%s error=%s", datasource_id, e)
-            column_dicts = {}
-        if not column_dicts:
-            return [self._normalize_runtime_semantic_config(config) for config in configs]
-        return [self._merge_column_dict_into_semantic_config(config, column_dicts) for config in configs]
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[dict]:
-        """异步获取指定的语义配置。"""
-        configs = await self.get_semantic_configs_async(datasource_id, user_id)
-        for config in configs:
-            if config.get("id") == config_id or config.get("semantic_config_id") == config_id:
-                return config
-        return None
-
-    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[dict]:
-        """异步获取智能问数运行时语义配置，并临时合并物理字段字典。"""
-        config = await self.get_semantic_config_async(datasource_id, config_id, user_id)
-        if not config:
-            return None
-        return await self._enrich_semantic_config_column_dict_async(datasource_id, config)
-
-    async def _semantic_config_name_exists_async(self, datasource_id: str, name: str, exclude_config_id: Optional[str] = None, scope_type: str = "public", create_by: str = "") -> bool:
-        """异步检查当前可见范围内是否已有同名未删除语义配置。"""
-        normalized_name = str(name or "").strip()
-        normalized_exclude_id = str(exclude_config_id or "").strip()
-        normalized_scope_type = str(scope_type or "public").strip().lower()
-        normalized_create_by = str(create_by or "").strip()
-        if not normalized_name:
-            return False
-        for config in await self.get_semantic_configs_async(datasource_id):
-            config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
-            if normalized_exclude_id and config_id == normalized_exclude_id:
-                continue
-            config_name = str(config.get("name") or config.get("semantic_config_name") or "").strip()
-            if config_name != normalized_name:
-                continue
-            config_scope_type = str(config.get("scope_type") or "public").strip().lower()
-            config_create_by = str(config.get("create_by") or "").strip()
-            if normalized_scope_type == "private":
-                if config_scope_type == "public" or (config_scope_type == "private" and config_create_by == normalized_create_by):
-                    return True
-            elif config_scope_type == "public" or config_name == normalized_name:
-                return True
-        return False
-
-    async def create_semantic_config_async(
-        self,
-        datasource_id: str,
-        name: str,
-        description: Optional[str] = None,
-        ontology_rules: Optional[str] = None,
-        enabled: bool = True,
-        metrics: Optional[List[dict]] = None,
-        dimensions: Optional[List[dict]] = None,
-        relationships: Optional[List[dict]] = None,
-        scope_type: str = "private",
-        create_by: str = "",
-        create_by_name: str = "",
-    ) -> Optional[dict]:
-        """异步创建语义配置。"""
-        datasource = await self.get_datasource_async(datasource_id)
-        if not datasource:
-            return None
-
-        normalized_name = str(name or "").strip()
-        if not normalized_name:
-            raise ValueError("语义配置名称不能为空")
-        normalized_scope_type = str(scope_type or "private").strip().lower()
-        if normalized_scope_type not in {"public", "private"}:
-            raise ValueError("语义配置范围只能是 public 或 private")
-        operator = str(create_by or "").strip()
-        if await self._semantic_config_name_exists_async(datasource_id, normalized_name, scope_type=normalized_scope_type, create_by=operator):
-            raise ValueError(f"语义配置名称已存在: {normalized_name}")
-
-        now = datetime.now()
-        config_id = f"sc_{now.strftime('%Y%m%d%H%M%S')}_{now.microsecond}"
-        now_str = _format_time(now)
-        config = {
-            "id": config_id,
-            "group_id": datasource.get("group_id"),
-            "name": normalized_name,
-            "description": description or "",
-            "ontology_rules": ontology_rules or "",
-            "enabled": enabled,
-            "metrics": metrics or [],
-            "dimensions": dimensions or [],
-            "relationships": relationships or [],
-            "scope_type": normalized_scope_type,
-            "create_time": now_str,
-            "update_time": now_str,
-            "create_by": operator,
-            "create_by_name": create_by_name or "",
-            "update_by": operator,
-            "update_by_name": create_by_name or "",
-        }
-        self._normalize_semantic_relationships({"semantic_configs": [config]})
-        await self.datasource_dao.upsert_semantic_config_async(datasource_id, config)
-
-        logger.info("创建语义配置: %s - %s", config_id, name)
-        return await self.get_semantic_config_async(datasource_id, config_id)
-
-    async def update_semantic_config_async(
-        self,
-        datasource_id: str,
-        config_id: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        ontology_rules: Optional[str] = None,
-        enabled: Optional[bool] = None,
-        metrics: Optional[List[dict]] = None,
-        dimensions: Optional[List[dict]] = None,
-        relationships: Optional[List[dict]] = None,
-        update_by: str = "",
-        update_by_name: str = "",
-    ) -> Optional[dict]:
-        """异步更新语义配置。"""
-        current = await self.get_semantic_config_async(datasource_id, config_id)
-        if not current:
-            return None
-
-        next_name = str(name).strip() if name is not None else str(current.get("name") or "").strip()
-        if not next_name:
-            raise ValueError("语义配置名称不能为空")
-        if await self._semantic_config_name_exists_async(datasource_id, next_name, exclude_config_id=config_id, scope_type=current.get("scope_type", "public"), create_by=current.get("create_by", "")):
-            raise ValueError(f"语义配置名称已存在: {next_name}")
-
-        config = {
-            **current,
-            "name": next_name,
-            "description": description if description is not None else current.get("description"),
-            "ontology_rules": ontology_rules if ontology_rules is not None else current.get("ontology_rules"),
-            "enabled": enabled if enabled is not None else current.get("enabled", True),
-            "metrics": metrics if metrics is not None else current.get("metrics", []),
-            "dimensions": dimensions if dimensions is not None else current.get("dimensions", []),
-            "relationships": relationships if relationships is not None else current.get("relationships", []),
-            "update_time": _format_time(),
-            "update_by": str(update_by or current.get("update_by") or "").strip(),
-            "update_by_name": str(update_by_name or current.get("update_by_name") or "").strip(),
-        }
-        self._normalize_semantic_relationships({"semantic_configs": [config]})
-        await self.datasource_dao.upsert_semantic_config_async(datasource_id, config)
-
-        logger.info("更新语义配置: %s", config_id)
-        return await self.get_semantic_config_async(datasource_id, config_id)
-
-    async def delete_semantic_config_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = "") -> bool:
-        """异步删除语义配置。"""
-        config = await self.get_semantic_config_async(datasource_id, config_id)
-        if not config:
-            return False
-        await self.datasource_dao.soft_delete_semantic_config_async(config_id, update_by=update_by or config.get("update_by") or "", update_by_name=update_by_name or config.get("update_by_name") or "")
-        logger.info("删除语义配置: %s", config_id)
+        logger.info("删除数据源: %s, force=%s", datasource_id, force)
         return True
 
     async def set_default_datasource_async(self, datasource_id: str, update_by: str = "", update_by_name: str = "") -> bool:
@@ -1377,11 +971,7 @@ class DataSourceManager:
 
     async def get_default_datasource_async(self) -> Optional[Dict[str, Any]]:
         """异步获取默认数据源。"""
-        datasource = await self.datasource_dao.get_default_datasource_async()
-        if not datasource:
-            return None
-        datasource["semantic_configs"] = await self.datasource_dao.get_semantic_configs_by_group_id_async(datasource.get("group_id"))
-        return datasource
+        return await self.datasource_dao.get_default_datasource_async()
 
     async def clear_default_datasource_async(self, datasource_id: str, update_by: str = "", update_by_name: str = "") -> bool:
         """异步取消数据源的默认标记。"""

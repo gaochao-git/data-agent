@@ -40,7 +40,7 @@ from ..services.evaluation_service import (
 )
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
-from ..services.semantic_config_service import can_mutate_semantic_config
+from ..services.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
 from ..services.semantic_core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
@@ -586,8 +586,7 @@ async def _ensure_evaluation_semantic_permission(
     admin_manage: bool = False,
 ) -> Dict[str, Any]:
     """评测入口按指标集维护权限校验。"""
-    ds_manager = get_datasource_manager()
-    config = await ds_manager.get_semantic_config_async(datasource_id, config_id)
+    config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
     if not config:
         raise HTTPException(status_code=404, detail=f"语义配置不存在: {config_id}")
     user_id = str(getattr(current_user, "user_id", "") or "").strip()

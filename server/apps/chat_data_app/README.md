@@ -455,8 +455,7 @@ chat_data_app/
 ├── services/
 │   ├── semantic_searchs.py              # 语义工具处理器
 │   ├── datasource_manager.py          # 数据源管理
-│   ├── mysql_sync.py                  # MySQL 元数据同步
-│   └── hive_sync.py                   # Hive 元数据同步
+│   └── datasource_metadata.py         # MySQL/Hive 物理元数据实现、适配器与注册表
 ├── evaluate/
 │   └── accuracy/                      # 页面/API 准确率评测执行器
 ├── tests/

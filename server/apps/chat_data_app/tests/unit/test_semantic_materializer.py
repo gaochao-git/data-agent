@@ -22,15 +22,7 @@ class _FakeDatasourceManager:
     def __init__(self, configs):
         self.configs = configs
 
-    async def get_runtime_semantic_configs_async(self, datasource_id, user_id):
-        assert datasource_id == "ds_1"
-        assert user_id == "user_1"
-        return self.configs
-
-    async def get_datasource_async(self, datasource_id):
-        return {"id": datasource_id, "source_type": "mysql"}
-
-    async def get_runtime_semantic_config_async(self, datasource_id, config_id, user_id=""):
+    async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
         assert datasource_id == "ds_1"
         assert user_id == "user_1"
         return next((config for config in self.configs if config["id"] == config_id), None)
@@ -62,7 +54,7 @@ def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(mon
     configs = [_config(), _config("sc_disabled", enabled=False)]
     monkeypatch.setattr(
         semantic_materializer,
-        "get_datasource_manager",
+        "get_semantic_config_service",
         lambda: _FakeDatasourceManager(configs),
     )
     calls = []
@@ -92,7 +84,7 @@ def test_materializer_cache_key_includes_config_content(monkeypatch):
     configs = [_config()]
     monkeypatch.setattr(
         semantic_materializer,
-        "get_datasource_manager",
+        "get_semantic_config_service",
         lambda: _FakeDatasourceManager(configs),
     )
     calls = []
@@ -115,7 +107,7 @@ def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     monkeypatch.setattr(
         semantic_materializer,
-        "get_datasource_manager",
+        "get_semantic_config_service",
         lambda: _FakeDatasourceManager([]),
     )
     runtime = _FakeRuntime()
@@ -139,7 +131,7 @@ def test_materializer_only_overwrites_selected_models(monkeypatch):
     configs = [_config("sc_old"), _config("sc_keep")]
     monkeypatch.setattr(
         semantic_materializer,
-        "get_datasource_manager",
+        "get_semantic_config_service",
         lambda: _FakeDatasourceManager(configs),
     )
 

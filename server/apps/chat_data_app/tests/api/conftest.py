@@ -24,7 +24,15 @@ from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app import routes as chat_data_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_admin as datasource_admin_routes  # noqa: E402
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
-from apps.chat_data_app.services import query_providers  # noqa: E402
+from apps.chat_data_app.routers import evaluation as evaluation_routes  # noqa: E402
+from apps.chat_data_app.routers import semantic_config as semantic_config_routes  # noqa: E402
+from apps.chat_data_app.services import (  # noqa: E402
+    dashboard_spec_service,
+    query_providers,
+    semantic_model_repository,
+    semantic_model_search,
+    semantic_query_service,
+)
 from utils.crypto import decrypt_env_value  # noqa: E402
 from utils.response import chatdata_http_exception_handler, chatdata_validation_exception_handler  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
@@ -55,21 +63,34 @@ def client():
         yield test_client
 
 
+def _patch_test_services(monkeypatch, manager):
+    semantic_service = FakeSemanticConfigService(manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(evaluation_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(evaluation_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_query_service, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_model_repository, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_model_search, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_model_search, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(dashboard_spec_service, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(dashboard_spec_service, "get_semantic_config_service", lambda: semantic_service)
+    return semantic_service
+
+
 @pytest.fixture()
 def patch_datasource_manager(monkeypatch):
-    def _patch(manager):
-        monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
-        monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
-        monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
-
-    return _patch
+    return lambda manager: _patch_test_services(monkeypatch, manager)
 
 
 class FakeDatasourceManager:
     def __init__(self):
-        self.created_semantic_kwargs = None
-        self.updated_semantic_kwargs = None
-        self.deleted_config_id = None
         self.replaced_table_groups = None
         self.replaced_table_groups_operator = None
         self.replaced_column_dict = None
@@ -174,53 +195,6 @@ class FakeDatasourceManager:
     async def get_live_schema_async(self, datasource_id: str, table_names=None, **_kwargs):
         return await self.get_cached_schema_async(datasource_id, table_names=table_names)
 
-    async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
-        configs = list((self.datasources.get(datasource_id) or {}).get("semantic_configs") or [])
-        normalized_user_id = str(user_id or "").strip()
-        if not normalized_user_id:
-            return configs
-        return [
-            config for config in configs
-            if config.get("scope_type", "public") == "public"
-            or (
-                config.get("scope_type") == "private"
-                and str(config.get("create_by") or "").strip() == normalized_user_id
-            )
-        ]
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
-        for config in await self.get_semantic_configs_async(datasource_id, user_id):
-            if config.get("id") == config_id:
-                return dict(config)
-        return None
-
-    async def get_runtime_semantic_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
-        return await self.get_semantic_config_async(datasource_id, config_id, user_id)
-
-    async def create_semantic_config_async(self, **kwargs):
-        self.created_semantic_kwargs = dict(kwargs)
-        config = {
-            "id": "cfg_new",
-            "scope_type": kwargs.get("scope_type"),
-            "create_by": kwargs.get("create_by"),
-            **kwargs,
-        }
-        self.datasources[kwargs["datasource_id"]]["semantic_configs"].append(config)
-        return config
-
-    async def update_semantic_config_async(self, **kwargs):
-        self.updated_semantic_kwargs = dict(kwargs)
-        config = await self.get_semantic_config_async(kwargs["datasource_id"], kwargs["config_id"])
-        if not config:
-            return None
-        config.update({key: value for key, value in kwargs.items() if key not in {"datasource_id", "config_id"}})
-        config["id"] = kwargs["config_id"]
-        return config
-
-    async def delete_semantic_config_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = ""):
-        self.deleted_config_id = config_id
-        return bool(await self.get_semantic_config_async(datasource_id, config_id))
-
     async def update_datasource_async(self, datasource_id: str, **kwargs):
         datasource = self.datasources.get(datasource_id)
         if not datasource:
@@ -294,6 +268,77 @@ class FakeDatasourceManager:
         self.deleted_datasource_id = datasource_id
         self.delete_update_by = update_by
         return True
+
+
+class FakeSemanticConfigService:
+    """API 测试使用的独立语义配置服务，底层复用同一份内存数据。"""
+
+    def __init__(self, datasource_manager: FakeDatasourceManager):
+        self.datasource_manager = datasource_manager
+        self.created_kwargs = None
+        self.updated_kwargs = None
+        self.deleted_config_id = None
+
+    def _all_configs(self, datasource_id: str):
+        return (self.datasource_manager.datasources.get(datasource_id) or {}).get("semantic_configs") or []
+
+    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+        configs = self._all_configs(datasource_id)
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return [dict(config) for config in configs]
+        return [
+            dict(config)
+            for config in configs
+            if config.get("scope_type", "public") == "public"
+            or (
+                config.get("scope_type") == "private"
+                and str(config.get("create_by") or "").strip() == normalized_user_id
+            )
+        ]
+
+    async def get_directory_async(self, datasource_id: str, user_id: str = ""):
+        return [
+            {
+                "id": config.get("id"),
+                "name": config.get("name") or "",
+                "description": config.get("description") or "",
+                "enabled": config.get("enabled", True),
+                "metrics_total": len(config.get("metrics") or []),
+                "dimensions_total": len(config.get("dimensions") or []),
+            }
+            for config in await self.get_configs_async(datasource_id, user_id)
+        ]
+
+    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        for config in await self.get_configs_async(datasource_id, user_id):
+            if config.get("id") == config_id:
+                return config
+        return None
+
+    async def get_runtime_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        return await self.get_config_async(datasource_id, config_id, user_id)
+
+    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = ""):
+        return await self.get_configs_async(datasource_id, user_id)
+
+    async def create_async(self, datasource_id: str, **kwargs):
+        self.created_kwargs = {"datasource_id": datasource_id, **kwargs}
+        config = {"id": "cfg_new", **kwargs}
+        self._all_configs(datasource_id).append(config)
+        return dict(config)
+
+    async def update_async(self, datasource_id: str, config_id: str, **kwargs):
+        self.updated_kwargs = {"datasource_id": datasource_id, "config_id": config_id, **kwargs}
+        for config in self._all_configs(datasource_id):
+            if config.get("id") == config_id:
+                config.update(kwargs)
+                return dict(config)
+        return None
+
+    async def delete_async(self, datasource_id: str, config_id: str, update_by: str = "", update_by_name: str = ""):
+        self.deleted_config_id = config_id
+        return any(config.get("id") == config_id for config in self._all_configs(datasource_id))
 
 
 class FakeDashboardService:
@@ -399,8 +444,10 @@ class FakeDashboardService:
 
 
 @pytest.fixture()
-def fake_datasource_manager():
-    return FakeDatasourceManager()
+def fake_datasource_manager(monkeypatch):
+    manager = FakeDatasourceManager()
+    _patch_test_services(monkeypatch, manager)
+    return manager
 
 
 @pytest.fixture()

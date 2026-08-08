@@ -14,6 +14,7 @@ from utils.llm_json import parse_llm_json
 from .context_budget import REQUEST_OVERHEAD_TOKENS, estimate_text_tokens, get_model_context_budget
 from .datasource_manager import get_datasource_manager
 from .llm_config import get_chat_data_llm
+from .semantic_config_service import get_semantic_config_service
 
 logger = get_logger(__name__)
 
@@ -322,11 +323,10 @@ async def search_semantic_models(
         return None
 
     if semantic_configs is None:
-        ds_manager = get_datasource_manager()
-        if hasattr(ds_manager, "get_runtime_semantic_configs_async"):
-            configs = await ds_manager.get_runtime_semantic_configs_async(normalized_datasource_id, normalized_user_id)
-        else:
-            configs = await ds_manager.get_semantic_configs_async(normalized_datasource_id, normalized_user_id)
+        configs = await get_semantic_config_service().get_runtime_configs_async(
+            normalized_datasource_id,
+            normalized_user_id,
+        )
     else:
         configs = semantic_configs
     enabled_configs = [

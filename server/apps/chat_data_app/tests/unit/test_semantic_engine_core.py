@@ -448,8 +448,17 @@ async def test_semantic_model_repository_keeps_runtime_and_full_modes_distinct()
             return [{"name": "orders"}]
 
     manager = FakeManager()
-    runtime = await load_semantic_model("ds", "runtime", mode="runtime", manager=manager)
-    full = await load_semantic_model("ds", "full", mode="full", manager=manager)
+
+    class FakeSemanticService:
+        async def get_runtime_config_async(self, datasource_id, config_id, user_id=""):
+            return await manager.get_runtime_semantic_config_async(datasource_id, config_id)
+
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return (await manager.get_semantic_configs_async(datasource_id, user_id))[0]
+
+    semantic_service = FakeSemanticService()
+    runtime = await load_semantic_model("ds", "runtime", mode="runtime", manager=manager, semantic_service=semantic_service)
+    full = await load_semantic_model("ds", "full", mode="full", manager=manager, semantic_service=semantic_service)
 
     assert runtime["source_type"] == "hive"
     assert runtime["joins"] == runtime["relationships"]

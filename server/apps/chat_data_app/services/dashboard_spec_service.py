@@ -12,6 +12,7 @@ from ..chart_types import get_chart_type_label, is_supported_chart_type_input, n
 from .dashboard_service import get_dashboard_service
 from .datasource_manager import get_datasource_manager
 from .semantic_model_repository import load_semantic_model
+from .semantic_config_service import get_semantic_config_service
 from .semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
 from .semantic_query_service import SemanticAIQueryAdapter
 from .sql_executor import get_executor, resolve_query_timeout
@@ -202,6 +203,7 @@ async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config
             user_id=user_id,
             mode="full",
             manager=get_datasource_manager(),
+            semantic_service=get_semantic_config_service(),
         )
     except ValueError as exc:
         if str(exc) == "缺少语义模型ID":

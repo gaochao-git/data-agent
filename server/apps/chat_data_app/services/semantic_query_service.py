@@ -19,6 +19,7 @@ from .semantic_core.query_plan import (
 from .semantic_core.semantic_sql.compiler import SemanticSQLCompiler
 from .semantic_core.semantic_sql.dialect import get_dialect
 from .semantic_model_repository import load_semantic_model
+from .semantic_config_service import get_semantic_config_service
 
 logger = get_logger(__name__)
 
@@ -1300,6 +1301,7 @@ async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: s
             user_id=_normalize_text(user_id),
             mode="runtime",
             manager=get_datasource_manager(),
+            semantic_service=get_semantic_config_service(),
         )
     except ValueError as exc:
         message = str(exc)

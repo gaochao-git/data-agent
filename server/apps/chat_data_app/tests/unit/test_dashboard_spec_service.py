@@ -105,7 +105,15 @@ def test_get_dashboard_spec_semantic_config_keeps_selected_source_type(monkeypat
             assert datasource_id == "ds_a"
             return []
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: FakeManager())
+    manager = FakeManager()
+
+    class FakeSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            datasource = await manager.get_datasource_async(datasource_id)
+            return datasource["semantic_configs"][0] if datasource and config_id == "sc_a" else None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_semantic_config_service", lambda: FakeSemanticService())
 
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "sc_a"))
 
@@ -465,7 +473,14 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_datasource_async(self, datasource_id):
             return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: MissingManager())
+    missing_manager = MissingManager()
+
+    class MissingSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: missing_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_semantic_config_service", lambda: MissingSemanticService())
     try:
         asyncio.run(get_dashboard_spec_semantic_config("missing", "sc_a"))
     except ValueError as err:
@@ -490,7 +505,18 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_cached_schema_async(self, datasource_id):
             return [{"table_name": "orders"}]
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: LazyManager())
+    lazy_manager = LazyManager()
+
+    class LazySemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return {
+                "id": config_id,
+                "enabled": config_id == "enabled",
+                "relationships": [{"left_table": "a"}],
+            } if config_id in {"enabled", "disabled"} else None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: lazy_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_semantic_config_service", lambda: LazySemanticService())
     config = asyncio.run(get_dashboard_spec_semantic_config("ds_a", "enabled"))
     assert config["id"] == "enabled"
     assert config["joins"] == [{"left_table": "a"}]
@@ -503,7 +529,14 @@ def test_get_dashboard_spec_semantic_config_errors_and_lazy_configs(monkeypatch)
         async def get_cached_schema_async(self, datasource_id):
             return []
 
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: NoConfigManager())
+    no_config_manager = NoConfigManager()
+
+    class NoConfigSemanticService:
+        async def get_config_async(self, datasource_id, config_id, user_id=""):
+            return None
+
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_datasource_manager", lambda: no_config_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_semantic_config_service", lambda: NoConfigSemanticService())
     try:
         asyncio.run(get_dashboard_spec_semantic_config("ds_a", "missing_config"))
     except ValueError as err:

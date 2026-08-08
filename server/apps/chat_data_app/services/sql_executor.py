@@ -14,11 +14,19 @@ import re
 import os
 
 from utils.logger import get_logger
-from utils.crypto import decrypt_password
 from utils.alarm import emit_dangerous_sql_alarm, emit_external_api_alarm, emit_database_connection_alarm
 from utils.db_failover import is_mysql_connection_error
-from .datasource_credentials import build_hive_connect_params, resolve_hive_credentials, resolve_mysql_credentials
-from .hive_sync import _apply_socket_timeout, SOCKET_TIMEOUT_SECONDS
+from .datasource_credentials import (
+    apply_hive_socket_timeout,
+    build_hive_connect_params,
+    get_http_auth_token,
+    HIVE_SOCKET_TIMEOUT_SECONDS,
+    resolve_execution_source_config,
+)
+
+# Keep the executor seam patchable without duplicating Hive transport logic.
+_apply_socket_timeout = apply_hive_socket_timeout
+SOCKET_TIMEOUT_SECONDS = HIVE_SOCKET_TIMEOUT_SECONDS
 from .runtime_config import DEFAULT_ROW_LIMIT, normalize_row_limit
 from .sql_parser import extract_top_level_limit_count, validate_raw_single_sql_statement
 
@@ -45,15 +53,7 @@ HTTP_VERIFY_TLS = str(os.getenv("CHAT_DATA_HTTP_VERIFY_TLS", "false")).strip().l
 JS_SAFE_INTEGER_MAX = 2**53 - 1
 
 
-def _get_http_auth_token() -> str:
-    """读取 ChatData HTTP 认证 token，环境变量中存储 SM4 密文。"""
-    encrypted_token = str(os.getenv("CHAT_DATA_HTTP_AUTH_TOKEN") or "").strip()
-    if not encrypted_token:
-        return ""
-    return decrypt_password(encrypted_token)
-
-
-HTTP_AUTH_TOKEN = _get_http_auth_token()
+HTTP_AUTH_TOKEN = get_http_auth_token()
 
 
 def _http_payload_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1189,7 +1189,13 @@ def get_executor(datasource: dict) -> SQLExecutor:
     """
     source_type = datasource.get("source_type")
     query_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
-    config = dict(datasource.get("source_config", {}) or {})
+    config = resolve_execution_source_config(
+        source_type,
+        query_executor_type,
+        datasource.get("source_config", {}),
+        org_code=datasource.get("org_code") or "",
+        org_name="",
+    )
 
     if query_executor_type == "http":
         org_code = str(config.get("org_code") or "").strip()
@@ -1202,10 +1208,6 @@ def get_executor(datasource: dict) -> SQLExecutor:
         )
 
     if source_type == "mysql":
-        if not config.get("user") or "password" not in config:
-            credentials = resolve_mysql_credentials(config)
-            config["user"] = credentials["user"]
-            config["password"] = credentials["password"]
         return MySQLExecutor(
             host=config.get("host"),
             port=config.get("port", 3306),
@@ -1214,12 +1216,6 @@ def get_executor(datasource: dict) -> SQLExecutor:
             password=config.get("password")
         )
     elif source_type == "hive":
-        if not config.get("username") or "password" not in config:
-            credentials = resolve_hive_credentials()
-            if credentials.get("username"):
-                config["username"] = credentials["username"]
-            if credentials.get("password"):
-                config["password"] = credentials["password"]
         return HiveExecutor(
             host=config.get("host"),
             port=config.get("port", 10000),

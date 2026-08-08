@@ -701,7 +701,7 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
             }
 
     class FakeManager:
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             if config_id == "cfg_public":
                 return {"id": config_id, "scope_type": "public", "create_by": "admin"}
             if config_id == "cfg_private":
@@ -710,7 +710,7 @@ def test_accuracy_history_routes_enforce_normal_and_admin_scope(monkeypatch):
 
     request = SimpleNamespace()
     monkeypatch.setattr(evaluation, "_build_evaluation_service", lambda: FakeEvaluationService())
-    monkeypatch.setattr(evaluation, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
 
     normal_list = _json_body(asyncio.run(evaluation.list_accuracy_evaluation_runs(
@@ -955,7 +955,7 @@ def test_compile_scene_case_gold_sql_success_and_error(monkeypatch):
 
 def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
     class FakeManager:
-        async def get_semantic_config_async(self, datasource_id, config_id):
+        async def get_config_async(self, datasource_id, config_id):
             if config_id == "missing":
                 return None
             if config_id == "boom":
@@ -981,7 +981,7 @@ def test_scene_evaluation_case_routes_success_and_errors(monkeypatch, eval_db):
             "business_domain": "订单分析",
         }
 
-    monkeypatch.setattr(evaluation, "get_datasource_manager", lambda: FakeManager())
+    monkeypatch.setattr(evaluation, "get_semantic_config_service", lambda: FakeManager())
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
     monkeypatch.setattr(evaluation, "_compile_scene_case_gold_sql", fake_compile)
     monkeypatch.setattr(evaluation, "_generate_draft_case_by_llm", fake_generate)

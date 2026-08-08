@@ -188,22 +188,6 @@ class _FakeDatasourceManager:
     async def has_datasource_async(self, datasource_id: str):
         return self.has_datasource(datasource_id)
 
-    def get_semantic_configs(self, datasource_id: str):
-        item = self.datasources.get(datasource_id)
-        return copy.deepcopy(item.get("semantic_configs") or []) if item else []
-
-    async def get_semantic_configs_async(self, datasource_id: str, user_id: str = ""):
-        return self.get_semantic_configs(datasource_id)
-
-    def get_semantic_config(self, datasource_id: str, config_id: str):
-        for item in self.get_semantic_configs(datasource_id):
-            if item.get("id") == config_id or item.get("semantic_config_id") == config_id:
-                return item
-        return None
-
-    async def get_semantic_config_async(self, datasource_id: str, config_id: str):
-        return self.get_semantic_config(datasource_id, config_id)
-
     def get_datasource_by_group_name(self, name: str):
         for item in self.datasources.values():
             if item["group_name"] == name:
@@ -830,13 +814,36 @@ def _mock_authenticated_user(monkeypatch, user_id: str = "10001", username: str 
     )
 
 
+class _FakeSemanticConfigService:
+    def __init__(self, manager):
+        self.manager = manager
+
+    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+        datasource = self.manager.datasources.get(datasource_id) or {}
+        return copy.deepcopy(datasource.get("semantic_configs") or [])
+
+    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        for config in await self.get_configs_async(datasource_id, user_id):
+            if config.get("id") == config_id or config.get("semantic_config_id") == config_id:
+                return config
+        return None
+
+    async def get_runtime_config_async(self, datasource_id: str, config_id: str, user_id: str = ""):
+        return await self.get_config_async(datasource_id, config_id, user_id)
+
+
 def _mock_datasource_manager(monkeypatch, manager):
-    """让主路由、数据源路由和运行时服务共用同一个 fake manager。"""
+    """让路由和运行时服务共用同一组数据源、语义配置 fake。"""
+    semantic_service = _FakeSemanticConfigService(manager)
     monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(datasource_admin_routes, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(datasource_public_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(query_execution_routes, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: manager)
+    return semantic_service
 
 
 def _mock_query_tracking(monkeypatch, task_id: str = "task_001"):
@@ -1265,8 +1272,14 @@ def test_list_semantic_configs_uses_lightweight_existence_check(monkeypatch):
 
     manager.get_datasource_async = _get_datasource
     manager.has_datasource_async = _has_datasource
-    manager.get_semantic_configs_async = _get_semantic_configs
-    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    _mock_datasource_manager(monkeypatch, manager)
+
+    class LightweightSemanticService:
+        async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+            calls.append(("get_semantic_configs", datasource_id))
+            return [{"semantic_config_id": "cfg_1"}]
+
+    monkeypatch.setattr(semantic_config_routes, "get_semantic_config_service", lambda: LightweightSemanticService())
     _mock_authenticated_user(monkeypatch)
 
     resp = asyncio.run(semantic_config_routes.list_semantic_configs("ds_a", SimpleNamespace()))
@@ -1469,7 +1482,7 @@ def test_semantic_prefill_passes_tables_and_business_context_to_llm(monkeypatch)
 
     manager = _FakeDatasourceManager()
     manager.datasources["ds_a"]["semantic_configs"] = [{"id": "sc_a", "name": "订单分析", "scope_type": "private", "create_by": "u1"}]
-    monkeypatch.setattr(semantic_config_routes, "get_datasource_manager", lambda: manager)
+    _mock_datasource_manager(monkeypatch, manager)
     monkeypatch.setattr(semantic_config_routes, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1"))
 
     captured = {}

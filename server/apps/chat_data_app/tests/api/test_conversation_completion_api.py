@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services import semantic_query_service, semantic_conversation_context, semantic_model_repository
-from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
+from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
 
 
@@ -273,6 +273,7 @@ class ToolCallingLLM:
 
 def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, auth_headers, monkeypatch):
     manager = FakeDatasourceManager()
+    semantic_service = FakeSemanticConfigService(manager)
     datasource = manager.datasources["ds_a"]
     datasource["ds_tables"].append({
         "table_name": "order_items",
@@ -340,6 +341,8 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
     for module in (semantic_query_service, semantic_conversation_context, semantic_model_repository):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
+    monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
+    monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
 
     async def fake_get_dashboard_spec_semantic_config(*_args, **_kwargs):
         return dict(config)

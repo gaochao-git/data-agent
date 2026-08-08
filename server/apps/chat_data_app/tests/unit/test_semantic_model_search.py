@@ -99,7 +99,7 @@ class _FakeDatasourceManager:
     def __init__(self, configs):
         self.configs = configs
 
-    async def get_runtime_semantic_configs_async(self, datasource_id, user_id=""):
+    async def get_runtime_configs_async(self, datasource_id, user_id=""):
         assert datasource_id == "ds_a"
         assert user_id == "u1"
         return self.configs
@@ -116,7 +116,7 @@ def test_search_semantic_models_returns_retrieved_ids(monkeypatch):
             assert "这是检索，不是覆盖校验" in messages[0].content
             return type("Response", (), {"content": '{"semantic_config_ids":["sc_order"]}'})()
 
-    monkeypatch.setattr(selector, "get_datasource_manager", lambda: _FakeDatasourceManager(configs))
+    monkeypatch.setattr(selector, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr(selector, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
 
     selection = asyncio.run(search_semantic_models("ds_a", "查询订单金额", user_id="u1"))
@@ -133,7 +133,7 @@ def test_search_semantic_models_merges_parallel_chunk_results(monkeypatch):
     async def fake_select_chunks(_llm, _query, _chunks, _context=""):
         return [{"semantic_config_ids": ["sc_order"]}, {"semantic_config_ids": ["sc_user", "sc_order"]}]
 
-    monkeypatch.setattr(selector, "get_datasource_manager", lambda: _FakeDatasourceManager(configs))
+    monkeypatch.setattr(selector, "get_semantic_config_service", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr(selector, "get_chat_data_llm", lambda **_kwargs: object())
     monkeypatch.setattr(selector, "_chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [[summaries[0]], [summaries[1]]])
     monkeypatch.setattr(selector, "_select_semantic_config_chunks", fake_select_chunks)
@@ -146,6 +146,6 @@ def test_search_semantic_models_merges_parallel_chunk_results(monkeypatch):
 def test_search_semantic_models_returns_none_for_invalid_or_disabled_configs(monkeypatch):
     assert asyncio.run(search_semantic_models("", "查询")) is None
     assert asyncio.run(search_semantic_models("ds_a", "")) is None
-    monkeypatch.setattr(selector, "get_datasource_manager", lambda: _FakeDatasourceManager([{"id": "sc_disabled", "enabled": False}]))
+    monkeypatch.setattr(selector, "get_semantic_config_service", lambda: _FakeDatasourceManager([{"id": "sc_disabled", "enabled": False}]))
 
     assert asyncio.run(search_semantic_models("ds_a", "查询", user_id="u1")) is None

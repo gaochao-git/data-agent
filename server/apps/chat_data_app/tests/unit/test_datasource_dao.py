@@ -17,6 +17,7 @@ from apps.chat_data_app.daos.datasource_dao import (
     _ORM_SESSION,
     DataSourceDao,
 )
+from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
 from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
 from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_member_identity,
@@ -259,7 +260,7 @@ def _patch_store_session(monkeypatch, rows_by_table=None, executed=None):
     async def fake_get_session():
         yield session
 
-    monkeypatch.setattr("apps.chat_data_app.daos.datasource_dao.get_session", fake_get_session)
+    monkeypatch.setattr("apps.chat_data_app.daos.dao_session.get_session", fake_get_session)
     return session
 
 
@@ -511,17 +512,15 @@ def test_datasource_dao_empty_defaults_and_write_short_circuits(monkeypatch):
     async def run_checks():
         return (
             await store.get_default_datasource_async(),
-            await store.get_semantic_configs_async("missing"),
             await store.update_datasource_table_business_desc_async("", "orders", "desc"),
             await store.update_datasource_table_business_desc_async("group_a", "", "desc"),
             await store.replace_column_dict_async("", "orders", "status", {"unit": "元"}),
             await store.replace_column_dict_async("group_a", "orders", "status", {}),
         )
 
-    default_ds, semantic_configs, empty_group_update, empty_table_update, invalid_dict, empty_dict = asyncio.run(run_checks())
+    default_ds, empty_group_update, empty_table_update, invalid_dict, empty_dict = asyncio.run(run_checks())
 
     assert default_ds is None
-    assert semantic_configs == []
     assert empty_group_update is None
     assert empty_table_update is None
     assert invalid_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
@@ -558,7 +557,7 @@ def test_datasource_dao_table_group_queries_deduplicate(monkeypatch):
 
 
 def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
-    store = DataSourceDao.__new__(DataSourceDao)
+    store = SemanticConfigDao.__new__(SemanticConfigDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [],
@@ -572,11 +571,11 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
 
     async def run_checks():
         return (
-            await store.get_semantic_configs_async("group_a"),
-            await store.get_semantic_configs_by_group_id_async("group_a", user_id="user_a"),
-            await store.get_semantic_config_directory_by_group_id_async("group_a", user_id="user_a"),
-            await store.get_semantic_config_by_group_id_async("group_a", "sc_public_b"),
-            await store.get_semantic_config_async("missing", "sc_public_b"),
+            await store.get_by_group_id_async("group_a"),
+            await store.get_by_group_id_async("group_a", user_id="user_a"),
+            await store.get_directory_by_group_id_async("group_a", user_id="user_a"),
+            await store.get_by_id_async("group_a", "sc_public_b"),
+            await store.get_by_id_async("missing", "sc_public_b"),
         )
 
     configs, visible_configs, directory, config, missing = asyncio.run(run_checks())
@@ -591,14 +590,15 @@ def test_semantic_config_queries_and_visibility_use_orm(monkeypatch):
     assert config["name"] == "订单分析"
     assert config["metrics"] == [{"name": "订单金额"}]
     assert missing is None
-    assert asyncio.run(store.get_semantic_configs_by_group_id_async("")) == []
-    assert asyncio.run(store.get_semantic_config_directory_by_group_id_async("")) == []
-    assert asyncio.run(store.get_semantic_config_by_group_id_async("", "sc_public")) is None
-    assert asyncio.run(store.get_semantic_config_by_group_id_async("group_a", "missing")) is None
+    assert asyncio.run(store.get_by_group_id_async("")) == []
+    assert asyncio.run(store.get_directory_by_group_id_async("")) == []
+    assert asyncio.run(store.get_by_id_async("", "sc_public")) is None
+    assert asyncio.run(store.get_by_id_async("group_a", "missing")) is None
 
 
 def test_store_write_methods_emit_orm_statements(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
+    semantic_store = SemanticConfigDao.__new__(SemanticConfigDao)
     executed = []
     _patch_store_session(monkeypatch, {"datasource_group": [_group_model()], "datasource_table": []}, executed=executed)
 
@@ -633,9 +633,9 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
         await store.replace_table_group_relations_async("", [{"table_group_name": "订单域", "table_names": ["orders"]}])
         await store.replace_table_group_relations_async("group_a", [{"table_group_name": "订单域", "table_names": ["orders", "orders", "items"]}, {"table_group_name": "", "table_names": ["x"]}], create_by="u7", update_by="u8")
         await store.soft_delete_group_async("group_a", update_by="u9")
-        assert await store.upsert_semantic_config_async("missing", {"id": "sc_missing"}) is False
-        assert await store.upsert_semantic_config_async("group_a", {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"}) is True
-        await store.soft_delete_semantic_config_async("sc_a", update_by="u10")
+        assert await semantic_store.upsert_async("", {"id": "sc_missing"}) is False
+        assert await semantic_store.upsert_async("group_a", {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"}) is True
+        await semantic_store.soft_delete_async("sc_a", update_by="u10")
         assert saved_dict == {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
 
     asyncio.run(run_checks())
@@ -679,6 +679,7 @@ def test_attach_table_groups_short_circuits():
 
 def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
     store = DataSourceDao.__new__(DataSourceDao)
+    semantic_store = SemanticConfigDao.__new__(SemanticConfigDao)
     _patch_store_session(monkeypatch, {
         "datasource_group": [_group_model()],
         "datasource_table": [
@@ -694,8 +695,8 @@ def test_datasource_dao_remaining_read_branch_edges(monkeypatch):
             await store._get_group_row_by_id_async(""),
             await store.get_group_member_datasource_ids_async("missing"),
             await store._get_group_tables_map_async(["group_a", ""]),
-            await store.get_semantic_config_async("missing", "sc_public"),
-            await store.get_semantic_config_async("group_a", "sc_public"),
+            await semantic_store.get_by_id_async("missing", "sc_public"),
+            await semantic_store.get_by_id_async("group_a", "sc_public"),
         )
 
     empty_group, missing_members, tables_map, missing_config, existing_config = asyncio.run(run_checks())

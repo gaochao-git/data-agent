@@ -38,8 +38,8 @@ def test_get_datasource_schema_requires_auth(client, fake_datasource_manager, pa
     assert response.json()["status"] == "error"
 
 
-def test_list_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_list_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/datasources/ds_a/semantic-configs", headers=auth_headers)
 
@@ -56,8 +56,8 @@ def test_list_semantic_configs_api_contract(client, auth_headers, fake_datasourc
     assert public_config["can_manage"] is False
 
 
-def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/datasources/ds_a/my-semantic-configs", headers=auth_headers)
 
@@ -68,8 +68,8 @@ def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_dataso
     assert payload["data"]["configs"][0]["can_manage"] is True
 
 
-def test_list_admin_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_list_admin_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-configs", headers=auth_headers)
 
@@ -80,8 +80,8 @@ def test_list_admin_semantic_configs_api_contract(client, auth_headers, fake_dat
     assert payload["data"]["configs"][0]["can_manage"] is True
 
 
-def test_create_semantic_config_sets_private_scope_and_creator(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_create_semantic_config_sets_private_scope_and_creator(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
     body = {
         "name": "个人订单分析",
         "description": "个人指标集",
@@ -105,12 +105,12 @@ def test_create_semantic_config_sets_private_scope_and_creator(client, auth_head
     assert payload["data"]["scope_type"] == "private"
     assert payload["data"]["create_by"] == "user_a"
     assert payload["data"]["can_manage"] is True
-    assert fake_datasource_manager.created_semantic_kwargs["scope_type"] == "private"
-    assert fake_datasource_manager.created_semantic_kwargs["create_by"] == "user_a"
+    assert semantic_service.created_kwargs["scope_type"] == "private"
+    assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
-def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
     body = {
         "name": "公共订单分析",
         "description": "公共指标集",
@@ -133,12 +133,12 @@ def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fa
     assert payload["data"]["scope_type"] == "public"
     assert payload["data"]["create_by"] == "user_a"
     assert payload["data"]["can_manage"] is True
-    assert fake_datasource_manager.created_semantic_kwargs["scope_type"] == "public"
-    assert fake_datasource_manager.created_semantic_kwargs["create_by"] == "user_a"
+    assert semantic_service.created_kwargs["scope_type"] == "public"
+    assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
-def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
         "/api/chatdata/datasources/ds_a/semantic-configs/cfg_a",
@@ -150,11 +150,11 @@ def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_
     payload = response.json()
     assert payload["status"] == "success"
     assert payload["data"]["name"] == "个人订单分析V2"
-    assert fake_datasource_manager.updated_semantic_kwargs["update_by"] == "user_a"
+    assert semantic_service.updated_kwargs["update_by"] == "user_a"
 
 
-def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
         "/api/chatdata/datasources/ds_a/semantic-configs/cfg_public",
@@ -168,8 +168,8 @@ def test_update_semantic_config_denies_public_in_normal_endpoint(client, auth_he
     assert payload["code"] == ErrorCode.CHATDATA_SEMANTIC_CONFIG_PERMISSION_DENIED
 
 
-def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    patch_datasource_manager(fake_datasource_manager)
 
     response = client.put(
         "/api/chatdata/admin/datasources/ds_a/semantic-configs/cfg_public",
@@ -184,8 +184,8 @@ def test_admin_update_semantic_config_allows_public(client, auth_headers, fake_d
     assert payload["data"]["can_manage"] is True
 
 
-def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, fake_datasource_manager, monkeypatch):
-    monkeypatch.setattr(semantic_routes, "get_datasource_manager", lambda: fake_datasource_manager)
+def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
 
     denied_public = client.delete(
         "/api/chatdata/datasources/ds_a/semantic-configs/cfg_public",
@@ -202,4 +202,4 @@ def test_delete_semantic_config_allows_private_owner_only(client, auth_headers, 
     assert allowed.status_code == 200
     assert allowed.json()["status"] == "success"
     assert allowed.json()["data"]["config_id"] == "cfg_a"
-    assert fake_datasource_manager.deleted_config_id == "cfg_a"
+    assert semantic_service.deleted_config_id == "cfg_a"
