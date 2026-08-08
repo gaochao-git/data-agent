@@ -2567,7 +2567,7 @@ const saveOntologyRules = (ontologyRules: string) => {
 <template>
   <div class="h-full flex flex-col bg-white">
     <!-- 头部 -->
-    <div v-if="!embedded" class="h-16 shrink-0 flex items-center gap-4 px-4 border-b border-gray-200 bg-white">
+    <div v-if="!embedded" class="h-12 shrink-0 flex items-center gap-4 px-4 border-b border-gray-200 bg-white">
       <div class="flex items-center gap-3 shrink-0">
         <button
           class="w-8 h-8 flex items-center justify-center border-none rounded-lg bg-transparent text-gray-500 cursor-pointer transition-all duration-200 hover:bg-gray-100 hover:text-gray-700"
@@ -2580,7 +2580,7 @@ const saveOntologyRules = (ontologyRules: string) => {
       </div>
       <div class="flex min-w-0 flex-1 flex-nowrap items-center gap-3">
         <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
-        <div class="h-9 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
+        <div class="h-8 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
           {{ datasourceName || '暂无数据源' }}
         </div>
         <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
@@ -2606,7 +2606,7 @@ const saveOntologyRules = (ontologyRules: string) => {
           />
         </el-select>
         <button
-          class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
+          class="h-8 w-8 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
           title="新建语义模型"
           :disabled="creatingConfig"
           @click="createConfig"
@@ -2631,7 +2631,7 @@ const saveOntologyRules = (ontologyRules: string) => {
 
       <div v-else class="h-full min-h-0">
         <div v-if="activeConfig" class="h-full min-h-0 border border-gray-200 rounded-xl bg-white overflow-hidden flex flex-col">
-          <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+          <div class="px-4 py-2 border-b border-gray-100 bg-gray-50">
             <div
               class="grid gap-3 items-center"
               :class="showDatasetSelectorInBody ? 'grid-cols-[260px_220px_1fr_auto]' : 'grid-cols-[220px_1fr_auto]'"
@@ -2667,7 +2667,7 @@ const saveOntologyRules = (ontologyRules: string) => {
               <input
                 type="text"
                 :value="activeConfig.name"
-                class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-700 outline-none focus:border-blue-500"
+                class="px-3 py-1.5 border border-gray-200 rounded-md text-[13px] text-gray-700 outline-none focus:border-blue-500"
                 placeholder="语义模型名称"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { name: ($event.target as HTMLInputElement).value })"
@@ -2676,7 +2676,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                 type="text"
                 :value="activeConfig.description"
                 placeholder="语义模型描述：简要说明这个语义模型是什么"
-                class="px-3 py-2 border border-gray-200 rounded-md text-[13px] text-gray-500 outline-none focus:border-blue-500"
+                class="px-3 py-1.5 border border-gray-200 rounded-md text-[13px] text-gray-500 outline-none focus:border-blue-500"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { description: ($event.target as HTMLInputElement).value })"
               />
@@ -2691,7 +2691,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                 </div>
                 <button
                   :class="[
-                    'px-3 py-2 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
+                    'px-3 py-1.5 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
                     activeConfig.enabled ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                   ]"
                   :disabled="togglingEnabledId === activeConfig.id || !canManageConfig(activeConfig)"
@@ -2705,14 +2705,14 @@ const saveOntologyRules = (ontologyRules: string) => {
                   </template>
                 </button>
                 <button
-                  class="px-3 py-2 rounded-md text-xs border border-blue-200 bg-white text-blue-600 transition-all duration-150 hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="px-3 py-1.5 rounded-md text-xs border border-blue-200 bg-white text-blue-600 transition-all duration-150 hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!activeConfig || !canManageConfig(activeConfig)"
                   @click="openHistoryLearningDialog"
                 >
                   <i class="fa-solid fa-graduation-cap mr-1"></i>历史学习
                 </button>
                 <button
-                  class="px-3 py-2 rounded-md text-xs border border-indigo-200 bg-indigo-50 text-indigo-600 transition-all duration-150 hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="px-3 py-1.5 rounded-md text-xs border border-indigo-200 bg-indigo-50 text-indigo-600 transition-all duration-150 hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!canOpenEvaluation"
                   @click="openEvaluateDrawer"
                 >
@@ -2720,7 +2720,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                 </button>
                 <button
                   :class="[
-                    'px-3 py-2 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
+                    'px-3 py-1.5 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
                     canSaveActiveConfig ? 'bg-[#1677FF] text-white cursor-pointer hover:bg-[#0958D9]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   ]"
                   :disabled="!canSaveActiveConfig"
@@ -2735,7 +2735,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                   </template>
                 </button>
                 <button
-                  class="px-3 py-2 rounded-md text-xs border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
+                  class="px-3 py-1.5 rounded-md text-xs border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
                   :disabled="!canManageConfig(activeConfig)"
                   title="删除语义模型"
                   @click="handleDeleteConfig(activeConfig.id, activeConfig.name)"
@@ -2848,7 +2848,12 @@ const saveOntologyRules = (ontologyRules: string) => {
                   @dragover.prevent
                   @drop.prevent="handleScopeDrop(activeConfig.id)"
                 >
-                  <div class="flex items-center justify-between mb-1.5">
+                  <div
+                    class="flex items-center justify-between cursor-pointer select-none"
+                    :class="modelConfigCollapsed ? '' : 'mb-1.5'"
+                    :title="modelConfigCollapsed ? '展开模型配置' : '折叠模型配置'"
+                    @click="modelConfigCollapsed = !modelConfigCollapsed"
+                  >
                     <div class="text-xs font-medium text-gray-600">模型配置</div>
                     <div class="flex items-center gap-2">
                       <div class="text-[11px] text-gray-400">
@@ -2857,7 +2862,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                       <button
                         class="w-6 h-6 border border-gray-200 rounded bg-white text-gray-400 text-[11px] cursor-pointer hover:text-gray-600 hover:border-gray-300"
                         :title="modelConfigCollapsed ? '展开模型配置' : '折叠模型配置'"
-                        @click="modelConfigCollapsed = !modelConfigCollapsed"
+                        @click.stop="modelConfigCollapsed = !modelConfigCollapsed"
                       >
                         <i :class="modelConfigCollapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up'"></i>
                       </button>
@@ -2869,14 +2874,6 @@ const saveOntologyRules = (ontologyRules: string) => {
                   >
                     <i class="fa-solid fa-up-right-and-down-left-from-center mb-2"></i>
                     拖动左侧数据表到这里
-                  </div>
-                  <div
-                    v-if="modelConfigCollapsed"
-                    class="h-[44px] border border-dashed border-gray-300 rounded-md bg-white flex items-center px-3 text-xs text-gray-400 cursor-pointer transition-all duration-150 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-500"
-                    title="点击展开模型配置"
-                    @click="modelConfigCollapsed = false"
-                  >
-                    模型配置已折叠
                   </div>
                   <div
                     v-if="!modelConfigCollapsed && getScopeEntries(activeConfig.id).length > 0"
