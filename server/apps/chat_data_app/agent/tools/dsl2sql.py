@@ -8,14 +8,28 @@ from langchain_core.tools import tool
 
 from utils.logger import get_logger
 from ...services.dashboard_spec_service import (
-    get_dashboard_spec_semantic_config,
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
 )
-from ...services.semantic_sql_generator import SemanticSQLGenerator
+from ...services.semantic_model_repository import load_semantic_model
+from ...services.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)
+
+
+async def get_dashboard_spec_semantic_config(
+    datasource_id: str,
+    semantic_config_id: str | None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """兼容旧测试替换点；单查询模型加载已不再依赖看板服务。"""
+    return await load_semantic_model(
+        datasource_id,
+        semantic_config_id,
+        user_id=user_id,
+        mode="full",
+    )
 
 
 def normalize_dsl_payload(value: Any) -> Any:
@@ -66,7 +80,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip()
                     for card in dsl
                 ):
-                    return "dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先调用 semantic_tool 搜索语义模型"
+                    return "dsl2sql_tool 执行失败: 批量看板卡片缺少 semantic_config_id，请先调用 semantic_search 搜索语义模型"
                 result = await validate_dashboard_spec_payload(
                     dashboard_spec={"cards": dsl},
                     datasource_id=bound_datasource_id,
@@ -88,7 +102,7 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
             if not isinstance(dsl, dict):
                 return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
             if not effective_semantic_config_id:
-                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 semantic_tool 搜索语义模型后显式传入语义模型ID"
+                return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 semantic_search 搜索语义模型后显式传入语义模型ID"
             semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id, user_id=bound_user_id)
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
             if payload.get("compare"):
@@ -102,16 +116,10 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                     "error": "错误：DSL2SQL 不再支持 compare 同比/环比；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析",
                     "warnings": warnings,
                 })
-            generator = SemanticSQLGenerator(semantic_config)
-            result = generator.generate_sql(
-                metrics=payload.get("metrics") or [],
-                dimensions=payload.get("dimensions") or [],
-                filters=payload.get("filters") or [],
-                having=payload.get("having") or [],
-                order_by=payload.get("order_by") or [],
-                limit=payload.get("limit"),
-                offset=payload.get("offset"),
-                user_query=user_query or None,
+            result = compile_semantic_ai_dsl(
+                semantic_config,
+                payload,
+                options=SemanticCompileOptions(user_query=user_query or None),
             )
             return "[dsl2sql_tool]\n" + json_dumps({
                 "success": bool(result.get("success")),

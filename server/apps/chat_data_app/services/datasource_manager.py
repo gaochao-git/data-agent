@@ -23,10 +23,7 @@ from .execution_permission import (
 from .hive_meta_http import get_hive_meta_schema_async, get_hive_meta_tables_async
 from .hive_sync import HiveSyncService
 from .mysql_sync import MySQLSyncService
-from .semantic_common import (
-    ensure_dimension_logical_type,
-    normalize_semantic_relationship_type,
-)
+from .semantic_core.common import ensure_dimension_logical_type, normalize_relationship_type
 
 logger = get_logger(__name__)
 
@@ -323,7 +320,7 @@ class DataSourceManager:
                 next_rel["join_conditions"] = normalized_conditions
                 next_rel["left_column"] = normalized_conditions[0]["left_column"]
                 next_rel["right_column"] = normalized_conditions[0]["right_column"]
-                next_rel["relationship_type"] = normalize_semantic_relationship_type(
+                next_rel["relationship_type"] = normalize_relationship_type(
                     next_rel.get("relationship_type")
                 )
                 normalized_relationships.append(next_rel)

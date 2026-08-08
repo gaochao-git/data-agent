@@ -53,7 +53,7 @@ USER_INPUT_OFFLOAD_THRESHOLD = 4000
 USER_INPUT_PREVIEW_CHARS = 200
 
 REASONING_TOOL_DISPLAY_NAMES = {
-    "semantic_tool": "语义检索",
+    "semantic_search": "语义检索",
     "search_dataset": "搜索指标集",
     "dsl2sql_tool": "生成 SQL",
     "semantic_query_tool": "查询数据",

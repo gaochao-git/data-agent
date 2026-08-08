@@ -637,7 +637,7 @@ def test_validate_dashboard_spec_payload_reuses_each_semantic_model_once(monkeyp
         fake_get_config,
     )
     monkeypatch.setattr(
-        "apps.chat_data_app.services.dashboard_spec_service.SemanticSQLGenerator",
+        "apps.chat_data_app.services.dashboard_spec_service.SemanticAIQueryAdapter",
         FakeGenerator,
     )
 
@@ -791,7 +791,7 @@ def test_validate_dashboard_spec_payload_validation_and_execute_sql(monkeypatch)
         return plans, ["预执行警告"]
 
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.get_dashboard_spec_semantic_config", fake_semantic_config)
-    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr("apps.chat_data_app.services.dashboard_spec_service.filter_executable_dashboard_panel_plans", fake_filter)
 
     valid = asyncio.run(validate_dashboard_spec_payload(

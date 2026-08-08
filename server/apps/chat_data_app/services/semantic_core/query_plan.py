@@ -1,0 +1,202 @@
+"""语义模型到统一查询计划的共享上下文。"""
+
+from __future__ import annotations
+
+import re
+from collections import deque
+from typing import Any, Dict, List, Optional
+
+from .common import ensure_dimension_logical_type
+
+
+AGGREGATE_EXPRESSION_PATTERN = re.compile(
+    r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$",
+    re.IGNORECASE,
+)
+
+
+def parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
+    """解析语义指标支持的聚合表达式。"""
+    match = AGGREGATE_EXPRESSION_PATTERN.match(str(expression or "").strip())
+    if not match:
+        return None
+    function = match.group(1).upper()
+    column_expression = (match.group(3) or "").strip()
+    if function == "COUNT" and (match.group(2) or "").strip():
+        return "COUNT_DISTINCT", column_expression
+    return function, column_expression
+
+
+def semantic_table_alias(item: Dict[str, Any]) -> str:
+    return str(
+        (item or {}).get("table_alias")
+        or (item or {}).get("alias")
+        or (item or {}).get("table")
+        or ""
+    ).strip()
+
+
+def _relationship_alias(relationship: Dict[str, Any], side: str) -> str:
+    return str(
+        (relationship or {}).get(f"{side}_alias")
+        or (relationship or {}).get(f"{side}_table")
+        or ""
+    ).strip()
+
+
+class SemanticQueryPlanContext:
+    """两种输入适配器共享的只读语义模型索引和 JOIN 规划。"""
+
+    def __init__(self, semantic_config: Dict[str, Any]):
+        normalized_config = dict(semantic_config or {})
+        normalized_config["dimensions"] = [
+            ensure_dimension_logical_type(item)
+            for item in normalized_config.get("dimensions") or []
+        ]
+        self.semantic_config = normalized_config
+        self.metrics_map = {
+            item["name"]: item
+            for item in normalized_config.get("metrics") or []
+            if item.get("name")
+        }
+        self.dimensions_map = {
+            item["name"]: item
+            for item in normalized_config.get("dimensions") or []
+            if item.get("name")
+        }
+        self.dialect_name = (
+            str(normalized_config.get("source_type") or "mysql").strip().lower()
+            or "mysql"
+        )
+
+    def build_joins(self, main_alias: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
+        relationships = self.semantic_config.get("relationships") or []
+        if len(tables_needed) <= 1 or not relationships:
+            return []
+
+        adjacency: Dict[str, List[tuple[Dict[str, Any], str]]] = {}
+        for relationship in relationships:
+            left = _relationship_alias(relationship, "left")
+            right = _relationship_alias(relationship, "right")
+            if left and right:
+                adjacency.setdefault(left, []).append((relationship, right))
+                adjacency.setdefault(right, []).append((relationship, left))
+
+        previous = self._find_paths(main_alias, adjacency)
+        required_nodes, required_relationships = self._collect_required_paths(
+            main_alias,
+            tables_needed,
+            previous,
+        )
+        return self._build_ordered_joins(main_alias, required_nodes, required_relationships)
+
+    @staticmethod
+    def _find_paths(
+        main_alias: str,
+        adjacency: Dict[str, List[tuple[Dict[str, Any], str]]],
+    ) -> Dict[str, tuple[str, Dict[str, Any]]]:
+        previous: Dict[str, tuple[str, Dict[str, Any]]] = {}
+        visited = {main_alias}
+        queue = deque([main_alias])
+        while queue:
+            current = queue.popleft()
+            for relationship, next_alias in adjacency.get(current, []):
+                if next_alias in visited:
+                    continue
+                visited.add(next_alias)
+                previous[next_alias] = (current, relationship)
+                queue.append(next_alias)
+        return previous
+
+    @staticmethod
+    def _collect_required_paths(
+        main_alias: str,
+        tables_needed: set[str],
+        previous: Dict[str, tuple[str, Dict[str, Any]]],
+    ) -> tuple[set[str], List[Dict[str, Any]]]:
+        required_nodes = {main_alias}
+        required_relationships: List[Dict[str, Any]] = []
+        seen_relationships: set[int] = set()
+        for target in tables_needed:
+            node = target
+            while node != main_alias and node in previous:
+                required_nodes.add(node)
+                parent, relationship = previous[node]
+                relationship_identity = id(relationship)
+                if relationship_identity not in seen_relationships:
+                    seen_relationships.add(relationship_identity)
+                    required_relationships.append(relationship)
+                node = parent
+        return required_nodes, required_relationships
+
+    @classmethod
+    def _build_ordered_joins(
+        cls,
+        main_alias: str,
+        required_nodes: set[str],
+        relationships: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        joins: List[Dict[str, Any]] = []
+        added = {main_alias}
+        while len(added) < len(required_nodes):
+            selected = cls._select_next_relationship(added, required_nodes, relationships)
+            if not selected:
+                break
+            relationship, left_alias, right_alias, reversed_pair = selected
+            joins.append(cls._relationship_to_join(relationship, left_alias, right_alias, reversed_pair))
+            added.add(right_alias)
+        return joins
+
+    @staticmethod
+    def _select_next_relationship(
+        added: set[str],
+        required_nodes: set[str],
+        relationships: List[Dict[str, Any]],
+    ) -> Optional[tuple[Dict[str, Any], str, str, bool]]:
+        for relationship in relationships:
+            left = _relationship_alias(relationship, "left")
+            right = _relationship_alias(relationship, "right")
+            if left in added and right in required_nodes and right not in added:
+                return relationship, left, right, False
+            if right in added and left in required_nodes and left not in added:
+                return relationship, right, left, True
+        return None
+
+    @staticmethod
+    def _relationship_to_join(
+        relationship: Dict[str, Any],
+        left_alias: str,
+        right_alias: str,
+        reversed_pair: bool,
+    ) -> Dict[str, Any]:
+        conditions = []
+        for condition in relationship.get("join_conditions") or []:
+            left_column = (condition or {}).get("left_column")
+            right_column = (condition or {}).get("right_column")
+            if not left_column or not right_column:
+                continue
+            conditions.append({
+                "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
+                "leftAlias": left_alias,
+                "leftColumn": right_column if reversed_pair else left_column,
+                "rightColumn": left_column if reversed_pair else right_column,
+            })
+        if not conditions and relationship.get("left_column") and relationship.get("right_column"):
+            conditions.append({
+                "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
+                "leftAlias": left_alias,
+                "leftColumn": relationship.get("right_column") if reversed_pair else relationship.get("left_column"),
+                "rightColumn": relationship.get("left_column") if reversed_pair else relationship.get("right_column"),
+            })
+
+        return {
+            "id": f"{left_alias}-{right_alias}",
+            "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
+            "leftAlias": left_alias,
+            "rightTable": relationship.get("left_table") if reversed_pair else relationship.get("right_table"),
+            "rightAlias": right_alias,
+            "joinType": str(relationship.get("join_type", "left")).upper(),
+            "joinConditions": conditions,
+            "leftColumn": conditions[0]["leftColumn"] if conditions else "",
+            "rightColumn": conditions[0]["rightColumn"] if conditions else "",
+        }

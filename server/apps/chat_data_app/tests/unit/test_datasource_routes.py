@@ -2508,7 +2508,7 @@ def test_create_dashboard_from_spec_creates_dashboard_and_panels(monkeypatch):
             metric = (kwargs.get("metrics") or ["cnt"])[0]
             return {"success": True, "sql": f"select 1 as `{metric}`"}
 
-    monkeypatch.setattr(dashboard_spec_service, "SemanticSQLGenerator", FakeSqlGenerator)
+    monkeypatch.setattr(dashboard_spec_service, "SemanticAIQueryAdapter", FakeSqlGenerator)
 
     request = DashboardFromSpecRequest(
         datasource_id="ds_a",

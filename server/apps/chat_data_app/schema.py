@@ -644,7 +644,7 @@ class ExecuteSemanticInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次 DSL 使用的指标集 ID，必须来自本轮 semantic_tool search_models 返回结果",
+        description="本次 DSL 使用的指标集 ID，必须来自本轮 semantic_search search_models 返回结果",
     )
     dsl: Dict[str, Any] = Field(
         ...,
@@ -679,7 +679,7 @@ class SemanticQueryInput(BaseModel):
     semantic_config_id: str = Field(
         ...,
         min_length=1,
-        description="本次查询使用的指标集 ID，必须来自本轮 semantic_tool search_models 返回结果",
+        description="本次查询使用的指标集 ID，必须来自本轮 semantic_search search_models 返回结果",
     )
     member_datasource_ids: List[str] = Field(
         ...,

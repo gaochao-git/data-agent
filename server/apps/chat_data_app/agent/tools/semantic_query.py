@@ -9,13 +9,13 @@ from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
 from ...schema import SemanticQueryInput
-from ...services.semantic_tools import load_runtime_semantic_config
+from ...services.semantic_model_repository import load_runtime_semantic_config
 from ...services.semantic_query_service import (
-    compile_semantic_query_dsl,
+    SemanticCompileOptions,
+    compile_semantic_ai_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
 )
-from ...services.semantic_sql_generator import SemanticSQLGenerator
 from ..tool_results import build_internal_query_result
 from .common import normalize_json_like_payload
 
@@ -161,7 +161,7 @@ async def _resolve_tool_context(
     datasource_id = _get_datasource_id_from_state(state)
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     if not normalized_semantic_config_id:
-        return _tool_error("缺少指标集ID，请先调用 semantic_tool 搜索语义模型后显式传入 semantic_config_id")
+        return _tool_error("缺少指标集ID，请先调用 semantic_search 搜索语义模型后显式传入 semantic_config_id")
     if not datasource_id:
         return _tool_error("当前会话未绑定数据源")
 
@@ -232,11 +232,10 @@ async def _compile_tool_query(
     if not request.has_dsl:
         return _CompiledToolQuery(sql=request.sql, query_mode=query_mode, confidence=confidence)
 
-    compile_result = compile_semantic_query_dsl(
+    compile_result = compile_semantic_ai_dsl(
         config,
         request.dsl or {},
-        user_query=context.query_text or None,
-        generator_cls=SemanticSQLGenerator,
+        options=SemanticCompileOptions(user_query=context.query_text or None),
     )
     if not compile_result.get("success"):
         return _tool_error(compile_result.get("error") or "DSL2SQL 编译失败")

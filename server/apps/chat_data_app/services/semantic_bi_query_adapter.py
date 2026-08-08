@@ -1,19 +1,16 @@
-"""
-语义可视化查询编译服务。
-
-该服务接收前端手工选择的语义字段 DSL，不接受前端传入的 mainTable/joins。
-表关系统一从后端语义配置 relationships 推导，底层 SQL 仍复用 builder compiler。
-"""
+"""将前端可视化查询配置适配为统一查询计划。"""
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from utils.logger import get_logger
 
-from .semantic_input_validator import InputValidator
-from .semantic_sql_generator import SemanticSQLGenerator
-from .semantic_builder_sql_compiler import compile_builder_sql
-from .semantic_filter_normalization import normalize_time_filter_leaf
+from .runtime_config import DEFAULT_ROW_LIMIT
+from .semantic_core.filter_normalization import normalize_time_filter_leaf
+from .semantic_core.input_validator import InputValidator
+from .semantic_core.semantic_sql.compiler import SemanticSQLCompiler
+from .semantic_core.query_plan import SemanticQueryPlanContext, parse_aggregate_expression
 from .datasource_manager import get_datasource_manager
+from .semantic_model_repository import load_semantic_model
 
 logger = get_logger(__name__)
 
@@ -52,8 +49,8 @@ def _field_keys(table: str, table_alias: str, column: str) -> Set[Tuple[str, str
     return keys
 
 
-def _parse_aggregate_expression(generator: SemanticSQLGenerator, expression: str) -> Tuple[str, str] | None:
-    parsed = generator._parse_aggregate_expression(expression)
+def _parse_aggregate_expression(expression: str) -> Tuple[str, str] | None:
+    parsed = parse_aggregate_expression(expression)
     if not parsed:
         return None
     func, column_expr = parsed
@@ -61,15 +58,22 @@ def _parse_aggregate_expression(generator: SemanticSQLGenerator, expression: str
     return func, column
 
 
-class SemanticBuilderCompiler:
-    """将语义可视化 DSL 编译为 SQL。"""
+class SemanticBIQueryAdapter:
+    """可视化查询输入适配器。"""
 
     def __init__(self, semantic_config: Dict[str, Any]):
-        self.semantic_config = semantic_config or {}
-        self.generator = SemanticSQLGenerator(self.semantic_config)
-        self.validator = InputValidator(self.generator.metrics_map, self.generator.dimensions_map)
+        self.query_plan_context = SemanticQueryPlanContext(semantic_config)
+        self.semantic_config = self.query_plan_context.semantic_config
+        self.metrics_map = self.query_plan_context.metrics_map
+        self.dimensions_map = self.query_plan_context.dimensions_map
+        self.validator = InputValidator(
+            self.metrics_map,
+            self.dimensions_map,
+            max_limit=DEFAULT_ROW_LIMIT,
+        )
 
-    def compile(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
+    def adapt(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
+        """校验并规范化 Builder 输入，不在此阶段生成 SQL。"""
         if not isinstance(semantic_builder_config, dict):
             raise ValueError("语义可视化 DSL 格式错误")
         forbidden = FORBIDDEN_SEMANTIC_BUILDER_KEYS.intersection(semantic_builder_config.keys())
@@ -88,10 +92,10 @@ class SemanticBuilderCompiler:
 
         main_table, main_alias = self._resolve_main_table(dimensions, aggregations, filters, order_by)
         tables_needed = self._collect_tables_needed(main_alias, dimensions, aggregations, filters, order_by)
-        builder_config = {
+        query_plan = {
             "mainTable": main_table,
             "mainAlias": main_alias,
-            "joins": self.generator._build_builder_joins(main_alias, tables_needed),
+            "joins": self.query_plan_context.build_joins(main_alias, tables_needed),
             "dimensions": dimensions,
             "aggregations": aggregations,
             "filters": filters,
@@ -99,8 +103,14 @@ class SemanticBuilderCompiler:
             "limit": limit,
             "offset": offset,
         }
-        sql = compile_builder_sql(builder_config, dialect=self.semantic_config.get("source_type", "mysql"))
-        return {"sql": sql, "builder_config": builder_config}
+        return query_plan
+
+    def compile(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
+        """适配 Builder 输入后，通过统一语义 SQL 编译入口生成 SQL。"""
+        query_plan = self.adapt(semantic_builder_config)
+        sql = SemanticSQLCompiler(dialect=self.query_plan_context.dialect_name).compile(query_plan)
+        # builder_config 是既有前端响应字段，内部统一使用 query_plan。
+        return {"sql": sql, "builder_config": query_plan}
 
     def _validate_limit(self, value: Any) -> Optional[int]:
         limit, err = self.validator.validate_limit(value)
@@ -123,8 +133,8 @@ class SemanticBuilderCompiler:
         ]
         for name in name_candidates:
             normalized = _normalize_text(name)
-            if normalized and normalized in self.generator.dimensions_map:
-                return self.generator.dimensions_map[normalized]
+            if normalized and normalized in self.dimensions_map:
+                return self.dimensions_map[normalized]
 
         item_keys = _field_keys(item.get("table"), _normalize_alias(item), item.get("column"))
         item_expression = _normalize_text(item.get("expression"))
@@ -145,8 +155,8 @@ class SemanticBuilderCompiler:
         ]
         for name in name_candidates:
             normalized = _normalize_text(name)
-            if normalized and normalized in self.generator.metrics_map:
-                return self.generator.metrics_map[normalized]
+            if normalized and normalized in self.metrics_map:
+                return self.metrics_map[normalized]
 
         item_func = _normalize_text(item.get("func") or "RAW").upper()
         item_keys = _field_keys(item.get("table"), _normalize_alias(item), item.get("column"))
@@ -154,7 +164,7 @@ class SemanticBuilderCompiler:
         matched_by_field: List[Dict[str, Any]] = []
         for metric in self.semantic_config.get("metrics") or []:
             metric_expression = _normalize_text(metric.get("expression"))
-            parsed = _parse_aggregate_expression(self.generator, metric_expression)
+            parsed = _parse_aggregate_expression(metric_expression)
             metric_func = parsed[0] if parsed else "RAW"
             metric_column = parsed[1] if parsed else (metric.get("column") or metric.get("field_name") or "")
             metric_keys = _field_keys(metric.get("table"), _semantic_alias(metric), metric_column)
@@ -186,7 +196,7 @@ class SemanticBuilderCompiler:
     def _map_aggregation(self, item: Dict[str, Any]) -> Dict[str, Any]:
         metric = self._resolve_metric_config(item)
         if metric:
-            parsed = _parse_aggregate_expression(self.generator, _normalize_text(metric.get("expression")))
+            parsed = _parse_aggregate_expression(_normalize_text(metric.get("expression")))
             func = parsed[0] if parsed else _normalize_text(item.get("func") or "RAW").upper()
             column = parsed[1] if parsed else (metric.get("column") or item.get("column") or "*")
             table = metric.get("table") or item.get("table")
@@ -485,12 +495,12 @@ class SemanticBuilderCompiler:
         if "and" in node:
             for child in node.get("and") or []:
                 if isinstance(child, dict):
-                    SemanticBuilderCompiler._collect_filter_tables(child, tables_needed)
+                    SemanticBIQueryAdapter._collect_filter_tables(child, tables_needed)
             return
         if "or" in node:
             for child in node.get("or") or []:
                 if isinstance(child, dict):
-                    SemanticBuilderCompiler._collect_filter_tables(child, tables_needed)
+                    SemanticBIQueryAdapter._collect_filter_tables(child, tables_needed)
             return
         table_alias = _normalize_alias(node)
         if table_alias:
@@ -550,39 +560,25 @@ class SemanticBuilderCompiler:
 async def load_runtime_semantic_config(datasource_id: str, semantic_config_id: str, user_id: str | None = None) -> Dict[str, Any]:
     normalized_datasource_id = _normalize_text(datasource_id)
     normalized_config_id = _normalize_text(semantic_config_id)
-    normalized_user_id = _normalize_text(user_id)
     if not normalized_datasource_id or not normalized_config_id:
         raise ValueError("缺少 datasource_id 或 semantic_config_id")
-
-    ds_manager = get_datasource_manager()
-    datasource = await ds_manager.get_datasource_async(normalized_datasource_id)
-    if not datasource:
-        raise LookupError(f"数据源不存在: {normalized_datasource_id}")
-    if hasattr(ds_manager, "get_runtime_semantic_config_async"):
-        config = (
-            await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
-            if normalized_user_id
-            else await ds_manager.get_runtime_semantic_config_async(normalized_datasource_id, normalized_config_id)
+    try:
+        return await load_semantic_model(
+            normalized_datasource_id,
+            normalized_config_id,
+            user_id=_normalize_text(user_id),
+            mode="runtime",
+            manager=get_datasource_manager(),
         )
-    else:
-        config = (
-            await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id, normalized_user_id)
-            if normalized_user_id
-            else await ds_manager.get_semantic_config_async(normalized_datasource_id, normalized_config_id)
-        )
-    if not config:
-        raise LookupError(f"语义配置不存在: {normalized_config_id}")
-    if not config.get("enabled", True):
-        raise ValueError(f"语义配置未启用: {normalized_config_id}")
-
-    result = dict(config)
-    if result.get("relationships") and not result.get("joins"):
-        result["joins"] = result.get("relationships")
-    if datasource.get("source_type"):
-        result["source_type"] = datasource.get("source_type")
-    if not result.get("id"):
-        result["id"] = normalized_config_id
-    return result
+    except ValueError as exc:
+        message = str(exc)
+        if message == "数据源不存在":
+            raise LookupError(f"数据源不存在: {normalized_datasource_id}") from exc
+        if message == "未找到可用语义配置":
+            raise LookupError(f"语义配置不存在: {normalized_config_id}") from exc
+        if message == "语义配置未启用":
+            raise ValueError(f"语义配置未启用: {normalized_config_id}") from exc
+        raise
 
 
 async def compile_semantic_builder_sql(
@@ -592,4 +588,10 @@ async def compile_semantic_builder_sql(
     user_id: str | None = None,
 ) -> Dict[str, Any]:
     semantic_config = await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id) if user_id else await load_runtime_semantic_config(datasource_id, semantic_config_id)
-    return SemanticBuilderCompiler(semantic_config).compile(semantic_builder_config)
+    # 权限和配置加载留在异步边界，纯编译统一走应用层 BI 门面。
+    from .semantic_query_service import compile_semantic_bi_dsl
+
+    result = compile_semantic_bi_dsl(semantic_config, semantic_builder_config)
+    if not result.get("success"):
+        raise ValueError(str(result.get("error") or "BI 语义 DSL 编译失败"))
+    return result

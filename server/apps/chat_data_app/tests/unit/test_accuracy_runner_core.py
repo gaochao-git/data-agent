@@ -295,12 +295,11 @@ async def test_compile_and_execute_local_branches(monkeypatch):
         return dsl, ["warning"]
 
     import apps.chat_data_app.services.dashboard_spec_service as dashboard_spec_service
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
     import apps.chat_data_app.services.semantic_query_service as semantic_query_service
 
     monkeypatch.setattr(dashboard_spec_service, "get_dashboard_spec_semantic_config", fake_get_config)
     monkeypatch.setattr(dashboard_spec_service, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_clean_dsl)
-    monkeypatch.setattr(generator_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     compiled = await runner.compile_dsl_locally(
         datasource_id="ds_a",

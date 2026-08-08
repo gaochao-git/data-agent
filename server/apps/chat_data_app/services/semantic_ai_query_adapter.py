@@ -1,46 +1,41 @@
-"""
-语义 SQL 生成器
-
-封装 DSL 生成和 SQL 转换的完整逻辑，
-包括参数验证、DSL 映射、SQL 验证等功能。
-"""
+"""将智能体语义 DSL 适配为统一查询计划并调用 SQL 内核。"""
 
 import re
-from collections import deque
 from typing import List, Dict, Optional, Any
 
 from utils.logger import get_logger
-from .semantic_builder_sql_compiler import compile_builder_sql
-from .semantic_common import ensure_dimension_logical_type
-from .semantic_filter_normalization import normalize_time_filter_leaf
-from .semantic_formatter import format_params_for_display
-from .semantic_input_validator import InputValidator
+from .runtime_config import DEFAULT_ROW_LIMIT
+from .semantic_core.filter_normalization import normalize_time_filter_leaf
+from .semantic_core.formatter import format_params_for_display
+from .semantic_core.input_validator import InputValidator
+from .semantic_core.query_plan import (
+    SemanticQueryPlanContext,
+    parse_aggregate_expression,
+    semantic_table_alias,
+)
+from .semantic_core.semantic_sql.compiler import SemanticSQLCompiler
+from .semantic_core.semantic_sql.dialect import get_dialect
 
 logger = get_logger(__name__)
 
 
-class SemanticSQLGenerator:
-    """语义 SQL 生成器（统一 DSL2SQL 引擎）"""
+class SemanticAIQueryAdapter:
+    """语义 DSL 输入适配器。"""
 
     def __init__(self, semantic_config: Dict):
         """
-        初始化生成器
+        初始化语义 DSL 适配器
 
         Args:
             semantic_config: 语义配置，包含 metrics, dimensions, relationships
         """
-        normalized_config = dict(semantic_config or {})
-        normalized_config["dimensions"] = [ensure_dimension_logical_type(item) for item in normalized_config.get("dimensions") or []]
-
-        # 构建映射
-        metrics_map = {m['name']: m for m in normalized_config.get('metrics', [])}
-        dimensions_map = {d['name']: d for d in normalized_config.get('dimensions', [])}
-        self.metrics_map = metrics_map
-        self.dimensions_map = dimensions_map
-
-        self.validator = InputValidator(metrics_map, dimensions_map)
-
-        self.semantic_config = normalized_config
+        self.query_plan_context = SemanticQueryPlanContext(semantic_config)
+        self.semantic_config = self.query_plan_context.semantic_config
+        self.metrics_map = self.query_plan_context.metrics_map
+        self.dimensions_map = self.query_plan_context.dimensions_map
+        self.validator = InputValidator(self.metrics_map, self.dimensions_map, max_limit=DEFAULT_ROW_LIMIT)
+        self.dialect_name = self.query_plan_context.dialect_name
+        self.dialect = get_dialect(self.dialect_name)
 
         # 构建表和字段的存在性校验映射
         self._build_table_column_map()
@@ -59,26 +54,20 @@ class SemanticSQLGenerator:
 
     @staticmethod
     def _parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
-        expr = (expression or "").strip()
-        if not expr:
-            return None
-        match = re.match(r"^(COUNT|SUM|AVG|MAX|MIN)\((DISTINCT\s+)?(.+)\)$", expr, flags=re.IGNORECASE)
-        if not match:
-            return None
-        func = match.group(1).upper()
-        column_expr = (match.group(3) or "").strip()
-        if func == "COUNT" and (match.group(2) or "").strip():
-            return "COUNT_DISTINCT", column_expr
-        return func, column_expr
+        return parse_aggregate_expression(expression)
 
     @staticmethod
     def _table_alias(item: Dict[str, Any]) -> str:
-        return str((item or {}).get("table_alias") or (item or {}).get("alias") or (item or {}).get("table") or "").strip()
+        return semantic_table_alias(item)
 
     @staticmethod
     def _quote_column_name(column: Any) -> str:
         cleaned = str(column or "").strip().replace("`", "")
         return f"`{cleaned}`"
+
+    def _quote_dimension_column(self, column: Any) -> str:
+        cleaned = str(column or "").strip().replace("`", "").replace('"', "")
+        return self.dialect.quote_identifier(cleaned)
 
     @staticmethod
     def _sql_literal(value: Any) -> str:
@@ -205,7 +194,7 @@ class SemanticSQLGenerator:
         dim_expression = str(dim_cfg.get("expression") or "").strip()
         if dim_expression:
             return self._rewrite_expression_table_qualifier(dim_expression, dim_table_alias, dim_table), {dim_table_alias} if dim_table_alias else set()
-        column_expr = self._quote_column_name(dim_column)
+        column_expr = self._quote_dimension_column(dim_column)
         if dim_table_alias:
             column_expr = f"{dim_table_alias}.{column_expr}"
         return column_expr, {dim_table_alias} if dim_table_alias else set()
@@ -325,96 +314,7 @@ class SemanticSQLGenerator:
         return metric_names
 
     def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
-        relationships = self.semantic_config.get("relationships", []) or []
-        if len(tables_needed) <= 1 or not relationships:
-            return []
-
-        adjacency: Dict[str, List[tuple[Dict[str, Any], str]]] = {}
-        for rel in relationships:
-            left = self._relationship_left_alias(rel)
-            right = self._relationship_right_alias(rel)
-            if not left or not right:
-                continue
-            adjacency.setdefault(left, []).append((rel, right))
-            adjacency.setdefault(right, []).append((rel, left))
-
-        prev: Dict[str, tuple[str, Dict[str, Any]]] = {}
-        visited = {main_table}
-        queue = deque([main_table])
-        while queue:
-            current = queue.popleft()
-            for rel, nxt in adjacency.get(current, []):
-                if nxt in visited:
-                    continue
-                visited.add(nxt)
-                prev[nxt] = (current, rel)
-                queue.append(nxt)
-
-        required_nodes = {main_table}
-        required_rels: List[Dict[str, Any]] = []
-        rel_seen: set[str] = set()
-        for target in tables_needed:
-            if target == main_table:
-                continue
-            node = target
-            while node != main_table and node in prev:
-                required_nodes.add(node)
-                parent, rel = prev[node]
-                rel_id = f"{self._relationship_left_alias(rel)}|{self._relationship_right_alias(rel)}|{rel.get('join_type')}|{str(rel.get('join_conditions') or [])}"
-                if rel_id not in rel_seen:
-                    rel_seen.add(rel_id)
-                    required_rels.append(rel)
-                node = parent
-
-        joins: List[Dict[str, Any]] = []
-        added = {main_table}
-        while len(added) < len(required_nodes):
-            selected_rel = None
-            for rel in required_rels:
-                left = self._relationship_left_alias(rel)
-                right = self._relationship_right_alias(rel)
-                if left in added and right in required_nodes and right not in added:
-                    selected_rel = (rel, left, right, False)
-                    break
-                if right in added and left in required_nodes and left not in added:
-                    selected_rel = (rel, right, left, True)
-                    break
-            if not selected_rel:
-                break
-            rel, left_alias, right_alias, reversed_pair = selected_rel
-            conditions = rel.get("join_conditions") or []
-            join_conditions = []
-            for cond in conditions:
-                left_col = (cond or {}).get("left_column")
-                right_col = (cond or {}).get("right_column")
-                if not left_col or not right_col:
-                    continue
-                if reversed_pair:
-                    join_conditions.append({"leftTable": rel.get("right_table"), "leftAlias": left_alias, "leftColumn": right_col, "rightColumn": left_col})
-                else:
-                    join_conditions.append({"leftTable": rel.get("left_table"), "leftAlias": left_alias, "leftColumn": left_col, "rightColumn": right_col})
-            if not join_conditions and rel.get("left_column") and rel.get("right_column"):
-                if reversed_pair:
-                    join_conditions.append({"leftTable": rel.get("right_table"), "leftAlias": left_alias, "leftColumn": rel.get("right_column"), "rightColumn": rel.get("left_column")})
-                else:
-                    join_conditions.append({"leftTable": rel.get("left_table"), "leftAlias": left_alias, "leftColumn": rel.get("left_column"), "rightColumn": rel.get("right_column")})
-
-            left_physical_table = rel.get("right_table") if reversed_pair else rel.get("left_table")
-            right_physical_table = rel.get("left_table") if reversed_pair else rel.get("right_table")
-
-            joins.append({
-                "id": f"{left_alias}-{right_alias}",
-                "leftTable": left_physical_table,
-                "leftAlias": left_alias,
-                "rightTable": right_physical_table,
-                "rightAlias": right_alias,
-                "joinType": str(rel.get("join_type", "left")).upper(),
-                "joinConditions": join_conditions,
-                "leftColumn": join_conditions[0]["leftColumn"] if join_conditions else "",
-                "rightColumn": join_conditions[0]["rightColumn"] if join_conditions else "",
-            })
-            added.add(right_alias)
-        return joins
+        return self.query_plan_context.build_joins(main_table, tables_needed)
 
     def _normalize_metrics_allow_dimension_raw(self, metrics: List[str]) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """
@@ -791,7 +691,7 @@ class SemanticSQLGenerator:
         for fil in builder_filters:
             self._collect_tables_from_filter_node(fil, tables_needed)
 
-        builder_config = {
+        query_plan = {
             "mainTable": main_table,
             "mainAlias": main_table_alias,
             "joins": self._build_builder_joins(main_table_alias, tables_needed),
@@ -803,9 +703,9 @@ class SemanticSQLGenerator:
             "offset": validated_offset,
         }
         if builder_having:
-            builder_config["filters"] = builder_config["filters"] + builder_having
+            query_plan["filters"] = query_plan["filters"] + builder_having
         try:
-            sql = compile_builder_sql(builder_config, dialect=self.semantic_config.get("source_type", "mysql"))
+            sql = SemanticSQLCompiler(dialect=self.dialect_name).compile(query_plan)
         except Exception as err:
             logger.error(f"统一 DSL2SQL 编译失败: {err}", exc_info=True)
             return {"success": False, "error": f"错误：SQL 转换失败 - {str(err)}"}

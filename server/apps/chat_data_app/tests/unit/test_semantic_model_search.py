@@ -9,15 +9,15 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import semantic_config_selector as selector
-from apps.chat_data_app.services.semantic_config_selector import (
+from apps.chat_data_app.services import semantic_model_search as selector
+from apps.chat_data_app.services.semantic_model_search import (
     _build_selector_prompt,
     _chunk_semantic_config_summaries,
     _merge_semantic_config_selections,
     _parse_selection_response,
     _retrieve_semantic_config_candidates,
     _summarize_semantic_config,
-    select_semantic_config_for_query,
+    search_semantic_models,
 )
 
 
@@ -119,7 +119,7 @@ class _FakeDatasourceManager:
         return self.configs
 
 
-def test_select_semantic_config_for_query_returns_retrieved_ids(monkeypatch):
+def test_search_semantic_models_returns_retrieved_ids(monkeypatch):
     configs = [
         {"id": "sc_order", "name": "订单分析", "enabled": True, "metrics": [{"name": "订单金额"}], "dimensions": []},
         {"id": "sc_user", "name": "用户分析", "enabled": True, "metrics": [{"name": "用户数"}], "dimensions": []},
@@ -133,12 +133,12 @@ def test_select_semantic_config_for_query_returns_retrieved_ids(monkeypatch):
     monkeypatch.setattr(selector, "get_datasource_manager", lambda: _FakeDatasourceManager(configs))
     monkeypatch.setattr(selector, "get_chat_data_llm", lambda **_kwargs: FakeLLM())
 
-    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单金额", user_id="u1"))
+    selection = asyncio.run(search_semantic_models("ds_a", "查询订单金额", user_id="u1"))
 
     assert selection == {"semantic_config_ids": ["sc_order"]}
 
 
-def test_select_semantic_config_for_query_merges_parallel_chunk_results(monkeypatch):
+def test_search_semantic_models_merges_parallel_chunk_results(monkeypatch):
     configs = [
         {"id": "sc_order", "name": "订单分析", "enabled": True},
         {"id": "sc_user", "name": "用户分析", "enabled": True},
@@ -152,14 +152,14 @@ def test_select_semantic_config_for_query_merges_parallel_chunk_results(monkeypa
     monkeypatch.setattr(selector, "_chunk_semantic_config_summaries", lambda summaries, *_args, **_kwargs: [[summaries[0]], [summaries[1]]])
     monkeypatch.setattr(selector, "_select_semantic_config_chunks", fake_select_chunks)
 
-    selection = asyncio.run(select_semantic_config_for_query("ds_a", "查询订单和用户", user_id="u1"))
+    selection = asyncio.run(search_semantic_models("ds_a", "查询订单和用户", user_id="u1"))
 
     assert selection == {"semantic_config_ids": ["sc_order", "sc_user"]}
 
 
-def test_select_semantic_config_for_query_returns_none_for_invalid_or_disabled_configs(monkeypatch):
-    assert asyncio.run(select_semantic_config_for_query("", "查询")) is None
-    assert asyncio.run(select_semantic_config_for_query("ds_a", "")) is None
+def test_search_semantic_models_returns_none_for_invalid_or_disabled_configs(monkeypatch):
+    assert asyncio.run(search_semantic_models("", "查询")) is None
+    assert asyncio.run(search_semantic_models("ds_a", "")) is None
     monkeypatch.setattr(selector, "get_datasource_manager", lambda: _FakeDatasourceManager([{"id": "sc_disabled", "enabled": False}]))
 
-    assert asyncio.run(select_semantic_config_for_query("ds_a", "查询", user_id="u1")) is None
+    assert asyncio.run(search_semantic_models("ds_a", "查询", user_id="u1")) is None

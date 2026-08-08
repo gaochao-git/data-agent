@@ -29,7 +29,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     if not semantic_config:
         return (
             "## 当前语义模型\n"
-            "本轮未手动选择语义模型。语义模型目录或业务范围概览可直接基于“当前可见语义模型目录”回答；目录中的 ID 只用于选择，不表示语义文件已经生成。需要具体指标、维度、枚举或业务口径时，先调用 `semantic_tool(operation=\"search_models\")`，再对候选模型调用 `list_fields`。需要确认字段完整定义、关系、原始表列或整体结构时，按工具返回的实际路径用 `file_grep`/`file_read` 读取。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
+            "本轮未手动选择语义模型。语义模型目录或业务范围概览可直接基于“当前可见语义模型目录”回答；目录中的 ID 只用于选择，不表示语义文件已经生成。需要具体指标、维度、枚举或业务口径时，先调用 `semantic_search(operation=\"search_models\")`，再对候选模型调用 `list_fields`。需要确认字段完整定义、关系、原始表列或整体结构时，按工具返回的实际路径用 `file_grep`/`file_read` 读取。搜索后仍未找到、候选不唯一或口径不清时再澄清。\n"
         )
 
     config_id = str(semantic_config.get("id") or "").strip()
@@ -42,7 +42,7 @@ def build_semantic_layer_context(semantic_config: dict | None) -> str:
     return (
         header
         + "。这是本轮优先参考，不代表锁定。\n"
-        + "需要具体指标、维度、枚举、关联或表列时，必须调用 `semantic_tool` 获取实际语义模型和字段定义；可根据检索结果使用其他可见语义模型。\n"
+        + "需要具体指标、维度、枚举、关联或表列时，必须调用 `semantic_search` 获取实际语义模型和字段定义；可根据检索结果使用其他可见语义模型。\n"
     )
 
 

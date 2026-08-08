@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
-from apps.chat_data_app.services import semantic_builder_compiler, semantic_conversation_context, semantic_tools
+from apps.chat_data_app.services import semantic_bi_query_adapter, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from apps.chat_data_app.routers import conversations as conversation_router
 
@@ -132,7 +132,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
     graph = FakeGraph([
         (
             FakeMessageChunk(
-                tool_calls=[{"id": "call_select", "name": "semantic_tool"}],
+                tool_calls=[{"id": "call_select", "name": "semantic_search"}],
             ),
             {"langgraph_node": "model"},
         ),
@@ -141,7 +141,7 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
                 tool_call_chunks=[
                     {
                         "id": "call_select",
-                        "name": "semantic_tool",
+                        "name": "semantic_search",
                         "args": json.dumps({"query": "查询订单金额和用户数"}, ensure_ascii=False),
                     }
                 ],
@@ -150,10 +150,10 @@ def test_completion_api_streams_multi_semantic_retrieval_tool_result(client, aut
         ),
         (
             FakeMessageChunk(
-                content="[semantic_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="semantic_tool",
+                name="semantic_search",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -194,15 +194,15 @@ def test_completion_api_streams_single_semantic_retrieval_tool_result(client, au
     }
     graph = FakeGraph([
         (
-            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "semantic_tool"}]),
+            FakeMessageChunk(tool_calls=[{"id": "call_select", "name": "semantic_search"}]),
             {"langgraph_node": "model"},
         ),
         (
             FakeMessageChunk(
-                content="[semantic_tool]\n" + json.dumps(payload, ensure_ascii=False),
+                content="[semantic_search]\n" + json.dumps(payload, ensure_ascii=False),
                 msg_type="tool",
                 tool_call_id="call_select",
-                name="semantic_tool",
+                name="semantic_search",
             ),
             {"langgraph_node": "tools"},
         ),
@@ -338,7 +338,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    for module in (semantic_builder_compiler, semantic_conversation_context, semantic_tools):
+    for module in (semantic_bi_query_adapter, semantic_conversation_context, semantic_model_repository):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
 
     async def fake_get_dashboard_spec_semantic_config(*_args, **_kwargs):

@@ -23,7 +23,7 @@ from apps.chat_data_app.schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from apps.chat_data_app.services import semantic_config_validator
+from apps.chat_data_app.services import semantic_config_service
 from apps.chat_data_app.services import semantic_history_learning_service
 from apps.chat_data_app.services.semantic_history_learning_service import build_semantic_history_learning_service
 
@@ -59,30 +59,30 @@ def test_validate_semantic_fields_checks_dimensions_and_metrics():
         ]
     }
 
-    assert semantic_config_validator.validate_semantic_fields(
+    assert semantic_config_service.validate_semantic_fields(
         datasource,
         metrics=[{"name": "销售额", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "城市", "table": "orders", "column": "city"}],
     ) is None
-    assert "所属表不存在" in semantic_config_validator.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
-    assert "字段不存在" in semantic_config_validator.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
-    assert "必须引用表" in semantic_config_validator.validate_semantic_fields(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
-    assert "字段显示名称重复" in semantic_config_validator.validate_semantic_fields(
+    assert "所属表不存在" in semantic_config_service.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "missing", "column": "city"}])
+    assert "字段不存在" in semantic_config_service.validate_semantic_fields(datasource, [], [{"name": "城市", "table": "orders", "column": "missing"}])
+    assert "必须引用表" in semantic_config_service.validate_semantic_fields(datasource, [{"name": "销售额", "table": "orders", "expression": "SUM(price)"}], [])
+    assert "字段显示名称重复" in semantic_config_service.validate_semantic_fields(
         datasource,
         metrics=[{"name": "数量", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[{"name": "数量", "table": "orders", "column": "city"}],
     )
-    assert "字段显示名称不能为空" in semantic_config_validator.validate_semantic_fields(
+    assert "字段显示名称不能为空" in semantic_config_service.validate_semantic_fields(
         datasource,
         metrics=[{"name": " ", "table": "orders", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "所属表不存在" in semantic_config_validator.validate_semantic_fields(
+    assert "所属表不存在" in semantic_config_service.validate_semantic_fields(
         datasource,
         metrics=[{"name": "销售额", "table": "missing", "expression": "SUM(amount)"}],
         dimensions=[],
     )
-    assert "缺少表结构" in semantic_config_validator.validate_semantic_fields({"ds_tables": []}, [], [])
+    assert "缺少表结构" in semantic_config_service.validate_semantic_fields({"ds_tables": []}, [], [])
 
 
 def test_validate_semantic_logical_types_requires_enum_column_dict():
@@ -95,17 +95,17 @@ def test_validate_semantic_logical_types_requires_enum_column_dict():
             return None
 
     manager = Manager()
-    assert asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+    assert asyncio.run(semantic_config_service.validate_semantic_logical_types(
         manager,
         "ds_a",
         [{"name": "状态", "table": "orders", "column": "status", "logical_type": "enum"}],
     )) is None
-    assert "请先维护字段字典枚举值" in asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+    assert "请先维护字段字典枚举值" in asyncio.run(semantic_config_service.validate_semantic_logical_types(
         manager,
         "ds_a",
         [{"name": "空枚举", "table": "orders", "column": "empty_enum", "logical_type": "enum"}],
     ))
-    assert asyncio.run(semantic_config_validator.validate_semantic_logical_types(
+    assert asyncio.run(semantic_config_service.validate_semantic_logical_types(
         manager,
         "ds_a",
         [{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
@@ -835,9 +835,9 @@ def test_semantic_helper_edge_cases():
 
     assert configs[0]["can_manage"] is False
     assert configs[1]["can_manage"] is True
-    assert semantic_config_validator.expression_uses_physical_column("", {"amount"}) is False
-    assert semantic_config_validator.expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
-    assert semantic_config_validator.expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
+    assert semantic_config_service.expression_uses_physical_column("", {"amount"}) is False
+    assert semantic_config_service.expression_uses_physical_column("SUM(o.AMOUNT)", {"amount"}) is True
+    assert semantic_config_service.expression_uses_physical_column("SUM(total_amount)", {"amount"}) is False
     assert semantic_config._quote_identifier("a`b") == "`a``b`"
     assert semantic_history_learning_service._parse_json_object({"a": 1}) == {"a": 1}
     assert semantic_history_learning_service._parse_json_object("{bad") == {}

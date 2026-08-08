@@ -17,7 +17,7 @@ from utils.logger import get_logger
 from auth import authenticate_request, AuthenticationError
 
 from ..services.runtime_skill_snapshot import build_runtime_skill_snapshot_async
-from ..services.semantic_common import AGENT_ID
+from .. import AGENT_ID
 
 logger = get_logger(__name__)
 

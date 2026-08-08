@@ -2,11 +2,80 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from . import query_runtime
 from .query_result import build_query_result_payload, query_result_status
-from .semantic_sql_generator import SemanticSQLGenerator
+from .semantic_ai_query_adapter import SemanticAIQueryAdapter
+from .semantic_bi_query_adapter import SemanticBIQueryAdapter
+
+
+@dataclass(frozen=True)
+class SemanticCompileOptions:
+    """语义 DSL 编译选项；应用层负责注入，不由编译器读取环境变量。"""
+
+    user_query: Optional[str] = None
+    max_rows: Optional[int] = None
+    offset: Optional[int] = None
+
+
+def compile_semantic_ai_dsl(
+    semantic_config: Dict[str, Any],
+    dsl: Dict[str, Any],
+    *,
+    options: Optional[SemanticCompileOptions] = None,
+    generator_cls: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    generator: Any = None,
+) -> Dict[str, Any]:
+    """统一语义 DSL 编译门面，所有应用入口应通过本函数编译。"""
+    if not isinstance(semantic_config, dict):
+        return {"success": False, "sql": "", "error": "语义模型必须是对象"}
+    if not isinstance(dsl, dict):
+        return {"success": False, "sql": "", "error": "语义 DSL 必须是对象"}
+
+    compile_options = options or SemanticCompileOptions()
+    compiler_factory = generator_cls or SemanticAIQueryAdapter
+    compiler = generator or compiler_factory(semantic_config)
+    compile_result = compiler.generate_sql(
+        metrics=dsl.get("metrics") or [],
+        dimensions=dsl.get("dimensions") or [],
+        filters=dsl.get("filters") or [],
+        having=dsl.get("having") or [],
+        order_by=dsl.get("order_by") or [],
+        limit=dsl.get("limit", compile_options.max_rows),
+        offset=dsl.get("offset", compile_options.offset),
+        user_query=compile_options.user_query,
+    )
+    return {
+        "success": bool(compile_result.get("success")),
+        "sql": str(compile_result.get("sql") or "").strip(),
+        "error": compile_result.get("error"),
+        "warnings": compile_result.get("warnings") or [],
+    }
+
+
+def compile_semantic_bi_dsl(
+    semantic_config: Dict[str, Any],
+    dsl: Dict[str, Any],
+) -> Dict[str, Any]:
+    """编译 BI 可视化语义 DSL，返回 SQL 和内部查询计划。"""
+    if not isinstance(semantic_config, dict):
+        return {"success": False, "sql": "", "error": "语义模型必须是对象"}
+    if not isinstance(dsl, dict):
+        return {"success": False, "sql": "", "error": "BI 语义 DSL 必须是对象"}
+    try:
+        result = SemanticBIQueryAdapter(semantic_config).compile(dsl)
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "sql": "", "error": str(exc)}
+    return {
+        "success": True,
+        "sql": str(result.get("sql") or "").strip(),
+        "query_plan": result.get("builder_config") or {},
+        # 保留已有可视化响应字段，新的公共门面内部使用 query_plan。
+        "builder_config": result.get("builder_config") or {},
+        "error": None,
+    }
 
 
 def normalize_member_datasource_ids(member_datasource_ids: Any) -> List[str]:
@@ -17,31 +86,6 @@ def normalize_member_datasource_ids(member_datasource_ids: Any) -> List[str]:
         if member_id and member_id not in normalized_ids:
             normalized_ids.append(member_id)
     return normalized_ids
-
-
-def compile_semantic_query_dsl(
-    semantic_config: Dict[str, Any],
-    dsl: Dict[str, Any],
-    *,
-    user_query: Optional[str] = None,
-    generator_cls: Callable[[Dict[str, Any]], Any] = SemanticSQLGenerator,
-) -> Dict[str, Any]:
-    """Compile a semantic DSL payload into SQL using the shared generator contract."""
-    compile_result = generator_cls(semantic_config).generate_sql(
-        metrics=dsl.get("metrics") or [],
-        dimensions=dsl.get("dimensions") or [],
-        filters=dsl.get("filters") or [],
-        having=dsl.get("having") or [],
-        order_by=dsl.get("order_by") or [],
-        limit=dsl.get("limit"),
-        offset=dsl.get("offset"),
-        user_query=user_query,
-    )
-    return {
-        "success": bool(compile_result.get("success")),
-        "sql": str(compile_result.get("sql") or "").strip(),
-        "error": compile_result.get("error"),
-    }
 
 
 async def execute_semantic_query_sql(

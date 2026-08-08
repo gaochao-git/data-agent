@@ -385,7 +385,7 @@ async def _invoke_selector_prompt(llm: Any, prompt: str) -> str:
     except Exception as exc:
         emit_llm_connection_alarm_if_needed(
             exc,
-            ext1={"purpose": "semantic_config_selector"},
+            ext1={"purpose": "semantic_model_search"},
         )
         raise
     return str(getattr(response, "content", response) or "")
@@ -440,7 +440,7 @@ def _merge_semantic_config_selections(selections: List[Dict[str, Any]]) -> Dict[
     return {"semantic_config_ids": semantic_config_ids}
 
 
-async def select_semantic_config_for_query(
+async def search_semantic_models(
     datasource_id: str | None,
     user_query: str,
     model_id: str | None = None,
@@ -510,7 +510,7 @@ async def select_semantic_config_for_query(
 
 
 __all__ = [
-    "select_semantic_config_for_query",
+    "search_semantic_models",
     "_parse_selection_response",
     "_summarize_semantic_config",
 ]

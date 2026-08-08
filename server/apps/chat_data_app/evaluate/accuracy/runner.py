@@ -359,29 +359,27 @@ async def compile_dsl_locally(
     dsl: dict[str, Any] | None,
     user_query: str,
 ) -> dict[str, Any]:
-    """Compile captured DSL with the current local DSL2SQL implementation."""
+    """Compile captured DSL through the shared semantic query facade."""
     if not isinstance(dsl, dict):
         return {"success": False, "sql": "", "error": "未捕获到可编译 DSL"}
     from apps.chat_data_app.services.dashboard_spec_service import (
         get_dashboard_spec_semantic_config,
         remove_mixed_raw_metrics_for_aggregate_dsl,
     )
-    from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
+    from apps.chat_data_app.services.semantic_query_service import (
+        SemanticCompileOptions,
+        compile_semantic_ai_dsl,
+    )
 
     semantic_config = await get_dashboard_spec_semantic_config(datasource_id, semantic_config_id)
     payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl, semantic_config)
     payload = normalize_pagination_values(payload)
     if payload.get("compare"):
         return {"success": False, "sql": "", "error": "DSL2SQL 不支持 compare；请拆成基础 DSL 查询；复杂同比/环比请使用智能分析", "warnings": warnings}
-    result = SemanticSQLGenerator(semantic_config).generate_sql(
-        metrics=payload.get("metrics") or [],
-        dimensions=payload.get("dimensions") or [],
-        filters=payload.get("filters") or [],
-        having=payload.get("having") or [],
-        order_by=payload.get("order_by") or [],
-        limit=payload.get("limit"),
-        offset=payload.get("offset"),
-        user_query=user_query,
+    result = compile_semantic_ai_dsl(
+        semantic_config,
+        payload,
+        options=SemanticCompileOptions(user_query=user_query),
     )
     return {
         "success": bool(result.get("success")),

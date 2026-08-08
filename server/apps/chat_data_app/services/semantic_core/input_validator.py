@@ -9,8 +9,7 @@ import logging
 import re
 from datetime import datetime
 
-from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
-from apps.chat_data_app.services.semantic_filter_normalization import split_text_between_filter, time_equal_value_to_range
+from .filter_normalization import split_text_between_filter, time_equal_value_to_range
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,12 @@ class InputValidator:
     与 SemanticValidator（DSL 验证）不同，本类验证的是原始输入格式。
     """
 
-    def __init__(self, metrics_map: Dict[str, Dict], dimensions_map: Dict[str, Dict]):
+    def __init__(
+        self,
+        metrics_map: Dict[str, Dict],
+        dimensions_map: Dict[str, Dict],
+        max_limit: int = 100,
+    ):
         """
         初始化验证器
 
@@ -54,6 +58,7 @@ class InputValidator:
         """
         self.metrics_map = metrics_map
         self.dimensions_map = dimensions_map
+        self.max_limit = max_limit
 
     def validate_metrics(self, metrics: List[str]) -> Tuple[List[Dict], Optional[str]]:
         """
@@ -674,7 +679,7 @@ class InputValidator:
 
         return validated_order_by, None
 
-    def validate_limit(self, limit: Optional[int], max_limit: int = DEFAULT_ROW_LIMIT) -> Tuple[Optional[int], Optional[str]]:
+    def validate_limit(self, limit: Optional[int], max_limit: Optional[int] = None) -> Tuple[Optional[int], Optional[str]]:
         """
         验证 LIMIT 限制条数
 
@@ -685,6 +690,7 @@ class InputValidator:
         Returns:
             (validated_limit, error_msg): 验证后的限制条数和错误消息
         """
+        effective_max_limit = self.max_limit if max_limit is None else max_limit
         if limit is None:
             return None, None
 
@@ -693,8 +699,8 @@ class InputValidator:
             return None, f"错误：LIMIT 必须为正整数，当前值：{limit}"
 
         # 防止过大的 LIMIT
-        if limit > max_limit:
-            return None, f"错误：LIMIT 不能超过 {max_limit}，当前值：{limit}"
+        if limit > effective_max_limit:
+            return None, f"错误：LIMIT 不能超过 {effective_max_limit}，当前值：{limit}"
 
         return limit, None
 

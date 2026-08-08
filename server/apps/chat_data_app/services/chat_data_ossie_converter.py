@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any
 
-from .semantic_common import normalize_semantic_relationship_type
+from .semantic_core.common import normalize_relationship_type
 
 
 _AGGREGATE_RE = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
@@ -81,7 +81,7 @@ def _dialect_expression(expression: str) -> dict[str, Any]:
 
 
 def _relationship_type(value: Any) -> str:
-    return normalize_semantic_relationship_type(value)
+    return normalize_relationship_type(value)
 
 
 class ChatDataToOssieConverter:

@@ -20,6 +20,7 @@ from apps.chat_data_app.agent.tools.current_time import get_current_time_payload
 from apps.chat_data_app.schema import SemanticQueryInput
 from apps.chat_data_app.services import query_runtime
 from apps.chat_data_app.services import sql_assist_context
+from apps.chat_data_app.services import semantic_query_service
 
 
 def test_current_time_tool_returns_detail_only_when_requested():
@@ -523,7 +524,7 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     success = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["订单数"]},
@@ -612,7 +613,7 @@ def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -652,7 +653,7 @@ def test_semantic_query_tool_allows_member_ids_from_available_scope(monkeypatch)
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -689,7 +690,7 @@ def test_semantic_query_tool_does_not_default_to_state_member_ids(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.coroutine(
@@ -724,7 +725,7 @@ def test_semantic_query_tool_rejects_member_ids_outside_available_scope(monkeypa
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -760,7 +761,7 @@ def test_semantic_query_tool_rejects_member_ids_outside_available_member_scope(m
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -797,7 +798,7 @@ def test_semantic_query_tool_rejects_member_ids_conflicting_with_matched_scope(m
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -834,7 +835,7 @@ def test_semantic_query_tool_requires_member_ids(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.coroutine(
@@ -869,7 +870,7 @@ def test_semantic_query_tool_rejects_empty_available_member_scope(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fail_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -912,7 +913,7 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -971,7 +972,7 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FailGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FailGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
 
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
@@ -1014,7 +1015,7 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
         "state": {},
     }))
 
-    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 semantic_tool 搜索语义模型后显式传入 semantic_config_id"
+    assert missing_config == "semantic_query_tool 执行失败: 缺少指标集ID，请先调用 semantic_search 搜索语义模型后显式传入 semantic_config_id"
     assert bad_dsl == "semantic_query_tool 执行失败: dsl 必须是对象"
     assert mixed_payload == "semantic_query_tool 执行失败: 必须且只能传入 dsl 或 sql 其中一个"
 
@@ -1032,7 +1033,7 @@ def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
             return {"success": True, "sql": "   "}
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
 
     compile_error = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["bad"]},
@@ -1105,7 +1106,7 @@ def test_semantic_query_tool_leaves_large_result_for_result_middleware(monkeypat
         }
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["内容"]},
@@ -1171,7 +1172,7 @@ def test_semantic_query_tool_returns_large_internal_result_for_middleware(monkey
     )
 
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["内容"]},
@@ -1207,7 +1208,7 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
         semantic_config_id="cfg_a",
     )
     monkeypatch.setattr(agent_tools, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(agent_tools, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(agent_tools, "_execute_sql_real", fake_execute_sql_real)
     result = asyncio.run(agent_tools.semantic_query_tool.ainvoke({
         "dsl": {"metrics": ["指标"]},
@@ -1218,4 +1219,3 @@ def test_semantic_query_tool_executes_compiled_sql_directly(monkeypatch):
 
     assert executed_sql == ["select 1"]
     assert '"sql": "select 1"' in result
-

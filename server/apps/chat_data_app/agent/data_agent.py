@@ -28,7 +28,7 @@ from .tools.present_artifacts import create_present_artifacts_tool
 from .tools.bash_run import create_bash_run_tool
 from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
-from .tools.semantic_tool import create_semantic_tool
+from .tools.semantic_search import create_semantic_search
 
 
 def assemble_tools(
@@ -43,7 +43,7 @@ def assemble_tools(
     source_type: str | None = None,
 ) -> list:
     """注册单一 Agent 的固定工具集，只有 Bash 受运行选项控制。"""
-    semantic_tool = create_semantic_tool(
+    semantic_search = create_semantic_search(
         model_id=model_id,
         datasource_id=datasource_id,
         user_id=user_id,
@@ -56,7 +56,7 @@ def assemble_tools(
         *create_parse_document_tool(workspace_runtime),
         create_present_artifacts_tool(workspace_runtime),
         get_current_time_tool,
-        semantic_tool,
+        semantic_search,
         create_dsl2sql_tool(
             datasource_id,
             user_id=user_id,

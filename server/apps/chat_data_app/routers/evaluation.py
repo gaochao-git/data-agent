@@ -40,7 +40,8 @@ from ..services.evaluation_service import (
 )
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
-from ..services.semantic_common import _can_mutate_semantic_config, _semantic_config_prompt_payload, is_time_logical_dimension
+from ..services.semantic_config_service import can_mutate_semantic_config
+from ..services.semantic_core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -403,7 +404,7 @@ async def _generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], pa
         nl_example=nl_example,
         business_domain=business_domain,
         existing_questions=payload.existing_questions,
-        semantic_config_payload=_semantic_config_prompt_payload(config),
+        semantic_config_payload=config,
     )
     llm = get_chat_data_llm(streaming=False, max_tokens=2000)
     try:
@@ -590,7 +591,7 @@ async def _ensure_evaluation_semantic_permission(
     if not config:
         raise HTTPException(status_code=404, detail=f"语义配置不存在: {config_id}")
     user_id = str(getattr(current_user, "user_id", "") or "").strip()
-    if not _can_mutate_semantic_config(config, user_id, admin_manage):
+    if not can_mutate_semantic_config(config, user_id, admin_manage):
         raise HTTPException(status_code=403, detail="无权限操作该指标集")
     return config
 

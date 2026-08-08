@@ -9,10 +9,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
-from apps.chat_data_app.services.semantic_builder_sql_compiler import compile_builder_sql
-from apps.chat_data_app.services.semantic_dialect import get_dialect
-import apps.chat_data_app.services.semantic_builder_sql_compiler as compiler
+from apps.chat_data_app.services.semantic_ai_query_adapter import SemanticAIQueryAdapter
+from apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler import compile_query_plan_sql
+from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import get_dialect
+import apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler as compiler
 from apps.chat_data_app.services.runtime_config import DEFAULT_ROW_LIMIT
 
 
@@ -162,18 +162,18 @@ def test_builder_join_clause_helper_allows_join_without_on():
     assert "LEFT JOIN items ON" not in clauses
 
 
-def test_compile_builder_sql_validates_shape_and_required_fields():
+def test_compile_query_plan_sql_validates_shape_and_required_fields():
     with pytest.raises(ValueError, match="格式错误"):
-        compile_builder_sql([])
+        compile_query_plan_sql([])
     with pytest.raises(ValueError, match="缺少 mainTable"):
-        compile_builder_sql({"dimensions": [{"table": "orders", "column": "id"}]})
+        compile_query_plan_sql({"dimensions": [{"table": "orders", "column": "id"}]})
     with pytest.raises(ValueError, match="至少选择"):
-        compile_builder_sql({"mainTable": "orders", "dimensions": [], "aggregations": []})
+        compile_query_plan_sql({"mainTable": "orders", "dimensions": [], "aggregations": []})
 
 
-def test_compile_builder_sql_rejects_raw_and_aggregate_metric_mix():
+def test_compile_query_plan_sql_rejects_raw_and_aggregate_metric_mix():
     with pytest.raises(ValueError, match="原始值与聚合函数混用"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [],
             "aggregations": [
@@ -189,7 +189,7 @@ def test_sql_dialect_time_grain_exprs_are_isolated_from_compiler():
     assert get_dialect("mysql").format_date("order_time", "month") == "DATE_FORMAT(order_time, '%Y-%m')"
 
 
-def test_compile_builder_sql_detail_query():
+def test_compile_query_plan_sql_detail_query():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -205,7 +205,7 @@ def test_compile_builder_sql_detail_query():
         "limit": 50,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "FROM orders" in sql
     assert "GROUP BY" not in sql
@@ -213,7 +213,7 @@ def test_compile_builder_sql_detail_query():
     assert "LIMIT 50" in sql
 
 
-def test_compile_builder_sql_duplicate_alias_raw_metric_and_join_conditions():
+def test_compile_query_plan_sql_duplicate_alias_raw_metric_and_join_conditions():
     builder_config = {
         "mainTable": "orders",
         "joins": [
@@ -249,7 +249,7 @@ def test_compile_builder_sql_duplicate_alias_raw_metric_and_join_conditions():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "orders.`status` AS `重复名`" in sql
     assert "order_items.`product_id` AS `重复名_2`" in sql
@@ -265,8 +265,8 @@ def test_compile_builder_sql_duplicate_alias_raw_metric_and_join_conditions():
     assert "ORDER BY `重复名` ASC" in sql
 
 
-def test_compile_builder_sql_alias_suffix_skips_existing_duplicate():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_alias_suffix_skips_existing_duplicate():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [
             {"id": "d1", "table": "orders", "column": "status", "alias": "重复名"},
@@ -282,7 +282,7 @@ def test_compile_builder_sql_alias_suffix_skips_existing_duplicate():
     assert "`province` AS `重复名_3`" in sql
 
 
-def test_compile_builder_sql_where_operator_branches_and_tree_empty_nodes():
+def test_compile_query_plan_sql_where_operator_branches_and_tree_empty_nodes():
     assert compiler._build_filter_tree_clause(
         {"and": []},
         for_having=False,
@@ -330,7 +330,7 @@ def test_compile_builder_sql_where_operator_branches_and_tree_empty_nodes():
         "orderBy": [],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "WHERE" in sql
     assert "o.`status` = u.`level`" in sql
@@ -339,9 +339,9 @@ def test_compile_builder_sql_where_operator_branches_and_tree_empty_nodes():
     assert "o.`created_at` BETWEEN '2024-01-01' AND current_date()" in sql
 
 
-def test_compile_builder_sql_rejects_mixed_filter_tree_scope():
+def test_compile_query_plan_sql_rejects_mixed_filter_tree_scope():
     with pytest.raises(ValueError, match="不能混用明细过滤和结果过滤"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
             "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -356,7 +356,7 @@ def test_compile_builder_sql_rejects_mixed_filter_tree_scope():
         })
 
 
-def test_compile_builder_sql_supports_same_physical_table_with_aliases():
+def test_compile_query_plan_sql_supports_same_physical_table_with_aliases():
     builder_config = {
         "mainTable": "orders",
         "mainAlias": "orders",
@@ -394,7 +394,7 @@ def test_compile_builder_sql_supports_same_physical_table_with_aliases():
         "limit": 20,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "FROM orders" in sql
     assert "LEFT JOIN users ON orders.buyer_id = users.id" in sql
@@ -405,7 +405,7 @@ def test_compile_builder_sql_supports_same_physical_table_with_aliases():
     assert "ORDER BY `卖家名称` ASC" in sql
 
 
-def test_compile_builder_sql_rewrites_alias_when_alias_is_only_table():
+def test_compile_query_plan_sql_rewrites_alias_when_alias_is_only_table():
     builder_config = {
         "mainTable": "users",
         "mainAlias": "users_2",
@@ -417,13 +417,13 @@ def test_compile_builder_sql_rewrites_alias_when_alias_is_only_table():
         "orderBy": [],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "FROM users users_2" in sql
     assert "users_2.name AS `卖家名称`" in sql
 
 
-def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
+def test_compile_query_plan_sql_count_variants_and_order_by_metric_expression():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -442,7 +442,7 @@ def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
         "limit": 10,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "COUNT(*) AS `总数`" in sql
     assert "COUNT(DISTINCT `user_id`) AS `用户数`" in sql
@@ -452,13 +452,13 @@ def test_compile_builder_sql_count_variants_and_order_by_metric_expression():
     assert "GROUP BY" not in sql
 
 
-def test_compile_builder_sql_count_distinct_star_and_raw_star_branches():
-    count_distinct_sql = compile_builder_sql({
+def test_compile_query_plan_sql_count_distinct_star_and_raw_star_branches():
+    count_distinct_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [],
         "aggregations": [{"id": "a1", "func": "COUNT_DISTINCT", "table": "orders", "column": "*", "alias": "去重总数"}],
     })
-    raw_star_sql = compile_builder_sql({
+    raw_star_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [],
         "aggregations": [{"id": "a1", "func": "RAW", "table": "orders", "column": "*", "alias": "全部"}],
@@ -468,7 +468,7 @@ def test_compile_builder_sql_count_distinct_star_and_raw_star_branches():
     assert raw_star_sql.startswith("SELECT *\nFROM orders")
 
 
-def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias():
+def test_compile_query_plan_sql_having_order_expression_fallback_uses_table_alias():
     builder_config = {
         "mainTable": "orders",
         "mainAlias": "o",
@@ -502,14 +502,14 @@ def test_compile_builder_sql_having_order_expression_fallback_uses_table_alias()
         ],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "HAVING SUM(o.amount * 1.06) > 100" in sql
     assert "ORDER BY SUM(o.amount * 1.06) DESC" in sql
     assert "SUM(orders.amount * 1.06)" not in sql
 
 
-def test_compile_builder_sql_groups_dimension_for_unselected_having_order_metric():
+def test_compile_query_plan_sql_groups_dimension_for_unselected_having_order_metric():
     builder_config = {
         "mainTable": "users",
         "mainAlias": "u",
@@ -550,14 +550,14 @@ def test_compile_builder_sql_groups_dimension_for_unselected_having_order_metric
         ],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "GROUP BY u.`level`" in sql
     assert "HAVING SUM(o.amount) > 100" in sql
     assert "ORDER BY SUM(o.amount) DESC" in sql
 
 
-def test_compile_builder_sql_having_tree_and_leaf_operator_branches():
+def test_compile_query_plan_sql_having_tree_and_leaf_operator_branches():
     builder_config = {
         "mainTable": "orders",
         "mainAlias": "o",
@@ -587,7 +587,7 @@ def test_compile_builder_sql_having_tree_and_leaf_operator_branches():
         "orderBy": [],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "HAVING" in sql
     assert "o.score IS NOT NULL" in sql
@@ -602,8 +602,8 @@ def test_compile_builder_sql_having_tree_and_leaf_operator_branches():
     assert "SUM(o.`amount`) BETWEEN 10 AND 20" in sql
 
 
-def test_compile_builder_sql_empty_having_tree_is_ignored():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_empty_having_tree_is_ignored():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -613,8 +613,8 @@ def test_compile_builder_sql_empty_having_tree_is_ignored():
     assert "HAVING" not in sql
 
 
-def test_compile_builder_sql_empty_having_tree_with_order_by_branch():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_empty_having_tree_with_order_by_branch():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -626,8 +626,8 @@ def test_compile_builder_sql_empty_having_tree_with_order_by_branch():
     assert "ORDER BY `状态` ASC" in sql
 
 
-def test_compile_builder_sql_single_child_filter_trees_are_unwrapped():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_single_child_filter_trees_are_unwrapped():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -642,8 +642,8 @@ def test_compile_builder_sql_single_child_filter_trees_are_unwrapped():
     assert "(SUM(`amount`) > 100)" not in sql
 
 
-def test_compile_builder_sql_having_expression_branches_without_tree():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_having_expression_branches_without_tree():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
@@ -659,8 +659,8 @@ def test_compile_builder_sql_having_expression_branches_without_tree():
     assert "HAVING o.score > 10 + 1 OR o.score IN (select score from whitelist)" in sql
 
 
-def test_compile_builder_sql_having_non_tree_expression_in_branch():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_having_non_tree_expression_in_branch():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
@@ -682,8 +682,8 @@ def test_compile_builder_sql_having_non_tree_expression_in_branch():
     assert "HAVING SUM(`amount`) IN (select amount from whitelist)" in sql
 
 
-def test_compile_builder_sql_having_structured_right_operand():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_having_structured_right_operand():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "pid", "alias": "分账户PID"}],
@@ -722,8 +722,8 @@ def test_compile_builder_sql_having_structured_right_operand():
     assert "HAVING SUM(o.out_amount) > (SUM(o.in_amount) * 10)" in sql
 
 
-def test_compile_builder_sql_having_and_order_remaining_branches():
-    raw_order_sql = compile_builder_sql({
+def test_compile_query_plan_sql_having_and_order_remaining_branches():
+    raw_order_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -732,7 +732,7 @@ def test_compile_builder_sql_having_and_order_remaining_branches():
     })
     assert "ORDER BY `status` ASC" in raw_order_sql
 
-    group_expr_order_sql = compile_builder_sql({
+    group_expr_order_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "city", "alias": "城市", "expression": "orders.city"}],
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
@@ -741,7 +741,7 @@ def test_compile_builder_sql_having_and_order_remaining_branches():
     })
     assert "ORDER BY `城市` DESC" in group_expr_order_sql
 
-    raw_star_having_sql = compile_builder_sql({
+    raw_star_having_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [],
@@ -750,7 +750,7 @@ def test_compile_builder_sql_having_and_order_remaining_branches():
     assert "HAVING * IS NOT NULL" in raw_star_having_sql
 
     with pytest.raises(ValueError, match="聚合查询不能按未分组"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
             "aggregations": [
@@ -761,8 +761,8 @@ def test_compile_builder_sql_having_and_order_remaining_branches():
         })
 
 
-def test_compile_builder_sql_order_by_dimension_expression_fallback():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_order_by_dimension_expression_fallback():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"id": "d1", "table": "orders", "tableAlias": "o", "column": "status", "alias": "状态", "expression": "orders.status"}],
@@ -773,7 +773,7 @@ def test_compile_builder_sql_order_by_dimension_expression_fallback():
     assert "ORDER BY `状态` ASC" in sql
 
 
-def test_compile_builder_sql_rejects_limit_over_global_max():
+def test_compile_query_plan_sql_rejects_limit_over_global_max():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -785,10 +785,10 @@ def test_compile_builder_sql_rejects_limit_over_global_max():
     }
 
     with pytest.raises(ValueError, match="查询结果最多返回"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_does_not_add_default_limit():
+def test_compile_query_plan_sql_does_not_add_default_limit():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -798,12 +798,12 @@ def test_compile_builder_sql_does_not_add_default_limit():
         "orderBy": [],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "LIMIT" not in sql
 
 
-def test_compile_builder_sql_rejects_offset_without_limit():
+def test_compile_query_plan_sql_rejects_offset_without_limit():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -815,10 +815,10 @@ def test_compile_builder_sql_rejects_offset_without_limit():
     }
 
     with pytest.raises(ValueError, match="OFFSET 必须配合 LIMIT 使用"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_rejects_invalid_offset():
+def test_compile_query_plan_sql_rejects_invalid_offset():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -831,10 +831,10 @@ def test_compile_builder_sql_rejects_invalid_offset():
     }
 
     with pytest.raises(ValueError, match="OFFSET 必须为非负整数"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_mysql_offset_uses_dialect_pagination():
+def test_compile_query_plan_sql_mysql_offset_uses_dialect_pagination():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -846,12 +846,12 @@ def test_compile_builder_sql_mysql_offset_uses_dialect_pagination():
         "offset": 20,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="mysql")
+    sql = compile_query_plan_sql(builder_config, dialect="mysql")
 
     assert sql.endswith("LIMIT 20, 10")
 
 
-def test_compile_builder_sql_hive_offset_uses_mysql_compatible_pagination():
+def test_compile_query_plan_sql_hive_offset_uses_mysql_compatible_pagination():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -863,13 +863,13 @@ def test_compile_builder_sql_hive_offset_uses_mysql_compatible_pagination():
         "offset": 20,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert sql.endswith("LIMIT 20, 10")
     assert "OFFSET" not in sql
 
 
-def test_compile_builder_sql_aggregate_query():
+def test_compile_query_plan_sql_aggregate_query():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -884,14 +884,14 @@ def test_compile_builder_sql_aggregate_query():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "SUM(`amount`)" in sql
     assert "GROUP BY `status`" in sql
     assert "ORDER BY SUM(`amount`) DESC" in sql
 
 
-def test_compile_builder_sql_aggregate_query_rejects_detail_order_by():
+def test_compile_query_plan_sql_aggregate_query_rejects_detail_order_by():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -907,10 +907,10 @@ def test_compile_builder_sql_aggregate_query_rejects_detail_order_by():
     }
 
     with pytest.raises(ValueError, match="聚合查询不能按未分组的明细字段排序"):
-        compile_builder_sql(builder_config, dialect="hive")
+        compile_query_plan_sql(builder_config, dialect="hive")
 
 
-def test_compile_builder_sql_aggregate_query_repairs_metric_order_by_without_agg_metadata():
+def test_compile_query_plan_sql_aggregate_query_repairs_metric_order_by_without_agg_metadata():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -932,14 +932,14 @@ def test_compile_builder_sql_aggregate_query_repairs_metric_order_by_without_agg
         "limit": 10,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "ORDER BY COUNT(order_id) DESC" in sql
     assert "ORDER BY orders.order_id DESC" not in sql
 
 
-def test_compile_builder_sql_order_by_group_expression_and_detail_fallback():
-    aggregate_sql = compile_builder_sql({
+def test_compile_query_plan_sql_order_by_group_expression_and_detail_fallback():
+    aggregate_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [
             {"id": "d1", "table": "orders", "column": "created_at", "alias": "创建时间", "transform": "month"},
@@ -947,7 +947,7 @@ def test_compile_builder_sql_order_by_group_expression_and_detail_fallback():
         "aggregations": [{"id": "a1", "func": "SUM", "table": "orders", "column": "amount", "alias": "销售额"}],
         "orderBy": [{"table": "orders", "column": "created_at", "direction": "DESC"}],
     })
-    detail_sql = compile_builder_sql({
+    detail_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
         "aggregations": [],
@@ -958,7 +958,7 @@ def test_compile_builder_sql_order_by_group_expression_and_detail_fallback():
     assert "ORDER BY orders.created_at DESC" in detail_sql
 
 
-def test_compile_builder_sql_compare_query_is_rejected():
+def test_compile_query_plan_sql_compare_query_is_rejected():
     builder_config = {
         "mainTable": "orders",
         "joins": [
@@ -984,10 +984,10 @@ def test_compile_builder_sql_compare_query_is_rejected():
     }
 
     with pytest.raises(ValueError, match="不再支持 compare"):
-        compile_builder_sql(builder_config, dialect="hive")
+        compile_query_plan_sql(builder_config, dialect="hive")
 
 
-def test_compile_builder_sql_regular_query_hive_time_transform():
+def test_compile_query_plan_sql_regular_query_hive_time_transform():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1002,14 +1002,14 @@ def test_compile_builder_sql_regular_query_hive_time_transform():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "DATE_FORMAT(`order_time`, 'yyyy-MM')" in sql
     assert "GROUP BY DATE_FORMAT(`order_time`, 'yyyy-MM')" in sql
     assert "%Y-%m" not in sql
 
 
-def test_compile_builder_sql_hive_time_filter_uses_raw_column_when_grouped_by_month():
+def test_compile_query_plan_sql_hive_time_filter_uses_raw_column_when_grouped_by_month():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1027,13 +1027,13 @@ def test_compile_builder_sql_hive_time_filter_uses_raw_column_when_grouped_by_mo
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "WHERE `order_time` >= '2024-01-01 00:00:00' AND `order_time` <= '2024-12-31 23:59:59'" in sql
     assert "GROUP BY DATE_FORMAT(`order_time`, 'yyyy-MM')" in sql
 
 
-def test_compile_builder_sql_hive_time_order_by_uses_selected_dimension_alias():
+def test_compile_query_plan_sql_hive_time_order_by_uses_selected_dimension_alias():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1048,14 +1048,14 @@ def test_compile_builder_sql_hive_time_order_by_uses_selected_dimension_alias():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "DATE_FORMAT(`order_time`, 'yyyy-MM') AS `下单时间_month`" in sql
     assert "GROUP BY DATE_FORMAT(`order_time`, 'yyyy-MM')" in sql
     assert "ORDER BY `下单时间_month` ASC" in sql
 
 
-def test_compile_builder_sql_hive_expression_time_order_by_uses_selected_alias():
+def test_compile_query_plan_sql_hive_expression_time_order_by_uses_selected_alias():
     builder_config = {
         "mainTable": "ods_pay_org_subsidiary_ledger_balance_incr_d",
         "joins": [],
@@ -1090,14 +1090,14 @@ def test_compile_builder_sql_hive_expression_time_order_by_uses_selected_alias()
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "TO_DATE(from_unixtime(unix_timestamp(`ymd`, 'yyyyMMdd'), 'yyyy-MM-dd')) AS `日期分区_day`" in sql
     assert "GROUP BY TO_DATE(from_unixtime(unix_timestamp(`ymd`, 'yyyyMMdd'), 'yyyy-MM-dd'))" in sql
     assert "ORDER BY `日期分区_day` ASC" in sql
 
 
-def test_compile_builder_sql_regular_query_hive_week_transform():
+def test_compile_query_plan_sql_regular_query_hive_week_transform():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1112,13 +1112,13 @@ def test_compile_builder_sql_regular_query_hive_week_transform():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config, dialect="hive")
+    sql = compile_query_plan_sql(builder_config, dialect="hive")
 
     assert "CONCAT(CAST(YEAR(`order_time`) AS STRING), '-W', LPAD(CAST(WEEKOFYEAR(`order_time`) AS STRING), 2, '0'))" in sql
     assert "DATE_FORMAT(`order_time`, 'YYYY')" not in sql
 
 
-def test_compile_builder_sql_regular_query_hour_transform_uses_dialect():
+def test_compile_query_plan_sql_regular_query_hour_transform_uses_dialect():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1133,15 +1133,15 @@ def test_compile_builder_sql_regular_query_hour_transform_uses_dialect():
         "limit": 100,
     }
 
-    hive_sql = compile_builder_sql(builder_config, dialect="hive")
-    mysql_sql = compile_builder_sql(builder_config, dialect="mysql")
+    hive_sql = compile_query_plan_sql(builder_config, dialect="hive")
+    mysql_sql = compile_query_plan_sql(builder_config, dialect="mysql")
 
     assert "DATE_FORMAT(`order_time`, 'yyyy-MM-dd HH:00')" in hive_sql
     assert "%Y-%m-%d %H:00" not in hive_sql
     assert "DATE_FORMAT(`order_time`, '%Y-%m-%d %H:00')" in mysql_sql
 
 
-def test_compile_builder_sql_compare_query_week_is_rejected_by_compare_policy():
+def test_compile_query_plan_sql_compare_query_week_is_rejected_by_compare_policy():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1158,12 +1158,12 @@ def test_compile_builder_sql_compare_query_week_is_rejected_by_compare_policy():
     }
 
     with pytest.raises(ValueError, match="不再支持 compare"):
-        compile_builder_sql(builder_config, dialect="mysql")
+        compile_query_plan_sql(builder_config, dialect="mysql")
     with pytest.raises(ValueError, match="不再支持 compare"):
-        compile_builder_sql(builder_config, dialect="hive")
+        compile_query_plan_sql(builder_config, dialect="hive")
 
 
-def test_compile_builder_sql_field_ref_filter():
+def test_compile_query_plan_sql_field_ref_filter():
     builder_config = {
         "mainTable": "orders",
         "joins": [
@@ -1197,11 +1197,11 @@ def test_compile_builder_sql_field_ref_filter():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "WHERE orders.`user_id` = order_items.`product_id`" in sql
 
 
-def test_compile_builder_sql_expression_filter():
+def test_compile_query_plan_sql_expression_filter():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1224,11 +1224,11 @@ def test_compile_builder_sql_expression_filter():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "WHERE `create_time` >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)" in sql
 
 
-def test_compile_builder_sql_between_with_mixed_value_type_array():
+def test_compile_query_plan_sql_between_with_mixed_value_type_array():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1249,11 +1249,11 @@ def test_compile_builder_sql_between_with_mixed_value_type_array():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "BETWEEN '2025-01-01' AND current_date()" in sql
 
 
-def test_compile_builder_sql_rejects_raw_and_aggregate_metric_mix():
+def test_compile_query_plan_sql_rejects_raw_and_aggregate_metric_mix():
     builder_config = {
         "mainTable": "orders",
         "dimensions": [],
@@ -1264,10 +1264,10 @@ def test_compile_builder_sql_rejects_raw_and_aggregate_metric_mix():
     }
 
     with pytest.raises(ValueError, match="原始值与聚合函数混用"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_filter_tree_and_mixed_tree_rejection():
+def test_compile_query_plan_sql_filter_tree_and_mixed_tree_rejection():
     where_tree_config = {
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "order_id", "alias": "订单ID"}],
@@ -1300,14 +1300,14 @@ def test_compile_builder_sql_filter_tree_and_mixed_tree_rejection():
         ],
     }
 
-    sql = compile_builder_sql(where_tree_config)
+    sql = compile_query_plan_sql(where_tree_config)
 
     assert "WHERE `status` = 'paid' OR (`amount` > 100 AND `status` LIKE 'refund%')" in sql
     with pytest.raises(ValueError, match="不能混用明细过滤和结果过滤"):
-        compile_builder_sql(mixed_tree_config)
+        compile_query_plan_sql(mixed_tree_config)
 
 
-def test_compile_builder_sql_having_tree_and_special_operators():
+def test_compile_query_plan_sql_having_tree_and_special_operators():
     tree_config = {
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
@@ -1356,15 +1356,15 @@ def test_compile_builder_sql_having_tree_and_special_operators():
         ],
     }
 
-    tree_sql = compile_builder_sql(tree_config)
-    leaf_sql = compile_builder_sql(leaf_config)
+    tree_sql = compile_query_plan_sql(tree_config)
+    leaf_sql = compile_query_plan_sql(leaf_config)
 
     assert "HAVING SUM(orders.amount) BETWEEN 10 AND 20 OR SUM(orders.amount) IN (select amount from whitelist)" in tree_sql
     assert "HAVING MAX(`amount`) > `discount`" in leaf_sql
     assert "OR MAX(`amount`) NOT IN (select amount from blacklist)" in leaf_sql
 
 
-def test_compile_builder_sql_having_leaf_operator_variants():
+def test_compile_query_plan_sql_having_leaf_operator_variants():
     builder_config = {
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
@@ -1379,7 +1379,7 @@ def test_compile_builder_sql_having_leaf_operator_variants():
         ],
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "HAVING SUM(`amount`) IS NULL" in sql
     assert "OR SUM(`amount`) = ''" in sql
@@ -1389,7 +1389,7 @@ def test_compile_builder_sql_having_leaf_operator_variants():
     assert "OR SUM(`amount`) IN (1, 2)" in sql
 
 
-def test_compile_builder_sql_order_by_ambiguous_aggregations_rejected():
+def test_compile_query_plan_sql_order_by_ambiguous_aggregations_rejected():
     builder_config = {
         "mainTable": "orders",
         "dimensions": [{"id": "d1", "table": "orders", "column": "status", "alias": "状态"}],
@@ -1402,10 +1402,10 @@ def test_compile_builder_sql_order_by_ambiguous_aggregations_rejected():
     }
 
     with pytest.raises(ValueError, match="聚合查询不能按未分组的明细字段排序"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_between_with_wrong_literal_keeps_string_literal():
+def test_compile_query_plan_sql_between_with_wrong_literal_keeps_string_literal():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1426,11 +1426,11 @@ def test_compile_builder_sql_between_with_wrong_literal_keeps_string_literal():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "BETWEEN '2025-01-01' AND 'current_date()'" in sql
 
 
-def test_compile_builder_sql_between_without_value_type_auto_unquotes_safe_function():
+def test_compile_query_plan_sql_between_without_value_type_auto_unquotes_safe_function():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1450,11 +1450,11 @@ def test_compile_builder_sql_between_without_value_type_auto_unquotes_safe_funct
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "BETWEEN '2025-01-01' AND current_date()" in sql
 
 
-def test_compile_builder_sql_where_or_tree_and_empty_tree_are_handled():
+def test_compile_query_plan_sql_where_or_tree_and_empty_tree_are_handled():
     or_builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1481,14 +1481,14 @@ def test_compile_builder_sql_where_or_tree_and_empty_tree_are_handled():
         "limit": 100,
     }
 
-    or_sql = compile_builder_sql(or_builder_config)
-    single_child_sql = compile_builder_sql(single_child_tree_config)
+    or_sql = compile_query_plan_sql(or_builder_config)
+    single_child_sql = compile_query_plan_sql(single_child_tree_config)
 
     assert "WHERE `status` = 'paid' OR `status` = 'refunded'" in or_sql
     assert "WHERE `status` = 'paid'" in single_child_sql
 
 
-def test_compile_builder_sql_aggregate_filter_tree_goes_to_having():
+def test_compile_query_plan_sql_aggregate_filter_tree_goes_to_having():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1518,13 +1518,13 @@ def test_compile_builder_sql_aggregate_filter_tree_goes_to_having():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
     assert "WHERE" not in sql
     assert "HAVING" in sql
     assert "SUM(`amount`) > 100" in sql
 
 
-def test_compile_builder_sql_having_leaf_operator_variants():
+def test_compile_query_plan_sql_having_leaf_operator_variants():
     builder_config = {
         "mainTable": "orders",
         "joins": [
@@ -1556,7 +1556,7 @@ def test_compile_builder_sql_having_leaf_operator_variants():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "HAVING orders.status IS NOT NULL" in sql
     assert "AND orders.status = order_items.`status`" in sql
@@ -1570,7 +1570,7 @@ def test_compile_builder_sql_having_leaf_operator_variants():
     assert "orders.status BETWEEN 'a' AND 'z'" in sql
 
 
-def test_compile_builder_sql_having_tree_or_and_empty_tree_variants():
+def test_compile_query_plan_sql_having_tree_or_and_empty_tree_variants():
     or_tree_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1597,14 +1597,14 @@ def test_compile_builder_sql_having_tree_or_and_empty_tree_variants():
         "limit": 100,
     }
 
-    or_sql = compile_builder_sql(or_tree_config)
-    empty_sql = compile_builder_sql(empty_tree_config)
+    or_sql = compile_query_plan_sql(or_tree_config)
+    empty_sql = compile_query_plan_sql(empty_tree_config)
 
     assert "HAVING SUM(`amount`) > 100 OR SUM(`amount`) < 10" in or_sql
     assert "HAVING" not in empty_sql
 
 
-def test_compile_builder_sql_mixed_filter_tree_raise_error():
+def test_compile_query_plan_sql_mixed_filter_tree_raise_error():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1643,10 +1643,10 @@ def test_compile_builder_sql_mixed_filter_tree_raise_error():
     }
 
     with pytest.raises(ValueError, match="不能混用明细过滤和结果过滤"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_mixed_raw_and_agg_metrics_raise_error():
+def test_compile_query_plan_sql_mixed_raw_and_agg_metrics_raise_error():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1661,10 +1661,10 @@ def test_compile_builder_sql_mixed_raw_and_agg_metrics_raise_error():
     }
 
     with pytest.raises(ValueError, match="指标区不支持原始值与聚合函数混用"):
-        compile_builder_sql(builder_config)
+        compile_query_plan_sql(builder_config)
 
 
-def test_compile_builder_sql_raw_star_metric_and_alias_collision_window():
+def test_compile_query_plan_sql_raw_star_metric_and_alias_collision_window():
     builder_config = {
         "mainTable": "orders",
         "joins": [],
@@ -1680,7 +1680,7 @@ def test_compile_builder_sql_raw_star_metric_and_alias_collision_window():
         "limit": 100,
     }
 
-    sql = compile_builder_sql(builder_config)
+    sql = compile_query_plan_sql(builder_config)
 
     assert "*, `order_no` AS `重复名_2_2`" in sql
     assert "ORDER BY orders.not_selected ASC" in sql
@@ -1702,7 +1702,7 @@ def test_semantic_unified_engine_allows_dimension_in_metrics():
         ],
     }
 
-    generator = SemanticSQLGenerator(semantic_config)
+    generator = SemanticAIQueryAdapter(semantic_config)
     result = generator.generate_sql(
         metrics=["订单编号", "用户ID", "订单金额"],
         dimensions=[],
@@ -1735,7 +1735,7 @@ def test_semantic_unified_engine_uses_dsl_metric_expression_not_user_query():
         ],
     }
 
-    generator = SemanticSQLGenerator(semantic_config)
+    generator = SemanticAIQueryAdapter(semantic_config)
     result = generator.generate_sql(
         metrics=["订单数量"],
         dimensions=[],
@@ -1767,7 +1767,7 @@ def test_semantic_unified_engine_dimensions_only_query_is_detail():
         ],
     }
 
-    result = SemanticSQLGenerator(semantic_config).generate_sql(
+    result = SemanticAIQueryAdapter(semantic_config).generate_sql(
         metrics=[],
         dimensions=["订单编号", "订单金额"],
         filters=[],
@@ -1820,7 +1820,7 @@ def test_semantic_unified_engine_uses_aliases_for_same_physical_table_roles():
         ],
     }
 
-    generator = SemanticSQLGenerator(semantic_config)
+    generator = SemanticAIQueryAdapter(semantic_config)
     result = generator.generate_sql(
         metrics=[],
         dimensions=["订单编号", "买家名称", "卖家名称"],
@@ -1889,8 +1889,8 @@ def test_builder_sql_compiler_remaining_helper_edges():
     ) == "SUM(`amount`) IN (select amount from t)"
 
 
-def test_compile_builder_sql_additional_branch_edges():
-    sql = compile_builder_sql({
+def test_compile_query_plan_sql_additional_branch_edges():
+    sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "joins": [
@@ -1922,21 +1922,21 @@ def test_compile_builder_sql_additional_branch_edges():
     assert "LIMIT 10" in sql
 
     with pytest.raises(ValueError, match="compare"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [{"table": "orders", "column": "status"}],
             "compare": {"type": "yoy"},
         })
 
     with pytest.raises(ValueError, match="OFFSET"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [{"table": "orders", "column": "status"}],
             "offset": 1,
         })
 
     with pytest.raises(ValueError, match="OFFSET"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "dimensions": [{"table": "orders", "column": "status"}],
             "limit": 10,
@@ -1944,8 +1944,8 @@ def test_compile_builder_sql_additional_branch_edges():
         })
 
 
-def test_compile_builder_sql_order_by_fallbacks_and_rejections():
-    detail_sql = compile_builder_sql({
+def test_compile_query_plan_sql_order_by_fallbacks_and_rejections():
+    detail_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [],
@@ -1954,7 +1954,7 @@ def test_compile_builder_sql_order_by_fallbacks_and_rejections():
     })
     assert "ORDER BY o.missing DESC" in detail_sql
 
-    aggregate_sql = compile_builder_sql({
+    aggregate_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [],
@@ -1964,7 +1964,7 @@ def test_compile_builder_sql_order_by_fallbacks_and_rejections():
     assert "ORDER BY SUM(`amount`) DESC" in aggregate_sql
 
     with pytest.raises(ValueError, match="聚合查询不能按未分组"):
-        compile_builder_sql({
+        compile_query_plan_sql({
             "mainTable": "orders",
             "mainAlias": "o",
             "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
@@ -1973,8 +1973,8 @@ def test_compile_builder_sql_order_by_fallbacks_and_rejections():
         })
 
 
-def test_compile_builder_sql_unselected_transformed_dimension_order_fallbacks():
-    group_expr_sql = compile_builder_sql({
+def test_compile_query_plan_sql_unselected_transformed_dimension_order_fallbacks():
+    group_expr_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"table": "orders", "tableAlias": "o", "column": "created_at", "alias": "下单月", "transform": "month"}],
@@ -1983,7 +1983,7 @@ def test_compile_builder_sql_unselected_transformed_dimension_order_fallbacks():
     })
     assert "ORDER BY `下单月_month` DESC" in group_expr_sql
 
-    dimension_expr_sql = compile_builder_sql({
+    dimension_expr_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"table": "orders", "tableAlias": "o", "column": "created_at", "alias": "下单月", "transform": "month"}],
@@ -1993,8 +1993,8 @@ def test_compile_builder_sql_unselected_transformed_dimension_order_fallbacks():
     assert "ORDER BY `下单月_month` ASC" in dimension_expr_sql
 
 
-def test_compile_builder_sql_having_and_order_expression_remaining_branches():
-    having_tree_sql = compile_builder_sql({
+def test_compile_query_plan_sql_having_and_order_expression_remaining_branches():
+    having_tree_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
@@ -2017,7 +2017,7 @@ def test_compile_builder_sql_having_and_order_expression_remaining_branches():
     })
     assert "HAVING SUM(`amount`) IN (select amount from threshold)" in having_tree_sql
 
-    order_sql = compile_builder_sql({
+    order_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [
@@ -2028,7 +2028,7 @@ def test_compile_builder_sql_having_and_order_expression_remaining_branches():
     })
     assert "ORDER BY `状态` ASC" in order_sql
 
-    dimension_expr_order_sql = compile_builder_sql({
+    dimension_expr_order_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [
@@ -2041,8 +2041,8 @@ def test_compile_builder_sql_having_and_order_expression_remaining_branches():
     assert "ORDER BY `状态` DESC" in dimension_expr_order_sql
 
 
-def test_compile_builder_sql_remaining_branch_edges():
-    where_expression_in_sql = compile_builder_sql({
+def test_compile_query_plan_sql_remaining_branch_edges():
+    where_expression_in_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [{"table": "orders", "tableAlias": "o", "column": "status", "alias": "状态"}],
@@ -2059,7 +2059,7 @@ def test_compile_builder_sql_remaining_branch_edges():
     })
     assert "`status` IN (select status from valid_status)" in where_expression_in_sql
 
-    having_expression_in_sql = compile_builder_sql({
+    having_expression_in_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [],
@@ -2078,7 +2078,7 @@ def test_compile_builder_sql_remaining_branch_edges():
     })
     assert "HAVING `score` IN (select score from whitelist)" in having_expression_in_sql
 
-    order_by_group_expr_sql = compile_builder_sql({
+    order_by_group_expr_sql = compile_query_plan_sql({
         "mainTable": "orders",
         "mainAlias": "o",
         "dimensions": [

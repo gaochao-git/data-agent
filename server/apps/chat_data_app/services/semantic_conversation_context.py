@@ -16,13 +16,30 @@ from .execution_target_context import (
     get_execution_target_org_code,
     normalize_member_datasource_ids,
 )
-from .semantic_tools import (
-    format_semantic_config_directory_for_prompt,
+from .semantic_model_repository import (
     list_runtime_semantic_config_directory,
     load_runtime_semantic_config,
 )
 
 logger = get_logger(__name__)
+
+
+def format_semantic_config_directory_for_prompt(directory: list[dict[str, Any]]) -> str:
+    items = [item for item in directory or [] if isinstance(item, dict) and str(item.get("name") or "").strip()]
+    if not items:
+        return ""
+    lines = [
+        "## 当前可见语义模型目录",
+        "以下是当前数据源组下可见的启用语义模型轻量目录，只包含 ID、名称、描述、指标数量和维度数量；用于选择模型，不代表已加载完整指标/维度口径。需要具体指标、维度或业务口径时，先调用 semantic_search 的 search_models 和 list_fields，再按返回路径使用 file_grep/file_read 按需读取。",
+    ]
+    for index, item in enumerate(items, start=1):
+        lines.extend([
+            f"{index}. ID：{str(item.get('id') or item.get('semantic_config_id') or '').strip()}",
+            f"   名称：{str(item.get('name') or '').strip()}",
+            f"   描述：{str(item.get('description') or '未填写').strip()}",
+            f"   指标数：{max(int(item.get('metrics_total') or 0), 0)}；维度数：{max(int(item.get('dimensions_total') or 0), 0)}",
+        ])
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)

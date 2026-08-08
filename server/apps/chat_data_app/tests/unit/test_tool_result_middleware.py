@@ -117,16 +117,16 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
 
 
 @pytest.mark.asyncio
-async def test_large_semantic_tool_result_is_offloaded_by_shared_middleware(monkeypatch, tmp_path):
+async def test_large_semantic_search_result_is_offloaded_by_shared_middleware(monkeypatch, tmp_path):
     request, paths = _workspace_request(monkeypatch, tmp_path)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    content = '[semantic_tool]\n{"operation":"list_fields","fields":[{"description":"' + "x" * 200 + '"}]}'
-    message = ToolMessage(content=content, name="semantic_tool", tool_call_id="call_semantic")
+    content = '[semantic_search]\n{"operation":"list_fields","fields":[{"description":"' + "x" * 200 + '"}]}'
+    message = ToolMessage(content=content, name="semantic_search", tool_call_id="call_semantic")
 
     result = await tool_result._finalize_tool_message(message, request)
 
     assert result.content.startswith("[tool_result_offloaded]\n")
-    assert "source_tool=semantic_tool" in result.content
+    assert "source_tool=semantic_search" in result.content
     assert "result_path=/mnt/user-data/outputs/.tool-offload/" in result.content
     assert "content_in_context=false" in result.content
     assert "preview:" not in result.content
@@ -200,7 +200,7 @@ async def test_storage_failure_returns_incomplete_query_result_marker(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_semantic_tool_storage_failure_returns_bounded_content(monkeypatch, tmp_path):
+async def test_semantic_search_storage_failure_returns_bounded_content(monkeypatch, tmp_path):
     request, _paths = _workspace_request(monkeypatch, tmp_path)
 
     async def fail_write_tool_result(self, **_kwargs):
@@ -208,14 +208,14 @@ async def test_semantic_tool_storage_failure_returns_bounded_content(monkeypatch
 
     monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    content = '[semantic_tool]\n{"fields":"' + "x" * 200 + '"}'
-    message = ToolMessage(content=content, name="semantic_tool", tool_call_id="call_semantic")
+    content = '[semantic_search]\n{"fields":"' + "x" * 200 + '"}'
+    message = ToolMessage(content=content, name="semantic_search", tool_call_id="call_semantic")
 
     result = await tool_result._finalize_tool_message(message, request)
 
     assert len(result.content) <= 100
     assert result.content.startswith("[tool_result_truncated]\n")
-    assert "source_tool=semantic_tool" in result.content
+    assert "source_tool=semantic_search" in result.content
     assert "content_complete=false" in result.content
     assert result.artifact is None
 

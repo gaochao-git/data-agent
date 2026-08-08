@@ -13,7 +13,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.schema import ExecuteSemanticInput
-from apps.chat_data_app.services.semantic_sql_generator import SemanticSQLGenerator
+from apps.chat_data_app.services.semantic_ai_query_adapter import SemanticAIQueryAdapter
 
 
 def build_config(source_type: str = "mysql") -> dict:
@@ -70,7 +70,7 @@ def build_enum_config(source_type: str = "mysql") -> dict:
 
 def generate(config: dict, payload: dict) -> str:
     """生成 SQL，失败时抛出错误便于断言。"""
-    result = SemanticSQLGenerator(config).generate_sql(
+    result = SemanticAIQueryAdapter(config).generate_sql(
         metrics=payload.get("metrics", []),
         dimensions=payload.get("dimensions", []),
         filters=payload.get("filters", []),
@@ -88,7 +88,7 @@ def generate(config: dict, payload: dict) -> str:
 
 def generate_result(config: dict, payload: dict) -> dict:
     """直接返回生成结果，便于断言失败路径。"""
-    return SemanticSQLGenerator(config).generate_sql(
+    return SemanticAIQueryAdapter(config).generate_sql(
         metrics=payload.get("metrics", []),
         dimensions=payload.get("dimensions", []),
         filters=payload.get("filters", []),
@@ -99,6 +99,22 @@ def generate_result(config: dict, payload: dict) -> dict:
         user_query=payload.get("user_query"),
         compare=payload.get("compare"),
     )
+
+
+def test_generate_sql_uses_semantic_model_dialect_for_dimension_expression():
+    sql = generate(
+        build_config("hive"),
+        {
+            "metrics": [],
+            "dimensions": ["订单状态"],
+            "filters": [
+                {"dimension": "订单状态", "operator": "=", "value": "paid"},
+            ],
+        },
+    )
+
+    assert "`status` AS `订单状态`" in sql
+    assert "WHERE `status` = 'paid'" in sql
 
 
 def test_generate_aggregate_sql_with_filter_does_not_add_default_limit():
@@ -663,15 +679,15 @@ def test_structured_expression_filter_rejects_invalid_operands():
 
 
 def test_structured_expression_filter_helper_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT helper"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = build_config()
     config["dimensions"].append({
         "name": "格式化状态",
@@ -680,7 +696,7 @@ def test_structured_expression_filter_helper_edges(monkeypatch):
         "table_alias": "o",
         "expression": "CASE WHEN orders.status='paid' THEN '已支付' END",
     })
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     result = generator.generate_sql(
         metrics=["订单数"],
@@ -716,7 +732,7 @@ def test_structured_expression_filter_additional_helper_branches():
         {"name": "空表达式维度", "column": "raw_col", "table": "", "table_alias": "", "expression": ""},
         {"name": "别名表达式维度", "column": "status", "table": "orders", "table_alias": "o", "expression": "orders.status"},
     ])
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     assert generator._rewrite_expression_table_qualifier("", "o", "orders") == ""
     assert generator._rewrite_expression_table_qualifier("orders.status", "", "orders") == "orders.status"
@@ -897,9 +913,9 @@ def test_generate_raw_metric_becomes_group_dimension_for_aggregate_query():
 
 
 def test_generate_compile_failure_returns_error(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")))
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")))
 
     result = generate_result(build_config(), {"metrics": ["订单数"]})
 
@@ -908,7 +924,7 @@ def test_generate_compile_failure_returns_error(monkeypatch):
 
 
 def test_generator_helper_branches_for_tables_and_joins():
-    generator = SemanticSQLGenerator(build_config())
+    generator = SemanticAIQueryAdapter(build_config())
 
     assert generator._parse_aggregate_expression("") is None
     assert generator._parse_aggregate_expression("orders.amount") is None
@@ -925,14 +941,14 @@ def test_generator_helper_branches_for_tables_and_joins():
 def test_generator_table_column_validation_with_explicit_tables():
     config = build_config()
     config["tables"] = [{"table_name": "orders", "columns": [{"name": "order_id"}]}]
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     assert generator._validate_table_column("orders", "order_id") is None
     assert "不存在字段 'status'" in generator._validate_table_column("orders", "status")
 
 
 def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
-    generator = SemanticSQLGenerator(build_config())
+    generator = SemanticAIQueryAdapter(build_config())
 
     tables_needed = set()
     generator._collect_tables_from_filter_node("bad", tables_needed)
@@ -944,23 +960,23 @@ def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
         {"left_table": "", "right_table": "users", "join_conditions": [{"left_column": "id", "right_column": "id"}]},
         {"left_table": "orders", "right_table": "users", "join_conditions": [{"left_column": "", "right_column": "user_id"}]},
     ]
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     joins = generator._build_builder_joins("orders", {"orders", "users"})
     assert joins[0]["joinConditions"] == []
     assert generator._build_builder_joins("orders", {"orders", "payments"}) == []
 
 
 def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         captured["dialect"] = dialect
         return "SELECT 1"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -982,7 +998,7 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
         ],
     }
 
-    result = SemanticSQLGenerator(config).generate_sql(
+    result = SemanticAIQueryAdapter(config).generate_sql(
         metrics=["销售额"],
         dimensions=[],
         filters=[{"dimension": "订单状态", "operator": "=", "value": "paid"}],
@@ -1001,15 +1017,15 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
 
 
 def test_generator_captures_builder_config_for_count_star_and_metric_columns(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT captured"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1023,7 +1039,7 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
         ],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     aggregate = generator.generate_sql(
         metrics=["订单数"],
@@ -1062,15 +1078,15 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
 
 
 def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT raw"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1082,7 +1098,7 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
         ],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
@@ -1116,16 +1132,16 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
 
 
 def test_generator_additional_helper_and_join_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         captured["dialect"] = dialect
         return "SELECT joined"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
 
     config = {
         "source_type": "mysql",
@@ -1165,7 +1181,7 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
             {"table_name": "orders", "columns": [{"name": "order_id"}, {}, {"name": "status"}, {"name": "order_no"}]},
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     assert generator._parse_aggregate_expression("count(distinct orders.order_id)") == ("COUNT_DISTINCT", "orders.order_id")
     assert generator._validate_table_column("orders", "status") is None
@@ -1190,15 +1206,15 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
 
 
 def test_generator_builder_config_branches_for_metric_columns_and_table_sets(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT branches"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
 
     config = {
         "source_type": "mysql",
@@ -1213,7 +1229,7 @@ def test_generator_builder_config_branches_for_metric_columns_and_table_sets(mon
         ],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
@@ -1262,7 +1278,7 @@ def test_generator_builder_config_branches_for_metric_columns_and_table_sets(mon
 
 def test_generator_error_validation_edges():
     config = build_config()
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     compare = generator.generate_sql(metrics=["订单数"], dimensions=[], filters=[], having=[], compare={"type": "yoy"})
     assert compare["success"] is False
@@ -1288,15 +1304,15 @@ def test_generator_error_validation_edges():
 
 
 def test_generator_remaining_branch_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT remaining"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
 
     config = {
         "source_type": "mysql",
@@ -1313,7 +1329,7 @@ def test_generator_remaining_branch_edges(monkeypatch):
             {"left_table": "orders", "right_table": "users", "join_type": "left", "join_conditions": []},
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     assert generator._extract_dimension_name({"bad": "x"}) == ""
     assert generator._extract_time_grain("状态") is None
@@ -1360,15 +1376,15 @@ def test_generator_remaining_branch_edges(monkeypatch):
 
 
 def test_generator_disconnected_join_and_missing_dimension_metric_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT disconnected"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1390,7 +1406,7 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
             }
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     assert generator._build_builder_joins("orders", {"orders", "products"}) == []
     monkeypatch.setattr(
@@ -1419,15 +1435,15 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
 
 
 def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT empty tables"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1438,7 +1454,7 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
         ],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     result = generator.generate_sql(
         metrics=["原始空表"],
@@ -1454,15 +1470,15 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
 
 
 def test_generator_remaining_builder_mapping_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT mapped"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1475,7 +1491,7 @@ def test_generator_remaining_builder_mapping_edges(monkeypatch):
         ],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_dimensions", lambda dimensions: (dimensions, None))
     monkeypatch.setattr(generator.validator, "validate_filters", lambda filters: (filters, None))
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
@@ -1522,7 +1538,7 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
             },
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     reversed_join = generator._build_builder_joins("users", {"users", "orders"})
     assert reversed_join[0]["leftTable"] == "users"
@@ -1534,15 +1550,15 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
 
 
 def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT branch coverage"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1561,7 +1577,7 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
             }
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
     monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
 
@@ -1586,22 +1602,22 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
 
 
 def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT duplicate"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [{"name": "状态原始值", "expression": "", "table": "orders", "column": "status"}],
         "dimensions": [{"name": "订单状态", "table": "orders", "column": "status"}],
         "relationships": [],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
 
     result = generator.generate_sql(
         metrics=["状态原始值"],
@@ -1617,15 +1633,15 @@ def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypa
 
 
 def test_generator_remaining_coverage_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_sql_generator as generator_module
+    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
 
     captured = {}
 
-    def fake_compile_builder_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
         captured["builder_config"] = builder_config
         return "SELECT coverage"
 
-    monkeypatch.setattr(generator_module, "compile_builder_sql", fake_compile_builder_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = {
         "source_type": "mysql",
         "metrics": [
@@ -1655,7 +1671,7 @@ def test_generator_remaining_coverage_branches(monkeypatch):
             },
         ],
     }
-    generator = SemanticSQLGenerator(config)
+    generator = SemanticAIQueryAdapter(config)
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
     monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
 

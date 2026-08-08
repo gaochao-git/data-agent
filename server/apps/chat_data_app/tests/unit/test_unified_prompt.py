@@ -31,7 +31,7 @@ def test_system_prompt_requires_semantic_discovery_and_detail_read_before_query(
     assert "不能通过 SQL 绕过" not in prompt
     assert "每次查询只能使用一个 `semantic_config_id`" in prompt
     assert "get_field" not in prompt
-    assert "source_tool=semantic_tool" not in prompt
+    assert "source_tool=semantic_search" not in prompt
     assert ".tool-offload" not in prompt
     assert "## 执行连续性" in prompt
     assert "## 工作区与交付" in prompt

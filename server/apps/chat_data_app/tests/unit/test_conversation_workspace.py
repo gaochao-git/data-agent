@@ -22,6 +22,7 @@ from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
 from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
+from apps.chat_data_app.services import semantic_query_service
 
 from apps.chat_data_app.services.conversation_workspace import (
     ConversationWorkspaceRuntime,
@@ -1297,7 +1298,7 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         }
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1359,7 +1360,7 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
         }
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1423,7 +1424,7 @@ async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middl
         }
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1545,7 +1546,7 @@ async def test_semantic_query_tool_returns_compile_errors(monkeypatch):
         return {"success": True, "columns": ["ok"], "data": [{"ok": 1}], "total_count": 1}
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_workspace_tools(
         monkeypatch,
@@ -1580,7 +1581,7 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
         raise RuntimeError("执行失败")
 
     monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    monkeypatch.setattr(sql_tool_module, "SemanticSQLGenerator", FakeGenerator)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
     monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
     tools = _create_local_workspace_tools(
         monkeypatch,

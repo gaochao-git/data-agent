@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from .semantic_common import is_time_logical_dimension
+from .common import is_time_logical_dimension
 
 
 def split_text_between_filter(node: Dict[str, Any]) -> Dict[str, Any]:

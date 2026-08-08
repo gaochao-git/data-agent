@@ -35,9 +35,9 @@ metadata:
 
 ### 1. 检索语义模型
 
-1. 每个业务问题原则上只调用一次 `semantic_tool(operation="search_models", query="...")`。工具会在当前用户可见的全部启用语义模型中检索，并可一次返回多个候选；`query` 保留完整业务意图，但不带机构名称、机构编码或 `member_datasource_id`。不要按指标、维度或分析子问题拆成多个重复或并行的 `search_models`。
+1. 每个业务问题原则上只调用一次 `semantic_search(operation="search_models", query="...")`。工具会在当前用户可见的全部启用语义模型中检索，并可一次返回多个候选；`query` 保留完整业务意图，但不带机构名称、机构编码或 `member_datasource_id`。不要按指标、维度或分析子问题拆成多个重复或并行的 `search_models`。
 2. 根据返回候选模型、描述、字段数量和相关性选择候选；手动选择的模型只是优先参考，不代表锁定。
-3. 对准备使用的候选调用 `semantic_tool(operation="list_fields", semantic_config_id="...", field_type="all")`，必要时用 `field_type="metric"` 或 `"dimension"` 分页。
+3. 对准备使用的候选调用 `semantic_search(operation="list_fields", semantic_config_id="...", field_type="all")`，必要时用 `field_type="metric"` 或 `"dimension"` 分页。
 4. `list_fields` 只是轻量字段索引，单页 `limit` 为 1 至 200。需要确认指标表达式、维度表达式、表列、关系、枚举或完整口径时，必须按工具返回的实际 `path` 使用 `file_grep` 定位，再用 `file_read` 分页读取 YAML。不能根据模型名称、文件名或字段相似性猜测。
 5. 搜索或读取确认当前配置不存在所需指标、维度或模型时，停止查询并说明当前缺少的能力；候选不唯一或读取后业务口径仍不清楚时，停止查询并只向用户提出一个最关键的业务澄清问题。
 
@@ -110,7 +110,7 @@ DSL 顶层只使用以下字段：
 
 ### DSL 示例
 
-下面示例中的“指标A”“维度A”“字段A”只是结构占位，不能直接作为真实查询参数。实际调用前必须替换为本轮 `semantic_tool` 和 YAML 确认过的名称。
+下面示例中的“指标A”“维度A”“字段A”只是结构占位，不能直接作为真实查询参数。实际调用前必须替换为本轮 `semantic_search` 和 YAML 确认过的名称。
 
 明细查询：
 

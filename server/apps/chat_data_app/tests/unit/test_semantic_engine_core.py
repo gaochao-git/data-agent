@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic_dialect import (
+from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import (
     DialectRegistry,
     HiveDialect,
     MySQLDialect,
@@ -17,12 +17,14 @@ from apps.chat_data_app.services.semantic_dialect import (
     SQLDialect,
     get_dialect,
 )
-from apps.chat_data_app.services.semantic_formatter import (
+from apps.chat_data_app.services.semantic_core.formatter import (
     format_error_message,
     format_params_for_display,
     format_sql_for_display,
 )
-from apps.chat_data_app.services.semantic_input_validator import InputValidator
+from apps.chat_data_app.services.semantic_core.input_validator import InputValidator
+from apps.chat_data_app.services.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from apps.chat_data_app.services.semantic_model_repository import load_semantic_model
 from apps.chat_data_app.services.sql_parser import (
     _is_query_sql,
     _parse_sql,
@@ -410,6 +412,77 @@ def test_input_validator_expression_filter_error_and_normalization_edges():
         {"left": {"type": "dimension", "name": "订单状态"}, "operator": "=", "right": {"type": "literal", "value": "unknown"}}
     ])[1]
     assert validator._is_zero_literal("not-number") is False
+
+
+def test_compile_semantic_ai_dsl_is_the_shared_compile_facade():
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config == {"id": "model"}
+
+        def generate_sql(self, **kwargs):
+            assert kwargs["metrics"] == ["指标"]
+            assert kwargs["limit"] == 25
+            assert kwargs["offset"] == 3
+            assert kwargs["user_query"] == "查看指标"
+            return {"success": True, "sql": " SELECT 1 ", "warnings": ["warning"]}
+
+    result = compile_semantic_ai_dsl(
+        {"id": "model"},
+        {"metrics": ["指标"]},
+        options=SemanticCompileOptions(user_query="查看指标", max_rows=25, offset=3),
+        generator_cls=FakeGenerator,
+    )
+
+    assert result == {"success": True, "sql": "SELECT 1", "error": None, "warnings": ["warning"]}
+    assert compile_semantic_ai_dsl(None, {})["error"] == "语义模型必须是对象"
+    assert compile_semantic_ai_dsl({}, []) ["error"] == "语义 DSL 必须是对象"
+
+
+@pytest.mark.asyncio
+async def test_semantic_model_repository_keeps_runtime_and_full_modes_distinct():
+    class FakeManager:
+        async def get_datasource_async(self, datasource_id):
+            return {
+                "id": datasource_id,
+                "source_type": "hive",
+                "semantic_configs": [{"id": "full", "enabled": True, "tables": ["stale"]}],
+            }
+
+        async def get_runtime_semantic_config_async(self, datasource_id, config_id):
+            return {
+                "id": config_id,
+                "enabled": True,
+                "relationships": [{"left_table": "a", "right_table": "b"}],
+            }
+
+        async def get_semantic_configs_async(self, datasource_id, user_id=""):
+            return [{"id": "full", "enabled": True, "tables": ["stale"]}]
+
+        async def get_cached_schema_async(self, datasource_id):
+            return [{"name": "orders"}]
+
+    manager = FakeManager()
+    runtime = await load_semantic_model("ds", "runtime", mode="runtime", manager=manager)
+    full = await load_semantic_model("ds", "full", mode="full", manager=manager)
+
+    assert runtime["source_type"] == "hive"
+    assert runtime["joins"] == runtime["relationships"]
+    assert "tables" not in runtime
+    assert full["tables"] == [{"name": "orders"}]
+
+
+@pytest.mark.asyncio
+async def test_semantic_model_repository_validates_mode_and_availability():
+    class MissingManager:
+        async def get_datasource_async(self, datasource_id):
+            return None
+
+    with pytest.raises(ValueError, match="缺少语义模型ID"):
+        await load_semantic_model("ds", None, manager=MissingManager())
+    with pytest.raises(ValueError, match="不支持的语义模型加载模式"):
+        await load_semantic_model("ds", "cfg", mode="bad", manager=MissingManager())
+    with pytest.raises(ValueError, match="数据源不存在"):
+        await load_semantic_model("ds", "cfg", manager=MissingManager())
 
 
 def test_input_validator_logical_type_filter_values():

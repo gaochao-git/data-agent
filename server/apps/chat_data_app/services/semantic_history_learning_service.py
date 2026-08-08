@@ -17,7 +17,8 @@ from utils.llm_json import parse_llm_json
 
 from ..agent.prompts.history_learning import build_history_learning_prompt
 from ..daos.semantic_history_learning_dao import SemanticHistoryLearningDao
-from .semantic_common import AGENT_ID, LOGICAL_TYPE_VALUES, _build_table_columns_map, _semantic_config_prompt_payload
+from .. import AGENT_ID
+from .semantic_core.common import LOGICAL_TYPE_VALUES, build_table_columns_map
 from .llm_config import get_chat_data_llm
 from .sql_parser import extract_physical_tables
 
@@ -434,7 +435,7 @@ def _history_suggestion_review_reasons(
     category: str,
     datasource: Dict[str, Any],
 ) -> List[str]:
-    table_columns = _build_table_columns_map(datasource)
+    table_columns = build_table_columns_map(datasource)
     table_name = str(normalized.get("table") or "").strip()
     review_reasons: List[str] = []
     if category in {"metrics", "dimensions"} and not table_name:
@@ -536,7 +537,7 @@ async def _generate_history_learning_suggestions_by_llm(
         return dict(HISTORY_LEARNING_EMPTY_RESULT)
     compact_samples = [_compact_history_sample_for_llm(item) for item in samples]
     prompt = build_history_learning_prompt(
-        semantic_config_payload=_semantic_config_prompt_payload(config),
+        semantic_config_payload=config,
         table_context=_build_history_learning_table_context(datasource, config),
         compact_samples=compact_samples,
     )

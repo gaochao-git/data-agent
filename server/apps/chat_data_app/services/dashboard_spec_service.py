@@ -11,7 +11,9 @@ from utils.logger import get_logger
 from ..chart_types import get_chart_type_label, is_supported_chart_type_input, normalize_chart_type
 from .dashboard_service import get_dashboard_service
 from .datasource_manager import get_datasource_manager
-from .semantic_sql_generator import SemanticSQLGenerator
+from .semantic_model_repository import load_semantic_model
+from .semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from .semantic_ai_query_adapter import SemanticAIQueryAdapter
 from .sql_executor import get_executor, resolve_query_timeout
 
 logger = get_logger(__name__)
@@ -193,35 +195,20 @@ def remove_mixed_raw_metrics_for_aggregate_dsl(dsl: Dict[str, Any], semantic_con
 
 async def get_dashboard_spec_semantic_config(datasource_id: str, semantic_config_id: Optional[str], user_id: Optional[str] = None) -> Dict[str, Any]:
     """读取看板 DSL 校验和 SQL 生成所需语义配置。"""
-    normalized_semantic_config_id = str(semantic_config_id or "").strip()
-    normalized_user_id = str(user_id or "").strip()
-    if not normalized_semantic_config_id:
-        raise ValueError("缺少语义模型ID，无法生成看板 SQL")
-    ds_manager = get_datasource_manager()
-    datasource = await ds_manager.get_datasource_async(datasource_id)
-    if not datasource:
-        raise ValueError("数据源不存在")
-    if normalized_user_id:
-        configs = await ds_manager.get_semantic_configs_async(datasource_id, normalized_user_id)
-    else:
-        configs = datasource.get("semantic_configs")
-        if configs is None:
-            configs = await ds_manager.get_semantic_configs_async(datasource_id)
-    selected = None
-    for config in configs or []:
-        config_id = str(config.get("id") or config.get("semantic_config_id") or "").strip()
-        if config_id == normalized_semantic_config_id:
-            selected = config
-            break
-    if not selected:
-        raise ValueError("未找到可用语义配置，无法生成看板 SQL")
-    result = dict(selected)
-    result["source_type"] = datasource.get("source_type") or selected.get("source_type") or "mysql"
-    cached_tables = await ds_manager.get_cached_schema_async(datasource_id)
-    result["tables"] = cached_tables or result.get("tables") or []
-    if result.get("relationships") and not result.get("joins"):
-        result["joins"] = result.get("relationships")
-    return result
+    try:
+        return await load_semantic_model(
+            datasource_id,
+            semantic_config_id,
+            user_id=user_id,
+            mode="full",
+            manager=get_datasource_manager(),
+        )
+    except ValueError as exc:
+        if str(exc) == "缺少语义模型ID":
+            raise ValueError("缺少语义模型ID，无法生成看板 SQL") from exc
+        if str(exc) == "未找到可用语义配置":
+            raise ValueError("未找到可用语义配置，无法生成看板 SQL") from exc
+        raise
 
 
 def resolve_dashboard_card_semantic_config_id(
@@ -233,7 +220,7 @@ def resolve_dashboard_card_semantic_config_id(
     return card_id or str(default_semantic_config_id or "").strip()
 
 
-def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticSQLGenerator, user_query: Optional[str] = None) -> str:
+def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: SemanticAIQueryAdapter, user_query: Optional[str] = None) -> str:
     """将看板卡片 DSL 转为面板 SQL。"""
     dsl = card.get("dsl") if isinstance(card.get("dsl"), dict) else {}
     if dsl.get("compare") or card.get("compare"):
@@ -248,15 +235,11 @@ def build_panel_sql_from_dashboard_card(card: Dict[str, Any], generator: Semanti
         "limit": dsl.get("limit") if dsl.get("limit") is not None else card.get("limit"),
         "offset": dsl.get("offset") if dsl.get("offset") is not None else card.get("offset"),
     }, getattr(generator, "semantic_config", {}))
-    result = generator.generate_sql(
-        metrics=payload.get("metrics") or [],
-        dimensions=payload.get("dimensions") or [],
-        filters=payload.get("filters") or [],
-        having=payload.get("having") or [],
-        order_by=payload.get("order_by") or [],
-        limit=payload.get("limit"),
-        offset=payload.get("offset"),
-        user_query=user_query,
+    result = compile_semantic_ai_dsl(
+        getattr(generator, "semantic_config", {}),
+        payload,
+        options=SemanticCompileOptions(user_query=user_query),
+        generator=generator,
     )
     if not result.get("success"):
         raise ValueError(str(result.get("error") or "SQL 生成失败"))
@@ -338,10 +321,10 @@ def validate_dashboard_spec_structure(
 
 def build_dashboard_panel_plans(
     cards: List[Any],
-    sql_generator: Optional[SemanticSQLGenerator] = None,
+    sql_generator: Optional[SemanticAIQueryAdapter] = None,
     user_query: Optional[str] = None,
     *,
-    semantic_config_generators: Optional[Dict[str, SemanticSQLGenerator]] = None,
+    semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]] = None,
     default_semantic_config_id: Optional[str] = None,
 ) -> tuple[List[Dict[str, Any]], List[str]]:
     """预生成看板面板 SQL，避免无有效卡片时先创建空看板。"""
@@ -493,10 +476,10 @@ async def validate_dashboard_spec_payload(
         config_id = resolve_dashboard_card_semantic_config_id(card, default_semantic_config_id)
         if config_id and config_id not in semantic_config_ids:
             semantic_config_ids.append(config_id)
-    semantic_config_generators: Dict[str, SemanticSQLGenerator] = {}
+    semantic_config_generators: Dict[str, SemanticAIQueryAdapter] = {}
     for config_id in semantic_config_ids:
         semantic_config = await get_dashboard_spec_semantic_config(datasource_id, config_id, user_id=user_id)
-        semantic_config_generators[config_id] = SemanticSQLGenerator(semantic_config)
+        semantic_config_generators[config_id] = SemanticAIQueryAdapter(semantic_config)
     panel_plans, warnings = build_dashboard_panel_plans(
         cards,
         user_query=user_query,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from ..services.semantic_common import _build_table_columns_map
+from ..services.semantic_core.common import build_table_columns_map
 
 SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
 
@@ -265,7 +265,7 @@ def _validate_semantic_relationship_health(
 
 def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str, Any]:
     """校验单个指标集是否仍匹配当前物理表结构。"""
-    table_columns_map = _build_table_columns_map(datasource)
+    table_columns_map = build_table_columns_map(datasource)
     issues: List[Dict[str, Any]] = []
     if not table_columns_map:
         issues.append(_semantic_health_issue("error", "missing_schema", "当前数据源缺少表结构信息，请在数据源组编辑页拉取表信息并保存", "datasource", config))

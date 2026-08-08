@@ -148,7 +148,7 @@ index.vue
   -> api/query.ts: compileSemanticBuilderSql()
   -> POST /agents/api/chatdata/compile-semantic-builder-sql
   -> routers/query_execution.py: compile_semantic_builder_sql_endpoint()
-  -> services/semantic_builder_compiler.py
+  -> services/semantic_bi_query_adapter.py
 
 QueryBuilder/index.vue
   -> useQueryTask.submitSqlTask(query_type='builder')
@@ -315,9 +315,9 @@ DashboardEditor.vue
      ↓
 [2. 智能体只生成 DSL 参数（指标/维度/过滤/排序/limit）
      ↓
-[3. SemanticSQLGenerator 校验 DSL 并映射语义配置
+[3. SemanticAIQueryAdapter 校验 DSL 并映射语义配置
      ↓
-[4. compiler.compile_builder_sql 生成 SQL
+[4. compiler.compile_query_plan_sql 生成 SQL
      ↓
 [5. engine.dialect 按 source_type 适配 MySQL/Hive 方言
      ↓
@@ -453,7 +453,7 @@ chat_data_app/
 │   ├── prompts/           # 提示词模板和 system prompt builder
 │   └── skills/            # 系统技能源目录；发布时复制到 CHAT_DATA_HOME/skills/system
 ├── services/
-│   ├── semantic_tools.py              # 语义工具处理器
+│   ├── semantic_searchs.py              # 语义工具处理器
 │   ├── datasource_manager.py          # 数据源管理
 │   ├── mysql_sync.py                  # MySQL 元数据同步
 │   └── hive_sync.py                   # Hive 元数据同步
@@ -469,8 +469,8 @@ chat_data_app/
 
 | 组件 | 文件 | 职责 |
 |---|-----|------|
-| `SemanticSQLGenerator` | semantic/semantic_sql_generator.py | 校验 DSL，映射指标/维度，组装 builder_config |
-| `compile_builder_sql` | semantic/builder_sql_compiler.py | 将 builder_config 编译为 SQL |
+| `SemanticAIQueryAdapter` | semantic/semantic_ai_query_adapter.py | 校验 DSL，映射指标/维度，组装 builder_config |
+| `compile_query_plan_sql` | semantic/builder_sql_compiler.py | 将 builder_config 编译为 SQL |
 | `get_dialect` | semantic/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
 | `InputValidator` | semantic/input_validator.py | 校验指标、维度、过滤、排序和 limit |
 
@@ -479,7 +479,7 @@ chat_data_app/
 ```
 create_agent
   ├─ model 节点：构造动态 system prompt、执行上下文裁剪、调用模型、写入 token_usage
-  └─ tools 节点：执行 file_read、semantic_tool、dsl2sql_tool、semantic_query_tool 等工具
+  └─ tools 节点：执行 file_read、semantic_search、dsl2sql_tool、semantic_query_tool 等工具
 
 model → tools → model，直到模型不再发起工具调用后结束。
 ```
