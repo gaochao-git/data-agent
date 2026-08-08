@@ -18,7 +18,6 @@ from .llm_config import get_chat_data_llm
 logger = get_logger(__name__)
 
 SELECTOR_MAX_CONCURRENCY = 4
-SELECTOR_DIRECTORY_TOP_K = 5
 SELECTOR_MAX_SELECTED_CONFIGS = 5
 
 
@@ -43,140 +42,6 @@ def _config_name(config: Dict[str, Any]) -> str:
 def _config_description(config: Dict[str, Any]) -> str:
     """读取指标集描述。"""
     return str(config.get("description") or config.get("semantic_config_desc") or "").strip()
-
-
-def _semantic_config_directory_entry(config: Dict[str, Any]) -> Dict[str, str]:
-    """构造轻量指标集目录项，只用于候选召回。"""
-    config_id = _config_id(config)
-    search_terms = _semantic_config_search_terms(config)
-    return {
-        "id": config_id,
-        "name": _config_name(config) or config_id,
-        "description": _truncate(_config_description(config), 240),
-        "search_terms": _truncate(search_terms, 2000),
-    }
-
-
-def _semantic_config_search_terms(config: Dict[str, Any]) -> str:
-    """提取指标、维度和原始字段关键词，补充目录召回。"""
-    terms: list[str] = []
-
-    def add(value: Any) -> None:
-        text = str(value or "").strip()
-        if text:
-            terms.append(text)
-
-    for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
-        add((item or {}).get("name"))
-        add((item or {}).get("description"))
-        add((item or {}).get("label"))
-        add((item or {}).get("metadata_supplement"))
-        add((item or {}).get("field"))
-        add((item or {}).get("column"))
-
-    table_names = _semantic_table_names(config)
-    for table in config.get("tables") or []:
-        table_name = str((table or {}).get("table_name") or "").strip()
-        if not table_name or table_name not in table_names:
-            continue
-        add(table_name)
-        add((table or {}).get("description"))
-        for column in table.get("columns") or []:
-            add((column or {}).get("name") or (column or {}).get("column_name"))
-            add((column or {}).get("description") or (column or {}).get("comment"))
-
-    return " ".join(terms)
-
-
-def _public_directory_entry(entry: Dict[str, str]) -> Dict[str, Any]:
-    """返回可对外记录的目录召回信息，去掉仅用于内部打分的字段。"""
-    return {key: value for key, value in entry.items() if key != "search_terms"}
-
-
-def _retrieval_terms(value: Any) -> set[str]:
-    """为轻量目录召回提取稳定关键词，避免依赖中文分词组件。"""
-    text = str(value or "").lower()
-    terms: set[str] = set()
-    token = []
-    cjk_chars: List[str] = []
-    for char in text:
-        if "\u4e00" <= char <= "\u9fff":
-            if token:
-                terms.add("".join(token))
-                token = []
-            cjk_chars.append(char)
-            continue
-        if char.isalnum() or char in {"_", "-"}:
-            token.append(char)
-            continue
-        if token:
-            terms.add("".join(token))
-            token = []
-    if token:
-        terms.add("".join(token))
-    for index, char in enumerate(cjk_chars):
-        terms.add(char)
-        if index + 1 < len(cjk_chars):
-            terms.add(char + cjk_chars[index + 1])
-    return {term for term in terms if term}
-
-
-def _directory_entry_score(user_query: str, entry: Dict[str, str]) -> int:
-    """按目录字段和轻量语义关键词对指标集目录项做召回打分。"""
-    query = str(user_query or "").lower()
-    name = str(entry.get("name") or "").lower()
-    description = str(entry.get("description") or "").lower()
-    search_terms = str(entry.get("search_terms") or "").lower()
-    entry_text = f"{entry.get('id') or ''} {name} {description} {search_terms}".lower()
-    query_terms = _retrieval_terms(query)
-    entry_terms = _retrieval_terms(entry_text)
-    if not query_terms or not entry_terms:
-        return 0
-    score = 0
-    for term in query_terms:
-        if term in entry_terms:
-            score += 2 if len(term) >= 2 else 1
-        if len(term) >= 2 and term in name:
-            score += 4
-        elif len(term) >= 2 and term in description:
-            score += 2
-        elif len(term) >= 2 and term in search_terms:
-            score += 3
-    if name and name in query:
-        score += 12
-    if description and description in query:
-        score += 6
-    return score
-
-
-def _retrieve_semantic_config_candidates(
-    configs: List[Dict[str, Any]],
-    user_query: str,
-    top_k: int = SELECTOR_DIRECTORY_TOP_K,
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """先用指标集 id/name/description 召回候选，召回失败时回退全量。"""
-    if len(configs) <= max(int(top_k or 0), 0):
-        directory = [_semantic_config_directory_entry(config) for config in configs]
-        return configs, [{**_public_directory_entry(item), "score": 0, "selected": True} for item in directory]
-
-    scored: List[tuple[int, int, Dict[str, Any], Dict[str, str]]] = []
-    for index, config in enumerate(configs):
-        entry = _semantic_config_directory_entry(config)
-        score = _directory_entry_score(user_query, entry)
-        if score > 0:
-            scored.append((score, index, config, entry))
-    if not scored:
-        directory = [_semantic_config_directory_entry(config) for config in configs]
-        return configs, [{**_public_directory_entry(item), "score": 0, "selected": True} for item in directory]
-
-    limit = max(int(top_k or SELECTOR_DIRECTORY_TOP_K), 1)
-    selected = sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]
-    selected_ids = {_config_id(item[2]) for item in selected}
-    retrieval = [
-        {**_public_directory_entry(entry), "score": score, "selected": _config_id(config) in selected_ids}
-        for score, _index, config, entry in sorted(scored, key=lambda item: (-item[0], item[1]))
-    ]
-    return [config for _score, _index, config, _entry in selected], retrieval
 
 
 def _compact_metric_summary(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -471,8 +336,7 @@ async def search_semantic_models(
     if not enabled_configs:
         return None
 
-    candidate_configs, _directory_candidates = _retrieve_semantic_config_candidates(enabled_configs, normalized_query)
-    summaries = [_summarize_semantic_config(config) for config in candidate_configs]
+    summaries = [_summarize_semantic_config(config) for config in enabled_configs]
     selector_budget = get_model_context_budget(model_id, max_output_tokens=1200)
     chunks = _chunk_semantic_config_summaries(
         summaries,
@@ -487,7 +351,7 @@ async def search_semantic_models(
     logger.info(
         "智能问数指标集选择上下文: datasource_id=%s configs=%s chunks=%s chunk_tokens=%s hard_input_limit_tokens=%s",
         normalized_datasource_id,
-        len(candidate_configs),
+        len(enabled_configs),
         len(chunks),
         chunk_tokens,
         selector_budget.hard_input_limit_tokens,
@@ -499,10 +363,9 @@ async def search_semantic_models(
         chunk_selections = await _select_semantic_config_chunks(llm, normalized_query, chunks, normalized_group_context)
         selection = _merge_semantic_config_selections(chunk_selections)
     logger.info(
-        "智能问数指标集检索: datasource_id=%s configs=%s candidates=%s chunks=%s semantic_config_ids=%s",
+        "智能问数指标集检索: datasource_id=%s configs=%s chunks=%s semantic_config_ids=%s",
         normalized_datasource_id,
         len(enabled_configs),
-        len(candidate_configs),
         len(chunks),
         selection.get("semantic_config_ids") or [],
     )

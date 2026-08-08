@@ -148,7 +148,7 @@ index.vue
   -> api/query.ts: compileSemanticBuilderSql()
   -> POST /agents/api/chatdata/compile-semantic-builder-sql
   -> routers/query_execution.py: compile_semantic_builder_sql_endpoint()
-  -> services/semantic_bi_query_adapter.py
+  -> services/semantic_query_service.py
 
 QueryBuilder/index.vue
   -> useQueryTask.submitSqlTask(query_type='builder')
@@ -469,7 +469,7 @@ chat_data_app/
 
 | 组件 | 文件 | 职责 |
 |---|-----|------|
-| `SemanticAIQueryAdapter` | semantic/semantic_ai_query_adapter.py | 校验 DSL，映射指标/维度，组装 builder_config |
+| `SemanticAIQueryAdapter` | semantic/semantic_query_service.py | 校验 DSL，映射指标/维度，组装 builder_config |
 | `compile_query_plan_sql` | semantic/builder_sql_compiler.py | 将 builder_config 编译为 SQL |
 | `get_dialect` | semantic/dialect.py | 按 source_type 提供 MySQL/Hive 方言 |
 | `InputValidator` | semantic/input_validator.py | 校验指标、维度、过滤、排序和 limit |

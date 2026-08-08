@@ -13,7 +13,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.schema import ExecuteSemanticInput
-from apps.chat_data_app.services.semantic_ai_query_adapter import SemanticAIQueryAdapter
+from apps.chat_data_app.services.semantic_query_service import SemanticAIQueryAdapter
 
 
 def build_config(source_type: str = "mysql") -> dict:
@@ -679,7 +679,7 @@ def test_structured_expression_filter_rejects_invalid_operands():
 
 
 def test_structured_expression_filter_helper_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -689,6 +689,7 @@ def test_structured_expression_filter_helper_edges(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fake_compile_query_plan_sql)
     config = build_config()
+    config["metrics"][0]["table_alias"] = "o"
     config["dimensions"].append({
         "name": "格式化状态",
         "column": "status",
@@ -748,8 +749,8 @@ def test_structured_expression_filter_additional_helper_branches():
     generator._collect_tables_from_filter_node({"table": "", "expressionTables": ["", "orders"]}, tables_needed)
     assert tables_needed == {"orders"}
 
-    joins = generator._build_builder_joins("orders", {"orders", "users", "payments"})
-    assert joins
+    with pytest.raises(ValueError, match="缺少.*关联路径"):
+        generator._build_builder_joins("orders", {"orders", "users", "payments"})
 
 
 def test_generate_having_order_offset_and_params_block():
@@ -913,7 +914,7 @@ def test_generate_raw_metric_becomes_group_dimension_for_aggregate_query():
 
 
 def test_generate_compile_failure_returns_error(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("compile boom")))
 
@@ -961,13 +962,14 @@ def test_generator_helper_edges_for_non_dict_nodes_and_missing_joins():
         {"left_table": "orders", "right_table": "users", "join_conditions": [{"left_column": "", "right_column": "user_id"}]},
     ]
     generator = SemanticAIQueryAdapter(config)
-    joins = generator._build_builder_joins("orders", {"orders", "users"})
-    assert joins[0]["joinConditions"] == []
-    assert generator._build_builder_joins("orders", {"orders", "payments"}) == []
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        generator._build_builder_joins("orders", {"orders", "users"})
+    with pytest.raises(ValueError, match="缺少.*关联路径"):
+        generator._build_builder_joins("orders", {"orders", "payments"})
 
 
 def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1017,7 +1019,7 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
 
 
 def test_generator_captures_builder_config_for_count_star_and_metric_columns(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1078,7 +1080,7 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
 
 
 def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1132,7 +1134,7 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
 
 
 def test_generator_additional_helper_and_join_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1206,7 +1208,7 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
 
 
 def test_generator_builder_config_branches_for_metric_columns_and_table_sets(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1304,7 +1306,7 @@ def test_generator_error_validation_edges():
 
 
 def test_generator_remaining_branch_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1336,7 +1338,8 @@ def test_generator_remaining_branch_edges(monkeypatch):
     assert generator._relationship_left_alias({"left_alias": "o", "left_table": "orders"}) == "o"
     assert generator._relationship_right_alias({"right_alias": "u", "right_table": "users"}) == "u"
     assert generator._build_builder_joins("orders", {"orders"}) == []
-    assert generator._build_builder_joins("orders", {"orders", "users"})[0]["joinConditions"] == []
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        generator._build_builder_joins("orders", {"orders", "users"})
 
     result = generator.generate_sql(
         metrics=["无列指标"],
@@ -1376,7 +1379,7 @@ def test_generator_remaining_branch_edges(monkeypatch):
 
 
 def test_generator_disconnected_join_and_missing_dimension_metric_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1408,7 +1411,8 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
     }
     generator = SemanticAIQueryAdapter(config)
 
-    assert generator._build_builder_joins("orders", {"orders", "products"}) == []
+    with pytest.raises(ValueError, match="缺少.*关联路径"):
+        generator._build_builder_joins("orders", {"orders", "products"})
     monkeypatch.setattr(
         generator.validator,
         "validate_dimensions",
@@ -1435,7 +1439,7 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
 
 
 def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1470,7 +1474,7 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
 
 
 def test_generator_remaining_builder_mapping_edges(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1546,11 +1550,12 @@ def test_generator_reversed_join_fallback_and_no_selected_relation():
     assert reversed_join[0]["rightTable"] == "orders"
     assert reversed_join[0]["rightColumn"] == "user_id"
 
-    assert generator._build_builder_joins("orders", {"orders", "categories"}) == []
+    with pytest.raises(ValueError, match="缺少.*关联路径"):
+        generator._build_builder_joins("orders", {"orders", "categories"})
 
 
 def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1602,7 +1607,7 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
 
 
 def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1633,7 +1638,7 @@ def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypa
 
 
 def test_generator_remaining_coverage_branches(monkeypatch):
-    import apps.chat_data_app.services.semantic_ai_query_adapter as generator_module
+    import apps.chat_data_app.services.semantic_query_service as generator_module
 
     captured = {}
 
@@ -1675,9 +1680,10 @@ def test_generator_remaining_coverage_branches(monkeypatch):
     monkeypatch.setattr(generator.validator, "validate_having", lambda having: (having, None))
     monkeypatch.setattr(generator.validator, "validate_order_by", lambda order_by, metrics, dimensions: (order_by, None))
 
-    joins = generator._build_builder_joins("refunds", {"refunds", "orders"})
-    assert joins[-1]["rightAlias"] == "orders"
-    assert generator._build_builder_joins("orders", {"orders", "payments", "refunds"})[-1]["joinConditions"] == []
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        generator._build_builder_joins("refunds", {"refunds", "orders"})
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        generator._build_builder_joins("orders", {"orders", "payments", "refunds"})
 
     result = generator.generate_sql(
         metrics=["无列求和", "总数"],

@@ -34,7 +34,7 @@ from ..services.query_task_service import (
     QueryTaskService,
 )
 from ..services.query_providers import get_query_task_service
-from ..services.semantic_bi_query_adapter import compile_semantic_builder_sql
+from ..services.semantic_query_service import compile_semantic_builder_sql
 from ..services.sql_assist_context import get_all_tables_async, get_tables_create_format
 from .dependencies import _get_current_user
 

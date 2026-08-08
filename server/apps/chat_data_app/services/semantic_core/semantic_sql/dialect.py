@@ -262,66 +262,6 @@ class HiveDialect(SQLDialect):
         return f"NVL({column}, {default})"
 
 
-class PostgreSQLDialect(SQLDialect):
-    """PostgreSQL 方言实现"""
-
-    name = "postgresql"
-
-    def quote_identifier(self, name: str) -> str:
-        return f'"{name}"'
-
-    def quote_string(self, value: str) -> str:
-        escaped = value.replace("'", "''")
-        return f"'{escaped}'"
-
-    def format_date(self, column: str, grain: str) -> str:
-        formats = {
-            "year": f"TO_CHAR({column}, 'YYYY')",
-            "quarter": f"TO_CHAR({column}, 'YYYY-\"Q\"Q')",
-            "month": f"TO_CHAR({column}, 'YYYY-MM')",
-            "week": f"TO_CHAR({column}, 'IYYY-IW')",
-            "day": f"DATE({column})",
-            "hour": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:00')",
-            "minute": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:MI')",
-        }
-        return formats.get(grain, column)
-
-    def current_date(self) -> str:
-        return "CURRENT_DATE"
-
-    def current_timestamp(self) -> str:
-        return "NOW()"
-
-    def date_add(self, column: str, interval: int, unit: str) -> str:
-        return f"({column} + INTERVAL '{interval} {unit}')"
-
-    def date_sub(self, column: str, interval: int, unit: str) -> str:
-        return f"({column} - INTERVAL '{interval} {unit}')"
-
-    def date_diff(self, start: str, end: str) -> str:
-        return f"({end}::date - {start}::date)"
-
-    def concat(self, *args: str) -> str:
-        return " || ".join(args)
-
-    def substring(self, column: str, start: int, length: int) -> str:
-        return f"SUBSTRING({column} FROM {start} FOR {length})"
-
-    def count_distinct(self, column: str) -> str:
-        return f"COUNT(DISTINCT {column})"
-
-    def limit_offset(self, limit: int, offset: int = 0) -> str:
-        if offset > 0:
-            return f"LIMIT {limit} OFFSET {offset}"
-        return f"LIMIT {limit}"
-
-    def coalesce(self, *args: str) -> str:
-        return f"COALESCE({', '.join(args)})"
-
-    def ifnull(self, column: str, default: str) -> str:
-        return f"COALESCE({column}, {default})"
-
-
 # ========== 方言注册表 ==========
 
 class DialectRegistry:
@@ -377,7 +317,6 @@ class DialectRegistry:
 # 注册内置方言
 DialectRegistry.register(MySQLDialect())
 DialectRegistry.register(HiveDialect())
-DialectRegistry.register(PostgreSQLDialect())
 
 
 def get_dialect(name: str) -> SQLDialect:

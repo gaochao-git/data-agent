@@ -25,19 +25,6 @@ def test_compile_semantic_sql_is_the_functional_facade(monkeypatch):
     assert compile_semantic_sql({}, dialect="hive") == "hive"
 
 
-def test_legacy_compiler_uses_request_dialect_for_identifier_rendering():
-    config = {
-        "mainTable": "orders",
-        "dimensions": [{"column": "order_id", "displayName": "订单"}],
-        "aggregations": [],
-    }
-
-    sql = query_plan_compiler.compile_query_plan_sql(config, dialect="postgresql")
-
-    assert '"order_id"' in sql
-    assert 'AS "订单"' in sql
-
-
 def test_semantic_sql_compiler_rejects_unknown_dialect():
     try:
         SemanticSQLCompiler(dialect="unknown")

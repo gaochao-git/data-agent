@@ -35,7 +35,7 @@ def _add_semantic_join_fixture(fake_datasource_manager):
 def test_compile_semantic_builder_sql_derives_join_from_backend_config(client, auth_headers, fake_datasource_manager, monkeypatch):
     _add_semantic_join_fixture(fake_datasource_manager)
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -64,7 +64,7 @@ def test_compile_semantic_builder_sql_derives_join_from_backend_config(client, a
 
 def test_compile_semantic_builder_sql_rejects_frontend_join_payload(client, auth_headers, fake_datasource_manager, monkeypatch):
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -96,7 +96,7 @@ def test_compile_semantic_builder_sql_uses_semantic_metric_name_for_ambiguous_co
         {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -132,7 +132,7 @@ def test_compile_semantic_builder_sql_does_not_reuse_selected_metric_for_named_h
         {"name": "城市", "column": "city", "table": "orders", "logical_type": "text"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -196,7 +196,7 @@ def test_compile_semantic_builder_sql_keeps_metric_expression_for_having_and_ord
         }
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -251,7 +251,7 @@ def test_compile_semantic_builder_sql_accepts_structured_metric_having(client, a
         }
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -296,7 +296,7 @@ def test_compile_semantic_builder_sql_normalizes_time_filter_to_range(client, au
         {"name": "下单时间", "column": "order_time", "table": "orders", "logical_type": "datetime"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -327,7 +327,7 @@ def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_
         {"name": "支付额", "expression": "SUM(orders.amount)", "table": "orders"},
     ]
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -349,7 +349,7 @@ def test_compile_semantic_builder_sql_rejects_ambiguous_metric_without_semantic_
 
 def test_compile_semantic_builder_sql_requires_auth(client, fake_datasource_manager, monkeypatch):
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
 
     response = client.post(
         "/api/chatdata/compile-semantic-builder-sql",
@@ -367,7 +367,7 @@ def test_compile_semantic_builder_sql_requires_auth(client, fake_datasource_mana
 
 def test_compile_semantic_builder_sql_rejects_other_users_private_config(client, auth_headers, fake_datasource_manager, monkeypatch):
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
     other_user_headers = {**auth_headers, "X-User-Id": "other_user"}
 
     response = client.post(
@@ -394,7 +394,7 @@ def test_create_query_task_recompiles_semantic_builder_sql(client, auth_headers,
         return sample_query_task
 
     monkeypatch.setattr(query_providers, "get_datasource_manager", lambda: fake_datasource_manager)
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_bi_query_adapter.get_datasource_manager", lambda: fake_datasource_manager)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic_query_service.get_datasource_manager", lambda: fake_datasource_manager)
     monkeypatch.setattr(query_runtime, "create_query_task", fake_create_query_task)
     monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", lambda task_id: captured.setdefault("scheduled", task_id))
 

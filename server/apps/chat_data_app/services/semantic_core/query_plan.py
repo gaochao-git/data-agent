@@ -70,9 +70,12 @@ class SemanticQueryPlanContext:
         )
 
     def build_joins(self, main_alias: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
+        tables_needed = {str(table or "").strip() for table in tables_needed if str(table or "").strip()}
         relationships = self.semantic_config.get("relationships") or []
-        if len(tables_needed) <= 1 or not relationships:
+        if len(tables_needed) <= 1:
             return []
+        if not relationships:
+            self._raise_disconnected_tables(main_alias, tables_needed - {main_alias})
 
         adjacency: Dict[str, List[tuple[Dict[str, Any], str]]] = {}
         for relationship in relationships:
@@ -83,12 +86,20 @@ class SemanticQueryPlanContext:
                 adjacency.setdefault(right, []).append((relationship, left))
 
         previous = self._find_paths(main_alias, adjacency)
+        disconnected_tables = tables_needed - {main_alias} - set(previous)
+        if disconnected_tables:
+            self._raise_disconnected_tables(main_alias, disconnected_tables)
         required_nodes, required_relationships = self._collect_required_paths(
             main_alias,
             tables_needed,
             previous,
         )
         return self._build_ordered_joins(main_alias, required_nodes, required_relationships)
+
+    @staticmethod
+    def _raise_disconnected_tables(main_alias: str, tables: set[str]) -> None:
+        table_names = "、".join(sorted(tables))
+        raise ValueError(f"语义模型缺少从主表 {main_alias} 到表 {table_names} 的关联路径")
 
     @staticmethod
     def _find_paths(
@@ -188,6 +199,8 @@ class SemanticQueryPlanContext:
                 "leftColumn": relationship.get("right_column") if reversed_pair else relationship.get("left_column"),
                 "rightColumn": relationship.get("left_column") if reversed_pair else relationship.get("right_column"),
             })
+        if not conditions:
+            raise ValueError(f"语义关系 {left_alias} -> {right_alias} 缺少有效关联条件")
 
         return {
             "id": f"{left_alias}-{right_alias}",

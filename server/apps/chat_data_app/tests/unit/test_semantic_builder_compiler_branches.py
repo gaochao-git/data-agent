@@ -9,9 +9,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
-from apps.chat_data_app.services import semantic_bi_query_adapter as compiler_module
-from apps.chat_data_app.services import semantic_ai_query_adapter as ai_compiler_module
-from apps.chat_data_app.services.semantic_bi_query_adapter import (
+from apps.chat_data_app.services import semantic_query_service as compiler_module
+from apps.chat_data_app.services import semantic_query_service as ai_compiler_module
+from apps.chat_data_app.services.semantic_query_service import (
     SemanticBIQueryAdapter,
     _as_list,
     _field_keys,
@@ -29,7 +29,7 @@ def build_semantic_config():
             {"name": "销售额", "expression": "SUM(orders.amount)", "table": "orders"},
             {"name": "订单数", "expression": "COUNT(DISTINCT orders.order_id)", "table": "orders"},
             {"name": "原始金额", "expression": "orders.amount", "table": "orders", "column": "amount"},
-            {"name": "用户数", "expression": "COUNT(DISTINCT users.user_id)", "table": "users"},
+            {"name": "用户数", "expression": "COUNT(DISTINCT users.user_id)", "table": "users", "table_alias": "u"},
         ],
         "dimensions": [
             {"name": "城市", "column": "city", "table": "orders", "logical_type": "text", "expression": "orders.city"},
@@ -41,6 +41,7 @@ def build_semantic_config():
             {
                 "left_table": "orders",
                 "right_table": "users",
+                "right_alias": "u",
                 "join_type": "left",
                 "join_conditions": [{"left_column": "user_id", "right_column": "user_id"}],
             }
@@ -52,7 +53,8 @@ def test_semantic_builder_helper_branches():
     compiler = SemanticBIQueryAdapter(build_semantic_config())
 
     assert _as_list(None) == []
-    assert _as_list([{"a": 1}, "skip", None]) == [{"a": 1}]
+    with pytest.raises(ValueError, match=r"字段\[1\] 必须是对象"):
+        _as_list([{"a": 1}, "skip", None])
     with pytest.raises(ValueError, match="必须是数组"):
         _as_list({"bad": True})
 
@@ -80,6 +82,29 @@ def test_semantic_builder_compile_validation_branches():
         compiler.compile({"dimensions": [{"semanticName": "城市"}], "offset": -1})
     with pytest.raises(ValueError, match="filters 必须是数组"):
         compiler.compile({"dimensions": [{"semanticName": "城市"}], "filters": {"bad": True}})
+    with pytest.raises(ValueError, match=r"dimensions\[1\] 必须是对象"):
+        compiler.compile({"dimensions": [{"semanticName": "城市"}, "bad"]})
+    with pytest.raises(ValueError, match=r"filters\[1\] 必须是对象"):
+        compiler.compile({"dimensions": [{"semanticName": "城市"}], "filters": [{"semanticName": "状态", "value": "paid"}, "bad"]})
+
+
+def test_ai_and_bi_reject_disconnected_semantic_tables():
+    config = build_semantic_config()
+    config["relationships"] = []
+
+    ai_result = ai_compiler_module.SemanticAIQueryAdapter(config).generate_sql(
+        metrics=["销售额"],
+        dimensions=["用户等级"],
+        filters=[],
+        having=[],
+    )
+    assert ai_result["success"] is False
+    assert "缺少从主表" in ai_result["error"]
+
+    with pytest.raises(ValueError, match="缺少从主表"):
+        SemanticBIQueryAdapter(config).compile({
+            "dimensions": [{"semanticName": "城市"}, {"semanticName": "用户等级"}],
+        })
 
 
 def test_semantic_builder_adapter_returns_config_without_compiling(monkeypatch):
@@ -152,6 +177,11 @@ def test_semantic_builder_filter_mapping_branches():
     with pytest.raises(ValueError, match="or 过滤节点必须是数组"):
         compiler._map_filter_node({"or": "bad"})
 
+    with pytest.raises(ValueError, match=r"or\[1\] 必须是对象"):
+        compiler._map_filter_nodes([
+            {"or": [{"semanticName": "状态", "operator": "=", "value": "paid"}, "skip"]}
+        ])
+
     mapped_tree = compiler._map_filter_nodes([
         {
             "and": [
@@ -159,7 +189,6 @@ def test_semantic_builder_filter_mapping_branches():
                 {
                     "or": [
                         {"semanticName": "状态", "operator": "=", "value": "paid"},
-                        "skip",
                     ]
                 },
             ]
@@ -188,6 +217,20 @@ def test_semantic_builder_filter_mapping_branches():
     })
     assert having["aggFunc"] == "SUM"
     assert having["column"] == "amount"
+
+
+def test_semantic_builder_enforces_dimension_allowed_operators():
+    config = build_semantic_config()
+    config["dimensions"][1]["allowed_operators"] = ["=", "IN"]
+    compiler = SemanticBIQueryAdapter(config)
+
+    assert compiler._map_filter_nodes([
+        {"semanticName": "状态", "operator": "in", "value": ["paid"]},
+    ])[0]["operator"] == "IN"
+    with pytest.raises(ValueError, match="不允许操作符 'LIKE'"):
+        compiler._map_filter_nodes([
+            {"semanticName": "状态", "operator": "LIKE", "value": "paid"},
+        ])
 
 
 def test_semantic_builder_normalizes_time_dimension_equal_filter():
@@ -284,7 +327,7 @@ def test_semantic_builder_table_collection_and_main_table_resolution():
     order_by = [{"table": "", "tableAlias": "", "column": ""}]
 
     tables_needed = compiler._collect_tables_needed("orders", dimensions, aggregations, filters, order_by)
-    assert tables_needed == {"orders", "u", "users"}
+    assert tables_needed == {"orders", "u"}
     assert compiler._resolve_main_table([], [], filters, [])[0] == "orders"
     assert compiler._resolve_main_table([], [], [], [compiler._map_order_by({"semanticName": "状态"}, [], [])]) == ("orders", "orders")
     assert compiler._first_filter_table({"or": ["skip", {"table": "users", "tableAlias": "u"}]}) == ("users", "u")
@@ -362,9 +405,9 @@ def test_semantic_builder_compile_full_path_with_aliases_and_field_ref():
 
     sql = result["sql"]
     assert "FROM users u" in sql
-    assert "`level` = `status`" in sql
-    assert "HAVING SUM(amount) > 100" in sql
-    assert "ORDER BY SUM(amount) DESC" in sql
+    assert "u.`level` = orders.`status`" in sql
+    assert "HAVING SUM(orders.amount) > 100" in sql
+    assert "ORDER BY SUM(orders.amount) DESC" in sql
     assert sql.endswith("LIMIT 5, 20")
 
 
@@ -453,7 +496,7 @@ async def test_load_runtime_semantic_config_rejects_other_users_private_config(m
         await compiler_module.load_runtime_semantic_config("ds_private", "cfg_private", user_id="other_user")
 
 
-def test_semantic_ai_query_adapter_remaining_join_and_metric_branches(monkeypatch):
+def test_semantic_query_service_remaining_join_and_metric_branches(monkeypatch):
     config = build_semantic_config()
     config["metrics"].append({"name": "总行数", "expression": "COUNT(*)", "table": "orders"})
     generator = ai_compiler_module.SemanticAIQueryAdapter(config)
@@ -462,7 +505,6 @@ def test_semantic_ai_query_adapter_remaining_join_and_metric_branches(monkeypatc
     assert generator._collect_tables_from_filter_node("bad", set()) is None
     assert generator._map_filter_node_for_builder("bad") == {}
 
-    config["relationships"][0]["right_alias"] = "u"
     generator = ai_compiler_module.SemanticAIQueryAdapter(config)
     reverse_joins = generator._build_builder_joins("u", {"u", "orders"})
     assert reverse_joins[0]["leftAlias"] == "u"
@@ -471,7 +513,8 @@ def test_semantic_ai_query_adapter_remaining_join_and_metric_branches(monkeypatc
     no_path_config = build_semantic_config()
     no_path_config["relationships"] = []
     no_path_generator = ai_compiler_module.SemanticAIQueryAdapter(no_path_config)
-    assert no_path_generator._build_builder_joins("orders", {"orders", "u"}) == []
+    with pytest.raises(ValueError, match="缺少.*关联路径"):
+        no_path_generator._build_builder_joins("orders", {"orders", "u"})
 
     result = generator.generate_sql(metrics=["总行数"], dimensions=[], filters=[], having=[], user_query="查询明细列表")
     assert result["success"] is True
@@ -485,7 +528,7 @@ def test_semantic_ai_query_adapter_remaining_join_and_metric_branches(monkeypatc
     assert "SQL 转换失败" in failed["error"]
 
 
-def test_semantic_ai_query_adapter_table_validation_and_prompt_edges():
+def test_semantic_query_service_table_validation_and_prompt_edges():
     config = {
         "source_type": "mysql",
         "tables": [{"table_name": "orders", "columns": [{"name": f"c{i}"} for i in range(12)]}],

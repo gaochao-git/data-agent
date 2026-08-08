@@ -61,9 +61,15 @@ async def validate_semantic_config_for_save(
     datasource: Dict,
     metrics: List[Dict],
     dimensions: List[Dict],
+    relationships: Optional[List[Dict]] = None,
 ) -> Optional[str]:
     """Validate semantic config before create/update persistence."""
-    validation_error = validate_semantic_fields(datasource, metrics, dimensions)
+    validation_error = validate_semantic_fields(
+        datasource,
+        metrics,
+        dimensions,
+        relationships,
+    )
     if validation_error:
         return validation_error
     return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions)

@@ -499,7 +499,15 @@ async def _create_semantic_config_with_scope(
 
         metrics = [m.model_dump() for m in payload.metrics]
         dimensions = [d.model_dump() for d in payload.dimensions]
-        validation_error = await validate_semantic_config_for_save(ds_manager, datasource_id, datasource, metrics, dimensions)
+        relationships = [r.model_dump() for r in payload.relationships]
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            metrics,
+            dimensions,
+            relationships,
+        )
         if validation_error:
             return business_response(msg=validation_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
 
@@ -511,7 +519,7 @@ async def _create_semantic_config_with_scope(
             enabled=payload.enabled,
             metrics=metrics,
             dimensions=dimensions,
-            relationships=[r.model_dump() for r in payload.relationships],
+            relationships=relationships,
             scope_type=scope_type,
             create_by=user_id,
             create_by_name=username,
@@ -740,7 +748,15 @@ async def _update_semantic_config(
 
         merged_metrics = update_kwargs.get("metrics", current_config.get("metrics", []))
         merged_dimensions = update_kwargs.get("dimensions", current_config.get("dimensions", []))
-        validation_error = await validate_semantic_config_for_save(ds_manager, datasource_id, datasource, merged_metrics, merged_dimensions)
+        merged_relationships = update_kwargs.get("relationships", current_config.get("relationships", []))
+        validation_error = await validate_semantic_config_for_save(
+            ds_manager,
+            datasource_id,
+            datasource,
+            merged_metrics,
+            merged_dimensions,
+            merged_relationships,
+        )
         if validation_error:
             return business_response(msg=validation_error, code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
 

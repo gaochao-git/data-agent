@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
-from apps.chat_data_app.services import semantic_bi_query_adapter, semantic_conversation_context, semantic_model_repository
+from apps.chat_data_app.services import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager
 from apps.chat_data_app.routers import conversations as conversation_router
 
@@ -338,7 +338,7 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(handler_module.conversation, "resolve_datasource_binding", fake_resolve_datasource_binding)
     monkeypatch.setattr(handler_module.conversation, "get_or_create_conversation", fake_get_or_create_conversation)
     monkeypatch.setattr(handler_module, "get_checkpointer", lambda: fake_checkpointer())
-    for module in (semantic_bi_query_adapter, semantic_conversation_context, semantic_model_repository):
+    for module in (semantic_query_service, semantic_conversation_context, semantic_model_repository):
         monkeypatch.setattr(module, "get_datasource_manager", lambda: manager)
 
     async def fake_get_dashboard_spec_semantic_config(*_args, **_kwargs):

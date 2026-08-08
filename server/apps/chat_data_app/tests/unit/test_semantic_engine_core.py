@@ -13,7 +13,6 @@ from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import (
     DialectRegistry,
     HiveDialect,
     MySQLDialect,
-    PostgreSQLDialect,
     SQLDialect,
     get_dialect,
 )
@@ -62,7 +61,6 @@ def test_formatter_outputs_display_text_and_truncates_sql():
 def test_sql_dialects_cover_common_functions_and_registry_errors():
     mysql = get_dialect("mysql")
     hive = get_dialect("hive")
-    pg = get_dialect("postgresql")
 
     assert mysql.quote_string("a'b") == "'a''b'"
     assert mysql.current_date() == "CURRENT_DATE()"
@@ -86,29 +84,23 @@ def test_sql_dialects_cover_common_functions_and_registry_errors():
     assert hive.substring("name", 1, 3) == "SUBSTR(name, 1, 3)"
     assert hive.ifnull("a", "0") == "NVL(a, 0)"
 
-    assert pg.quote_identifier("order") == '"order"'
-    assert pg.format_date("dt", "week") == "TO_CHAR(dt, 'IYYY-IW')"
-    assert pg.format_date("dt", "unknown") == "dt"
-    assert pg.date_add("dt", 1, "day") == "(dt + INTERVAL '1 day')"
-    assert pg.date_sub("dt", 1, "day") == "(dt - INTERVAL '1 day')"
-    assert pg.date_diff("start_dt", "end_dt") == "(end_dt::date - start_dt::date)"
-    assert pg.concat("a", "b", "c") == "a || b || c"
-    assert pg.limit_offset(10, 20) == "LIMIT 10 OFFSET 20"
-    assert pg.ifnull("a", "0") == "COALESCE(a, 0)"
     assert DialectRegistry.has("mysql") is True
     assert "hive" in DialectRegistry.list()
 
-    custom_pg = PostgreSQLDialect()
-    DialectRegistry.register(custom_pg)
-    assert DialectRegistry.get("postgresql") is custom_pg
-    with pytest.raises(ValueError, match="未知的 SQL 方言"):
-        DialectRegistry.get("oracle")
+    class CustomDialect(MySQLDialect):
+        name = "custom"
+
+    custom = CustomDialect()
+    DialectRegistry.register(custom)
+    assert DialectRegistry.get("custom") is custom
+    for unsupported in ("oracle", "postgresql"):
+        with pytest.raises(ValueError, match="未知的 SQL 方言"):
+            DialectRegistry.get(unsupported)
 
 
 def test_sql_dialects_cover_all_builtin_function_variants():
     mysql = MySQLDialect()
     hive = HiveDialect()
-    pg = PostgreSQLDialect()
 
     assert mysql.format_date("dt", "year") == "DATE_FORMAT(dt, '%Y')"
     assert mysql.format_date("dt", "quarter") == "CONCAT(YEAR(dt), '-Q', QUARTER(dt))"
@@ -134,20 +126,6 @@ def test_sql_dialects_cover_all_builtin_function_variants():
     assert hive.limit_offset(10, 5) == "LIMIT 5, 10"
     assert hive.coalesce("a", "b") == "COALESCE(a, b)"
 
-    assert pg.quote_string("a'b") == "'a''b'"
-    assert pg.current_date() == "CURRENT_DATE"
-    assert pg.current_timestamp() == "NOW()"
-    assert pg.format_date("dt", "year") == "TO_CHAR(dt, 'YYYY')"
-    assert pg.format_date("dt", "quarter") == "TO_CHAR(dt, 'YYYY-\"Q\"Q')"
-    assert pg.format_date("dt", "month") == "TO_CHAR(dt, 'YYYY-MM')"
-    assert pg.format_date("dt", "day") == "DATE(dt)"
-    assert pg.format_date("dt", "hour") == "TO_CHAR(dt, 'YYYY-MM-DD HH24:00')"
-    assert pg.format_date("dt", "minute") == "TO_CHAR(dt, 'YYYY-MM-DD HH24:MI')"
-    assert pg.substring("name", 1, 3) == "SUBSTRING(name FROM 1 FOR 3)"
-    assert pg.count_distinct("user_id") == "COUNT(DISTINCT user_id)"
-    assert pg.limit_offset(10) == "LIMIT 10"
-    assert pg.coalesce("a", "b") == "COALESCE(a, b)"
-
     assert SQLDialect.quote_identifier(object(), "x") is None
     assert SQLDialect.quote_string(object(), "x") is None
     assert SQLDialect.format_date(object(), "dt", "day") is None
@@ -172,6 +150,7 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
             "下单时间": {"name": "下单时间"},
             "出金金额": {"name": "出金金额"},
             "入金金额": {"name": "入金金额"},
+            "受限状态": {"name": "受限状态", "allowed_operators": ["=", "IN"]},
         },
     )
 
@@ -191,6 +170,13 @@ def test_input_validator_covers_metrics_dimensions_filters_having_order_limit_of
     assert "value_type 仅支持" in validator.validate_filters([{"dimension": "下单时间", "operator": "IN", "value": ["today"], "value_type": []}])[1]
     assert validator.validate_filters([{"dimension": "订单状态", "operator": "LIKE", "value": "pa"}])[1] is None
     assert "操作符 'DROP TABLE'" in validator.validate_filters([{"dimension": "订单状态", "operator": "DROP TABLE", "value": "paid"}])[1]
+    assert validator.validate_filters([{"dimension": "受限状态", "operator": "in", "value": ["paid"]}])[1] is None
+    assert "不允许操作符 'LIKE'" in validator.validate_filters([{"dimension": "受限状态", "operator": "LIKE", "value": "paid"}])[1]
+    assert "不允许操作符 '>'" in validator.validate_filters([{
+        "left": {"type": "dimension", "name": "受限状态"},
+        "operator": ">",
+        "right": {"type": "literal", "value": "paid"},
+    }])[1]
     structured_filters, structured_err = validator.validate_filters([
         {
             "left": {"type": "dimension", "name": "出金金额"},

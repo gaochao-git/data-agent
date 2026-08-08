@@ -15,7 +15,6 @@ from apps.chat_data_app.services.semantic_model_search import (
     _chunk_semantic_config_summaries,
     _merge_semantic_config_selections,
     _parse_selection_response,
-    _retrieve_semantic_config_candidates,
     _summarize_semantic_config,
     search_semantic_models,
 )
@@ -55,19 +54,6 @@ def test_selector_prompt_is_retrieval_only_and_keeps_datasource_context():
     assert "query_plan" not in prompt
     assert "cross_config_required" not in prompt
     assert '{"semantic_config_ids":["..."]}' in prompt
-
-
-def test_retrieve_semantic_config_candidates_uses_directory_and_fields():
-    configs = [
-        {"id": "sc_order", "name": "订单分析", "description": "订单经营分析", "metrics": [{"name": "订单金额"}]},
-        {"id": "sc_course", "name": "课程报名", "description": "课程和学生分析"},
-    ]
-
-    candidates, retrieval = _retrieve_semantic_config_candidates(configs, "查询订单金额", top_k=1)
-
-    assert [item["id"] for item in candidates] == ["sc_order"]
-    assert retrieval[0]["id"] == "sc_order"
-    assert "search_terms" not in retrieval[0]
 
 
 def test_summarize_semantic_config_keeps_query_facts_without_physical_expression():

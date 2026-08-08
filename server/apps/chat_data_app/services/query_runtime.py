@@ -24,7 +24,7 @@ from ..schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTas
 from . import query_cache
 from .datasource_manager import get_datasource_manager
 from .runtime_config import DEFAULT_ROW_LIMIT
-from .semantic_bi_query_adapter import compile_semantic_builder_sql
+from .semantic_query_service import compile_semantic_builder_sql
 from .sql_concurrency_limiter import run_with_sql_user_datasource_limit
 from .sql_executor import build_effective_sql, fetch_http_query_task_result, get_executor, validate_sql
 from .sql_parser import validate_raw_single_sql_statement

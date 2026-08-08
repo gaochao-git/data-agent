@@ -85,6 +85,57 @@ def test_validate_semantic_fields_checks_dimensions_and_metrics():
     assert "缺少表结构" in semantic_config_service.validate_semantic_fields({"ds_tables": []}, [], [])
 
 
+def test_validate_semantic_fields_checks_operators_and_relationships():
+    datasource = {
+        "ds_tables": [
+            {"table_name": "orders", "columns": [{"name": "user_id"}, {"name": "status"}]},
+            {"table_name": "users", "columns": [{"name": "id"}, {"name": "level"}]},
+        ]
+    }
+    dimensions = [
+        {"name": "订单状态", "table": "orders", "column": "status", "allowed_operators": ["=", "IN"]},
+        {"name": "用户等级", "table": "users", "table_alias": "u", "column": "level"},
+    ]
+    valid_relationship = [{
+        "left_table": "orders",
+        "right_table": "users",
+        "right_alias": "u",
+        "left_column": "user_id",
+        "right_column": "id",
+    }]
+
+    assert semantic_config_service.validate_semantic_fields(
+        datasource, [], dimensions, valid_relationship,
+    ) is None
+    assert "不支持的过滤操作符" in semantic_config_service.validate_semantic_fields(
+        datasource,
+        [],
+        [{**dimensions[0], "allowed_operators": ["contains"]}],
+        [],
+    )
+    assert "右字段不存在" in semantic_config_service.validate_semantic_fields(
+        datasource,
+        [],
+        dimensions,
+        [{**valid_relationship[0], "right_column": "missing"}],
+    )
+    assert "缺少关联条件" in semantic_config_service.validate_semantic_fields(
+        datasource,
+        [],
+        dimensions,
+        [{
+            "left_table": "orders",
+            "right_table": "users",
+            "right_alias": "u",
+            "left_column": "",
+            "right_column": "",
+        }],
+    )
+    assert "缺少关联路径" in semantic_config_service.validate_semantic_fields(
+        datasource, [], dimensions, [],
+    )
+
+
 def test_validate_semantic_logical_types_requires_enum_column_dict():
     class Manager:
         async def get_column_dict_async(self, datasource_id, table_name, column_name):
@@ -1691,7 +1742,9 @@ def test_semantic_config_route_optional_update_and_missing_current_branches(monk
         dimensions=[{"name": "城市", "table": "orders", "column": "city", "logical_type": "text"}],
         relationships=[{
             "left_table": "orders",
+            "left_alias": "orders",
             "right_table": "orders",
+            "right_alias": "orders_2",
             "left_column": "order_id",
             "right_column": "order_id",
             "relationship_type": "one_to_one",

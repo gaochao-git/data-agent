@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic_ai_query_adapter import SemanticAIQueryAdapter
+from apps.chat_data_app.services.semantic_query_service import SemanticAIQueryAdapter
 from apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler import compile_query_plan_sql
 from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import get_dialect
 import apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler as compiler
@@ -127,7 +127,6 @@ def test_builder_sql_compiler_remaining_helper_branch_edges():
 
 def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_table():
     clauses = compiler._build_join_clauses("orders", [
-        {"rightTable": ""},
         {
             "leftTable": "orders",
             "rightTable": "order_items",
@@ -150,16 +149,17 @@ def test_builder_join_clause_helper_supports_multi_condition_and_missing_right_t
     assert "LEFT JOIN users ON orders.user_id = users.id" in clauses
 
 
-def test_builder_join_clause_helper_allows_join_without_on():
-    clauses = compiler._build_join_clauses("orders", [
-        {"rightTable": "users", "joinConditions": [{"leftColumn": "", "rightColumn": "id"}]},
-        {"rightTable": "items", "leftColumn": "", "rightColumn": "order_id"},
-    ])
-
-    assert "LEFT JOIN users" in clauses
-    assert "LEFT JOIN users ON" not in clauses
-    assert "LEFT JOIN items" in clauses
-    assert "LEFT JOIN items ON" not in clauses
+def test_builder_join_clause_helper_rejects_join_without_on():
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        compiler._build_join_clauses("orders", [
+            {"rightTable": "users", "joinConditions": [{"leftColumn": "", "rightColumn": "id"}]},
+        ])
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        compiler._build_join_clauses("orders", [
+            {"rightTable": "items", "leftColumn": "", "rightColumn": "order_id"},
+        ])
+    with pytest.raises(ValueError, match="缺少 rightTable"):
+        compiler._build_join_clauses("orders", [{"rightTable": ""}])
 
 
 def test_compile_query_plan_sql_validates_shape_and_required_fields():
@@ -227,7 +227,6 @@ def test_compile_query_plan_sql_duplicate_alias_raw_metric_and_join_conditions()
                     {"leftColumn": "", "rightColumn": "ignored"},
                 ],
             },
-            {"rightTable": ""},
         ],
         "dimensions": [
             {"id": "d1", "table": "orders", "column": "status", "displayName": "重复名", "transform": "raw"},
@@ -1894,7 +1893,7 @@ def test_compile_query_plan_sql_additional_branch_edges():
         "mainTable": "orders",
         "mainAlias": "o",
         "joins": [
-            {"rightTable": "items", "rightAlias": "i", "leftAlias": "o", "leftColumn": "", "rightColumn": "order_id"},
+            {"rightTable": "items", "rightAlias": "i", "leftAlias": "o", "leftColumn": "order_id", "rightColumn": "order_id"},
             {"rightTable": "users", "rightAlias": "u", "leftAlias": "o", "leftColumn": "user_id", "rightColumn": "id"},
         ],
         "dimensions": [
@@ -1914,8 +1913,7 @@ def test_compile_query_plan_sql_additional_branch_edges():
         "offset": 0,
     })
 
-    assert "LEFT JOIN items" in sql
-    assert "LEFT JOIN items ON" not in sql
+    assert "LEFT JOIN items i ON o.order_id = i.order_id" in sql
     assert "DATE_FORMAT(o.`created_at`, '%Y-%m') AS `月份_month`" in sql
     assert "WHERE o.`status` = 'paid' AND o.`created_at` <= current_date()" in sql
     assert "ORDER BY `月份_month` ASC" in sql

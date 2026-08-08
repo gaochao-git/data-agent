@@ -13,7 +13,7 @@ from .dashboard_service import get_dashboard_service
 from .datasource_manager import get_datasource_manager
 from .semantic_model_repository import load_semantic_model
 from .semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
-from .semantic_ai_query_adapter import SemanticAIQueryAdapter
+from .semantic_query_service import SemanticAIQueryAdapter
 from .sql_executor import get_executor, resolve_query_timeout
 
 logger = get_logger(__name__)

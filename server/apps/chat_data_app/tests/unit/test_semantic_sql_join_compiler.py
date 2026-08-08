@@ -1,3 +1,5 @@
+import pytest
+
 from apps.chat_data_app.services.semantic_core.semantic_sql.join_compiler import build_join_clauses
 
 
@@ -22,7 +24,6 @@ def test_build_join_clauses_supports_alias_and_multiple_conditions():
     ]
 
 
-def test_build_join_clauses_keeps_join_without_condition():
-    clauses = build_join_clauses("orders", [{"rightTable": "users"}])
-
-    assert clauses == ["FROM orders", "LEFT JOIN users"]
+def test_build_join_clauses_rejects_join_without_condition():
+    with pytest.raises(ValueError, match="缺少有效关联条件"):
+        build_join_clauses("orders", [{"rightTable": "users"}])

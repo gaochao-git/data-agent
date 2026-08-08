@@ -24,7 +24,7 @@ def build_join_clauses(
     for join in joins:
         right_table = join.get("rightTable")
         if not right_table:
-            continue
+            raise ValueError("查询计划中的 JOIN 缺少 rightTable")
         right_alias = str(join.get("rightAlias") or right_table).strip()
         join_type = (join.get("joinType") or "LEFT").upper()
         clause = f"{join_type} JOIN {_build_from_ref(right_table, right_alias)}"
@@ -54,5 +54,7 @@ def build_join_clauses(
                 if left_table and left_column and right_column
                 else ""
             )
-        parts.append(f"{clause} ON {on_expr}" if on_expr else clause)
+        if not on_expr:
+            raise ValueError(f"查询计划中的 JOIN {right_alias} 缺少有效关联条件")
+        parts.append(f"{clause} ON {on_expr}")
     return parts

@@ -56,7 +56,7 @@ const findJsonObjectEnd = (text: string, start: number): number => {
 }
 
 const hideTaggedSemanticConfigSelectionPayloads = (content: string): string => {
-  const markers = ['[semantic_tool]', '[search_dataset]']
+  const markers = ['[semantic_search]']
   let text = content
   let searchFrom = 0
   while (searchFrom < text.length) {

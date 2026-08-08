@@ -158,6 +158,9 @@ class InputValidator:
         Returns:
             错误消息，验证通过返回 None
         """
+        if not isinstance(filter_node, dict):
+            return "错误：无效的过滤条件格式，必须是对象"
+
         # OR 节点
         if 'or' in filter_node:
             children = filter_node['or']
@@ -203,6 +206,9 @@ class InputValidator:
             operator = str(filter_node.get('operator', '=')).upper()
             if operator not in FILTER_OPERATORS:
                 return f"错误：过滤条件操作符 '{operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
+            err = self.validate_dimension_operator(dim_name, operator)
+            if err:
+                return err
             err = self._validate_free_right_expression(filter_node)
             if err:
                 return err
@@ -269,6 +275,9 @@ class InputValidator:
         left_name = str(left.get('name') or '').strip()
         if left_name not in self.dimensions_map:
             return f"错误：过滤条件中的维度 '{left_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
+        err = self.validate_dimension_operator(left_name, operator)
+        if err:
+            return err
 
         err = self._validate_expression_operand(right, path='right')
         if err:
@@ -277,6 +286,26 @@ class InputValidator:
         if err:
             return err
         return self._validate_expression_allowed_value(left_name, operator, right)
+
+    def validate_dimension_operator(self, dim_name: str, operator: Any) -> Optional[str]:
+        """Enforce the optional per-dimension operator contract."""
+        normalized_operator = str(operator or '=').strip().upper()
+        if normalized_operator not in FILTER_OPERATORS:
+            return f"错误：过滤条件操作符 '{normalized_operator}' 不支持。可选值：{', '.join(sorted(FILTER_OPERATORS))}"
+        dim_config = self.dimensions_map.get(dim_name) or {}
+        configured = dim_config.get('allowed_operators')
+        if not configured:
+            return None
+        if not isinstance(configured, list):
+            return f"错误：维度 '{dim_name}' 的 allowed_operators 配置必须是数组"
+        allowed = {
+            str(item or '').strip().upper()
+            for item in configured
+            if str(item or '').strip()
+        }
+        if normalized_operator not in allowed:
+            return f"错误：维度 '{dim_name}' 不允许操作符 '{normalized_operator}'。可选值：{', '.join(sorted(allowed))}"
+        return None
 
     def _validate_expression_operand(self, operand: Any, path: str) -> Optional[str]:
         if not isinstance(operand, dict):
