@@ -137,6 +137,9 @@ class MySQLSyncService:
                             "table_name": table_name,
                             "description": row["TABLE_COMMENT"] or table_name,
                             "columns": [],
+                            "primary_keys": [],
+                            "unique_indexes": [],
+                            "indexes": [],
                         },
                     )
                     if row["COLUMN_NAME"]:
@@ -151,6 +154,55 @@ class MySQLSyncService:
                             "index_key": column_key == "MUL",
                             "nullable": row["IS_NULLABLE"] == "YES",
                         })
+                await cursor.execute(
+                    """
+                    SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
+                    FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = %s
+                    ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
+                    """,
+                    (self.database,),
+                )
+                stat_rows = await cursor.fetchall()
+                stats_by_table: Dict[str, List[Dict[str, Any]]] = {}
+                for sr in stat_rows:
+                    table_name = sr.get("TABLE_NAME")
+                    if not table_name:
+                        continue
+                    if table_names and table_name not in table_names:
+                        continue
+                    stats_by_table.setdefault(table_name, []).append({
+                        "index_name": sr.get("INDEX_NAME"),
+                        "non_unique": bool(sr.get("NON_UNIQUE")),
+                        "seq": sr.get("SEQ_IN_INDEX") or 0,
+                        "column_name": sr.get("COLUMN_NAME"),
+                    })
+                for table_name, stats_list in stats_by_table.items():
+                    table = tables_by_name.get(table_name)
+                    if table is None:
+                        continue
+                    by_index: Dict[str, Dict[str, Any]] = {}
+                    for s in stats_list:
+                        index_name = s["index_name"]
+                        if not index_name or not s["column_name"]:
+                            continue
+                        if index_name not in by_index:
+                            by_index[index_name] = {"non_unique": s["non_unique"], "columns": []}
+                        by_index[index_name]["columns"].append((s["seq"], s["column_name"]))
+                    primary_keys: List[List[str]] = []
+                    unique_indexes: List[Dict[str, Any]] = []
+                    indexes: List[Dict[str, Any]] = []
+                    for index_name, info in by_index.items():
+                        columns = [col for _, col in sorted(info["columns"])]
+                        if index_name == "PRIMARY":
+                            primary_keys.append(columns)
+                        elif not info["non_unique"]:
+                            unique_indexes.append({"name": index_name, "columns": columns})
+                        else:
+                            indexes.append({"name": index_name, "columns": columns})
+                    table["primary_keys"] = primary_keys
+                    table["unique_indexes"] = unique_indexes
+                    table["indexes"] = indexes
                 if table_names:
                     return [tables_by_name[name] for name in table_names if name in tables_by_name]
                 return list(tables_by_name.values())
@@ -277,6 +329,9 @@ class HiveSyncService:
                     "table_name": table_name,
                     "description": metadata.get("comment") or table_name,
                     "columns": metadata.get("columns", []),
+                    "primary_keys": [],
+                    "unique_indexes": [],
+                    "indexes": [],
                 }
             finally:
                 conn.close()
@@ -437,6 +492,9 @@ def _normalize_schema_tables(
             "table_name": table_name,
             "description": description_map.get(table_name) or table.get("description") or table_name,
             "columns": normalized_columns,
+            "primary_keys": [],
+            "unique_indexes": [],
+            "indexes": [],
         })
     return validated_tables
 

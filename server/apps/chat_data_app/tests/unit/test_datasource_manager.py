@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import copy
 
 import pytest
 
@@ -1734,6 +1735,86 @@ def test_datasource_manager_column_finder_edges():
     assert asyncio.run(manager.get_default_datasource_async())["id"] == "ds_a"
     store.datasources["ds_a"]["is_default"] = False
     assert asyncio.run(manager.get_default_datasource_async()) is None
+
+
+def test_datasource_manager_table_indexes_validate_and_persist():
+    class IndexStore(_FakeStore):
+        def __init__(self):
+            super().__init__()
+            self.datasources["ds_a"]["ds_tables"] = [{
+                "table_name": "orders",
+                "columns": [{"name": "id"}, {"name": "status"}, {"name": "created_at"}],
+                "primary_keys": [],
+                "unique_indexes": [{"name": "uniq_physical", "columns": ["id"]}],
+                "indexes": [{"name": "idx_physical", "columns": ["created_at"]}],
+            }]
+            self.index_payload = {
+                "physical": [{"index_type": "secondary", "index_name": "idx_physical", "columns": ["created_at"]}],
+                "manual": [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}],
+            }
+
+        async def get_datasource_table_indexes_async(self, group_id, table_name):
+            return copy.deepcopy(self.index_payload) if (group_id, table_name) == ("group_ds_a", "orders") else None
+
+        async def update_datasource_table_indexes_async(self, group_id, table_name, manual_indexes, **kwargs):
+            self.saved_indexes = {
+                "group_id": group_id,
+                "table_name": table_name,
+                "manual": copy.deepcopy(manual_indexes),
+                **kwargs,
+            }
+            return copy.deepcopy(manual_indexes)
+
+    store = IndexStore()
+    manager = _build_manager(store)
+    payload = [
+        {"index_type": "primary", "index_name": "ignored", "columns": ["id"]},
+        {"index_type": "unique", "index_name": "uniq_status", "columns": ["status", "created_at"]},
+        {"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]},
+    ]
+
+    assert asyncio.run(manager.get_table_indexes_async("missing", "orders")) is None
+    assert asyncio.run(manager.get_table_indexes_async("ds_a", "missing")) is None
+    assert asyncio.run(manager.get_table_indexes_async("ds_a", "orders")) == store.index_payload["manual"]
+    store.index_payload = None
+    assert asyncio.run(manager.get_table_indexes_async("ds_a", "orders")) is None
+    store.index_payload = {
+        "physical": [{"index_type": "secondary", "index_name": "idx_physical", "columns": ["created_at"]}],
+        "manual": [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}],
+    }
+    saved = asyncio.run(manager.replace_table_indexes_async(
+        "ds_a", "orders", payload, operator="u1", operator_name="用户1"
+    ))
+    assert saved[0]["index_name"] == "PRIMARY"
+    assert store.saved_indexes["update_by"] == "u1"
+    assert store.saved_indexes["update_by_name"] == "用户1"
+
+
+@pytest.mark.parametrize(("indexes", "message"), [
+    ([{"index_type": "bad", "index_name": "idx_x", "columns": ["id"]}], "索引类型"),
+    ([{"index_type": "secondary", "index_name": "wrong", "columns": ["id"]}], "必须以 idx_ 开头"),
+    ([{"index_type": "unique", "index_name": "uniq_x", "columns": ["missing"]}], "索引字段不存在"),
+    ([{"index_type": "secondary", "index_name": "idx_x", "columns": ["id", "id"]}], "不能重复配置字段"),
+    ([{"index_type": "secondary", "index_name": "idx_physical", "columns": ["id"]}], "与物理索引重复"),
+    ([{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}] * 2, "只能配置一个主键"),
+    ([{"index_type": "secondary", "index_name": f"idx_{index}", "columns": ["id"]} for index in range(6)], "不能超过 5 个"),
+])
+def test_datasource_manager_rejects_invalid_table_indexes(indexes, message):
+    table = {
+        "columns": [{"name": "id"}, {"name": "status"}],
+        "primary_keys": [],
+        "unique_indexes": [],
+        "indexes": [{"name": "idx_physical", "columns": ["status"]}],
+    }
+    with pytest.raises(ValueError, match=message):
+        DataSourceManager._validate_table_indexes(table, indexes)
+
+    table["primary_keys"] = [["id"]]
+    with pytest.raises(ValueError, match="已经存在物理主键"):
+        DataSourceManager._validate_table_indexes(
+            table,
+            [{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}],
+        )
 
 
 def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):

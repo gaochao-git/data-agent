@@ -25,7 +25,9 @@ from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_source_line,
     _format_time,
     _load_json,
+    _merge_table_indexes_for_sync,
     _normalize_column_dict,
+    _normalize_table_indexes_payload,
     _normalize_query_executor_type_for_parse,
     _parse_member_source_entry,
     _parse_member_source_entries,
@@ -66,6 +68,7 @@ def _table_model(group_id: str = "group_a", table_name: str = "orders", sort_no:
         table_desc="订单表",
         table_business_desc="业务订单主表",
         columns_json='[{"name":"id"}]',
+        indexes_json=None,
         sort_no=sort_no,
         delete_flag=0,
         create_time=None,
@@ -217,9 +220,11 @@ class _FakeOrmSession:
     def _filter_datasource_table(self, sql: str, values: set):
         rows = list(self.rows_by_table.get("datasource_table", []))
         if "group_id = " in sql:
-            return [row for row in rows if row.group_id in values]
-        if "group_id IN " in sql:
-            return [row for row in rows if row.group_id in values]
+            rows = [row for row in rows if row.group_id in values]
+        elif "group_id IN " in sql:
+            rows = [row for row in rows if row.group_id in values]
+        if "table_names = " in sql or "table_names IN " in sql:
+            rows = [row for row in rows if row.table_names in values]
         return rows
 
     def _filter_table_group(self, sql: str, values: set):
@@ -372,6 +377,78 @@ def test_map_group_row_and_member_sources_preserve_metadata():
     assert legacy["recommended_questions"] == []
 
 
+def test_table_indexes_normalization_preserves_legacy_and_manual_indexes():
+    columns = [
+        {"name": "id", "primary_key": True},
+        {"name": "code", "unique_key": True},
+        {"name": "email", "unique_key": True},
+        {"name": "status", "index_key": True},
+        {"name": "created_at", "index_key": True},
+    ]
+    legacy = _normalize_table_indexes_payload(None, columns)
+    assert legacy["physical"] == [
+        {"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]},
+        {"index_type": "unique", "index_name": "", "columns": ["code"]},
+        {"index_type": "unique", "index_name": "", "columns": ["email"]},
+        {"index_type": "secondary", "index_name": "", "columns": ["status"]},
+        {"index_type": "secondary", "index_name": "", "columns": ["created_at"]},
+    ]
+
+    existing = {
+        "physical": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
+        "manual": [{"index_type": "unique", "index_name": "uniq_code", "columns": ["code"]}],
+    }
+    merged = _merge_table_indexes_for_sync(
+        {
+            "columns": columns,
+            "primary_keys": [["id"]],
+            "unique_indexes": [{"name": "uniq_email", "columns": ["email"]}],
+            "indexes": [{"name": "idx_created_at", "columns": ["created_at"]}],
+        },
+        existing,
+    )
+    assert merged["physical"][2] == {
+        "index_type": "secondary",
+        "index_name": "idx_created_at",
+        "columns": ["created_at"],
+    }
+    assert merged["manual"] == existing["manual"]
+
+
+def test_datasource_dao_table_index_read_and_update_boundaries(monkeypatch):
+    store = DataSourceDao.__new__(DataSourceDao)
+    table = _table_model()
+    table.columns_json = '[{"name":"id"},{"name":"status"}]'
+    table.indexes_json = json.dumps({
+        "physical": [{"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]}],
+        "manual": [{"index_type": "secondary", "index_name": "idx_old", "columns": ["status"]}],
+    })
+    executed = []
+    _patch_store_session(monkeypatch, {"datasource_table": [table]}, executed=executed)
+    manual = [{"index_type": "unique", "index_name": "uniq_status", "columns": ["status"]}]
+
+    async def run_checks():
+        return (
+            await store.get_datasource_table_indexes_async("group_a", "orders"),
+            await store.get_datasource_table_indexes_async("group_a", "missing"),
+            await store.update_datasource_table_indexes_async("group_a", "orders", manual, update_by="u1", update_by_name="用户1"),
+            await store.update_datasource_table_indexes_async("", "orders", manual),
+        )
+
+    indexes, missing, saved, invalid = asyncio.run(run_checks())
+    assert indexes["physical"][0]["index_name"] == "PRIMARY"
+    assert indexes["manual"][0]["index_name"] == "idx_old"
+    assert missing is None
+    assert saved == manual
+    assert invalid is None
+    update_stmt = next(stmt for stmt in executed if str(stmt).lstrip().upper().startswith("UPDATE DATASOURCE_TABLE"))
+    params = update_stmt.compile().params
+    persisted = json.loads(next(value for key, value in params.items() if key.startswith("indexes_json")))
+    assert persisted["physical"] == indexes["physical"]
+    assert persisted["manual"] == manual
+    assert any("FOR UPDATE" in str(stmt).upper() for stmt in executed)
+
+
 def test_map_group_row_normalizes_malformed_recommended_questions():
     store = DataSourceDao.__new__(DataSourceDao)
     row = store._group_model_to_row(_group_model())
@@ -438,6 +515,8 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     assert by_name["group_name"] == "订单组"
     assert default["is_default"] is True
     assert tables[0]["columns"] == [{"name": "id"}]
+    assert tables[0]["primary_keys"] == []
+    assert tables[0]["manual_indexes"] == []
     assert member_ids == ["ORG_A", "ORG_B"]
     assert column_dict == {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
     assert asyncio.run(store.get_datasource_tables_by_group_id_async("")) == []

@@ -15,6 +15,7 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 UPSERT_BATCH_SIZE = 200
 _PARSE_WARNING_KEYS: set[tuple[str, str]] = set()
 _PARSE_WARNING_LOCK = threading.Lock()
+VALID_TABLE_INDEX_TYPES = {"primary", "unique", "secondary"}
 
 
 def _warn_parse_once(message: str, text: str) -> None:
@@ -106,6 +107,106 @@ def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:
     """判断字段数据字典是否为空。"""
     normalized = _normalize_column_dict(payload)
     return not normalized["enum_values"] and not normalized["synonyms"] and not normalized["storage_format"] and not normalized["unit"]
+
+
+def _normalize_table_index_items(items: Any) -> List[Dict[str, Any]]:
+    """Normalize persisted table indexes without inventing missing metadata."""
+    if not isinstance(items, list):
+        return []
+    result: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        index_type = str(raw_item.get("index_type") or "").strip().lower()
+        if index_type not in VALID_TABLE_INDEX_TYPES:
+            continue
+        index_name = str(raw_item.get("index_name") or "").strip()
+        if index_type == "primary":
+            index_name = "PRIMARY"
+        raw_columns = raw_item.get("columns")
+        columns = _unique_non_empty_texts(raw_columns) if isinstance(raw_columns, list) else []
+        if not columns:
+            continue
+        identity = index_name.lower() or "\x1f".join(columns)
+        key = (index_type, identity)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({
+            "index_type": index_type,
+            "index_name": index_name,
+            "columns": columns,
+        })
+    return result
+
+
+def _legacy_physical_indexes(columns: Any) -> List[Dict[str, Any]]:
+    """Best-effort fallback for rows written before indexes_json existed."""
+    if not isinstance(columns, list):
+        return []
+    primary_columns = [
+        str(column.get("name") or "").strip()
+        for column in columns
+        if isinstance(column, dict) and column.get("primary_key") and str(column.get("name") or "").strip()
+    ]
+    result: List[Dict[str, Any]] = []
+    if primary_columns:
+        result.append({"index_type": "primary", "index_name": "PRIMARY", "columns": primary_columns})
+    for column in columns:
+        if not isinstance(column, dict):
+            continue
+        column_name = str(column.get("name") or "").strip()
+        if not column_name:
+            continue
+        if column.get("unique_key"):
+            result.append({"index_type": "unique", "index_name": "", "columns": [column_name]})
+        if column.get("index_key"):
+            result.append({"index_type": "secondary", "index_name": "", "columns": [column_name]})
+    return result
+
+
+def _normalize_table_indexes_payload(raw_payload: Any, columns: Any = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Return the canonical {physical, manual} indexes_json payload."""
+    payload = _load_json(raw_payload, None)
+    if not isinstance(payload, dict):
+        return {
+            "physical": _legacy_physical_indexes(columns),
+            "manual": [],
+        }
+    return {
+        "physical": _normalize_table_index_items(payload.get("physical")),
+        "manual": _normalize_table_index_items(payload.get("manual")),
+    }
+
+
+def _physical_indexes_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for columns in table.get("primary_keys") or []:
+        result.append({"index_type": "primary", "index_name": "PRIMARY", "columns": columns})
+    for item in table.get("unique_indexes") or []:
+        result.append({
+            "index_type": "unique",
+            "index_name": (item or {}).get("name") if isinstance(item, dict) else "",
+            "columns": (item or {}).get("columns") if isinstance(item, dict) else [],
+        })
+    for item in table.get("indexes") or []:
+        result.append({
+            "index_type": "secondary",
+            "index_name": (item or {}).get("name") if isinstance(item, dict) else "",
+            "columns": (item or {}).get("columns") if isinstance(item, dict) else [],
+        })
+    return _normalize_table_index_items(result)
+
+
+def _merge_table_indexes_for_sync(table: Dict[str, Any], existing_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """Refresh physical metadata while retaining user-maintained indexes."""
+    existing = _normalize_table_indexes_payload(existing_payload, table.get("columns"))
+    has_physical_metadata = any(
+        key in table for key in ("primary_keys", "unique_indexes", "indexes")
+    )
+    physical = _physical_indexes_from_table(table) if has_physical_metadata else existing["physical"]
+    return {"physical": physical, "manual": existing["manual"]}
 
 
 def _batch_items(items: List[Dict[str, Any]], batch_size: int = UPSERT_BATCH_SIZE) -> List[List[Dict[str, Any]]]:

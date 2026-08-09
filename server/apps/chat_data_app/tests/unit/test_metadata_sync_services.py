@@ -289,7 +289,10 @@ async def test_mysql_sync_positive_int_env_and_empty_schema_rows(monkeypatch):
 
     connections = [
         AsyncMySQLConnection([]),
-        AsyncMySQLConnection([{"TABLE_NAME": "orders", "TABLE_COMMENT": "订单表", "COLUMN_NAME": ""}]),
+        AsyncMySQLConnection(
+            [{"TABLE_NAME": "orders", "TABLE_COMMENT": "订单表", "COLUMN_NAME": ""}],
+            [],
+        ),
     ]
 
     async def fake_connect(**_kwargs):
@@ -301,7 +304,14 @@ async def test_mysql_sync_positive_int_env_and_empty_schema_rows(monkeypatch):
     service = MySQLSyncService("localhost", database="demo")
     assert await service.get_full_schema_async() == []
     assert await service.get_full_schema_async() == [
-        {"table_name": "orders", "description": "订单表", "columns": []}
+        {
+            "table_name": "orders",
+            "description": "订单表",
+            "columns": [],
+            "primary_keys": [],
+            "unique_indexes": [],
+            "indexes": [],
+        }
     ]
 
 
@@ -344,9 +354,12 @@ def test_lang_util_model_to_dict_json_branches():
 
 
 class AsyncCursor:
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, rows, index_rows=None):
+        self.result_sets = [rows]
+        if index_rows is not None:
+            self.result_sets.append(index_rows)
         self.executed = []
+        self.fetch_index = 0
 
     async def __aenter__(self):
         return self
@@ -358,15 +371,19 @@ class AsyncCursor:
         self.executed.append((sql, params))
 
     async def fetchall(self):
-        return self.rows
+        if self.fetch_index >= len(self.result_sets):
+            return []
+        rows = self.result_sets[self.fetch_index]
+        self.fetch_index += 1
+        return rows
 
 
 class AsyncMySQLConnection:
-    def __init__(self, rows):
+    def __init__(self, rows, index_rows=None):
         self.rows = rows
         self.closed = False
         self.ensure_closed_called = False
-        self.cursor_obj = AsyncCursor(rows)
+        self.cursor_obj = AsyncCursor(rows, index_rows)
 
     def cursor(self, _cursor_type):
         return self.cursor_obj
@@ -409,6 +426,11 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
             "COLUMN_KEY": "UNI",
             "IS_NULLABLE": "NO",
         },
+    ], [
+        {"TABLE_NAME": "orders", "INDEX_NAME": "PRIMARY", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "order_id"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "uniq_order_amount", "NON_UNIQUE": 0, "SEQ_IN_INDEX": 2, "COLUMN_NAME": "amount"},
+        {"TABLE_NAME": "orders", "INDEX_NAME": "idx_amount", "NON_UNIQUE": 1, "SEQ_IN_INDEX": 1, "COLUMN_NAME": "amount"},
     ])
     connections = [table_conn, schema_conn]
 
@@ -448,6 +470,9 @@ async def test_mysql_sync_fetches_tables_and_schema(monkeypatch):
                 "nullable": True,
             },
         ],
+        "primary_keys": [["order_id"]],
+        "unique_indexes": [{"name": "uniq_order_amount", "columns": ["order_id", "amount"]}],
+        "indexes": [{"name": "idx_amount", "columns": ["amount"]}],
     }]
     assert table_conn.closed is True
     assert schema_conn.ensure_closed_called is True

@@ -25,7 +25,13 @@ import {
   syncAdminDatasourceMetadata,
 } from '../api'
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
-import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem, DatasourceSemanticHealthResult, DatasourceTableGroupItem } from '../api'
+import type {
+  DatasourceColumnDictPayload,
+  DatasourceColumnDictEnumItem,
+  DatasourceSemanticHealthResult,
+  DatasourceTableGroupItem,
+} from '../api'
+import TableIndexDialog from './TableIndexDialog.vue'
 
 const emit = defineEmits<{
   (e: 'datasources-updated'): void
@@ -37,6 +43,8 @@ const datasources = ref<DataSource[]>([])
 const datasourcesLoading = ref(false)
 const expandedDatasources = ref<Set<string>>(new Set())
 const expandedTables = ref<Set<string>>(new Set())
+const collapsedFieldGroups = ref<Set<string>>(new Set())
+const collapsedIndexGroups = ref<Set<string>>(new Set())
 const datasourceTableSearchKeywords = ref<Record<string, string>>({})
 
 // 数据源组
@@ -98,6 +106,10 @@ const editingTableGroupName = ref('')
 const editingTableGroupInput = ref('')
 const loadingTableGroups = ref(false)
 const savingTableGroups = ref(false)
+
+// 表索引管理
+const showIndexModal = ref(false)
+const indexContext = ref<{ datasource: DataSource; table: TableInfo } | null>(null)
 
 // 表业务说明编辑
 const editingTableBusinessDescKey = ref('')
@@ -864,6 +876,20 @@ const toggleTable = (ds: DataSource, table: TableInfo) => {
   }
 }
 
+const toggleFieldGroup = (dsId: string, tableName: string) => {
+  const key = buildTableKey(dsId, tableName)
+  const s = new Set(collapsedFieldGroups.value)
+  s.has(key) ? s.delete(key) : s.add(key)
+  collapsedFieldGroups.value = s
+}
+
+const toggleIndexGroup = (dsId: string, tableName: string) => {
+  const key = buildTableKey(dsId, tableName)
+  const s = new Set(collapsedIndexGroups.value)
+  s.has(key) ? s.delete(key) : s.add(key)
+  collapsedIndexGroups.value = s
+}
+
 const handleOpenSemanticConfig = (datasourceId: string) => {
   emit('open-semantic-config', datasourceId, datasources.value.find(ds => ds.id === datasourceId))
 }
@@ -1340,6 +1366,59 @@ const getColumnIconTitle = (col: any) => {
   return ''
 }
 
+// 表级索引聚合
+interface DisplayTableIndex {
+  type: 'primary' | 'unique' | 'secondary'
+  source: 'physical' | 'manual'
+  name: string
+  columns: string[]
+}
+
+const getTableDisplayIndexes = (table: TableInfo): DisplayTableIndex[] => {
+  const result: DisplayTableIndex[] = []
+  for (const columns of table.primary_keys || []) {
+    result.push({ type: 'primary', source: 'physical', name: 'PRIMARY', columns })
+  }
+  for (const ui of table.unique_indexes || []) {
+    result.push({ type: 'unique', source: 'physical', name: ui.name || 'UNIQUE', columns: ui.columns || [] })
+  }
+  for (const ii of table.indexes || []) {
+    result.push({ type: 'secondary', source: 'physical', name: ii.name || 'INDEX', columns: ii.columns || [] })
+  }
+  for (const item of table.manual_indexes || []) {
+    result.push({
+      type: item.index_type,
+      source: 'manual',
+      name: item.index_name || (item.index_type === 'primary' ? 'PRIMARY' : 'INDEX'),
+      columns: item.columns || [],
+    })
+  }
+  return result
+}
+
+const hasTableIndexes = (table: TableInfo) => getTableDisplayIndexes(table).length > 0
+
+const closeIndexModal = () => {
+  showIndexModal.value = false
+  indexContext.value = null
+}
+
+const openIndexModal = (datasource: DataSource, table: TableInfo) => {
+  indexContext.value = { datasource, table }
+  showIndexModal.value = true
+}
+
+const handleIndexesSaved = (indexes: NonNullable<TableInfo['manual_indexes']>) => {
+  if (indexContext.value) {
+    indexContext.value.table.manual_indexes = indexes.map(item => ({
+      ...item,
+      columns: [...item.columns],
+      source: 'manual',
+    }))
+  }
+  closeIndexModal()
+}
+
 const getDatasourceConnectionTitle = (ds: DataSource) => {
   const sourceType = (ds.source_type || '').toLowerCase()
   const config = (ds.source_config || {}) as Record<string, unknown>
@@ -1654,6 +1733,17 @@ defineExpose({
                 <!-- 列列表 -->
                 <div v-if="expandedTables.has(buildTableKey(ds.id, table.table_name))" class="ml-6 overflow-hidden">
                   <div class="border-l border-slate-200 py-1">
+                    <!-- 字段分组 -->
+                    <div class="ml-2">
+                      <div
+                        class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                        @click="toggleFieldGroup(ds.id, table.table_name)"
+                      >
+                        <i :class="['fa-solid text-[9px] text-slate-400', collapsedFieldGroups.has(buildTableKey(ds.id, table.table_name)) ? 'fa-chevron-right' : 'fa-chevron-down']"></i>
+                        <i class="fa-solid fa-table-columns text-[10px] text-slate-400"></i>
+                        <span>字段 ({{ table.columns.length }})</span>
+                      </div>
+                      <div v-show="!collapsedFieldGroups.has(buildTableKey(ds.id, table.table_name))">
                     <div
                       v-for="col in table.columns"
                       :key="col.name"
@@ -1685,6 +1775,42 @@ defineExpose({
                         <span>{{ isColumnDictMaintained(ds.id, table.table_name, col.name) ? '已维护' : '字典' }}</span>
                       </button>
                       <span class="min-w-[160px] flex-1"></span>
+                    </div>
+                      </div>
+                    </div>
+                    <!-- 索引分组 -->
+                    <div class="ml-2 mt-1">
+                      <div
+                        class="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                        @click="toggleIndexGroup(ds.id, table.table_name)"
+                      >
+                        <i :class="['fa-solid text-[9px] text-slate-400', collapsedIndexGroups.has(buildTableKey(ds.id, table.table_name)) ? 'fa-chevron-right' : 'fa-chevron-down']"></i>
+                        <i class="fa-solid fa-list-ol text-[10px] text-slate-400"></i>
+                        <span>索引 ({{ getTableDisplayIndexes(table).length }})</span>
+                        <button type="button" class="ml-auto text-blue-600 hover:text-blue-700" @click.stop="openIndexModal(ds, table)">
+                          <i class="fa-solid fa-pen text-[10px] mr-0.5"></i>配置
+                        </button>
+                      </div>
+                      <div v-show="!collapsedIndexGroups.has(buildTableKey(ds.id, table.table_name))" class="py-1">
+                        <div v-if="hasTableIndexes(table)" class="space-y-0.5">
+                          <div
+                            v-for="idx in getTableDisplayIndexes(table)"
+                            :key="[idx.source, idx.type, idx.name, ...idx.columns].join(':')"
+                            class="group ml-4 flex items-center gap-2 rounded px-2 py-1 text-xs transition-colors hover:bg-slate-50"
+                          >
+                            <i
+                              :class="['fa-solid text-[10px]', idx.type === 'primary' ? 'fa-key text-amber-600' : idx.type === 'unique' ? 'fa-fingerprint text-blue-600' : 'fa-bolt text-slate-500']"
+                              :title="idx.type === 'primary' ? '主键' : idx.type === 'unique' ? '唯一索引' : '二级索引'"
+                            ></i>
+                            <span :class="['shrink-0 rounded px-1 py-0.5 text-[10px]', idx.source === 'manual' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500']">
+                              {{ idx.source === 'manual' ? '手工' : '物理' }}
+                            </span>
+                            <span class="font-mono text-slate-900">{{ idx.name }}</span>
+                            <span class="font-mono text-slate-500">({{ idx.columns.join(', ') }})</span>
+                          </div>
+                        </div>
+                        <div v-else class="ml-4 py-1 px-2 text-xs text-slate-400">暂无索引</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1954,6 +2080,14 @@ defineExpose({
         </div>
       </div>
     </el-dialog>
+
+    <TableIndexDialog
+      :visible="showIndexModal"
+      :datasource="indexContext?.datasource"
+      :table="indexContext?.table"
+      @close="closeIndexModal"
+      @saved="handleIndexesSaved"
+    />
 
     <!-- 表分组管理弹窗 -->
     <el-dialog v-model="showTableGroupModal" width="760px" :close-on-click-modal="!savingTableGroups" :show-close="false">

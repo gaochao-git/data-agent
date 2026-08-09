@@ -16,6 +16,7 @@ import type {
   SkillVersionInfo,
   SqlHistoryItem,
   DashboardSpecPayload,
+  DatasourceTableIndexItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -595,6 +596,28 @@ export function updateAdminDatasourceTableGroups(datasourceId: string, groups: D
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/table-groups`,
     method: 'put',
     data: { groups }
+  })
+}
+
+export function getAdminDatasourceTableIndexes(
+  datasourceId: string,
+  tableName: string,
+): Promise<ApiResponse<{ datasource_id: string; table_name: string; indexes: DatasourceTableIndexItem[] }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/indexes`,
+    method: 'get',
+  })
+}
+
+export function updateAdminDatasourceTableIndexes(
+  datasourceId: string,
+  tableName: string,
+  indexes: DatasourceTableIndexItem[],
+): Promise<ApiResponse<{ datasource_id: string; table_name: string; indexes: DatasourceTableIndexItem[] }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/indexes`,
+    method: 'put',
+    data: { indexes },
   })
 }
 

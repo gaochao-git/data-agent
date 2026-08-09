@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 from ..daos.datasource_dao import DataSourceDao
+from ..daos.datasource_dao_helpers import VALID_TABLE_INDEX_TYPES, _normalize_table_index_items
 from .datasource_credentials import resolve_execution_source_config, sanitize_source_config
 from .datasource_metadata import (
     DataSourceMetadataAdapter,
@@ -30,6 +32,9 @@ logger = get_logger(__name__)
 
 _UNSET = object()
 SUPPORTED_QUERY_EXECUTOR_TYPES = {"direct", "http"}
+MAX_TABLE_INDEX_COUNT = 5
+MAX_INDEX_COLUMN_COUNT = 5
+INDEX_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def _read_positive_int_env(name: str, default: int) -> int:
@@ -48,6 +53,37 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 
 DATASOURCE_SYNC_TIMEOUT_SECONDS = _read_positive_int_env("CHAT_DATA_DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
+
+
+def _validate_table_index_name(index_type: str, index_name: Any, physical_names: set[str]) -> str:
+    normalized = str(index_name or "").strip()
+    if index_type == "primary":
+        return "PRIMARY"
+    if not normalized:
+        raise ValueError("唯一索引和普通索引必须填写索引名称")
+    if len(normalized) > 32 or not INDEX_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError("索引名称必须是 1-32 位字母、数字、下划线或 $，且不能以数字开头")
+    if index_type == "unique" and not normalized.startswith("uniq_"):
+        raise ValueError("唯一索引名称必须以 uniq_ 开头")
+    if index_type == "secondary" and not normalized.startswith("idx_"):
+        raise ValueError("普通索引名称必须以 idx_ 开头")
+    if normalized.lower() in physical_names:
+        raise ValueError(f"索引名称与物理索引重复: {normalized}")
+    return normalized
+
+
+def _validate_table_index_columns(raw_columns: Any, available_columns: set[str]) -> List[str]:
+    columns = [str(value or "").strip() for value in (raw_columns or [])]
+    if not columns or any(not value for value in columns):
+        raise ValueError("索引至少需要一个字段")
+    if len(columns) > MAX_INDEX_COLUMN_COUNT:
+        raise ValueError(f"单个组合索引不能超过 {MAX_INDEX_COLUMN_COUNT} 个字段")
+    if len(set(columns)) != len(columns):
+        raise ValueError("同一个索引内不能重复配置字段")
+    missing = [value for value in columns if value not in available_columns]
+    if missing:
+        raise ValueError(f"索引字段不存在: {', '.join(missing)}")
+    return columns
 
 
 def _normalize_query_executor_type(source_type: str, query_executor_type: Optional[str] = None) -> str:
@@ -720,6 +756,102 @@ class DataSourceManager:
             create_by_name=operator_name or "",
             update_by_name=operator_name or "",
         )
+
+    async def get_table_indexes_async(
+        self,
+        datasource_id: str,
+        table_name: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """异步获取数据源表的手动索引配置。"""
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
+        if not datasource:
+            return None
+        table = self._find_table(datasource, table_name)
+        if table is None:
+            return None
+        indexes = await self.datasource_dao.get_datasource_table_indexes_async(
+            datasource.get("group_id") or "", str(table_name or "").strip()
+        )
+        if indexes is None:
+            return None
+        return list(indexes.get("manual") or [])
+
+    async def replace_table_indexes_async(
+        self,
+        datasource_id: str,
+        table_name: str,
+        indexes: List[Dict[str, Any]],
+        operator: str = "",
+        operator_name: str = "",
+    ) -> Optional[List[Dict[str, Any]]]:
+        """异步覆盖保存数据源表的手动索引配置。"""
+        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
+        if not datasource:
+            return None
+        table = self._find_table(datasource, table_name)
+        if table is None:
+            return None
+        normalized = self._validate_table_indexes(table, indexes)
+        return await self.datasource_dao.update_datasource_table_indexes_async(
+            datasource.get("group_id") or "",
+            str(table_name or "").strip(),
+            normalized,
+            update_by=operator or "",
+            update_by_name=operator_name or "",
+        )
+
+    @staticmethod
+    def _find_table(datasource: Optional[Dict[str, Any]], table_name: str) -> Optional[Dict[str, Any]]:
+        normalized = str(table_name or "").strip()
+        if not datasource or not normalized:
+            return None
+        return next(
+            (table for table in datasource.get("ds_tables") or []
+             if str(table.get("table_name") or "").strip() == normalized),
+            None,
+        )
+
+    @staticmethod
+    def _validate_table_indexes(table: Dict[str, Any], indexes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(indexes or []) > MAX_TABLE_INDEX_COUNT:
+            raise ValueError(f"单表手工索引不能超过 {MAX_TABLE_INDEX_COUNT} 个")
+        columns = {
+            str(column.get("name") or "").strip()
+            for column in table.get("columns") or []
+            if isinstance(column, dict) and str(column.get("name") or "").strip()
+        }
+        normalized: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        physical_names = {
+            str(item.get("name") or "").strip().lower()
+            for item in [*(table.get("unique_indexes") or []), *(table.get("indexes") or [])]
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        }
+        primary_seen = False
+        for item in indexes or []:
+            if not isinstance(item, dict):
+                raise ValueError("索引项必须是对象")
+            index_type = str(item.get("index_type") or "").strip().lower()
+            if index_type not in VALID_TABLE_INDEX_TYPES:
+                raise ValueError("索引类型必须是 primary、unique 或 secondary")
+            if index_type == "primary":
+                if table.get("primary_keys"):
+                    raise ValueError("当前表已经存在物理主键，无需重复配置手工主键")
+                if primary_seen:
+                    raise ValueError("同一张表只能配置一个主键索引")
+                primary_seen = True
+            index_name = _validate_table_index_name(index_type, item.get("index_name"), physical_names)
+            index_columns = _validate_table_index_columns(item.get("columns"), columns)
+            key = (index_type, index_name.lower())
+            if key in seen:
+                raise ValueError(f"索引名称重复: {index_name}")
+            seen.add(key)
+            normalized.append({
+                "index_type": index_type,
+                "index_name": index_name,
+                "columns": index_columns,
+            })
+        return _normalize_table_index_items(normalized)
 
     def _find_table_column(self, datasource: Optional[Dict[str, Any]], table_name: str, column_name: str) -> Optional[Dict[str, Any]]:
         """校验数据源缓存中是否存在指定表字段。"""

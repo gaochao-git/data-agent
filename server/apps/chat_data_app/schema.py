@@ -276,6 +276,18 @@ class DatasourceColumnDictGenerateRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000, description="用于生成字段字典的文本")
 
 
+class TableIndexItem(BaseModel):
+    """数据源表索引项"""
+    index_type: Literal["primary", "unique", "secondary"] = Field(..., description="索引类型")
+    index_name: str = Field(default="", max_length=32, description="索引名称")
+    columns: List[str] = Field(default_factory=list, max_length=5, description="索引列名列表")
+
+
+class DatasourceTableIndexesUpdateRequest(BaseModel):
+    """数据源表索引配置更新请求（整体覆盖）"""
+    indexes: List[TableIndexItem] = Field(default_factory=list, max_length=5, description="索引列表")
+
+
 class SkillCreateRequest(BaseModel):
     """用户技能创建请求"""
     skill_name: str = Field(..., min_length=3, max_length=64, description="技能英文名称，使用小写字母和中划线")

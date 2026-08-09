@@ -665,6 +665,7 @@ class DatasourceTable(Base):
     table_desc: Mapped[Optional[str]] = mapped_column(String(128))
     table_business_desc: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     columns_json: Mapped[Optional[str]] = mapped_column(Text)
+    indexes_json: Mapped[Optional[str]] = mapped_column(Text)
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())

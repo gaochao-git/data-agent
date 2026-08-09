@@ -61,6 +61,7 @@ from apps.chat_data_app.schema import (
     DatasourceColumnDictUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
+    DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
     ExecuteSqlRequest,
     LayoutUpdateRequest,
@@ -3149,6 +3150,52 @@ def test_datasource_update_missing_and_exception_branches(monkeypatch):
     assert _payload(asyncio.run(datasource_admin_routes.update_datasource_table_business_desc("ds_a", "t_a", DatasourceTableBusinessDescUpdateRequest(business_desc="x"), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_admin_routes.set_default_datasource("ds_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_admin_routes.clear_default_datasource("ds_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+
+
+def test_datasource_table_index_routes_success_and_errors(monkeypatch):
+    calls = []
+
+    class IndexManager:
+        async def get_table_indexes_async(self, datasource_id, table_name):
+            calls.append(("get", datasource_id, table_name))
+            if datasource_id == "missing":
+                return None
+            if datasource_id == "crash":
+                raise RuntimeError("database details")
+            return [{"index_type": "secondary", "index_name": "idx_status", "columns": ["status"]}]
+
+        async def replace_table_indexes_async(self, datasource_id, table_name, indexes, operator="", operator_name=""):
+            calls.append(("put", datasource_id, table_name, indexes, operator, operator_name))
+            if datasource_id == "missing":
+                return None
+            if datasource_id == "invalid":
+                raise ValueError("普通索引名称必须以 idx_ 开头")
+            if datasource_id == "crash":
+                raise RuntimeError("database details")
+            return indexes
+
+    monkeypatch.setattr(datasource_admin_routes, "get_datasource_manager", lambda: IndexManager())
+    _mock_authenticated_user(monkeypatch, user_id="u1", username="用户1")
+    body = DatasourceTableIndexesUpdateRequest(indexes=[{
+        "index_type": "secondary", "index_name": "idx_status", "columns": ["status"]
+    }])
+
+    get_ok = _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("ds_a", "orders", SimpleNamespace())))
+    put_ok = _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("ds_a", "orders", body, SimpleNamespace())))
+    assert get_ok["data"]["indexes"][0]["index_name"] == "idx_status"
+    assert put_ok["data"]["indexes"][0]["columns"] == ["status"]
+    assert calls[-1][-2:] == ("u1", "用户1")
+
+    assert _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("missing", "orders", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("missing", "orders", body, SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("invalid", "orders", body, SimpleNamespace())))["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
+
+    get_crash = _payload(asyncio.run(datasource_admin_routes.get_datasource_table_indexes("crash", "orders", SimpleNamespace())))
+    put_crash = _payload(asyncio.run(datasource_admin_routes.update_datasource_table_indexes("crash", "orders", body, SimpleNamespace())))
+    assert get_crash["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert put_crash["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert "database details" not in get_crash["msg"]
+    assert "database details" not in put_crash["msg"]
 
 
 def test_create_and_update_datasource_group_validation_branches(monkeypatch):

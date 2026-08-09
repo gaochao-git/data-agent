@@ -6,11 +6,30 @@ import type { ChartType } from '../chartTypes'
 export type { MemberQueryResult, QueryResult } from './query'
 
 // 表信息
+export interface TableIndex {
+  name: string
+  columns: string[]
+  source?: 'physical' | 'manual'
+}
+
+export type DatasourceTableIndexType = 'primary' | 'unique' | 'secondary'
+
+export interface DatasourceTableIndexItem {
+  index_type: DatasourceTableIndexType
+  index_name: string
+  columns: string[]
+  source?: 'manual'
+}
+
 export interface TableInfo {
   table_name: string
   description: string
   business_desc?: string
   columns: ColumnInfo[]
+  primary_keys?: string[][]
+  unique_indexes?: TableIndex[]
+  indexes?: TableIndex[]
+  manual_indexes?: DatasourceTableIndexItem[]
   groups?: Array<{
     table_group_name: string
   }>
@@ -34,6 +53,8 @@ export interface ColumnInfo {
   hive_type?: string
   description: string
   primary_key?: boolean
+  unique_key?: boolean
+  index_key?: boolean
   nullable?: boolean
   column_dict?: DatasourceColumnDictInfo
 }

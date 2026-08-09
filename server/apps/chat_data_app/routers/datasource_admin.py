@@ -24,6 +24,7 @@ from ..schema import (
     DatasourceGroupUpdateRequest,
     DatasourceTableBusinessDescUpdateRequest,
     DatasourceTableGroupsUpdateRequest,
+    DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
 )
 from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
@@ -519,6 +520,70 @@ async def generate_datasource_column_dict(datasource_id: str, table_name: str, c
     except Exception as e:
         logger.error("生成字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s", datasource_id, table_name, column_name, e, exc_info=True)
         return business_response(msg=f"生成失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
+async def get_datasource_table_indexes(datasource_id: str, table_name: str, request: Request):
+    """获取数据源表的手动索引配置。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        indexes = await ds_manager.get_table_indexes_async(datasource_id, table_name)
+        if indexes is None:
+            return business_response(
+                msg=f"数据源或数据表不存在: {datasource_id}/{table_name}",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+            )
+        return business_response(
+            data={
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "indexes": indexes,
+            },
+            msg="获取成功"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取表索引配置失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
+        return business_response(msg="获取表索引配置失败，请稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.put("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
+async def update_datasource_table_indexes(datasource_id: str, table_name: str, body: DatasourceTableIndexesUpdateRequest, request: Request):
+    """覆盖保存数据源表的手动索引配置。"""
+    try:
+        current_user = _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        saved = await ds_manager.replace_table_indexes_async(
+            datasource_id,
+            table_name,
+            [item.model_dump() for item in body.indexes],
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        if saved is None:
+            return business_response(
+                msg=f"数据源或数据表不存在: {datasource_id}/{table_name}",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+            )
+        return business_response(
+            data={
+                "datasource_id": datasource_id,
+                "table_name": table_name,
+                "indexes": saved,
+            },
+            msg="保存成功"
+        )
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("保存表索引配置失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True)
+        return business_response(msg="保存表索引配置失败，请稍后重试", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
 
 
 @router.post("/admin/datasources/{datasource_id}/set-default")
