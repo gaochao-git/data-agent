@@ -220,7 +220,7 @@ async def _compile_tool_query(
     request: _PreparedToolRequest,
     context: _ResolvedToolContext,
 ) -> _CompiledToolQuery | str:
-    query_mode = "nl2sql" if not request.has_dsl else "dsl2sql"
+    query_mode = "sql" if not request.has_dsl else "dsl"
     confidence = 0.6 if not request.has_dsl else 0.9
     config = await _resolve_semantic_query_config(
         context.state,
@@ -285,12 +285,14 @@ async def semantic_query_tool(
     save_as: str | None = None,
 ) -> str:
     """
-    执行数据库查询并返回统一查询结果。
+    使用 DSL 模式或 SQL 模式执行数据库查询并返回统一查询结果。
 
-    常规查询传入语义 DSL，服务端先编译为 SQL 再执行；只有 DSL 无法表达查询结构时，
-    才传入只读 SQL 直接执行。两种模式都必须指定语义模型和执行对象范围。
-    DSL 和 SQL 只能传递一个。常规查询不要传 save_as；仅当用户、技能或后续流程明确要求
-    将完整结果保留到磁盘用于二次分析、脚本处理或产物生成时使用 save_as。
+    DSL 模式：传顶层 dsl，服务端编译后执行；常规查询使用此模式，并先调用
+    dsl2sql_tool 校验同一份 DSL。SQL 模式：仅当 DSL 无法表达查询结构时传顶层 sql，
+    直接执行只读 SQL，不调用 dsl2sql_tool。两种模式都必须指定语义模型和执行对象范围，
+    且 dsl 和 sql 必须二选一。“模式”不是参数，不要传 mode。常规查询不要传 save_as；
+    仅当用户、技能或后续流程明确要求将完整结果保留到磁盘用于二次分析、脚本处理或
+    产物生成时使用 save_as。
     """
     return await _run_semantic_query_tool(
         dsl=dsl,

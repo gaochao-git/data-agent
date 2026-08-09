@@ -104,7 +104,7 @@ index.vue
   -> services/sql_executor.py
 ```
 
-主链路优先 `NL -> DSL -> SQL -> semantic_query_tool`。只有 DSL 无法表达时，智能体才允许走 `semantic_query_tool(sql=...)` 的只读 SQL 路径；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
+查询支持 DSL 模式和 SQL 模式。DSL 模式为默认主链路：`NL -> DSL -> SQL -> semantic_query_tool`；只有 DSL 模式无法表达查询结构时，智能体才允许使用 SQL 模式，通过 `semantic_query_tool(sql=...)` 直接执行只读 SQL。两种模式通过顶层 `dsl` / `sql` 参数二选一表达，不传 `mode`；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
 
 执行模式：
 
@@ -126,7 +126,7 @@ index.vue
   },
   "error": null,
   "meta": {
-    "query_mode": "dsl2sql",
+    "query_mode": "dsl",
     "confidence": 0.9,
     "result_id": null
   }

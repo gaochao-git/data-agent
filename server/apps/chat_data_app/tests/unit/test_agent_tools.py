@@ -23,6 +23,19 @@ from apps.chat_data_app.services import sql_assist_context
 from apps.chat_data_app.services import semantic_query_service
 
 
+def test_semantic_query_tool_describes_dsl_and_sql_modes_without_mode_parameter():
+    description = agent_tools.semantic_query_tool.description
+    properties = SemanticQueryInput.model_json_schema()["properties"]
+
+    assert "DSL 模式" in description
+    assert "SQL 模式" in description
+    assert "dsl 和 sql 必须二选一" in description
+    assert "不调用 dsl2sql_tool" in description
+    assert "DSL 模式专用" in properties["dsl"]["description"]
+    assert "SQL 模式专用" in properties["sql"]["description"]
+    assert "mode" not in properties
+
+
 def test_current_time_tool_returns_detail_only_when_requested():
     current_time = datetime(2026, 7, 24, 10, 30, 0, tzinfo=timezone.utc)
     assert get_current_time_payload(current_time, detail=False) == {
@@ -553,7 +566,7 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     assert success_payload["success"] is True
     assert success_payload["data"] == [{"id": 1}]
     assert success_payload["sql"] == "select 1"
-    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9, "save_as": ""}
+    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl", "confidence": 0.9, "save_as": ""}
     assert json_string_success_payload["success"] is True
     failed_payload = _internal_query_payload(failed)
     assert failed_payload["success"] is False
@@ -934,7 +947,7 @@ def test_semantic_query_tool_uses_latest_human_query_and_rejects_sql_inside_dsl(
     assert legacy_sql_result == "semantic_query_tool 执行失败: sql 必须放在顶层 sql 参数中，不要放入 dsl"
 
 
-def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
+def test_semantic_query_tool_executes_top_level_sql_in_sql_mode(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     async def fake_load_config(datasource_id, semantic_config_id, user_id=None):
@@ -993,7 +1006,7 @@ def test_semantic_query_tool_executes_top_level_sql_as_nl2sql(monkeypatch):
         "conversation_id": "conv_a",
         "operator_name": "测试用户",
     }
-    assert _query_result_payload(result)["meta"]["query_mode"] == "nl2sql"
+    assert _query_result_payload(result)["meta"]["query_mode"] == "sql"
     assert _query_result_payload(result)["meta"]["confidence"] == 0.6
     assert payload["sql"] == "with t as (select 1 as v) select * from t"
 

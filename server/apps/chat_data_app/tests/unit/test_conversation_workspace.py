@@ -1320,7 +1320,7 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     assert payload["kind"] == "query_result"
     assert payload["payload"]["results"][0]["data"][0]["sales"] == 120
     assert payload["meta"] == {
-        "query_mode": "dsl2sql",
+        "query_mode": "dsl",
         "confidence": 0.9,
         "save_as": "workspace/current.json",
     }

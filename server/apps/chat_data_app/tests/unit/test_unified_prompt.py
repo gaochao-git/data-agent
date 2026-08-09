@@ -26,8 +26,11 @@ def test_system_prompt_requires_semantic_discovery_and_detail_read_before_query(
     assert "不得跳过技能直接调用语义或查询工具" in prompt
     assert "<name>semantic-query</name>" in prompt
     assert "必须先读取该技能" in prompt
-    assert "DSL 与 SQL 只能二选一" in prompt
-    assert "SQL 路径不调用 `dsl2sql_tool`" in prompt
+    assert "**DSL 模式**和**SQL 模式**" in prompt
+    assert "DSL 模式传顶层 `dsl`" in prompt
+    assert "SQL 模式传顶层 `sql`" in prompt
+    assert "SQL 模式" in prompt and "不调用 `dsl2sql_tool`" in prompt
+    assert "不是工具参数，不要传 `mode`" in prompt
     assert "不能通过 SQL 绕过" not in prompt
     assert "每次查询只能使用一个 `semantic_config_id`" in prompt
     assert "get_field" not in prompt

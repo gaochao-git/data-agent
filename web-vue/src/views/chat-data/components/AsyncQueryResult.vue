@@ -241,8 +241,8 @@ const confidenceText = computed(() => {
 
 const queryModeTitle = computed(() => {
   const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
-  if (mode === 'dsl2sql') return '语义查询'
-  if (mode === 'nl2sql') return '直接 SQL 查询'
+  if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL 模式'
+  if (mode === 'sql' || mode === 'nl2sql') return 'SQL 模式'
   return ''
 })
 

@@ -679,14 +679,14 @@ having 只用于聚合结果过滤。'''
 # ============ Agent 工具输入模型 ============
 
 class SemanticQueryInput(BaseModel):
-    """查询工具的输入参数。优先接收 DSL；DSL 无法表达时接收只读 SQL。"""
+    """查询工具输入：常规使用 DSL 模式，无法表达时使用 SQL 模式。"""
     dsl: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="语义查询 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；operator 使用 SQL 风格操作符，不使用 equals/notEquals；与 sql 二选一",
+        description="DSL 模式专用：完整语义 DSL，包含 metrics、dimensions、filters、having、order_by、limit、offset；operator 使用 SQL 风格操作符，不使用 equals/notEquals；与顶层 sql 二选一，不要传 mode",
     )
     sql: Optional[str] = Field(
         default=None,
-        description="DSL 明确无法表达时使用的只读 SQL；与 dsl 二选一",
+        description="SQL 模式专用：仅当 DSL 模式明确无法表达查询结构时使用的只读 SQL；直接执行且不调用 dsl2sql_tool；与顶层 dsl 二选一，不要传 mode",
     )
     semantic_config_id: str = Field(
         ...,

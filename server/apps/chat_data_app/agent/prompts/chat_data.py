@@ -144,7 +144,8 @@ SCENE_ROUTING_BLOCK = """## 场景路由
 
 SEMANTIC_QUERY_CORE_BLOCK = """## 语义查询核心规则
 - 用户意图命中语义查询且当前可用技能包含 `semantic-query` 时，必须先读取该技能，再按技能流程检索模型、确认字段口径并决定查询、抽样或澄清；旧会话快照不包含该技能时，不得虚构技能路径，仍须遵守本段门禁和工具 schema。
-- 常规查询优先 DSL；只有 DSL 确实无法表达查询结构时才允许只读 SQL，DSL 与 SQL 只能二选一，SQL 路径不调用 `dsl2sql_tool`。
+- 查询支持两种模式：**DSL 模式**和**SQL 模式**。DSL 模式传顶层 `dsl`，先用 `dsl2sql_tool` 校验同一份 DSL，再用 `semantic_query_tool` 执行；SQL 模式传顶层 `sql`，直接用 `semantic_query_tool` 执行只读 SQL，不调用 `dsl2sql_tool`。
+- 常规查询使用 DSL 模式；只有 DSL 确实无法表达查询结构时才使用 SQL 模式。两种模式只能选择一种，不能同时传 `dsl` 和 `sql`；“模式”是查询路径术语，不是工具参数，不要传 `mode`。
 - 调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，语义模型、指标、维度、筛选对象、时间范围、枚举含义、单位和业务口径必须高置信明确；字段已确认但枚举值或时间存储格式未知时，才允许少量抽样。
 - 每次查询只能使用一个 `semantic_config_id`；DSL/SQL 中的指标、维度、原始表列和关系必须来自本轮检索并通过文件读取确认的模型。机构范围只通过 `member_datasource_ids` 控制，不在 DSL filters 中添加机构名称、编码或 ID。
 - 候选不唯一或口径不清时，只向用户提出一个最关键的业务澄清问题；搜索确认不存在时说明当前配置缺少什么。相对时间需要真实范围时，先调用 `get_current_time`。"""

@@ -83,7 +83,11 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "顶层 `and`" in semantic_query
     assert "范围优先使用半开区间" in semantic_query
     assert "不能同时传 `dsl`" in semantic_query
-    assert "SQL 路径不调用 `dsl2sql_tool`" in semantic_query
+    assert "**DSL 模式**和**SQL 模式**" in semantic_query
+    assert "DSL 模式传顶层 `dsl`" in semantic_query
+    assert "SQL 模式传顶层 `sql`" in semantic_query
+    assert "SQL 模式不调用 `dsl2sql_tool`" in semantic_query
+    assert "不是 `mode` 参数" in semantic_query
     assert "CTE" in semantic_query
     assert "年度总量对比" in semantic_query
     assert "搜索或读取确认当前配置不存在" in semantic_query

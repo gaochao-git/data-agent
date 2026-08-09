@@ -44,7 +44,9 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
 
     @tool("dsl2sql_tool")
     async def dsl2sql_tool(dsl: Any, semantic_config_id: str | None = None, user_query: str = "") -> str:
-        """使用统一语义规则校验单个查询 DSL，或一次批量校验完整 dashboard_spec 的所有卡片 DSL。
+        """DSL 模式的校验工具：校验单个查询 DSL，或批量校验完整 dashboard_spec 的卡片 DSL。
+
+        只在 DSL 模式使用；SQL 模式直接调用 semantic_query_tool 的顶层 sql，不调用本工具。
 
         看板场景必须把包含 dashboard_name 和 cards 的完整 dashboard_spec
         作为一次 dsl 传入；每张卡片必须有 semantic_config_id，或由旧规格顶层字段提供默认值。

@@ -1,6 +1,6 @@
 ---
 name: semantic-query
-description: 用当前授权的语义模型完成自然语言查数，先检索并确认指标维度口径，再选择 DSL 或只读 SQL 执行查询和分析。
+description: 用当前授权的语义模型完成自然语言查数，先检索并确认指标维度口径，再选择 DSL 模式或 SQL 模式执行查询和分析。
 metadata:
   title: 语义查询技能
   domain: 数据分析
@@ -14,7 +14,7 @@ metadata:
 
 处理自然语言数据查询、明细查看、统计汇总、趋势、排行、对比和基于查询结果的计算分析。
 
-本技能只负责语义模型选择、查询规划、DSL/SQL 选择和结果分析；文件和产物任务遵循其各自的工具协议。
+本技能只负责语义模型选择、查询规划、DSL 模式/SQL 模式选择和结果分析；文件和产物任务遵循其各自的工具协议。
 
 ## 必读资料
 
@@ -25,8 +25,9 @@ metadata:
 ## 必须遵守的总原则
 
 - 所有业务查询先确认语义模型和字段定义，不凭常识编造指标、维度、表、字段、枚举或查询结果。
-- 常规查询优先使用 DSL；只有 DSL 确实无法表达查询结构时，才使用顶层 `sql` 参数传入只读 SQL。
-- `semantic_query_tool` 的 `dsl` 和 `sql` 只能二选一。SQL 路径不调用 `dsl2sql_tool`。
+- 查询支持两种模式：**DSL 模式**和**SQL 模式**。这是查询路径术语，不是 `mode` 参数。
+- 常规查询使用 DSL 模式；只有 DSL 确实无法表达查询结构时，才使用 SQL 模式。
+- DSL 模式传顶层 `dsl`，SQL 模式传顶层 `sql`；`semantic_query_tool` 的 `dsl` 和 `sql` 只能二选一。SQL 模式不调用 `dsl2sql_tool`，不要传 `mode`。
 - 指标、维度或业务口径本身不明确时必须澄清，不能用 SQL 绕过；字段已经确认、只是枚举值或时间存储格式未知时，才允许少量抽样确认。
 - 一次 `dsl2sql_tool` 或 `semantic_query_tool` 只能使用一个 `semantic_config_id`，不能混合多个模型的字段、分组或 JOIN。
 - 机构范围由 `member_datasource_ids` 控制，不在 DSL 过滤机构名称、编码或 ID。
@@ -72,7 +73,7 @@ metadata:
 - 统计、汇总、平均、总计、趋势、分组、排行等聚合意图明确时，才使用口径明确一致的 `metrics`。
 - 用户原词精确命中指标或维度时优先使用精确项，不自动增加“平均、汇总、总额、数量”等限定词。
 - 未指定时间范围时，总量和明细查询可以继续；趋势、排行、对比、Top N、分布分析必须先补充时间范围。
-- 派生字段、截取、拼接、正则或复杂函数分组如果没有已维护维度，DSL 不可表达，不要退化为原字段分组，应评估 SQL 回退或澄清。
+- 派生字段、截取、拼接、正则或复杂函数分组如果没有已维护维度，DSL 模式不可表达，不要退化为原字段分组，应评估 SQL 模式或澄清。
 - 同比、环比、增长率必须拆为基础查询，结果对齐后使用 `calculator_tool` 计算差值和比例，禁止心算。全年或年度同比是年度总量对比；月度、季度或日同比按相同粒度对齐；环比只能比较相邻周期，不能把两个不同年度直接称为环比。
 - 用户使用今天、昨天、本周、本月、当前或最近等相对时间，且需要确定真实范围时，先调用 `get_current_time(detail=false)`；需要时区、星期或时间戳时使用 `detail=true`。
 
@@ -168,18 +169,18 @@ DSL 顶层只使用以下字段：
 
 时间维度对象必须使用 `name`，不能使用 `dimension`；否则维度名可能被解析为空。
 
-### DSL 工具顺序
+### DSL 模式
 
 1. 生成完整 DSL。
 2. 调用 `dsl2sql_tool`，显式传入同一个 `semantic_config_id` 和同一份 DSL 做校验/生成 SQL。
 3. 校验成功后调用 `semantic_query_tool`，显式传入同一个 `semantic_config_id`、本次范围的 `member_datasource_ids` 和同一份顶层 `dsl`。
 4. 不要把 DSL 字段提升到工具顶层，也不要修改校验工具返回的 SQL。
 
-## SQL 回退
+## SQL 模式
 
-只有 DSL 明确无法表达查询结构时，才可以调用 `semantic_query_tool` 的顶层 `sql` 参数。典型结构包括 CTE、子查询、窗口函数、多阶段聚合、自连接、`UNION`、`EXISTS`、复杂 `CASE WHEN` 或 DSL 无法表达的中间结果计算。
+SQL 模式是 DSL 模式无法表达查询结构时的回退模式。只有满足该条件，才可以调用 `semantic_query_tool` 的顶层 `sql` 参数。典型结构包括 CTE、子查询、窗口函数、多阶段聚合、自连接、`UNION`、`EXISTS`、复杂 `CASE WHEN` 或 DSL 无法表达的中间结果计算。
 
-SQL 路径必须同时传入 `semantic_config_id` 和 `member_datasource_ids`，不能同时传 `dsl`，也不调用 `dsl2sql_tool`。
+SQL 模式必须同时传入 `semantic_config_id` 和 `member_datasource_ids`，不能同时传 `dsl`，也不调用 `dsl2sql_tool`。
 
 SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度中维护的原始表名、原始列名和 `relationships` 中确认的关联关系；关联字段只用于连接路径，不能当作未暴露业务字段随意查询或过滤。已维护指标的表达式代表业务口径，不能擅自改写。不能因为指标、维度或口径不清就回退 SQL。
 

@@ -20,6 +20,15 @@ from apps.chat_data_app.services.artifact_registry import (
 from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
 
 
+def test_dsl2sql_tool_description_is_limited_to_dsl_mode():
+    description = dsl2sql.create_dsl2sql_tool("ds_a").description
+
+    assert "DSL 模式的校验工具" in description
+    assert "只在 DSL 模式使用" in description
+    assert "SQL 模式" in description
+    assert "不调用本工具" in description
+
+
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
