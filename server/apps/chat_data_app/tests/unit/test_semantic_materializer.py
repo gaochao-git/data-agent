@@ -103,6 +103,41 @@ def test_materializer_cache_key_includes_config_content(monkeypatch):
     assert calls == ["订单分析", "订单模型（已更新）"]
 
 
+def test_materializer_cache_key_includes_runtime_table_indexes(monkeypatch):
+    semantic_materializer._YAML_CACHE.clear()
+    config = _config()
+    config["tables"] = [{
+        "table_name": "orders",
+        "primary_keys": [],
+        "unique_indexes": [],
+        "manual_indexes": [],
+    }]
+    configs = [config]
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager(configs),
+    )
+    calls = []
+
+    def fake_convert(self, current, *, source_type=""):
+        calls.append(current["tables"][0]["manual_indexes"])
+        return str(current["tables"][0]["manual_indexes"])
+
+    monkeypatch.setattr(semantic_materializer.ChatDataToOssieConverter, "convert", fake_convert)
+    _materialize(_FakeRuntime())
+    config["tables"][0]["manual_indexes"] = [{
+        "index_type": "unique",
+        "index_name": "uniq_order_id",
+        "columns": ["order_id"],
+    }]
+    runtime = _FakeRuntime()
+    _materialize(runtime)
+
+    assert len(calls) == 2
+    assert "uniq_order_id" in runtime.entries[0][1]
+
+
 def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     semantic_materializer._YAML_CACHE.clear()
     monkeypatch.setattr(

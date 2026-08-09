@@ -29,6 +29,36 @@ def _config(relationship_type="many_to_one"):
     }
 
 
+def _config_with_indexes():
+    config = _config()
+    config["tables"] = [
+        {
+            "table_name": "orders",
+            "primary_keys": [["order_id"]],
+            "unique_indexes": [
+                {"name": "uniq_order_no", "columns": ["order_no"]},
+                {"name": "uniq_tenant_order", "columns": ["tenant_id", "order_no"]},
+            ],
+            "manual_indexes": [
+                {"index_type": "primary", "index_name": "PRIMARY", "columns": ["manual_id"]},
+                {"index_type": "unique", "index_name": "uniq_order_no_manual", "columns": ["order_no"]},
+                {"index_type": "unique", "index_name": "uniq_external_id", "columns": ["external_id"]},
+                {"index_type": "secondary", "index_name": "idx_city", "columns": ["city"]},
+            ],
+        },
+        {
+            "table_name": "users",
+            "primary_keys": [],
+            "unique_indexes": [],
+            "manual_indexes": [
+                {"index_type": "primary", "index_name": "PRIMARY", "columns": ["id"]},
+                {"index_type": "unique", "index_name": "uniq_mobile", "columns": ["mobile"]},
+            ],
+        },
+    ]
+    return config
+
+
 def test_convert_is_valid_ossie_pydantic_document():
     from ossie import OSIDocument
 
@@ -60,6 +90,28 @@ def test_convert_passes_official_json_schema():
     assert relationship["to"] == "orders"
     assert all(dataset["primary_key"] == [] for dataset in document["semantic_model"][0]["datasets"])
     assert all(dataset["unique_keys"] == [[]] for dataset in document["semantic_model"][0]["datasets"])
+    assert "  - []" in ChatDataToOssieConverter().convert(_config("one_to_many"))
+
+
+def test_convert_maps_physical_and_manual_table_keys():
+    content = ChatDataToOssieConverter().convert(_config_with_indexes())
+    document = yaml.safe_load(content)
+    datasets = {
+        dataset["name"]: dataset
+        for dataset in document["semantic_model"][0]["datasets"]
+    }
+
+    assert datasets["orders"]["primary_key"] == ["order_id"]
+    assert datasets["orders"]["unique_keys"] == [
+        ["order_no"],
+        ["tenant_id", "order_no"],
+        ["external_id"],
+    ]
+    assert datasets["users"]["primary_key"] == ["id"]
+    assert datasets["users"]["unique_keys"] == [["mobile"]]
+    assert "primary_key: [order_id]" in content
+    assert "  - [order_no]" in content
+    assert "  - [tenant_id, order_no]" in content
 
 
 def test_invalid_relationship_type_is_rejected():

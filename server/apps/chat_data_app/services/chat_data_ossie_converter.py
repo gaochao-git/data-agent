@@ -10,6 +10,8 @@ import json
 import re
 from typing import Any
 
+import yaml
+
 from .semantic_core.common import normalize_relationship_type
 
 
@@ -84,6 +86,33 @@ def _relationship_type(value: Any) -> str:
     return normalize_relationship_type(value)
 
 
+def _key_columns(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for column in value:
+        name = _text(column)
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+class _FlowStyleList(list):
+    """Marker for short Ossie arrays that are clearer in inline YAML form."""
+
+
+class _OssieYamlDumper(yaml.SafeDumper):
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
+        return super().increase_indent(flow, False)
+
+
+def _represent_flow_style_list(dumper: yaml.Dumper, value: _FlowStyleList) -> Any:
+    return dumper.represent_sequence("tag:yaml.org,2002:seq", value, flow_style=True)
+
+
+_OssieYamlDumper.add_representer(_FlowStyleList, _represent_flow_style_list)
+
+
 class ChatDataToOssieConverter:
     """Build an Ossie document from one ChatData semantic config."""
 
@@ -150,7 +179,24 @@ class ChatDataToOssieConverter:
         # The current core JSON schema is strict at the document root and
         # allows only version and semantic_model. Keep optional model metadata
         # out of the root so the serialized snapshot passes that schema too.
-        return OSIDocument(semantic_model=[model]).to_osi_yaml()
+        document = OSIDocument(semantic_model=[model])
+        data = document.model_dump(by_alias=True, exclude_none=True, mode="json")
+        for semantic_model in data.get("semantic_model") or []:
+            for dataset in semantic_model.get("datasets") or []:
+                if "primary_key" in dataset:
+                    dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
+                if "unique_keys" in dataset:
+                    dataset["unique_keys"] = [
+                        _FlowStyleList(columns)
+                        for columns in dataset["unique_keys"]
+                    ]
+        return yaml.dump(
+            data,
+            Dumper=_OssieYamlDumper,
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True,
+        )
 
     def _table_names(self, config: dict[str, Any]) -> list[str]:
         result: list[str] = []
@@ -188,16 +234,48 @@ class ChatDataToOssieConverter:
                 datatype=datatype_type(_datatype(item.get("logical_type"))) if _datatype(item.get("logical_type")) else None,
                 custom_extensions=[extension_type(**x) for x in (_extension(self._private_item_fields(item)) or [])],
             ))
+        primary_key, unique_keys = self._dataset_keys(table, config)
         return dataset_type(
             name=table,
             source=table,
-            # Keep the official Ossie empty-value shape when key metadata has
-            # not been maintained yet; empty keys are not treated as facts.
-            primary_key=[],
-            unique_keys=[[]],
+            primary_key=primary_key,
+            unique_keys=unique_keys or [[]],
             fields=fields,
             custom_extensions=[extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])],
         )
+
+    def _dataset_keys(self, table: str, config: dict[str, Any]) -> tuple[list[str], list[list[str]]]:
+        table_config = next((
+            item for item in config.get("tables") or []
+            if isinstance(item, dict) and _table_name(item) == table
+        ), {})
+        physical_primary_keys = [
+            columns for value in table_config.get("primary_keys") or []
+            if (columns := _key_columns(value))
+        ]
+        manual_indexes = [
+            item for item in table_config.get("manual_indexes") or []
+            if isinstance(item, dict)
+        ]
+        manual_primary_keys = [
+            columns for item in manual_indexes
+            if _text(item.get("index_type")).lower() == "primary"
+            and (columns := _key_columns(item.get("columns")))
+        ]
+        primary_key = (physical_primary_keys or manual_primary_keys or [[]])[0]
+
+        unique_keys: list[list[str]] = []
+        for item in table_config.get("unique_indexes") or []:
+            columns = _key_columns(item.get("columns")) if isinstance(item, dict) else []
+            if columns and columns not in unique_keys:
+                unique_keys.append(columns)
+        for item in manual_indexes:
+            if _text(item.get("index_type")).lower() != "unique":
+                continue
+            columns = _key_columns(item.get("columns"))
+            if columns and columns not in unique_keys:
+                unique_keys.append(columns)
+        return primary_key, unique_keys
 
     def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:
         result = []

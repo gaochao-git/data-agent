@@ -15,7 +15,17 @@ class _FakeDatasourceManager:
             "id": "ds_a",
             "group_id": "group_a",
             "source_type": "hive",
-            "ds_tables": [{"table_name": "orders", "columns": [{"name": "amount"}, {"name": "status"}]}],
+            "ds_tables": [{
+                "table_name": "orders",
+                "columns": [{"name": "amount"}, {"name": "status"}],
+                "primary_keys": [["id"]],
+                "unique_indexes": [{"name": "uniq_order_no", "columns": ["order_no"]}],
+                "manual_indexes": [{
+                    "index_type": "unique",
+                    "index_name": "uniq_external_id",
+                    "columns": ["external_id"],
+                }],
+            }],
         }
         self.column_dicts = {}
         self.column_dict_error = None
@@ -125,6 +135,9 @@ def test_query_enriches_model_context_and_applies_visibility():
     assert [config["id"] for config in configs] == ["sc_a", "sc_private"]
     assert selected["source_type"] == "hive"
     assert selected["tables"][0]["table_name"] == "orders"
+    assert selected["tables"][0]["primary_keys"] == [["id"]]
+    assert selected["tables"][0]["unique_indexes"][0]["columns"] == ["order_no"]
+    assert selected["tables"][0]["manual_indexes"][0]["columns"] == ["external_id"]
     assert selected["relationships"][0]["join_conditions"] == [{"left_column": "order_id", "right_column": "order_id"}]
     assert selected["joins"] == selected["relationships"]
     assert asyncio.run(service.get_configs_async("missing", "u1")) == []
