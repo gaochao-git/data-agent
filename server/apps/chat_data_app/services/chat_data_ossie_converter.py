@@ -7,7 +7,6 @@ continues to use the authoritative ChatData configuration stored in the DB.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 import yaml
@@ -15,7 +14,6 @@ import yaml
 from .semantic_core.common import normalize_relationship_type
 
 
-_AGGREGATE_RE = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
 _DATATYPE_MAP = {
     "string": "String",
     "varchar": "String",
@@ -70,16 +68,25 @@ def _datatype(value: Any) -> str | None:
     return "Opaque"
 
 
+def _physical_column_name(item: dict[str, Any]) -> str:
+    return _text(item.get("column") or item.get("field"))
+
+
+def _source_reference(item: dict[str, Any]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in {
+            "table": _table_name(item),
+            "column": _physical_column_name(item),
+        }.items()
+        if value
+    }
+
+
 def _extension(data: dict[str, Any]) -> list[dict[str, str]] | None:
     if not data:
         return None
     return [{"vendor_name": "CHAT_DATA", "data": json.dumps(data, ensure_ascii=False, sort_keys=True)}]
-
-
-def _dialect_expression(expression: str) -> dict[str, Any]:
-    # Ossie 0.2 currently has no MYSQL/HIVE enum. ANSI_SQL is the portable
-    # representation; the original source type is retained in extensions.
-    return {"dialects": [{"dialect": "ANSI_SQL", "expression": expression}]}
 
 
 def _relationship_type(value: Any) -> str:
@@ -225,14 +232,15 @@ class ChatDataToOssieConverter:
             expression = _expression(item, fallback=name)
             if not name or not expression:
                 continue
+            datatype = self._dimension_datatype(config, item)
             fields.append(field_type(
                 name=name,
                 expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
                 dimension=dimension_type(is_time=_text(item.get("logical_type")).lower() in {"date", "datetime", "timestamp", "time"}) if item.get("logical_type") else None,
                 label=_text(item.get("label")) or None,
                 description=_text(item.get("description") or item.get("metadata_supplement")) or None,
-                datatype=datatype_type(_datatype(item.get("logical_type"))) if _datatype(item.get("logical_type")) else None,
-                custom_extensions=[extension_type(**x) for x in (_extension(self._private_item_fields(item)) or [])],
+                datatype=datatype_type(datatype) if datatype else None,
+                custom_extensions=[extension_type(**x) for x in (_extension(_source_reference(item)) or [])],
             ))
         primary_key, unique_keys = self._dataset_keys(table, config)
         return dataset_type(
@@ -277,6 +285,32 @@ class ChatDataToOssieConverter:
                 unique_keys.append(columns)
         return primary_key, unique_keys
 
+    @staticmethod
+    def _dimension_datatype(config: dict[str, Any], dimension: dict[str, Any]) -> str | None:
+        table_name = _table_name(dimension).casefold()
+        column_name = _physical_column_name(dimension).casefold()
+        if table_name and column_name:
+            for table in config.get("tables") or []:
+                if not isinstance(table, dict):
+                    continue
+                table_names = {
+                    _table_name(table).casefold(),
+                    _text(table.get("table_alias")).casefold(),
+                }
+                if table_name not in table_names:
+                    continue
+                for column in table.get("columns") or []:
+                    if not isinstance(column, dict) or _text(column.get("name")).casefold() != column_name:
+                        continue
+                    physical_type = next((
+                        _text(column.get(key))
+                        for key in ("mysql_type", "hive_type", "type", "data_type")
+                        if _text(column.get(key))
+                    ), "")
+                    if physical_type:
+                        return _datatype(physical_type)
+        return _datatype(dimension.get("logical_type"))
+
     def _metrics(self, config: dict[str, Any], metric_type: Any, expression_type: Any, dialect_type: Any, extension_type: Any, datatype_type: Any) -> list[Any]:
         result = []
         for item in config.get("metrics") or []:
@@ -286,12 +320,13 @@ class ChatDataToOssieConverter:
             expression = _expression(item, fallback=name)
             if not name or not expression:
                 continue
+            datatype = _datatype(item.get("data_type") or item.get("logical_type"))
             result.append(metric_type(
                 name=name,
                 expression=expression_type(dialects=[dialect_type(dialect="ANSI_SQL", expression=expression)]),
                 description=_text(item.get("description") or item.get("metadata_supplement")) or None,
-                datatype=datatype_type(_datatype(item.get("logical_type"))) if _datatype(item.get("logical_type")) else None,
-                custom_extensions=[extension_type(**x) for x in (_extension({**self._private_item_fields(item), "table": _table_name(item), "role": "aggregate" if _AGGREGATE_RE.match(expression) else "raw"}) or [])],
+                datatype=datatype_type(datatype) if datatype else None,
+                custom_extensions=[extension_type(**x) for x in (_extension(_source_reference(item)) or [])],
             ))
         return result
 
@@ -330,11 +365,5 @@ class ChatDataToOssieConverter:
                 }) or [])],
             ))
         return result
-
-    @staticmethod
-    def _private_item_fields(item: dict[str, Any]) -> dict[str, Any]:
-        keys = ("table", "column", "field", "field_name", "logical_type", "mapping", "allowed_values", "allowed_operators")
-        return {key: item[key] for key in keys if key in item and item[key] not in (None, "", [], {})}
-
 
 __all__ = ["ChatDataToOssieConverter"]

@@ -114,6 +114,58 @@ def test_convert_maps_physical_and_manual_table_keys():
     assert "  - [tenant_id, order_no]" in content
 
 
+def test_convert_uses_physical_column_type_and_minimal_field_extension():
+    config = {
+        "id": "sc_category",
+        "name": "产品分类",
+        "metrics": [],
+        "dimensions": [{
+            "name": "类别ID",
+            "table": "categories",
+            "column": "category_id",
+            "field_name": "category_id",
+            "logical_type": "number",
+            "mapping": {"一级": "1"},
+            "allowed_values": ["一级"],
+            "allowed_operators": ["=", "IN"],
+        }],
+        "relationships": [],
+        "tables": [{
+            "table_name": "categories",
+            "columns": [{
+                "name": "category_id",
+                "type": "int(11)",
+                "mysql_type": "int(11)",
+                "description": "id",
+                "primary_key": True,
+                "unique_key": False,
+                "index_key": False,
+                "nullable": False,
+            }],
+        }],
+    }
+
+    document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
+    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    extension_data = json.loads(field["custom_extensions"][0]["data"])
+
+    assert field["name"] == "类别ID"
+    assert field["expression"]["dialects"][0]["expression"] == "category_id"
+    assert field["datatype"] == "Integer"
+    assert extension_data == {"table": "categories", "column": "category_id"}
+
+
+def test_convert_falls_back_to_logical_type_without_physical_column_type():
+    document = yaml.safe_load(ChatDataToOssieConverter().convert(_config()))
+    orders = next(
+        dataset
+        for dataset in document["semantic_model"][0]["datasets"]
+        if dataset["name"] == "orders"
+    )
+
+    assert orders["fields"][0]["datatype"] == "String"
+
+
 def test_invalid_relationship_type_is_rejected():
     with pytest.raises(ValueError, match="unsupported_cardinality"):
         ChatDataToOssieConverter().convert(_config("unsupported_cardinality"))
