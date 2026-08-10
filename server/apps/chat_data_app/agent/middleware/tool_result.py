@@ -54,7 +54,7 @@ async def _finalize_tool_message(
     content = _tool_message_text(message.content)
     if content is None:
         return message
-    if tool_name in {"semantic_search", "search_dataset"}:
+    if tool_name == "semantic_search":
         externalized, recovery = await _persist_semantic_search_result(content, request, tool_name)
         if recovery is None:
             if len(content) <= TOOL_RESULT_OFFLOAD_SIZE:

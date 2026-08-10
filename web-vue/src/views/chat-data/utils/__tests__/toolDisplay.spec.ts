@@ -35,8 +35,6 @@ describe('toolDisplay', () => {
   it('keeps the generic fallback for unknown or empty tool names', () => {
     expect(getToolDisplayName('unknown_tool')).toBe('工具调用')
     expect(getToolDisplayName('semantic_tool')).toBe('工具调用')
-    expect(getToolDisplayName('search_dataset')).toBe('工具调用')
-    expect(getToolDisplayName('select_semantic_config_tool')).toBe('工具调用')
     expect(getToolDisplayName('  ')).toBe('工具调用')
     expect(getToolDisplayName(null)).toBe('工具调用')
   })

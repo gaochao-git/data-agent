@@ -344,10 +344,11 @@ def test_completion_api_runs_real_dsl2sql_tool_with_structured_having(client, au
     monkeypatch.setattr(semantic_query_service, "get_semantic_config_service", lambda: semantic_service)
     monkeypatch.setattr(semantic_model_repository, "get_semantic_config_service", lambda: semantic_service)
 
-    async def fake_get_dashboard_spec_semantic_config(*_args, **_kwargs):
+    async def fake_load_semantic_model(*_args, **kwargs):
+        assert kwargs["mode"] == "full"
         return dict(config)
 
-    monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_dashboard_spec_semantic_config)
+    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_load_semantic_model)
     from apps.chat_data_app.agent import data_agent
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda *_args, **_kwargs: fake_llm)

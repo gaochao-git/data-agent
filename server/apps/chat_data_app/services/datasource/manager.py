@@ -1011,8 +1011,6 @@ class DataSourceManager:
         tables: Optional[List[dict]] = None,
         source_type: Optional[str] = None,
         source_config: Optional[dict] = None,
-        semantic_config: Optional[dict] = None,
-        semantic_configs: Optional[List[dict]] = None,
         mapped_modules: Optional[List[str]] = None,
         update_by: str = "",
         update_by_name: str = "",
@@ -1059,11 +1057,6 @@ class DataSourceManager:
             update_by=update_by or current.get("update_by") or "",
             update_by_name=update_by_name or current.get("update_by_name") or "",
         )
-
-        if semantic_config is not None:
-            logger.warning("单 semantic_config 已废弃，忽略本次 update 请求: datasource_id=%s", datasource_id)
-        if semantic_configs is not None:
-            logger.warning("update_datasource 不再直接处理 semantic_configs，请使用语义配置接口: datasource_id=%s", datasource_id)
 
         logger.info("更新数据源: %s", datasource_id)
         return updated

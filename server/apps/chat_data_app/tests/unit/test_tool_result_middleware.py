@@ -232,19 +232,6 @@ async def test_semantic_search_storage_failure_returns_bounded_content(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_legacy_search_dataset_result_still_uses_semantic_offload_compatibility(monkeypatch, tmp_path):
-    request, _paths = _workspace_request(monkeypatch, tmp_path)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
-    content = '[search_dataset]\n{"semantic_config_ids":["legacy"],"payload":"' + "x" * 200 + '"}'
-    message = ToolMessage(content=content, name="search_dataset", tool_call_id="call_legacy")
-
-    result = await tool_result._finalize_tool_message(message, request)
-
-    assert result.content.startswith("[tool_result_offloaded]\n")
-    assert "source_tool=search_dataset" in result.content
-
-
-@pytest.mark.asyncio
 async def test_generic_storage_failure_returns_incomplete_result_marker(monkeypatch, tmp_path):
     request, _paths = _workspace_request(monkeypatch, tmp_path)
 

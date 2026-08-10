@@ -18,20 +18,6 @@ from .common import json_dumps, normalize_json_like_payload
 logger = get_logger(__name__)
 
 
-async def get_dashboard_spec_semantic_config(
-    datasource_id: str,
-    semantic_config_id: str | None,
-    user_id: str | None = None,
-) -> dict[str, Any]:
-    """兼容旧测试替换点；单查询模型加载已不再依赖看板服务。"""
-    return await load_semantic_model(
-        datasource_id,
-        semantic_config_id,
-        user_id=user_id,
-        mode="full",
-    )
-
-
 def normalize_dsl_payload(value: Any) -> Any:
     """兼容模型把 DSL 作为 JSON 字符串或二次转义字符串传入。"""
     return normalize_json_like_payload(value)
@@ -105,7 +91,12 @@ def create_dsl2sql_tool(datasource_id: str | None = None, user_id: str | None = 
                 return "dsl2sql_tool 执行失败: dsl 必须是对象或数组"
             if not effective_semantic_config_id:
                 return "dsl2sql_tool 执行失败: 缺少 semantic_config_id，请先调用 semantic_search 搜索语义模型后显式传入语义模型ID"
-            semantic_config = await get_dashboard_spec_semantic_config(bound_datasource_id, effective_semantic_config_id, user_id=bound_user_id)
+            semantic_config = await load_semantic_model(
+                bound_datasource_id,
+                effective_semantic_config_id,
+                user_id=bound_user_id,
+                mode="full",
+            )
             payload, warnings = remove_mixed_raw_metrics_for_aggregate_dsl(dsl or {}, semantic_config)
             if payload.get("compare"):
                 return "[dsl2sql_tool]\n" + json_dumps({

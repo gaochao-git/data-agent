@@ -1,11 +1,4 @@
-"""
-chat_data_app 的 completion handler
-
-语义模式：
-- 当用户开启语义模式时，传入 semantic_config_id
-- 系统加载对应语义配置，动态添加 semantic_to_sql_tool 工具
-- LLM 根据语义配置中的指标/维度，自动调用工具生成 SQL
-"""
+"""ChatData completion handler."""
 
 import json
 import asyncio
@@ -54,7 +47,6 @@ USER_INPUT_PREVIEW_CHARS = 200
 
 REASONING_TOOL_DISPLAY_NAMES = {
     "semantic_search": "语义检索",
-    "search_dataset": "搜索指标集",
     "dsl2sql_tool": "生成 SQL",
     "semantic_query_tool": "查询数据",
     "calculator_tool": "精确计算",

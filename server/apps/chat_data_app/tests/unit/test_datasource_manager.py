@@ -1158,7 +1158,7 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
     assert asyncio.run(manager.update_datasource_group_from_sources_async("missing", "x", "", "mysql", {})) is None
 
 
-def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypatch):
+def test_datasource_manager_update_datasource_updates_supported_fields(monkeypatch):
     store = _SaveStore()
     manager = _build_manager(store)
     manager._load_datasource_async = lambda datasource_id: asyncio.sleep(0, result={"id": datasource_id, "updated": True})
@@ -1168,8 +1168,6 @@ def test_datasource_manager_update_datasource_ignores_semantic_payloads(monkeypa
         name="新名称",
         description="新描述",
         source_config={"database": "dw2"},
-        semantic_config={"deprecated": True},
-        semantic_configs=[{"deprecated": True}],
         mapped_modules=["执法检查"],
         update_by="u1",
     ))
@@ -1567,8 +1565,6 @@ def test_datasource_manager_async_update_datasource_group_and_datasource(monkeyp
             name="数据源新名",
             description="新描述",
             source_config={"host": "127.0.0.4", "port": 3306, "database": "newer"},
-            semantic_config={"ignored": True},
-            semantic_configs=[{"ignored": True}],
             mapped_modules=["可视化查询"],
             update_by="u3",
         )

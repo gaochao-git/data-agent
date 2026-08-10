@@ -312,7 +312,8 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
             assert kwargs["user_query"] == "查销售额"
             return {"success": True, "sql": "select sum(amount) from orders", "error": ""}
 
-    async def fake_get_config(datasource_id, semantic_config_id, user_id=None):
+    async def fake_get_config(datasource_id, semantic_config_id, user_id=None, mode="summary"):
+        assert mode == "full"
         return {"id": semantic_config_id, "datasource_id": datasource_id}
 
     def fake_remove_mixed(dsl, semantic_config):
@@ -325,7 +326,7 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
         assert username == "测试用户"
         return {"valid": True, "valid_count": len(dashboard_spec["cards"]), "warnings": ["ok"], "panels": [{"title": "面板"}]}
 
-    monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_get_config)
     monkeypatch.setattr(dsl2sql, "remove_mixed_raw_metrics_for_aggregate_dsl", fake_remove_mixed)
     monkeypatch.setattr(dsl2sql, "validate_dashboard_spec_payload", fake_validate)
     monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
@@ -370,10 +371,11 @@ async def test_dsl2sql_tool_handles_single_batch_compare_and_invalid_payload(mon
 
 @pytest.mark.asyncio
 async def test_dsl2sql_tool_returns_error_text_when_dependency_raises(monkeypatch):
-    async def fake_get_config(_datasource_id, _semantic_config_id, user_id=None):
+    async def fake_get_config(_datasource_id, _semantic_config_id, user_id=None, mode="summary"):
+        assert mode == "full"
         raise RuntimeError("配置不存在")
 
-    monkeypatch.setattr(dsl2sql, "get_dashboard_spec_semantic_config", fake_get_config)
+    monkeypatch.setattr(dsl2sql, "load_semantic_model", fake_get_config)
 
     result = await dsl2sql.create_dsl2sql_tool("ds_a").ainvoke({"semantic_config_id": "sc_a", "dsl": {"metrics": ["销售额"]}})
 

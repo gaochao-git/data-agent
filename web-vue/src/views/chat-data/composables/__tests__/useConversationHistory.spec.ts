@@ -9,7 +9,7 @@ describe('buildHistoryMessages', () => {
         id: 'assistant-1',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'tool-select', name: 'search_dataset', args: {} }],
+        tool_calls: [{ id: 'tool-select', name: 'semantic_search', args: {} }],
       },
       { id: 'tool-result-1', role: 'tool', tool_call_id: 'tool-select', content: '已选择指标集' },
       {
@@ -85,25 +85,6 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
-  it('keeps legacy unknown tool calls as generic cards', () => {
-    const messages = buildHistoryMessages([
-      { id: 'user-1', role: 'user', content: '查询订单' },
-      {
-        id: 'assistant-1',
-        role: 'assistant',
-        content: '',
-        tool_calls: [{ id: 'legacy-select', name: 'select_semantic_config_tool', args: {} }],
-      },
-      { id: 'tool-result-1', role: 'tool', tool_call_id: 'legacy-select', content: '[select_semantic_config_tool] {"success": true}' },
-    ], [])
-
-    const legacyTool = messages[1]?.toolCalls?.[0]
-    expect(legacyTool).toMatchObject({
-      tool_name: 'select_semantic_config_tool',
-      result: '[select_semantic_config_tool] {"success": true}',
-    })
-  })
-
   it('replays persisted history events by sequence instead of guessing thought positions', () => {
     const messages = buildHistoryMessagesFromEvents([
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '查询订单' } },
@@ -112,7 +93,7 @@ describe('buildHistoryMessages', () => {
         sequence_no: 3,
         turn_id: 'turn-1',
         event_type: 'assistant_message',
-        payload: { id: 'assistant-1', content: '', tool_calls: [{ id: 'tool-1', name: 'search_dataset', args: {} }] },
+        payload: { id: 'assistant-1', content: '', tool_calls: [{ id: 'tool-1', name: 'semantic_search', args: {} }] },
       },
       { sequence_no: 4, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'tool-result-1', tool_call_id: 'tool-1', content: '已选择订单指标集' } },
       { sequence_no: 5, turn_id: 'turn-1', event_type: 'reasoning', payload: { id: 'thinking-2', content: '继续生成 SQL' } },
