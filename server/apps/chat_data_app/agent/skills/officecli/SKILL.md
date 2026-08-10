@@ -20,7 +20,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
 
 1. 本 `SKILL.md` 已通过 `file_read` 读取。本技能通过 `officecli_run` 工具执行 OfficeCLI；运行失败时如实说明，不要伪造修改结果。
 2. 禁止安装、升级、联网下载、插件、MCP、`watch`、后台进程或访问宿主机路径。
-3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或 `outputs/.tool-offload/`。`/mnt/skills/` 仅供 `file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
+3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或系统管理的 `outputs/query_result/`、`outputs/.tool-offload/`。`/mnt/skills/` 仅供 `file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
 4. `officecli_run(command_args=[...])` 的每个数组元素就是一个独立参数，**不要加引号、不要把整条命令拼成一个字符串**。文件路径一律用完整绝对路径；含空格、方括号或中文时照原样写（如 `"/mnt/user-data/workspace/我的 报告.docx"`），加引号会被当成文件名的一部分。
 5. 不确定命令、元素路径或属性名时，先用 `officecli help <format> <element>` 查询，不要猜测。`docx`、`xlsx`、`pptx` 分别对应 Word、Excel、PowerPoint。
 

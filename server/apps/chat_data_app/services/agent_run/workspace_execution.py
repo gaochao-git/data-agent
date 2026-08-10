@@ -21,6 +21,7 @@ from utils.crypto import decrypt_env_value
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME
+from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from .artifact_registry import parse_output_artifact
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 
@@ -78,6 +79,7 @@ class SandboxExecutionSession:
     cache_key: str = ""
     application_manifest: dict[str, tuple[int, int, str]] | None = None
     uploads_manifest: dict[str, tuple[int, int, str]] | None = None
+    text_line_counts: dict[str, tuple[int, str, int]] = field(default_factory=dict)
     pending_persistence: bool = False
     operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
@@ -469,7 +471,8 @@ async def _initialize_sandbox_filesystem(
     user_data_directories.extend([
         sandbox_workspace_dir(),
         sandbox_outputs_dir(),
-        f"{sandbox_outputs_dir()}/.tool-offload",
+        f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+        f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
         sandbox_uploads_dir(),
     ])
     writable_directories = [
@@ -503,7 +506,8 @@ async def _initialize_sandbox_filesystem(
         file_mode=_SANDBOX_WRITABLE_FILE_MODE,
         readonly_roots=(
             f"{sandbox_workspace_dir()}/semantic",
-            f"{sandbox_outputs_dir()}/.tool-offload",
+            f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+            f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
             sandbox_uploads_dir(),
         ),
     )
@@ -779,8 +783,12 @@ def _application_directory_for_sandbox_path(session: SandboxExecutionSession, sa
 
 
 def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bool:
-    hidden_root = application_root / "outputs" / ".tool-offload"
-    return path == hidden_root or hidden_root in path.parents
+    output_root = application_root / "outputs"
+    roots = (
+        output_root / TOOL_OFFLOAD_DIR_NAME,
+        output_root / QUERY_RESULT_DIR_NAME,
+    )
+    return any(path == root or root in path.parents for root in roots)
 
 
 def _is_managed_semantic_model_local_path(application_root: Path, path: Path) -> bool:
@@ -1107,8 +1115,11 @@ def _is_outputs_sandbox_path(path: str) -> bool:
 
 
 def _is_tool_results_sandbox_path(path: str) -> bool:
-    root = f"{sandbox_outputs_dir()}/.tool-offload"
-    return path == root or path.startswith(f"{root}/")
+    roots = (
+        f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+        f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
+    )
+    return any(path == root or path.startswith(f"{root}/") for root in roots)
 
 
 def _is_uploads_sandbox_path(path: str) -> bool:
@@ -1317,6 +1328,35 @@ async def sandbox_render_office_html(
         }
 
 
+async def _sandbox_text_line_count(
+    *,
+    session: SandboxExecutionSession,
+    path: str,
+    entry: Any,
+) -> int:
+    """Count lines inside the sandbox and cache by remote file metadata."""
+    size = int(getattr(entry, "size", 0) or 0)
+    modified_at = str(getattr(entry, "modified_at", "") or "")
+    cached = session.text_line_counts.get(path)
+    if cached is not None and cached[:2] == (size, modified_at):
+        return cached[2]
+
+    command = f"awk 'END {{ print NR }}' < {shlex.quote(path)}"
+    exit_code, stdout, stderr = await run_command_in_sandbox(
+        session=session,
+        command=command,
+        timeout_seconds=30,
+    )
+    if exit_code != 0:
+        raise RuntimeError(stderr or "沙箱文本行数统计失败")
+    try:
+        total_lines = int((stdout or "").strip())
+    except ValueError as exc:
+        raise RuntimeError("沙箱文本行数统计结果无效") from exc
+    session.text_line_counts[path] = (size, modified_at, total_lines)
+    return total_lines
+
+
 async def sandbox_read_text_file(
     *,
     session_ref: SandboxExecutionSessionRef,
@@ -1325,7 +1365,7 @@ async def sandbox_read_text_file(
     limit: int,
     max_chars: int,
 ) -> dict[str, Any]:
-    """Read a text page through OpenSandbox Files API, never Commands API."""
+    """Read one page through Files API and count lines inside the sandbox."""
     session = require_sandbox_session(session_ref)
     async with session.operation_lock:
         await _recover_pending_persistence(session)
@@ -1344,24 +1384,31 @@ async def sandbox_read_text_file(
         sample = bytes(await reader(target, range_header="bytes=0-4095"))
         if b"\x00" in sample:
             return {"exists": True, "is_binary": True, "path": visible_path}
+        total_lines = await _sandbox_text_line_count(
+            session=session,
+            path=target,
+            entry=entry,
+        )
         source_offset = max(0, int(offset)) + 1
         source_limit = max(1, int(limit)) + 1
         page_text = bytes(await reader(target, offset=source_offset, limit=source_limit)).decode(
             "utf-8", errors="replace"
         )
-        source_lines = page_text.splitlines()
+        source_lines = page_text.split("\n") if page_text else []
+        if source_lines and source_lines[-1] == "" and page_text.endswith("\n"):
+            source_lines.pop()
+        source_lines = [line[:-1] if line.endswith("\r") else line for line in source_lines]
         has_more_lines = len(source_lines) > source_limit - 1
         selected_source_lines = source_lines[:source_limit - 1]
         if not selected_source_lines:
-            is_empty = int(getattr(entry, "size", 0) or 0) == 0
             return {
                 "exists": True,
                 "is_dir": False,
                 "is_binary": False,
                 "path": visible_path,
-                "total_lines": 0 if is_empty else None,
-                "empty": is_empty,
-                "offset_out_of_range": not is_empty,
+                "total_lines": total_lines,
+                "empty": total_lines == 0,
+                "offset_out_of_range": total_lines > 0,
             }
         budgets = _allocate_file_read_line_budgets(
             [len(line) for line in selected_source_lines],
@@ -1369,7 +1416,7 @@ async def sandbox_read_text_file(
         )
         selected_lines = selected_source_lines[:len(budgets)]
         lines = [line[:budget] for line, budget in zip(selected_lines, budgets)]
-        start_line = max(0, int(offset)) + 1
+        start_line = source_offset
         truncated_lines = [
             {
                 "line_number": start_line + position,
@@ -1386,10 +1433,10 @@ async def sandbox_read_text_file(
             "is_binary": False,
             "path": visible_path,
             "lines": lines,
-            "total_lines": None,
+            "total_lines": total_lines,
             "start_line": start_line,
             "end_line": start_line + len(lines) - 1,
-            "next_offset": max(0, int(offset)) + len(lines) if has_more_lines else None,
+            "next_offset": source_offset - 1 + len(lines) if has_more_lines else None,
             "has_more_lines": has_more_lines,
             "has_more": has_more_lines,
             "truncated_lines": truncated_lines,
@@ -1584,7 +1631,7 @@ async def sandbox_copy_path(
         await _recover_pending_persistence(session)
         source = await _resolve_sandbox_real_path(session=session, file_path=source_path)
         if _is_tool_results_sandbox_path(source):
-            raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能复制")
+            raise ValueError("系统结果目录（tool-offload/query_result）不能复制")
         source_kind = await _sandbox_path_kind(session=session, path=source)
         if source_kind != "file":
             raise ValueError(f"file_copy 只支持复制单个文件: {source_path}")
@@ -1948,7 +1995,7 @@ async def sandbox_write_tool_result(
             allow_tool_result_write=True,
         )
         if not _is_tool_results_sandbox_path(target):
-            raise ValueError("内部工具结果只能写入 outputs/.tool-offload/")
+            raise ValueError("内部工具结果只能写入系统结果目录")
         try:
             await _read_sandbox_file_bytes(sandbox=session.sandbox, path=target)
         except Exception as exc:

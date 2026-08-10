@@ -16,7 +16,6 @@ def build_internal_query_result(
     *,
     query_mode: str,
     confidence: float,
-    save_as: str = "",
 ) -> str:
     """Return the non-user-facing result consumed by ToolResultMiddleware."""
     return json.dumps(
@@ -28,7 +27,6 @@ def build_internal_query_result(
             "meta": {
                 "query_mode": query_mode,
                 "confidence": confidence,
-                "save_as": str(save_as or "").strip(),
             },
         },
         ensure_ascii=False,

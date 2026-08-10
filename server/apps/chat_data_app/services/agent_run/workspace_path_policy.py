@@ -8,7 +8,7 @@ from typing import Literal, cast
 from urllib.parse import unquote
 
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
-from utils.tool_result_store import TOOL_OFFLOAD_DIR_NAME
+from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
 WorkspacePathKind = Literal["workspace", "outputs", "uploads", "skills"]
 
@@ -31,11 +31,27 @@ class LogicalWorkspacePath:
         )
 
     @property
-    def is_tool_result(self) -> bool:
+    def is_tool_offload(self) -> bool:
         return self.kind == "outputs" and (
             self.relative_path == TOOL_OFFLOAD_DIR_NAME
             or self.relative_path.startswith(f"{TOOL_OFFLOAD_DIR_NAME}/")
         )
+
+    @property
+    def is_query_result(self) -> bool:
+        return self.kind == "outputs" and (
+            self.relative_path == QUERY_RESULT_DIR_NAME
+            or self.relative_path.startswith(f"{QUERY_RESULT_DIR_NAME}/")
+        )
+
+    @property
+    def is_system_result(self) -> bool:
+        return self.is_tool_offload or self.is_query_result
+
+    @property
+    def is_tool_result(self) -> bool:
+        """Backward-compatible name for system-managed result paths."""
+        return self.is_system_result
 
     @property
     def is_skill(self) -> bool:
@@ -91,8 +107,8 @@ class WorkspacePathPolicy:
     ) -> None:
         if logical_path.kind not in {"workspace", "outputs"}:
             raise ValueError("只允许写入 workspace/ 或 outputs/")
-        if logical_path.is_tool_result:
-            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
+        if logical_path.is_system_result:
+            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if logical_path.is_semantic_model and not allow_managed_semantic_model_write:
             raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
         if allow_managed_semantic_model_write and (

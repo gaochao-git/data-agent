@@ -10,7 +10,7 @@ from langchain.agents.middleware import wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from utils.logger import get_logger
-from utils.tool_result_store import ToolResultRecord
+from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME, ToolResultRecord
 from ...services.agent_run.conversation_workspace import workspace_runtime_from_state
 from ...services.sql_run.result import query_result_status, query_result_succeeded
 from ...services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
@@ -92,105 +92,45 @@ async def _finalize_query_result(
             meta=public_meta,
         ), None
 
-    save_as = str(meta.get("save_as") or "").strip()
-    if save_as:
-        return await _save_query_result_to_workspace(
-            query_result,
-            public_meta=public_meta,
-            save_as=save_as,
-            request=request,
-        )
-
-    raw_result = json.dumps(query_result, ensure_ascii=False)
+    serialized_result = json.dumps(query_result, ensure_ascii=False, indent=2)
+    result_size_chars = len(serialized_result)
     try:
         record = await _write_private_tool_result(
-            content=json.dumps(query_result, ensure_ascii=False, indent=2),
+            content=serialized_result,
             suffix=".json",
+            directory_name=QUERY_RESULT_DIR_NAME,
             request=request,
         )
     except Exception as exc:
         logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
-        if len(raw_result) <= TOOL_RESULT_OFFLOAD_SIZE:
-            return build_query_result_response(status=status, data=query_result, meta=public_meta), None
-        return _build_truncated_tool_result_message("semantic_query_tool", len(raw_result)), None
+        return _build_truncated_tool_result_message("semantic_query_tool", result_size_chars), None
 
     recovery = build_tool_result_recovery(
         source_tool="semantic_query_tool",
         result_path=record.virtual_path,
-        result_size_chars=len(raw_result),
+        result_size_chars=result_size_chars,
         result_id=record.result_id,
     )
-    if len(raw_result) <= TOOL_RESULT_OFFLOAD_SIZE:
-        return build_query_result_response(status=status, data=query_result, meta=public_meta), recovery
 
     public_meta.update({
         "result_id": record.result_id,
         "result_path": record.virtual_path,
         "total_count": query_result.get("total_count", 0),
         "execution_time_ms": query_result.get("execution_time_ms"),
-        "result_size_chars": len(raw_result),
-        "llm_analysis_skipped": True,
-        "message": "查询结果已超过上下文预算，完整数据未进入模型上下文；前端会自动加载完整结果供用户查看。",
+        "result_size_chars": result_size_chars,
+        "content_in_context": False,
+        "message": "查询已完成，完整结果已保存；前端会自动加载结果。",
     })
     if query_result.get("sql"):
         public_meta["sql"] = query_result["sql"]
+
     logger.info(
-        "查询工具结果已卸载: result_id=%s size_chars=%s rows=%s",
+        "查询工具结果已保存: result_id=%s size_chars=%s rows=%s",
         record.result_id,
-        len(raw_result),
+        result_size_chars,
         query_result.get("total_count", 0),
     )
     return build_query_result_response(status=status, data=None, meta=public_meta), recovery
-
-
-async def _save_query_result_to_workspace(
-    query_result: dict[str, Any],
-    *,
-    public_meta: dict[str, Any],
-    save_as: str,
-    request: Any,
-) -> tuple[str, dict[str, Any] | None]:
-    state = _request_state(request)
-    workspace = state.get("workspace") if isinstance(state.get("workspace"), dict) else {}
-    if not str(workspace.get("workspace_root") or "").strip():
-        return build_query_result_response(
-            status=query_result_status(query_result),
-            error="当前会话未初始化工作目录，无法保存结果",
-            meta=public_meta,
-        ), None
-    runtime = workspace_runtime_from_state(state)
-    try:
-        write_result = await runtime.write_text_file(
-            file_path=save_as,
-            content=json.dumps(query_result, ensure_ascii=False, indent=2),
-            mode="overwrite",
-        )
-    except Exception as exc:
-        logger.error("保存查询结果到工作区失败: path=%s error=%s", save_as, exc, exc_info=True)
-        return build_query_result_response(
-            status=query_result_status(query_result),
-            error="保存查询结果失败，请检查目标路径后重试",
-            meta=public_meta,
-        ), None
-    public_meta.update({
-        "result_path": write_result.get("file_path") or save_as,
-        "total_count": query_result.get("total_count"),
-        "execution_time_ms": query_result.get("execution_time_ms"),
-        "sql": query_result.get("sql") or "",
-        "next_required_action": "使用 file_read 抽查文件，或用 bash_run 读取 result_path 生成后续产物。",
-    })
-    content = build_query_result_response(
-        status=query_result_status(query_result),
-        data=None,
-        error=query_result.get("error"),
-        meta=public_meta,
-    )
-    recovery = build_tool_result_recovery(
-        source_tool="semantic_query_tool",
-        result_path=str(public_meta["result_path"]),
-        result_size_chars=len(json.dumps(query_result, ensure_ascii=False)),
-    )
-    return content, recovery
 
 
 async def _externalize_generic_text(
@@ -290,6 +230,7 @@ async def _write_private_tool_result(
     *,
     content: str,
     suffix: str,
+    directory_name: str = TOOL_OFFLOAD_DIR_NAME,
     request: Any,
 ) -> ToolResultRecord:
     """Persist one hidden result through the active conversation backend.
@@ -310,6 +251,7 @@ async def _write_private_tool_result(
         suffix=suffix,
         conversation_id=conversation_id,
         user_id=user_id,
+        directory_name=directory_name,
     )
     runtime = workspace_runtime_from_state(_request_state(request))
     await runtime.write_tool_result(file_path=record.virtual_path, content=content)

@@ -698,14 +698,6 @@ class SemanticQueryInput(BaseModel):
         min_length=1,
         description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
     )
-    save_as: Optional[str] = Field(
-        default=None,
-        description=(
-            "按需使用：仅当用户、已读取技能或后续处理流程明确要求将完整查询结果保留到磁盘，"
-            "用于二次分析、脚本处理或产物生成时传入；常规查询不要传。目标必须是当前会话 "
-            "workspace/ 下的 .json 文件"
-        ),
-    )
 
     @field_validator("dsl", mode="before")
     @classmethod

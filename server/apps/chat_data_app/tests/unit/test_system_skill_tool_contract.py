@@ -92,8 +92,8 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "年度总量对比" in semantic_query
     assert "搜索或读取确认当前配置不存在" in semantic_query
     assert "用户必须补充公式和统计周期" in semantic_query
-    assert "`save_as` 默认不传" in semantic_query
-    assert "不要为普通查询" in semantic_query
+    assert "查询成功后系统始终将完整结果保存" in semantic_query
+    assert "result_path" in semantic_query
     assert "/mnt/skills/semantic-query/references/dialect.md" in semantic_query
     assert "## 必读资料" in semantic_query
     assert "DSL 查询只使用 `time_grain`" in semantic_query

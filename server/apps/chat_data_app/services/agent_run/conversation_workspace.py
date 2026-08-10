@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import fnmatch
+from functools import lru_cache
 import mimetypes
 import os
 import re
@@ -21,7 +22,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
-from utils.tool_result_store import TOOL_OFFLOAD_DIR_NAME, ToolResultStore
+from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME, ToolResultStore
 
 from ...daos.conversation_dao import ConversationDao
 from .artifact_registry import parse_output_artifact
@@ -519,8 +520,8 @@ def resolve_workspace_path(
         raise ValueError("只允许访问 workspace/、outputs/ 或 uploads/")
 
     if writable:
-        if is_tool_result_workspace_path(str(root), target):
-            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
+        if is_system_result_workspace_path(str(root), target):
+            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if (
             is_managed_semantic_model_workspace_path(str(root), target)
             and not allow_managed_semantic_model_write
@@ -530,11 +531,20 @@ def resolve_workspace_path(
     return target
 
 
-def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
-    """Return whether a resolved path belongs to hidden tool-result storage."""
-    results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_OFFLOAD_DIR_NAME).resolve()
+def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a resolved path belongs to system-managed result storage."""
+    output_root = Path(workspace_root).resolve() / "outputs"
     target = path.resolve()
-    return target == results_root or results_root in target.parents
+    result_roots = (
+        (output_root / TOOL_OFFLOAD_DIR_NAME).resolve(),
+        (output_root / QUERY_RESULT_DIR_NAME).resolve(),
+    )
+    return any(target == root or root in target.parents for root in result_roots)
+
+
+def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Backward-compatible alias for system-managed result path checks."""
+    return is_system_result_workspace_path(workspace_root, path)
 
 
 def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
@@ -558,8 +568,8 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
 def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
     """Return a generated skill directory that is eligible for user import."""
     skill_dir = resolve_workspace_path(workspace_root, path)
-    if is_tool_result_workspace_path(workspace_root, skill_dir):
-        raise ValueError("不允许导入 outputs/.tool-offload/ 下的内容")
+    if is_system_result_workspace_path(workspace_root, skill_dir):
+        raise ValueError("不允许导入系统结果目录下的内容")
     outputs_root = resolve_workspace_path(workspace_root, "outputs")
     try:
         relative = skill_dir.relative_to(outputs_root)
@@ -674,7 +684,7 @@ def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[
             try:
                 relative_path = item.relative_to(root).as_posix()
                 resolved_item = resolve_workspace_path(str(root), relative_path)
-                if is_tool_result_workspace_path(str(root), resolved_item):
+                if is_system_result_workspace_path(str(root), resolved_item):
                     continue
                 stat = item.stat()
             except (OSError, ValueError):
@@ -701,7 +711,7 @@ def read_workspace_text_file(
     paths = ensure_conversation_workspace(conversation_id, user_id)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    if is_tool_result_workspace_path(root, target):
+    if is_system_result_workspace_path(root, target):
         raise ValueError("工具结果缓存不在工作区文件预览范围内")
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -761,7 +771,7 @@ async def read_conversation_workspace_raw_file(
 
 def _validate_office_preview_source(workspace_root: str, path: str) -> None:
     target = resolve_workspace_path(workspace_root, path)
-    if is_tool_result_workspace_path(workspace_root, target):
+    if is_system_result_workspace_path(workspace_root, target):
         raise ValueError("工具结果缓存不支持 Office 预览")
     if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
         raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
@@ -875,7 +885,7 @@ def read_workspace_raw_file(
     paths = ensure_conversation_workspace(conversation_id, user_id)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    if is_tool_result_workspace_path(root, target):
+    if is_system_result_workspace_path(root, target):
         raise ValueError("工具结果缓存不在工作区文件预览范围内")
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -908,24 +918,30 @@ async def read_conversation_query_result(
 
 
 _TEXT_READ_CHUNK_CHARS = 64 * 1024
-_TEXT_LINE_SEPARATOR_RE = re.compile(r"[\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+_TEXT_LINE_SEPARATOR_RE = re.compile(r"\n")
 MAX_FILE_READ_LINE_CHARS = 500
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
 def _iter_text_line_fragments(file_obj: Any):
-    """逐块产出文本行片段，保持 ``str.splitlines()`` 的行分隔语义。
-
-    ``newline=None`` 已将 CR / CRLF 标准化为 LF；其余 Python 识别的行分隔符
-    仍需显式处理，避免大文件流式读取改变 ``offset`` 的按行语义。
-    """
+    """逐块产出 LF 分隔的物理文本行片段，并去除 CRLF 中的 CR。"""
+    trailing_cr = False
     while chunk := file_obj.read(_TEXT_READ_CHUNK_CHARS):
+        if trailing_cr:
+            chunk = f"\r{chunk}"
+            trailing_cr = False
+        if chunk.endswith("\r"):
+            chunk = chunk[:-1]
+            trailing_cr = True
         position = 0
         for match in _TEXT_LINE_SEPARATOR_RE.finditer(chunk):
-            yield chunk[position:match.start()], True
+            part = chunk[position:match.start()]
+            yield part[:-1] if part.endswith("\r") else part, True
             position = match.end()
         if position < len(chunk):
             yield chunk[position:], False
+    if trailing_cr:
+        yield "\r", False
 
 
 def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
@@ -957,6 +973,7 @@ def _allocate_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]
 
 
 def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict[str, Any]:
+    """流式读取请求页的行长度，不为分页正文扫描到文件末尾。"""
     selected_lines: list[dict[str, int]] = []
     line_index = 0
     pending_chars = 0
@@ -974,18 +991,60 @@ def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict
         pending_chars = 0
         return False
 
-    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as file_obj:
         for part, ends_line in _iter_text_line_fragments(file_obj):
             pending_chars += len(part)
             if ends_line and finish_line():
-                return {"selected_lines": selected_lines, "has_more_lines": True}
-            if len(selected_lines) == limit and pending_chars:
                 return {"selected_lines": selected_lines, "has_more_lines": True}
     if pending_chars:
         if finish_line():
             return {"selected_lines": selected_lines, "has_more_lines": True}
 
-    return {"selected_lines": selected_lines, "has_more_lines": False, "observed_lines": line_index}
+    return {
+        "selected_lines": selected_lines,
+        "has_more_lines": False,
+    }
+
+
+@lru_cache(maxsize=512)
+def _count_local_text_lines_cached(
+    path_text: str,
+    file_size: int,
+    modified_ns: int,
+    inode: int,
+) -> int:
+    """Count newline-separated lines without loading the file into Python memory."""
+    wc_path = shutil.which("wc") or "wc"
+    completed = subprocess.run(
+        [wc_path, "-l", path_text],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise OSError((completed.stderr or "").strip() or "wc -l 执行失败")
+    try:
+        newline_count = int((completed.stdout or "").strip().split()[0])
+    except (IndexError, ValueError) as exc:
+        raise OSError("wc -l 返回结果无效") from exc
+    if file_size <= 0:
+        return 0
+    with Path(path_text).open("rb") as file_obj:
+        file_obj.seek(-1, os.SEEK_END)
+        has_trailing_newline = file_obj.read(1) == b"\n"
+    return newline_count if has_trailing_newline else newline_count + 1
+
+
+def _count_local_text_lines(target: Path) -> int:
+    """Return LF-delimited physical line count from the operating system."""
+    stat = target.stat()
+    return _count_local_text_lines_cached(
+        str(target),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(getattr(stat, "st_ino", 0) or 0),
+    )
 
 
 def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], budgets: list[int]) -> list[str]:
@@ -1017,7 +1076,7 @@ def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], b
         current_line_char = 0
         return current_line_index > last_line_index
 
-    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as file_obj:
         for part, ends_line in _iter_text_line_fragments(file_obj):
             consume(part)
             if ends_line and finish_line():
@@ -1042,18 +1101,18 @@ def _read_text_page_from_path(
     if b"\x00" in sample:
         return {"exists": True, "is_binary": True, "path": visible_path}
 
+    total_lines = _count_local_text_lines(target)
     page = _scan_text_page_line_lengths(target, offset=offset, limit=limit)
     selected_lines = list(page["selected_lines"])
     if not selected_lines:
-        observed_lines = int(page.get("observed_lines") or 0)
         return {
             "exists": True,
             "is_dir": False,
             "is_binary": False,
             "path": visible_path,
-            "total_lines": observed_lines,
-            "empty": observed_lines == 0,
-            "offset_out_of_range": observed_lines > 0,
+            "total_lines": total_lines,
+            "empty": total_lines == 0,
+            "offset_out_of_range": total_lines > 0,
         }
     budgets = _allocate_line_budgets(
         [item["original_chars"] for item in selected_lines],
@@ -1066,6 +1125,7 @@ def _read_text_page_from_path(
             "is_dir": False,
             "is_binary": False,
             "path": visible_path,
+            "total_lines": total_lines,
             "empty": True,
         }
     lines = _read_text_page_prefixes(target, selected_lines, budgets)
@@ -1085,7 +1145,7 @@ def _read_text_page_from_path(
         "is_binary": False,
         "path": visible_path,
         "lines": lines,
-        "total_lines": None,
+        "total_lines": total_lines,
         "start_line": selected_lines[0]["line_number"],
         "end_line": selected_lines[-1]["line_number"],
         "next_offset": offset + len(selected_lines) if has_more_lines else None,
@@ -1209,8 +1269,8 @@ def _replace_local_text_file(
 def _write_local_tool_result(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
     """Write a private result once; this path is never exposed to file_edit."""
     target = resolve_workspace_path(workspace_root, file_path)
-    if not is_tool_result_workspace_path(workspace_root, target):
-        raise ValueError("内部工具结果只能写入 outputs/.tool-offload/")
+    if not is_system_result_workspace_path(workspace_root, target):
+        raise ValueError("内部工具结果只能写入系统结果目录")
     target.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     with target.open("xb") as file_obj:
@@ -1223,7 +1283,7 @@ def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[st
         target = resolve_workspace_path(workspace_root, file_path)
     except ValueError:
         return {}
-    if is_tool_result_workspace_path(workspace_root, target):
+    if is_system_result_workspace_path(workspace_root, target):
         return {}
     outputs_root = resolve_workspace_path(workspace_root, "outputs")
     if target != outputs_root and outputs_root not in target.parents:
@@ -1390,8 +1450,8 @@ def _copy_local_resolved_path(
 
 def _copy_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:
     source = resolve_workspace_path(workspace_root, source_path)
-    if is_tool_result_workspace_path(workspace_root, source):
-        raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能复制")
+    if is_system_result_workspace_path(workspace_root, source):
+        raise ValueError("系统结果目录（tool-offload/query_result）不能复制")
     return _copy_local_resolved_path(
         workspace_root,
         source,

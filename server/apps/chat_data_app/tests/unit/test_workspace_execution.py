@@ -124,7 +124,7 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
             captured["info_paths"] = paths
             return {
                 paths[0]: SimpleNamespace(
-                    path=paths[0], entry_type="file", size=4,
+                    path=paths[0], entry_type="file", size=4, modified_at="2026-08-10T00:00:00Z",
                 )
             }
 
@@ -149,6 +149,11 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
         return "/mnt/user-data/workspace/report.txt"
 
     monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+
+    async def fake_line_count(**_kwargs):
+        return 1
+
+    monkeypatch.setattr(workspace_execution, "_sandbox_text_line_count", fake_line_count)
 
     result = asyncio.run(workspace_execution.sandbox_read_text_file(
         session_ref=session_ref,
@@ -175,7 +180,69 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
         },
     ]
     assert result["path"] == "/mnt/user-data/workspace/report.txt"
+    assert result["total_lines"] == 1
     assert result["has_more_lines"] is False
+
+
+def test_sandbox_text_line_count_uses_metadata_cache(monkeypatch):
+    calls = []
+    session = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    async def fake_run_command_in_sandbox(*, session, command, timeout_seconds):
+        calls.append((session, command, timeout_seconds))
+        return 0, "3\n", ""
+
+    monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run_command_in_sandbox)
+    path = "/mnt/user-data/workspace/report file.txt"
+    first_entry = SimpleNamespace(size=20, modified_at="2026-08-10T00:00:00Z")
+
+    first = asyncio.run(workspace_execution._sandbox_text_line_count(
+        session=session, path=path, entry=first_entry,
+    ))
+    second = asyncio.run(workspace_execution._sandbox_text_line_count(
+        session=session, path=path, entry=first_entry,
+    ))
+    changed = asyncio.run(workspace_execution._sandbox_text_line_count(
+        session=session,
+        path=path,
+        entry=SimpleNamespace(size=24, modified_at="2026-08-10T00:00:01Z"),
+    ))
+
+    assert first == second == changed == 3
+    assert len(calls) == 2
+    assert calls[0][1] == "awk 'END { print NR }' < '/mnt/user-data/workspace/report file.txt'"
+    assert calls[0][2] == 30
+
+
+@pytest.mark.parametrize(
+    ("command_result", "expected_error"),
+    [
+        ((1, "", "permission denied"), "permission denied"),
+        ((0, "not-a-number", ""), "沙箱文本行数统计结果无效"),
+    ],
+)
+def test_sandbox_text_line_count_rejects_command_failures(monkeypatch, command_result, expected_error):
+    session = SandboxExecutionSession(
+        sandbox=object(),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    async def fake_run_command_in_sandbox(**_kwargs):
+        return command_result
+
+    monkeypatch.setattr(workspace_execution, "run_command_in_sandbox", fake_run_command_in_sandbox)
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        asyncio.run(workspace_execution._sandbox_text_line_count(
+            session=session,
+            path="/mnt/user-data/workspace/report.txt",
+            entry=SimpleNamespace(size=4, modified_at="2026-08-10T00:00:00Z"),
+        ))
 
 
 def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch, tmp_path):

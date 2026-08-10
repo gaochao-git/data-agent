@@ -282,6 +282,41 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
         resolve_workspace_path(paths["root"], "outputs/.tool-offload/result_1.json", writable=True)
 
 
+@pytest.mark.asyncio
+async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(conversation_workspace_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(conversation_workspace_module, "THREADS_DIR", tmp_path / "users")
+    paths = ensure_conversation_workspace("conv_query_result", "user_a")
+    result_file = Path(paths["outputs"]) / "query_result" / "result_1.json"
+    result_file.parent.mkdir()
+    result_file.write_text('{\n  "rows": [1, 2]\n}', encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=paths["root"], user_id="user_a", backend="local",
+    )
+    file_read = next(
+        tool for tool in filesystem_tool_module.create_filesystem_tools(runtime)
+        if tool.name == "file_read"
+    )
+
+    assert all(
+        item["name"] != "result_1.json"
+        for item in list_workspace_files("conv_query_result", "user_a")
+    )
+    content = await file_read.ainvoke({
+        "file_path": "/mnt/user-data/outputs/query_result/result_1.json",
+        "offset": 0,
+        "limit": 2,
+    })
+
+    assert "total_lines=3" in content
+    assert "     1 {" in content
+    assert "has_more=true" in content
+    with pytest.raises(ValueError, match="系统结果目录"):
+        resolve_workspace_path(
+            paths["root"], "outputs/query_result/result_1.json", writable=True,
+        )
+
+
 def test_resolve_workspace_path_accepts_short_absolute_aliases():
     paths = ensure_conversation_workspace(f"conv_workspace_alias_{uuid.uuid4().hex}")
 
@@ -780,7 +815,7 @@ async def test_file_read_default_limit_is_200(monkeypatch):
     assert "[file_read]" in result
     assert "limit=200" in result
     assert "end_line=200" in result
-    assert "total_lines=unknown" in result
+    assert "total_lines=601" in result
     assert "has_more=true" in result
     assert "next_offset=200" in result
 
@@ -941,7 +976,7 @@ def test_text_page_content_body_respects_budget_and_preserves_source_order(tmp_p
     assert result["lines"] == ["ab", "abcdefghij", "xyz"]
     assert len("\n".join(result["lines"])) == 17
     assert result["truncated_lines"] == []
-    assert result["total_lines"] is None
+    assert result["total_lines"] == 4
     assert result["has_more_lines"] is True
 
 
@@ -966,8 +1001,8 @@ def test_text_page_caps_each_line_and_total_body_chars(tmp_path):
     assert result["next_offset"] == 2
 
 
-@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
-def test_text_page_preserves_python_splitlines_semantics(tmp_path, separator):
+@pytest.mark.parametrize("separator", ["\n", "\r\n"])
+def test_text_page_uses_standard_physical_line_semantics(tmp_path, separator):
     target = tmp_path / "separators.txt"
     content = separator.join(["first", "second", "third"])
     target.write_text(content, encoding="utf-8", newline="")
@@ -984,6 +1019,57 @@ def test_text_page_preserves_python_splitlines_semantics(tmp_path, separator):
     assert result["start_line"] == 2
     assert result["end_line"] == 2
     assert result["has_more_lines"] is True
+
+
+def test_text_page_does_not_treat_control_characters_as_physical_lines(tmp_path):
+    target = tmp_path / "control-separator.txt"
+    target.write_text("first\u2028second\vthird", encoding="utf-8")
+
+    result = conversation_workspace_module._read_text_page_from_path(
+        target,
+        "/workspace/control-separator.txt",
+        offset=0,
+        limit=10,
+        max_chars=100,
+    )
+
+    assert result["lines"] == ["first\u2028second\vthird"]
+    assert result["total_lines"] == 1
+
+
+def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_path):
+    target = tmp_path / "report with spaces.txt"
+    target.write_text("first\nsecond\nthird", encoding="utf-8")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        newline_count = target.read_bytes().count(b"\n")
+        return SimpleNamespace(returncode=0, stdout=f"{newline_count} report with spaces.txt\n", stderr="")
+
+    conversation_workspace_module._count_local_text_lines_cached.cache_clear()
+    monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
+
+    first = conversation_workspace_module._read_text_page_from_path(
+        target, "/workspace/report with spaces.txt", offset=0, limit=1, max_chars=100,
+    )
+    second = conversation_workspace_module._read_text_page_from_path(
+        target, "/workspace/report with spaces.txt", offset=1, limit=1, max_chars=100,
+    )
+
+    assert first["total_lines"] == second["total_lines"] == 3
+    assert len(calls) == 1
+    assert calls[0][0][1:] == ["-l", str(target)]
+    assert calls[0][1]["timeout"] == 30
+    assert calls[0][1]["check"] is False
+
+    target.write_text("first\nsecond\nthird\nfourth", encoding="utf-8")
+    third = conversation_workspace_module._read_text_page_from_path(
+        target, "/workspace/report with spaces.txt", offset=2, limit=1, max_chars=100,
+    )
+
+    assert third["total_lines"] == 4
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
@@ -1260,7 +1346,7 @@ async def test_file_edit_rejects_uploads_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
+async def test_semantic_query_tool_returns_internal_result_envelope(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_save_{uuid.uuid4().hex}")
     writes = []
     input_dsl = {"metrics": ["销售额"], "dimensions": ["月份"]}
@@ -1311,7 +1397,6 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],
         "dsl": input_dsl,
-        "save_as": "workspace/current.json",
         "state": state,
     })
 
@@ -1322,13 +1407,11 @@ async def test_semantic_query_tool_save_as_writes_query_result(monkeypatch):
     assert payload["meta"] == {
         "query_mode": "dsl",
         "confidence": 0.9,
-        "save_as": "workspace/current.json",
     }
-    assert not (Path(paths["workspace"]) / "current.json").exists()
 
 
 @pytest.mark.asyncio
-async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch):
+async def test_semantic_query_tool_keeps_full_result(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_full_{uuid.uuid4().hex}")
     input_dsl = {"metrics": ["订单数"]}
 
@@ -1378,24 +1461,12 @@ async def test_semantic_query_tool_without_save_as_keeps_full_result(monkeypatch
 
     payload = json.loads(result)
     assert payload["type"] == "chatdata_internal_tool_result"
-    assert payload["meta"]["save_as"] == ""
     assert payload["payload"]["results"][0]["data"] == [{"cnt": 3}]
     assert payload["payload"]["sql"] == "select count(*) cnt from t"
 
-    blank_save_result = await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": input_dsl,
-        "save_as": "   ",
-        "state": state,
-    })
-    blank_save_payload = json.loads(blank_save_result)
-    assert blank_save_payload["meta"]["save_as"] == ""
-    assert blank_save_payload["payload"]["results"][0]["data"] == [{"cnt": 3}]
-
 
 @pytest.mark.asyncio
-async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middleware(monkeypatch):
+async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_offload_{uuid.uuid4().hex}")
 
     async def fake_get_config(*_args, **_kwargs):
@@ -1446,7 +1517,7 @@ async def test_semantic_query_tool_without_save_as_leaves_large_result_for_middl
 
 
 @pytest.mark.asyncio
-async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_json_save(monkeypatch):
+async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_requests(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
     tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths)
     state_without_datasource = _analysis_query_state(paths, datasource_id=None)
@@ -1458,42 +1529,12 @@ async def test_semantic_query_tool_rejects_missing_datasource_workspace_and_non_
         "state": state_without_datasource,
     }) == "semantic_query_tool 执行失败: 当前会话未绑定数据源"
 
-    async def fake_execute_sql_real(sql, datasource_id, member_datasource_ids=None, user_id=None, **kwargs):
-        return {"success": True, "sql": sql, "columns": [], "data": []}
-
-    monkeypatch.setattr(sql_tool_module, "_execute_sql_real", fake_execute_sql_real)
-    async def fake_get_config(*_args, **_kwargs):
-        return {"id": "sc_1", "metrics": [{"name": "订单数"}], "dimensions": []}
-
-    monkeypatch.setattr(sql_tool_module, "load_runtime_semantic_config", fake_get_config)
-    assert await sql_tool_module.semantic_query_tool.ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "sql": "select 1",
-        "save_as": "workspace/a.json",
-        "state": {
-            "execution_context": {
-                "datasource_id": "ds_1",
-                "available_member_datasource_ids": ["m1"],
-                "matched_member_datasource_ids": [],
-            },
-            "workspace": {},
-        },
-    }) == "semantic_query_tool 执行失败: 当前会话未初始化工作目录，无法保存结果"
-
     tools = _create_local_workspace_tools(
         monkeypatch,
         paths,
         datasource_id="ds_1",
     )
     state = _analysis_query_state(paths)
-    assert await tools["semantic_query_tool"].ainvoke({
-        "semantic_config_id": "sc_1",
-        "member_datasource_ids": ["m1"],
-        "dsl": {"metrics": ["订单数"]},
-        "save_as": "workspace/a.txt",
-        "state": state,
-    }) == "semantic_query_tool 执行失败: save_as 只支持 .json 文件"
     assert await tools["semantic_query_tool"].ainvoke({
         "semantic_config_id": "sc_1",
         "member_datasource_ids": ["m1"],

@@ -16,6 +16,8 @@ logger = get_logger(__name__)
 
 TOOL_OFFLOAD_DIR_NAME = ".tool-offload"
 TOOL_OFFLOAD_VIRTUAL_ROOT = "/mnt/user-data/outputs/.tool-offload"
+QUERY_RESULT_DIR_NAME = "query_result"
+QUERY_RESULT_VIRTUAL_ROOT = "/mnt/user-data/outputs/query_result"
 _RESULT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ALLOWED_SUFFIXES = frozenset({".json", ".txt"})
 
@@ -28,10 +30,16 @@ class ToolResultRecord:
     suffix: str
     user_id: str
     conversation_id: str
+    directory_name: str = TOOL_OFFLOAD_DIR_NAME
 
     @property
     def virtual_path(self) -> str:
-        return f"{TOOL_OFFLOAD_VIRTUAL_ROOT}/{self.result_id}{self.suffix}"
+        virtual_root = (
+            QUERY_RESULT_VIRTUAL_ROOT
+            if self.directory_name == QUERY_RESULT_DIR_NAME
+            else TOOL_OFFLOAD_VIRTUAL_ROOT
+        )
+        return f"{virtual_root}/{self.result_id}{self.suffix}"
 
 
 def validate_tool_result_id(value: str) -> str:
@@ -69,6 +77,7 @@ class ToolResultStore:
             suffix=".json",
             conversation_id=conversation_id,
             user_id=user_id,
+            directory_name=QUERY_RESULT_DIR_NAME,
         )
         path = self._path_for_record(record)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +123,7 @@ class ToolResultStore:
             suffix=".json",
             conversation_id=conversation_id,
             user_id=user_id,
+            directory_name=QUERY_RESULT_DIR_NAME,
         )
         try:
             with self._path_for_record(record).open("r", encoding="utf-8") as handle:
@@ -130,14 +140,18 @@ class ToolResultStore:
         suffix: str,
         conversation_id: str,
         user_id: str,
+        directory_name: str = TOOL_OFFLOAD_DIR_NAME,
     ) -> ToolResultRecord:
         if suffix not in _ALLOWED_SUFFIXES:
             raise ValueError("私有工具结果文件类型无效")
+        if directory_name not in {TOOL_OFFLOAD_DIR_NAME, QUERY_RESULT_DIR_NAME}:
+            raise ValueError("私有工具结果目录无效")
         return ToolResultRecord(
             result_id=validate_tool_result_id(result_id),
             suffix=suffix,
             user_id=str(user_id).strip(),
             conversation_id=str(conversation_id).strip(),
+            directory_name=directory_name,
         )
 
     def _path_for_record(self, record: ToolResultRecord) -> Path:
@@ -152,7 +166,7 @@ class ToolResultStore:
             / conversation_id
             / "user-data"
             / "outputs"
-            / TOOL_OFFLOAD_DIR_NAME
+            / record.directory_name
             / f"{record.result_id}{record.suffix}"
         ).resolve()
         if self.base_dir != path and self.base_dir not in path.parents:

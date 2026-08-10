@@ -55,7 +55,8 @@ def _query_tool_message(query_result: dict) -> ToolMessage:
 
 
 @pytest.mark.asyncio
-async def test_query_result_is_inlined_as_public_envelope(monkeypatch, tmp_path):
+async def test_query_result_is_saved_as_reference_only(monkeypatch, tmp_path):
+    request, paths = _workspace_request(monkeypatch, tmp_path)
     message = _query_tool_message({
         "status": "succeeded",
         "sql": "select 1",
@@ -63,14 +64,17 @@ async def test_query_result_is_inlined_as_public_envelope(monkeypatch, tmp_path)
         "total_count": 1,
     })
 
-    result = await tool_result._finalize_tool_message(message, _request())
+    result = await tool_result._finalize_tool_message(message, request)
     payload = json.loads(result.content)
 
     assert payload["type"] == "query_result"
     assert payload["status"] == "succeeded"
-    assert payload["data"]["results"][0]["data"] == [{"value": 1}]
-    assert payload["meta"] == {"query_mode": "dsl2sql", "confidence": 0.9}
-    assert not list(tmp_path.rglob("*.json"))
+    assert payload["data"] is None
+    result_id = payload["meta"]["result_id"]
+    assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/query_result/{result_id}.json"
+    assert json.loads(
+        (Path(paths["outputs"]) / "query_result" / f"{result_id}.json").read_text(encoding="utf-8")
+    )["results"][0]["data"] == [{"value": 1}]
 
 
 @pytest.mark.asyncio
@@ -90,11 +94,10 @@ async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tm
     result_id = payload["meta"]["result_id"]
 
     assert payload["data"] is None
-    assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/.tool-offload/{result_id}.json"
-    assert payload["meta"]["llm_analysis_skipped"] is True
-    assert "完整数据未进入模型上下文" in payload["meta"]["message"]
-    assert "file_read" not in payload["meta"]["message"]
-    saved_path = Path(paths["outputs"]) / ".tool-offload" / f"{result_id}.json"
+    assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/query_result/{result_id}.json"
+    assert payload["meta"]["content_in_context"] is False
+    assert "完整结果已保存" in payload["meta"]["message"]
+    saved_path = Path(paths["outputs"]) / "query_result" / f"{result_id}.json"
     assert json.loads(saved_path.read_text(encoding="utf-8"))["results"][0]["data"][0]["content"] == "x" * 200
 
 

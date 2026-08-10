@@ -28,7 +28,6 @@ class _PreparedToolRequest:
     dsl: dict[str, Any] | None
     sql: str
     has_dsl: bool
-    save_path: str
 
 
 @dataclass(frozen=True)
@@ -99,27 +98,10 @@ def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[st
     return available_member_ids, matched_member_ids
 
 
-def _get_workspace_root_from_state(state: dict | None) -> str | None:
-    """读取当前会话工作区。"""
-    workspace_context = (state or {}).get("workspace")
-    workspace_root = (
-        workspace_context.get("workspace_root")
-        if isinstance(workspace_context, dict)
-        else None
-    )
-    if not isinstance(workspace_root, str):
-        return None
-    workspace_root = workspace_root.strip()
-    return workspace_root or None
-
-
 def _prepare_tool_request(
     *,
     dsl: Any,
     sql: str | None,
-    save_as: str | None,
-    workspace_root: str | None,
-    has_workspace: bool,
 ) -> _PreparedToolRequest | str:
     has_dsl = dsl is not None
     normalized_sql = str(sql or "").strip()
@@ -134,20 +116,10 @@ def _prepare_tool_request(
         return _tool_error("sql 必须放在顶层 sql 参数中，不要放入 dsl")
     if isinstance(dsl, dict) and isinstance(dsl.get("cards"), list):
         return _tool_error("dsl 必须是单个查询对象")
-
-    save_path = str(save_as or "").strip()
-    if save_path:
-        if not has_workspace:
-            return _tool_error("当前会话未初始化工作目录，无法保存结果")
-        if not str(workspace_root or "").strip():
-            return _tool_error("当前会话未初始化工作目录，无法保存结果")
-        if not save_path.lower().endswith(".json"):
-            return _tool_error("save_as 只支持 .json 文件")
     return _PreparedToolRequest(
         dsl=dsl if isinstance(dsl, dict) else None,
         sql=normalized_sql,
         has_dsl=has_dsl,
-        save_path=save_path,
     )
 
 
@@ -282,7 +254,6 @@ async def semantic_query_tool(
     sql: str | None = None,
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
-    save_as: str | None = None,
 ) -> str:
     """
     使用 DSL 模式或 SQL 模式执行数据库查询并返回统一查询结果。
@@ -290,9 +261,7 @@ async def semantic_query_tool(
     DSL 模式：传顶层 dsl，服务端编译后执行；常规查询使用此模式，并先调用
     dsl2sql_tool 校验同一份 DSL。SQL 模式：仅当 DSL 无法表达查询结构时传顶层 sql，
     直接执行只读 SQL，不调用 dsl2sql_tool。两种模式都必须指定语义模型和执行对象范围，
-    且 dsl 和 sql 必须二选一。“模式”不是参数，不要传 mode。常规查询不要传 save_as；
-    仅当用户、技能或后续流程明确要求将完整结果保留到磁盘用于二次分析、脚本处理或
-    产物生成时使用 save_as。
+    且 dsl 和 sql 必须二选一。“模式”不是参数，不要传 mode。
     """
     return await _run_semantic_query_tool(
         dsl=dsl,
@@ -300,7 +269,6 @@ async def semantic_query_tool(
         semantic_config_id=semantic_config_id,
         member_datasource_ids=member_datasource_ids,
         state=state,
-        save_as=save_as,
     )
 
 
@@ -311,18 +279,8 @@ async def _run_semantic_query_tool(
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
     state: dict | None = None,
-    save_as: str | None = None,
 ) -> str:
-    workspace_root = _get_workspace_root_from_state(state)
-    workspace_context = (state or {}).get("workspace")
-    has_workspace = isinstance(workspace_context, dict)
-    prepared_request = _prepare_tool_request(
-        dsl=dsl,
-        sql=sql,
-        save_as=save_as,
-        workspace_root=workspace_root,
-        has_workspace=has_workspace,
-    )
+    prepared_request = _prepare_tool_request(dsl=dsl, sql=sql)
     if isinstance(prepared_request, str):
         return prepared_request
 
@@ -354,7 +312,6 @@ async def _run_semantic_query_tool(
         query_result,
         query_mode=query.query_mode,
         confidence=query.confidence,
-        save_as=prepared_request.save_path,
     )
 
 

@@ -566,7 +566,7 @@ def test_semantic_query_tool_returns_query_result_or_error(monkeypatch):
     assert success_payload["success"] is True
     assert success_payload["data"] == [{"id": 1}]
     assert success_payload["sql"] == "select 1"
-    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl", "confidence": 0.9, "save_as": ""}
+    assert _query_result_payload(success)["meta"] == {"query_mode": "dsl", "confidence": 0.9}
     assert json_string_success_payload["success"] is True
     failed_payload = _internal_query_payload(failed)
     assert failed_payload["success"] is False
@@ -588,14 +588,6 @@ def test_semantic_query_input_rejects_invalid_json_dsl_string():
         SemanticQueryInput.model_validate({**base_payload, "dsl": "not-json"})
     with pytest.raises(ValidationError, match="dsl 必须是对象或有效的 JSON 对象字符串"):
         SemanticQueryInput.model_validate({**base_payload, "dsl": "[]"})
-
-
-def test_semantic_query_save_as_description_is_explicitly_opt_in():
-    description = SemanticQueryInput.model_fields["save_as"].description or ""
-
-    assert "常规查询不要传" in description
-    assert "二次分析" in description
-    assert "workspace/ 下的 .json 文件" in description
 
 
 def test_semantic_query_tool_allows_model_selected_member_ids(monkeypatch):
