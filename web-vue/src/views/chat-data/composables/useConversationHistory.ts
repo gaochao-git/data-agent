@@ -13,7 +13,7 @@ import type {
   SemanticParams,
   ThinkingSegment,
 } from '../types'
-import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
+import { extractSemanticParamsFromArgs, getQueryResultError, getRenderableQueryResultData } from '../utils/semanticTool'
 
 const parseHistoryTimestamp = (value: unknown): Date | null => {
   if (typeof value !== 'string' || !value.trim()) return null
@@ -172,7 +172,7 @@ const withHistoryToolResult = (toolCall: ToolCallInfo, result: string): ToolCall
   return {
     ...toolCall,
     result,
-    status: 'completed',
+    status: getQueryResultError(result) ? 'error' : 'completed',
     renderId,
     renderType,
     semanticParams,

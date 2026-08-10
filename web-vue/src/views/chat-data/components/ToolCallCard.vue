@@ -9,7 +9,7 @@ import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
-import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, parseQueryResultEnvelope } from '../utils/semanticTool'
+import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
 import { getToolDisplayName } from '../utils/toolDisplay'
 
 interface Props {
@@ -164,6 +164,7 @@ const compactDescription = computed(() => {
 })
 
 const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))
+const visibleError = computed(() => getQueryResultError(props.toolCall.result) || String(props.toolCall.result || '执行失败'))
 
 // 是否可以保存到看板（semantic_query_tool 完成且查询结果包含内部生成的 SQL）
 const canSaveToPanel = computed(() => {
@@ -666,7 +667,7 @@ function getSqlTokenClass(type: string): string {
           <i class="fa-solid fa-triangle-exclamation"></i>
           <span>错误</span>
         </div>
-        <div class="text-sm text-red-600">{{ toolCall.result }}</div>
+        <div class="text-sm text-red-600 whitespace-pre-wrap break-words">{{ visibleError }}</div>
       </div>
     </div>
 

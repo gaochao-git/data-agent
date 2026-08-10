@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 class SemanticAIQueryAdapter:
     """语义 DSL 输入适配器。"""
 
-    def __init__(self, semantic_config: Dict):
+    def __init__(self, semantic_config: Dict, max_rows: Optional[int] = None):
         """
         初始化语义 DSL 适配器
 
@@ -38,7 +38,8 @@ class SemanticAIQueryAdapter:
         self.semantic_config = self.query_plan_context.semantic_config
         self.metrics_map = self.query_plan_context.metrics_map
         self.dimensions_map = self.query_plan_context.dimensions_map
-        self.validator = InputValidator(self.metrics_map, self.dimensions_map, max_limit=DEFAULT_ROW_LIMIT)
+        self.max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
+        self.validator = InputValidator(self.metrics_map, self.dimensions_map, max_limit=self.max_rows)
         self.dialect_name = self.query_plan_context.dialect_name
         self.dialect = get_dialect(self.dialect_name)
 
@@ -710,7 +711,7 @@ class SemanticAIQueryAdapter:
             }
             if builder_having:
                 query_plan["filters"] = query_plan["filters"] + builder_having
-            sql = SemanticSQLCompiler(dialect=self.dialect_name).compile(query_plan)
+            sql = SemanticSQLCompiler(dialect=self.dialect_name, max_rows=self.max_rows).compile(query_plan)
         except Exception as err:
             logger.error(f"统一 DSL2SQL 编译失败: {err}", exc_info=True)
             return {"success": False, "error": f"错误：SQL 转换失败 - {str(err)}"}
@@ -767,15 +768,16 @@ def _parse_aggregate_expression(expression: str) -> Tuple[str, str] | None:
 class SemanticBIQueryAdapter:
     """可视化查询输入适配器。"""
 
-    def __init__(self, semantic_config: Dict[str, Any]):
+    def __init__(self, semantic_config: Dict[str, Any], max_rows: Optional[int] = None):
         self.query_plan_context = SemanticQueryPlanContext(semantic_config)
         self.semantic_config = self.query_plan_context.semantic_config
         self.metrics_map = self.query_plan_context.metrics_map
         self.dimensions_map = self.query_plan_context.dimensions_map
+        self.max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
         self.validator = InputValidator(
             self.metrics_map,
             self.dimensions_map,
-            max_limit=DEFAULT_ROW_LIMIT,
+            max_limit=self.max_rows,
         )
 
     def adapt(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -814,7 +816,10 @@ class SemanticBIQueryAdapter:
     def compile(self, semantic_builder_config: Dict[str, Any]) -> Dict[str, Any]:
         """适配 Builder 输入后，通过统一语义 SQL 编译入口生成 SQL。"""
         query_plan = self.adapt(semantic_builder_config)
-        sql = SemanticSQLCompiler(dialect=self.query_plan_context.dialect_name).compile(query_plan)
+        sql = SemanticSQLCompiler(
+            dialect=self.query_plan_context.dialect_name,
+            max_rows=self.max_rows,
+        ).compile(query_plan)
         # builder_config 是既有前端响应字段，内部统一使用 query_plan。
         return {"sql": sql, "builder_config": query_plan}
 
@@ -981,10 +986,54 @@ class SemanticBIQueryAdapter:
             return {"or": mapped_children}
         if isinstance(node.get("left"), dict) and "right" in node:
             return self._map_having_filter(node)
+        self._validate_filter_value(node)
         if node.get("aggFunc"):
             return self._map_having_filter(node)
         mapped_filters = self._map_dimension_filter_leaves(node)
         return mapped_filters[0] if len(mapped_filters) == 1 else mapped_filters
+
+    @staticmethod
+    def _has_filter_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        return True
+
+    @classmethod
+    def _validate_filter_value(cls, node: Dict[str, Any]) -> None:
+        operator = _normalize_text(node.get("operator") or "=").upper()
+        if operator in {"IS NULL", "IS NOT NULL", "EMPTY STRING"}:
+            return
+
+        label = _normalize_text(
+            node.get("displayName")
+            or node.get("semanticName")
+            or node.get("name")
+            or node.get("column")
+            or "筛选条件"
+        )
+        value_type = _normalize_text(node.get("valueType") or node.get("value_type") or "literal").lower()
+        if value_type == "field_ref":
+            if not _normalize_text(node.get("rightTable")) or not _normalize_text(node.get("rightColumn")):
+                raise ValueError(f"筛选条件“{label}”请选择右侧字段")
+            return
+        if value_type == "expression":
+            if not _normalize_text(node.get("rightExpression")):
+                raise ValueError(f"筛选条件“{label}”请输入表达式")
+            return
+
+        value = node.get("value")
+        if operator == "BETWEEN":
+            if not isinstance(value, list) or len(value) != 2 or any(not cls._has_filter_value(item) for item in value):
+                raise ValueError(f"筛选条件“{label}”请输入完整的起止值")
+            return
+        if operator in {"IN", "NOT IN"}:
+            if not isinstance(value, list) or not value or any(not cls._has_filter_value(item) for item in value):
+                raise ValueError(f"筛选条件“{label}”请至少输入一个有效值")
+            return
+        if not cls._has_filter_value(value):
+            raise ValueError(f"筛选条件“{label}”请输入筛选值")
 
     def _copy_filter_value_fields(self, source: Dict[str, Any], target: Dict[str, Any]) -> None:
         for key in ("value", "valueType", "value_type", "rightExpression", "logic"):
@@ -1381,7 +1430,7 @@ def compile_semantic_bi_dsl(
     if not isinstance(dsl, dict):
         return {"success": False, "sql": "", "error": "BI 语义 DSL 必须是对象"}
     try:
-        result = SemanticBIQueryAdapter(semantic_config).compile(dsl)
+        result = SemanticBIQueryAdapter(semantic_config, max_rows=DEFAULT_ROW_LIMIT).compile(dsl)
     except (TypeError, ValueError) as exc:
         return {"success": False, "sql": "", "error": str(exc)}
     return {

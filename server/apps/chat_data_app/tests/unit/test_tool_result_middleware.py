@@ -179,14 +179,13 @@ async def test_remaining_context_budget_does_not_change_per_result_threshold(mon
 
 
 @pytest.mark.asyncio
-async def test_storage_failure_returns_incomplete_query_result_marker(monkeypatch, tmp_path):
+async def test_query_result_storage_failure_returns_structured_delivery_error(monkeypatch, tmp_path):
     request, _paths = _workspace_request(monkeypatch, tmp_path)
 
     async def fail_write_tool_result(self, **_kwargs):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(conversation_workspace.ConversationWorkspaceRuntime, "write_tool_result", fail_write_tool_result)
-    monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)
     message = _query_tool_message({
         "status": "succeeded",
         "sql": "select content",
@@ -194,11 +193,20 @@ async def test_storage_failure_returns_incomplete_query_result_marker(monkeypatc
     })
 
     result = await tool_result._finalize_tool_message(message, request)
+    payload = json.loads(result.content)
 
-    assert result.content.startswith("[tool_result_truncated]\n")
-    assert "source_tool=semantic_query_tool" in result.content
-    assert "content_complete=false" in result.content
-    assert len(result.content) <= 100
+    assert payload == {
+        "type": "query_result",
+        "version": 1,
+        "status": "failed",
+        "data": None,
+        "error": "查询已执行，但结果保存失败，当前无法展示或继续分析",
+        "meta": {
+            "query_mode": "dsl2sql",
+            "confidence": 0.9,
+            "result_persisted": False,
+        },
+    }
     assert result.artifact is None
 
 

@@ -26,6 +26,9 @@ describe('AsyncQueryResult', () => {
     expect(wrapper.text()).toContain('Invalid expression near LIMIT1')
     expect(wrapper.text()).not.toContain('Please use LIMIT 100')
     expect(wrapper.text()).not.toContain('\u001b[4m')
+    expect(wrapper.text()).toContain('失败')
+    expect(wrapper.text()).not.toContain('成功')
+    expect(wrapper.text()).not.toContain('共 0 条')
     expect(wrapper.get('[data-testid="toggle-query-error"]').attributes('aria-expanded')).toBe('false')
 
     await wrapper.get('[data-testid="toggle-query-error"]').trigger('click')

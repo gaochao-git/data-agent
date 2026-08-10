@@ -103,7 +103,12 @@ async def _finalize_query_result(
         )
     except Exception as exc:
         logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
-        return _build_truncated_tool_result_message("semantic_query_tool", result_size_chars), None
+        public_meta["result_persisted"] = False
+        return build_query_result_response(
+            status="failed",
+            error="查询已执行，但结果保存失败，当前无法展示或继续分析",
+            meta=public_meta,
+        ), None
 
     recovery = build_tool_result_recovery(
         source_tool="semantic_query_tool",

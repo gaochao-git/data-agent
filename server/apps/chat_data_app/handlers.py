@@ -501,6 +501,12 @@ def _is_tool_result_error(content: Any) -> bool:
     text = str(content or "").strip()
     if not text:
         return False
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and payload.get("type") == "query_result":
+        return str(payload.get("status") or "").strip().lower() in {"failed", "cancelled"}
     return "执行失败" in text or text.lower().startswith("error:")
 
 

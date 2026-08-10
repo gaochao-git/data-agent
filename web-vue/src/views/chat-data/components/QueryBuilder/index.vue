@@ -69,7 +69,7 @@ import {
 } from './utils/advancedFilterTree'
 import { ensureArrayValues, parseManualValues } from './utils/filterValues'
 import { buildSemanticSelectedTables } from './utils/semanticSelectedTables'
-import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
+import { buildBuilderConfigPayload as buildBuilderConfigPayloadUtil, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload } from './utils/builderConfig'
 import { useQueryBuilderResultAnalysis } from './composables/useQueryBuilderResultAnalysis'
 
 const props = defineProps({
@@ -543,6 +543,13 @@ const validateQueryPagination = () => {
     return false
   }
   return true
+}
+
+const validateBuilderFilters = () => {
+  const message = getBuilderFilterValidationError(filters.value)
+  if (!message) return true
+  ElMessage.warning(message)
+  return false
 }
 
 // 运算符选项
@@ -2113,6 +2120,9 @@ const openFavoriteModal = () => {
   if (!validateQueryPagination()) {
     return
   }
+  if (!validateBuilderFilters()) {
+    return
+  }
   const builderConfigPayload = buildBuilderConfigPayload() as Record<string, unknown>
   if (!builderConfigPayload.mainTable) {
     ElMessage.warning('请先配置可视化查询')
@@ -2151,6 +2161,9 @@ const compileCurrentBuilderSql = async (
   semanticConfigId: string = props.semanticConfigId as string,
   force = false,
 ): Promise<string> => {
+  if (!validateBuilderFilters()) {
+    return ''
+  }
   if (!validateQueryPagination()) {
     return ''
   }
@@ -2236,6 +2249,9 @@ const executeQuery = async () => {
     return
   }
   if (!validateQueryPagination()) {
+    return
+  }
+  if (!validateBuilderFilters()) {
     return
   }
   executing.value = true

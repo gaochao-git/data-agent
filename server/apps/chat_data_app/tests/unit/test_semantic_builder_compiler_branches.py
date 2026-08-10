@@ -88,6 +88,50 @@ def test_semantic_builder_compile_validation_branches():
         compiler.compile({"dimensions": [{"semanticName": "城市"}], "filters": [{"semanticName": "状态", "value": "paid"}, "bad"]})
 
 
+def test_ai_and_bi_adapters_pass_the_configured_row_limit_to_sql_compiler(monkeypatch):
+    calls = []
+
+    def fake_compile(_plan, dialect="mysql", max_rows=100):
+        calls.append((dialect, max_rows))
+        return "SELECT 1"
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        fake_compile,
+    )
+    config = build_semantic_config()
+    assert SemanticBIQueryAdapter(config, max_rows=218).compile({
+        "dimensions": [{"semanticName": "城市"}],
+    })["sql"] == "SELECT 1"
+    assert compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
+        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=218,
+    )["sql"] == "SELECT 1"
+    assert calls == [("mysql", 218), ("mysql", 218)]
+
+
+def test_ai_and_bi_adapters_compile_limits_above_the_core_default():
+    config = build_semantic_config()
+    ai_result = compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
+        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=218,
+    )
+    bi_result = SemanticBIQueryAdapter(config, max_rows=218).compile({
+        "dimensions": [{"semanticName": "城市"}],
+        "limit": 218,
+    })
+
+    assert ai_result["success"] is True
+    assert ai_result["sql"].endswith("LIMIT 218")
+    assert bi_result["sql"].endswith("LIMIT 218")
+    assert compiler_module.SemanticAIQueryAdapter(config, max_rows=218).generate_sql(
+        metrics=["销售额"], dimensions=[], filters=[], having=[], limit=219,
+    )["success"] is False
+    with pytest.raises(ValueError, match="LIMIT 不能超过 218"):
+        SemanticBIQueryAdapter(config, max_rows=218).compile({
+            "dimensions": [{"semanticName": "城市"}],
+            "limit": 219,
+        })
+
+
 def test_ai_and_bi_reject_disconnected_semantic_tables():
     config = build_semantic_config()
     config["relationships"] = []
@@ -217,6 +261,38 @@ def test_semantic_builder_filter_mapping_branches():
     })
     assert having["aggFunc"] == "SUM"
     assert having["column"] == "amount"
+
+
+@pytest.mark.parametrize(
+    ("filter_config", "error"),
+    [
+        ({"semanticName": "状态", "operator": "=", "value": "  "}, "请输入筛选值"),
+        ({"semanticName": "状态", "operator": "BETWEEN", "value": ["paid", ""]}, "完整的起止值"),
+        ({"semanticName": "状态", "operator": "IN", "value": []}, "至少输入一个有效值"),
+        ({"semanticName": "状态", "operator": "=", "valueType": "field_ref"}, "请选择右侧字段"),
+        ({"semanticName": "状态", "operator": "=", "valueType": "expression", "rightExpression": " "}, "请输入表达式"),
+    ],
+)
+def test_semantic_builder_rejects_incomplete_filter_values(filter_config, error):
+    compiler = SemanticBIQueryAdapter(build_semantic_config())
+
+    with pytest.raises(ValueError, match=error):
+        compiler.compile({
+            "dimensions": [{"semanticName": "状态"}],
+            "filters": [filter_config],
+        })
+
+
+@pytest.mark.parametrize("operator", ["EMPTY STRING", "IS NULL", "IS NOT NULL"])
+def test_semantic_builder_accepts_explicit_value_free_operators(operator):
+    compiler = SemanticBIQueryAdapter(build_semantic_config())
+
+    result = compiler.compile({
+        "dimensions": [{"semanticName": "状态"}],
+        "filters": [{"semanticName": "状态", "operator": operator, "value": ""}],
+    })
+
+    assert result["sql"]
 
 
 def test_semantic_builder_enforces_dimension_allowed_operators():

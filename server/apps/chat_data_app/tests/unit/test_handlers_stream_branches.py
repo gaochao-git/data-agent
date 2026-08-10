@@ -143,6 +143,8 @@ def test_handler_tool_state_helpers_cover_empty_and_fallback_branches():
     assert handlers._is_tool_result_error('[dashboard_write] {"success": false}') is False
     assert handlers._is_tool_result_error("error: bad") is True
     assert handlers._is_tool_result_error("执行失败") is True
+    assert handlers._is_tool_result_error('{"type":"query_result","status":"failed"}') is True
+    assert handlers._is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
 
     assert handlers._visible_tool_count({}) == 0
     assert handlers._visible_tool_count({

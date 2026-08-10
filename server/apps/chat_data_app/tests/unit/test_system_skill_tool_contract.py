@@ -94,6 +94,11 @@ def test_semantic_query_skill_contains_complete_query_contract():
     assert "用户必须补充公式和统计周期" in semantic_query
     assert "查询成功后系统始终将完整结果保存" in semantic_query
     assert "result_path" in semantic_query
+    assert "用户只要求查询、查看或列出结果时，不读取结果文件" in semantic_query
+    assert "回答具体数值、形成业务结论" in semantic_query
+    assert "必须先读取 `result_path` 中的实际数据" in semantic_query
+    assert "优先重新执行更小的 DSL/SQL" in semantic_query
+    assert "禁止为了分析把大型结果逐页全部加载进模型上下文" in semantic_query
     assert "/mnt/skills/semantic-query/references/dialect.md" in semantic_query
     assert "## 必读资料" in semantic_query
     assert "DSL 查询只使用 `time_grain`" in semantic_query

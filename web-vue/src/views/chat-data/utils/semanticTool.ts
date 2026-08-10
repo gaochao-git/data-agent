@@ -48,6 +48,12 @@ export const parseQueryResultEnvelope = (result?: string): QueryToolResultEnvelo
   return parsed as QueryToolResultEnvelope
 }
 
+export const getQueryResultError = (result?: string): string => {
+  const envelope = parseQueryResultEnvelope(result)
+  if (!envelope || !['failed', 'cancelled'].includes(String(envelope.status || '').toLowerCase())) return ''
+  return String(envelope.error || '查询失败').trim()
+}
+
 export const getRenderableQueryResultData = (result?: string): string => {
   const envelope = parseQueryResultEnvelope(result)
   if (!envelope) return ''

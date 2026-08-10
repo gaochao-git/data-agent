@@ -1,8 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { buildBuilderConfigPayload, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload, type BuildBuilderConfigParams } from '../builderConfig'
+import { buildBuilderConfigPayload, getBuilderFilterValidationError, snapshotBuilderConfigPayload, toSemanticBuilderConfigPayload, type BuildBuilderConfigParams } from '../builderConfig'
 import { buildSemanticSelectedTables } from '../semanticSelectedTables'
 
 describe('QueryBuilder configuration utilities', () => {
+  it('rejects incomplete filter values and accepts explicit value-free operators', () => {
+    const filter = (overrides: Partial<BuildBuilderConfigParams['filters'][number]> = {}) => ({
+      id: 'f1',
+      table: 'orders',
+      column: 'status',
+      displayName: '订单状态',
+      operator: '=',
+      value: 'paid',
+      valueType: 'literal' as const,
+      logic: 'AND' as const,
+      ...overrides,
+    })
+
+    expect(getBuilderFilterValidationError([filter({ value: '   ' })])).toContain('请输入筛选值')
+    expect(getBuilderFilterValidationError([filter({ operator: 'BETWEEN', value: ['2026-01-01', ''] })])).toContain('完整的起止值')
+    expect(getBuilderFilterValidationError([filter({ operator: 'IN', value: [] })])).toContain('至少输入一个有效值')
+    expect(getBuilderFilterValidationError([filter({ valueType: 'field_ref', rightTable: '', rightColumn: '' })])).toContain('请选择右侧字段')
+    expect(getBuilderFilterValidationError([filter({ valueType: 'expression', rightExpression: ' ' })])).toContain('请输入表达式')
+    expect(getBuilderFilterValidationError([filter({ operator: 'EMPTY STRING', value: '' })])).toBeNull()
+    expect(getBuilderFilterValidationError([filter({ operator: 'IS NULL', value: '' })])).toBeNull()
+  })
   it('keeps a compound filter and separate HAVING filter in the generated payload', () => {
     const payload = buildBuilderConfigPayload({
       semanticConfigId: 'semantic-1',

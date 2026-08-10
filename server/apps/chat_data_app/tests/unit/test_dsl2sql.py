@@ -683,7 +683,7 @@ def test_structured_expression_filter_helper_edges(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT helper"
 
@@ -973,7 +973,7 @@ def test_generator_reversed_join_and_legacy_left_right_columns(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         captured["dialect"] = dialect
         return "SELECT 1"
@@ -1023,7 +1023,7 @@ def test_generator_captures_builder_config_for_count_star_and_metric_columns(mon
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT captured"
 
@@ -1084,7 +1084,7 @@ def test_generator_dimension_metric_raw_fallback_and_table_collection(monkeypatc
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT raw"
 
@@ -1138,7 +1138,7 @@ def test_generator_additional_helper_and_join_edges(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         captured["dialect"] = dialect
         return "SELECT joined"
@@ -1212,7 +1212,7 @@ def test_generator_builder_config_branches_for_metric_columns_and_table_sets(mon
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT branches"
 
@@ -1310,7 +1310,7 @@ def test_generator_remaining_branch_edges(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT remaining"
 
@@ -1383,7 +1383,7 @@ def test_generator_disconnected_join_and_missing_dimension_metric_branches(monke
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT disconnected"
 
@@ -1443,7 +1443,7 @@ def test_generator_tables_needed_empty_objects_do_not_add_tables(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT empty tables"
 
@@ -1478,7 +1478,7 @@ def test_generator_remaining_builder_mapping_edges(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT mapped"
 
@@ -1559,7 +1559,7 @@ def test_generator_join_condition_and_star_metric_remaining_branches(monkeypatch
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT branch coverage"
 
@@ -1611,7 +1611,7 @@ def test_generator_raw_metric_duplicate_dimension_skips_added_dimension(monkeypa
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT duplicate"
 
@@ -1642,7 +1642,7 @@ def test_generator_remaining_coverage_branches(monkeypatch):
 
     captured = {}
 
-    def fake_compile_query_plan_sql(builder_config, dialect="mysql"):
+    def fake_compile_query_plan_sql(builder_config, dialect="mysql", max_rows=100):
         captured["builder_config"] = builder_config
         return "SELECT coverage"
 

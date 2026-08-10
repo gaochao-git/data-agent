@@ -269,6 +269,9 @@ def test_parse_tool_args_buffer_falls_back_on_invalid_json():
 def test_is_tool_result_error_detects_plain_errors():
     assert _is_tool_result_error("执行失败: 表不存在") is True
     assert _is_tool_result_error("error: syntax error") is True
+    assert _is_tool_result_error('{"type":"query_result","status":"failed"}') is True
+    assert _is_tool_result_error('{"type":"query_result","status":"cancelled"}') is True
+    assert _is_tool_result_error('{"type":"query_result","status":"succeeded"}') is False
     assert _is_tool_result_error("[dashboard_write] {\"success\": false}") is False
     assert _is_tool_result_error("执行完成") is False
 

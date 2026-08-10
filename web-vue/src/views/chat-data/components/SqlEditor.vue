@@ -474,7 +474,7 @@ const queryResultPanelItems = computed<QueryResultPanelItem[]>(() =>
     sql: result.sql,
     memberDatasourceId: result.memberDatasourceId,
     memberName: result.memberName,
-    status: result.error ? 'error' : 'success',
+    status: isQuerySucceeded(result) ? 'success' : 'error',
   }))
 )
 const queryHistoryRefreshKey = ref(0)

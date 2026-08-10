@@ -8,7 +8,7 @@ import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
 import { CHART_TYPES, normalizeChartType, type ChartType } from '../chartTypes'
-import { getSafeNumericColumns, isQueryFailed, stripAnsiErrorText } from '../utils'
+import { getSafeNumericColumns, isQueryFailed, isQuerySucceeded, normalizeQueryStatus, stripAnsiErrorText } from '../utils'
 
 interface QueryResult {
   status?: string | null
@@ -136,6 +136,10 @@ const activeResult = computed(() => parseResult.value.result)
 const parseError = computed(() => parseResult.value.error)
 const activeErrorText = computed(() => stripAnsiErrorText(activeResult.value?.error, '查询失败'))
 const activeFailed = computed(() => isQueryFailed(activeResult.value))
+const activeSucceeded = computed(() => isQuerySucceeded(activeResult.value))
+const activeFailureLabel = computed(() => (
+  normalizeQueryStatus(activeResult.value) === 'cancelled' ? '已取消' : '失败'
+))
 const errorExpanded = ref(false)
 const errorSummary = computed(() => activeErrorText.value.split(/\r?\n/, 1)[0] || '查询失败')
 
@@ -462,17 +466,27 @@ const getDimensionKey = (dim: string | { name: string }): string => {
       <div class="shrink-0 flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 border-t border-black/[0.04] bg-gradient-to-br from-slate-50 to-slate-100">
         <!-- 左侧：状态信息 -->
         <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <span class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-emerald-500 bg-gradient-to-br from-emerald-500/12 to-emerald-500/6">
+          <span
+            v-if="activeSucceeded"
+            class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-emerald-500 bg-gradient-to-br from-emerald-500/12 to-emerald-500/6"
+          >
             <i class="fa-solid fa-circle-check text-[10px]"></i>
             成功
+          </span>
+          <span
+            v-else-if="activeFailed"
+            class="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold text-red-600 bg-red-100"
+          >
+            <i class="fa-solid fa-circle-exclamation text-[10px]"></i>
+            {{ activeFailureLabel }}
           </span>
           <span v-if="activeResult?.execution_time_ms != null" class="shrink-0 whitespace-nowrap text-xs text-gray-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             {{ formatExecutionSeconds(activeResult.execution_time_ms) }}
           </span>
-          <span v-if="activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
+          <span v-if="activeSucceeded && activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             共 {{ activeResult.total_count }} 条
           </span>
-          <span v-if="activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
+          <span v-if="activeSucceeded && activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
             缓存结果
           </span>
           <span
@@ -496,7 +510,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
         <!-- 中间：翻页器 -->
         <div
-          v-if="paginationEnabled && viewMode === 'table' && limitedData.length > 0"
+          v-if="activeSucceeded && paginationEnabled && viewMode === 'table' && limitedData.length > 0"
           class="flex shrink-0 flex-wrap items-center gap-1.5 text-xs text-gray-600"
         >
           <button
@@ -535,7 +549,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           </button>
 
           <!-- 视图切换下拉 -->
-          <div class="relative">
+          <div v-if="activeSucceeded" class="relative">
             <button
               ref="viewBtnRef"
               class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center gap-1.5 border border-transparent rounded-md bg-gradient-to-br from-[#1f82d9] to-[#135589] text-white text-[11px] cursor-pointer transition-all duration-200 shadow-[0_1px_4px_rgba(31,130,217,0.3)]"
@@ -578,7 +592,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
 
           <!-- 保存按钮 -->
           <button
-            v-if="activeResult?.sql || sql"
+            v-if="activeSucceeded && (activeResult?.sql || sql)"
             class="shrink-0 whitespace-nowrap h-[26px] min-w-[56px] px-2 flex items-center justify-center border border-black/10 rounded-md bg-white text-gray-600 text-[11px] cursor-pointer transition-all duration-200 hover:border-[#1f82d9]/40 hover:bg-gradient-to-br hover:from-[#1f82d9]/10 hover:to-[#1f82d9]/5 hover:text-[#1f82d9]"
             title="保存到看板"
             @click="handleSave"
