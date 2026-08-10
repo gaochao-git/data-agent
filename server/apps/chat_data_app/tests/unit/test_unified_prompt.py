@@ -12,7 +12,7 @@ from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.skills.loader import format_skills_prompt
 
 
-def test_system_prompt_requires_semantic_discovery_and_detail_read_before_query():
+def test_system_prompt_requires_semantic_skill_gate_before_query():
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
         available_skills_xml=format_skills_prompt([{
@@ -23,16 +23,16 @@ def test_system_prompt_requires_semantic_discovery_and_detail_read_before_query(
     )
 
     assert "第一步必须调用 `file_read`" in prompt
-    assert "不得跳过技能直接调用语义或查询工具" in prompt
     assert "<name>semantic-query</name>" in prompt
-    assert "必须先读取该技能" in prompt
-    assert "**DSL 模式**和**SQL 模式**" in prompt
-    assert "DSL 模式传顶层 `dsl`" in prompt
-    assert "SQL 模式传顶层 `sql`" in prompt
-    assert "SQL 模式" in prompt and "不调用 `dsl2sql_tool`" in prompt
-    assert "不是工具参数，不要传 `mode`" in prompt
+    assert "## 语义查询门禁" in prompt
+    assert "不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`" in prompt
+    assert "读取技能后，语义模型检索、字段确认、DSL/SQL 模式选择" in prompt
+    assert "**DSL 模式**和**SQL 模式**" not in prompt
+    assert "DSL 模式传顶层 `dsl`" not in prompt
+    assert "SQL 模式传顶层 `sql`" not in prompt
+    assert "不是工具参数，不要传 `mode`" not in prompt
     assert "不能通过 SQL 绕过" not in prompt
-    assert "每次查询只能使用一个 `semantic_config_id`" in prompt
+    assert "每次查询只能使用一个 `semantic_config_id`" not in prompt
     assert "get_field" not in prompt
     assert "source_tool=semantic_search" not in prompt
     assert ".tool-offload" not in prompt

@@ -140,15 +140,12 @@ SKILLS_USAGE_BLOCK = """## 技能使用
 SCENE_ROUTING_BLOCK = """## 场景路由
 - 问候、闲聊、使用帮助和概念解释：直接回答，不调用查询工具。
 - 用户不知道能查什么、有哪些数据或如何开始：仅根据当前数据源说明和语义模型目录做引导，不把目录当作完整字段口径，也不编造具体查询示例。
-- 业务数据查询、具体指标或维度询问，以及“订单数、用户数、销售额”等短问法：只要当前可用技能包含 `semantic-query`，第一步必须调用 `file_read` 读取其声明的 `SKILL.md`，再按技能流程检索语义模型；不得跳过技能直接调用语义或查询工具。"""
+- 业务数据查询、具体指标或维度询问，以及“订单数、用户数、销售额”等短问法：按“语义查询门禁”处理。"""
 
-SEMANTIC_QUERY_CORE_BLOCK = """## 语义查询核心规则
-- 用户意图命中语义查询且当前可用技能包含 `semantic-query` 时，必须先读取该技能，再按技能流程检索模型、确认字段口径并决定查询、抽样或澄清；旧会话快照不包含该技能时，不得虚构技能路径，仍须遵守本段门禁和工具 schema。
-- 查询支持两种模式：**DSL 模式**和**SQL 模式**。DSL 模式传顶层 `dsl`，先用 `dsl2sql_tool` 校验同一份 DSL，再用 `semantic_query_tool` 执行；SQL 模式传顶层 `sql`，直接用 `semantic_query_tool` 执行只读 SQL，不调用 `dsl2sql_tool`。
-- 常规查询使用 DSL 模式；只有 DSL 确实无法表达查询结构时才使用 SQL 模式。两种模式只能选择一种，不能同时传 `dsl` 和 `sql`；“模式”是查询路径术语，不是工具参数，不要传 `mode`。
-- 调用 `dsl2sql_tool`、`semantic_query_tool` 或 `calculator_tool` 前，语义模型、指标、维度、筛选对象、时间范围、枚举含义、单位和业务口径必须高置信明确；字段已确认但枚举值或时间存储格式未知时，才允许少量抽样。
-- 每次查询只能使用一个 `semantic_config_id`；DSL/SQL 中的指标、维度、原始表列和关系必须来自本轮检索并通过文件读取确认的模型。机构范围只通过 `member_datasource_ids` 控制，不在 DSL filters 中添加机构名称、编码或 ID。
-- 候选不唯一或口径不清时，只向用户提出一个最关键的业务澄清问题；搜索确认不存在时说明当前配置缺少什么。相对时间需要真实范围时，先调用 `get_current_time`。"""
+SEMANTIC_QUERY_GATE_BLOCK = """## 语义查询门禁
+- 业务数据查询命中当前可用的 `semantic-query` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`；不得在读取前调用 `semantic_search`、`dsl2sql_tool` 或 `semantic_query_tool`。
+- 读取技能后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循该技能；系统层不重复定义这些具体规则。
+- 当前可用技能中没有 `semantic-query` 时，不得虚构技能路径；说明当前语义查询技能不可用。"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 回复只展示简短结论、关键数字、产物路径或预览状态。
@@ -256,7 +253,7 @@ def build_unified_system_prompt(
     sections.extend([
         SKILLS_USAGE_BLOCK,
         SCENE_ROUTING_BLOCK,
-        SEMANTIC_QUERY_CORE_BLOCK,
+        SEMANTIC_QUERY_GATE_BLOCK,
     ])
 
     dialect_context_text = build_dialect_prompt_context(data_context or {})
