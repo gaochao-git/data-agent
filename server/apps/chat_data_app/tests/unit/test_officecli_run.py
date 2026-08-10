@@ -10,13 +10,13 @@ from apps.chat_data_app.agent.tools.officecli_run import (
     create_officecli_run_tool,
     run_officecli_command,
 )
-from apps.chat_data_app.services import conversation_workspace as cw
-from apps.chat_data_app.services.conversation_workspace import (
+from apps.chat_data_app.services.agent_run import conversation_workspace as cw
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     SandboxWorkspaceBackend,
     ensure_conversation_workspace,
 )
-from apps.chat_data_app.services.officecli_adapter import command_path_values, parse_officecli_args
+from apps.chat_data_app.services.agent_run.officecli_adapter import command_path_values, parse_officecli_args
 
 
 def _write_fake_officecli(tmp_path, log_path) -> str:

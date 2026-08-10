@@ -9,8 +9,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import semantic_model_search as selector
-from apps.chat_data_app.services.semantic_model_search import (
+from apps.chat_data_app.services.semantic.run import semantic_model_search as selector
+from apps.chat_data_app.services.semantic.run.semantic_model_search import (
     _build_selector_prompt,
     _chunk_semantic_config_summaries,
     _merge_semantic_config_selections,

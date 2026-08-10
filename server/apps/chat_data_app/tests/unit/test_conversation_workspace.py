@@ -16,15 +16,15 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.services import conversation_workspace as conversation_workspace_module
+from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_module
 from utils import tool_result_store
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.dsl2sql import normalize_dsl_payload
-from apps.chat_data_app.services.workspace_execution import _artifact_payload_from_bytes
-from apps.chat_data_app.services import semantic_query_service
+from apps.chat_data_app.services.agent_run.workspace_execution import _artifact_payload_from_bytes
+from apps.chat_data_app.services.semantic.run import semantic_query_service
 
-from apps.chat_data_app.services.conversation_workspace import (
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     create_workspace_backend,
     _render_local_office_html,

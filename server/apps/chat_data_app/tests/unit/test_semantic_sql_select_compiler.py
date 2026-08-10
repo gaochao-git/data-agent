@@ -1,5 +1,5 @@
-from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import get_dialect
-from apps.chat_data_app.services.semantic_core.semantic_sql.select_compiler import compile_select_fields
+from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import get_dialect
+from apps.chat_data_app.services.semantic.core.semantic_sql.select_compiler import compile_select_fields
 
 
 def test_compile_select_fields_returns_alias_and_group_maps():

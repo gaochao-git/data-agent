@@ -1,4 +1,4 @@
-from apps.chat_data_app.services.semantic_core.semantic_sql.filter_compiler import (
+from apps.chat_data_app.services.semantic.core.semantic_sql.filter_compiler import (
     build_filter_tree_clause,
     build_where_leaf_clause,
 )

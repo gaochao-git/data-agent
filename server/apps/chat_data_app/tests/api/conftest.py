@@ -26,9 +26,9 @@ from apps.chat_data_app.routers import datasource_admin as datasource_admin_rout
 from apps.chat_data_app.routers import datasource_public as datasource_public_routes  # noqa: E402
 from apps.chat_data_app.routers import evaluation as evaluation_routes  # noqa: E402
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes  # noqa: E402
-from apps.chat_data_app.services import (  # noqa: E402
-    dashboard_spec_service,
-    query_providers,
+from apps.chat_data_app.services.dashboard import spec_service as dashboard_spec_service  # noqa: E402
+from apps.chat_data_app.services.sql_run import providers as query_providers  # noqa: E402
+from apps.chat_data_app.services.semantic.run import (  # noqa: E402
     semantic_model_repository,
     semantic_model_search,
     semantic_query_service,

@@ -18,9 +18,9 @@ from apps.chat_data_app.agent.tools import calculator_tool
 from apps.chat_data_app.agent.tools import semantic_query as agent_tools
 from apps.chat_data_app.agent.tools.current_time import get_current_time_payload, get_current_time_tool
 from apps.chat_data_app.schema import SemanticQueryInput
-from apps.chat_data_app.services import query_runtime
+from apps.chat_data_app.services.sql_run import runtime as query_runtime
 from apps.chat_data_app.services import sql_assist_context
-from apps.chat_data_app.services import semantic_query_service
+from apps.chat_data_app.services.semantic.run import semantic_query_service
 
 
 def test_semantic_query_tool_describes_dsl_and_sql_modes_without_mode_parameter():

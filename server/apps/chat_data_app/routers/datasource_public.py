@@ -8,7 +8,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
-from ..services.datasource_manager import get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

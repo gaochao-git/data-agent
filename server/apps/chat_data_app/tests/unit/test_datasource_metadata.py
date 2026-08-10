@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from apps.chat_data_app.services import datasource_metadata
-from apps.chat_data_app.services.datasource_metadata import (
+from apps.chat_data_app.services.datasource import metadata as datasource_metadata
+from apps.chat_data_app.services.datasource.metadata import (
     DataSourceMetadataAdapter,
     DataSourceMetadataAdapterRegistry,
     HiveDirectMetadataAdapter,

@@ -362,11 +362,11 @@ async def compile_dsl_locally(
     """Compile captured DSL through the shared semantic query facade."""
     if not isinstance(dsl, dict):
         return {"success": False, "sql": "", "error": "未捕获到可编译 DSL"}
-    from apps.chat_data_app.services.dashboard_spec_service import (
+    from apps.chat_data_app.services.dashboard.spec_service import (
         get_dashboard_spec_semantic_config,
         remove_mixed_raw_metrics_for_aggregate_dsl,
     )
-    from apps.chat_data_app.services.semantic_query_service import (
+    from apps.chat_data_app.services.semantic.run.semantic_query_service import (
         SemanticCompileOptions,
         compile_semantic_ai_dsl,
     )
@@ -393,7 +393,7 @@ async def execute_sql_locally(*, sql: str, datasource_id: str, user_id: str) -> 
     """Execute generated SQL through the same backend SQL executor used by DataAnalyze."""
     if not sql.strip():
         return {"success": False, "error": "SQL 为空"}
-    from apps.chat_data_app.services.semantic_query_service import execute_semantic_query_sql
+    from apps.chat_data_app.services.semantic.run.semantic_query_service import execute_semantic_query_sql
 
     return await execute_semantic_query_sql(sql=sql, datasource_id=datasource_id, member_datasource_ids=None, user_id=user_id)
 

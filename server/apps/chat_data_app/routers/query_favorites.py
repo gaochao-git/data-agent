@@ -10,8 +10,8 @@ from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest
-from ..services.query_providers import get_query_favorite_service
-from ..services.query_favorite_service import (
+from ..services.sql_run.providers import get_query_favorite_service
+from ..services.sql_run.favorite_service import (
     QueryFavoriteNotFoundError,
     QueryFavoriteOperationNotAllowedError,
     QueryFavoriteService,

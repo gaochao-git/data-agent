@@ -7,12 +7,12 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.dashboard_spec_service import (
+from ...services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
 )
-from ...services.semantic_model_repository import load_semantic_model
-from ...services.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from ...services.semantic.run.semantic_model_repository import load_semantic_model
+from ...services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
 from .common import json_dumps, normalize_json_like_payload
 
 logger = get_logger(__name__)

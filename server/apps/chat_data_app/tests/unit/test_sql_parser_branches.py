@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
-from apps.chat_data_app.services import sql_parser
+from apps.chat_data_app.services.sql_run import parser as sql_parser
 
 
 def test_strip_comments_scan_handles_quotes_escapes_and_unclosed_comments():

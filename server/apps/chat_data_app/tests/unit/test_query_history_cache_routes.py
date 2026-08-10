@@ -22,8 +22,9 @@ from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import query_history as query_history_routes
 from apps.chat_data_app.schema import ExecuteSqlRequest, QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest, QueryTaskCreateRequest
-from apps.chat_data_app.services import dashboard_runtime, query_cache, query_providers, query_runtime
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
+from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from utils.models import Base, ChatDataQueryExecution, ChatDataQueryTask, ChatDataSqlResultCache, SqlQueryFavorite
 
 
@@ -428,7 +429,7 @@ def test_get_query_history_filters_by_executed_time_range(route_db):
 
 
 def test_query_history_accepts_url_encoded_datetime():
-    from apps.chat_data_app.services.query_history_service import QueryHistoryService
+    from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 
     assert QueryHistoryService.parse_history_time("2026-07-06%2010%3A37%3A58") == datetime(2026, 7, 6, 10, 37, 58)
 

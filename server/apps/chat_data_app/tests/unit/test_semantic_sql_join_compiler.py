@@ -1,6 +1,6 @@
 import pytest
 
-from apps.chat_data_app.services.semantic_core.semantic_sql.join_compiler import build_join_clauses
+from apps.chat_data_app.services.semantic.core.semantic_sql.join_compiler import build_join_clauses
 
 
 def test_build_join_clauses_supports_alias_and_multiple_conditions():

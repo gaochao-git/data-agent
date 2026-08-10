@@ -1,0 +1,2293 @@
+"""ChatData 会话工作区及本地 / OpenSandbox 后端适配。"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import fnmatch
+import mimetypes
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from pathlib import PurePosixPath
+from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
+
+from utils.database import get_session
+from utils.logger import get_logger
+from utils.skill_paths import SKILLS_VIRTUAL_ROOT, runtime_skill_visible_root
+from utils.storage_paths import CHAT_DATA_HOME, normalize_conversation_id, normalize_user_id
+from utils.tool_result_store import TOOL_OFFLOAD_DIR_NAME, ToolResultStore
+
+from ...daos.conversation_dao import ConversationDao
+from .artifact_registry import parse_output_artifact
+from .runtime_skill_snapshot import (
+    build_runtime_skill_snapshot_async,
+    is_runtime_skill_snapshot_ready,
+    runtime_skills_snapshot_dir_from_workspace,
+)
+from ... import AGENT_ID
+from .workspace_path_policy import WORKSPACE_PATH_POLICY
+from .workspace_special_services import (
+    semantic_model_workspace_service,
+    workspace_artifact_service,
+    workspace_office_preview_service,
+    workspace_tool_result_service,
+)
+from .workspace_execution import (
+    OPENSANDBOX_BACKEND,
+    SandboxExecutionSessionRef,
+    get_workspace_execution_session,
+    parse_rg_output,
+    run_command_in_sandbox,
+    sandbox_artifact_payload,
+    sandbox_copy_path,
+    sandbox_create_dir,
+    sandbox_delete_path,
+    sandbox_grep_text,
+    sandbox_list_dir,
+    sandbox_move_path,
+    sandbox_path_to_visible,
+    sandbox_read_text_file,
+    sandbox_render_office_html,
+    sandbox_write_tool_result,
+    sync_sandbox_working_trees,
+    sandbox_write_internal_text_files,
+    sandbox_search_files,
+    sandbox_visible_path,
+    sandbox_replace_text_file,
+    sandbox_write_text_file,
+    sandbox_workspace_dir,
+)
+from .officecli_adapter import (
+    command_path_values,
+    parse_officecli_args,
+    translate_command_args,
+)
+
+logger = get_logger(__name__)
+
+THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
+WORKSPACE_DIR_NAMES = ("workspace", "outputs", "uploads")
+OFFICE_PREVIEW_MAX_CHARS = 12 * 1024 * 1024
+conversation_dao = ConversationDao(session_context=lambda: get_session())
+
+
+@runtime_checkable
+class WorkspaceBackend(Protocol):
+    """Backend contract for one conversation's model-visible workspace."""
+
+    name: str
+
+    async def read_text_file(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]: ...
+
+    async def write_text_file(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]: ...
+
+    async def replace_text_file(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]: ...
+
+    async def list_dir(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def create_dir(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+    ) -> dict[str, Any]: ...
+
+    async def delete_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]: ...
+
+    async def move_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def copy_path(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]: ...
+
+    async def search_files(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def grep_text(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        path: str,
+        patterns: list[str],
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]: ...
+
+
+
+@runtime_checkable
+class ExecutableWorkspaceBackend(WorkspaceBackend, Protocol):
+    """Workspace backend extension whose commands share the file environment."""
+
+    async def validate_bash_paths(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        command: str,
+    ) -> None: ...
+
+    async def run_bash(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]: ...
+
+    async def run_officecli(
+        self,
+        runtime: "ConversationWorkspaceRuntime",
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]: ...
+
+
+@dataclass
+class ConversationWorkspaceRuntime:
+    """当前会话的路径、技能快照和工作区后端绑定。"""
+
+    workspace_root: str
+    user_id: str
+    backend: "WorkspaceBackend | str" = "local"
+    # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
+    # 仅用于说明/调试，不作为本地读取的前置条件。
+    available_skill_names: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Convert the configured backend name once; tools only see the backend contract."""
+        if isinstance(self.backend, str):
+            self.backend = create_workspace_backend(self.backend)
+        if not isinstance(self.backend, WorkspaceBackend):
+            raise TypeError("backend 必须是 local、sandbox 或 WorkspaceBackend 实现")
+
+    @property
+    def backend_name(self) -> str:
+        return self.backend.name
+
+    @property
+    def runtime_skills_dir(self) -> Path:
+        """本会话 runtime-skills 快照目录（运行域只读技能根）。"""
+        return runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
+
+    async def _ensure_snapshot_async(self) -> None:
+        """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
+
+        ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
+        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容或带完成标记的目录
+        视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
+        （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
+        """
+        snapshot_dir = self.runtime_skills_dir
+        if is_runtime_skill_snapshot_ready(snapshot_dir):
+            return
+        base = Path(self.workspace_root).resolve().parent  # .../<cid>
+        uid, cid = base.parent.name, base.name
+        try:
+            await build_runtime_skill_snapshot_async(uid, cid)
+        except Exception as err:
+            logger.warning("惰性构建技能快照失败，技能读取可能不可用: %s", err)
+
+    async def resolve_readonly_skill_path_async(self, path: str) -> tuple[Path, str]:
+        """将 /mnt/skills 路径解析到本会话快照真实文件系统。
+
+        运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
+        ``threads/<uid>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
+        快照内不存在即视为无权限。快照缺失时惰性构建。
+        """
+        raw = str(path or "").strip().replace("\\", "/")
+        prefix = f"{SKILLS_VIRTUAL_ROOT}/"
+        if not raw.startswith(prefix):
+            raise ValueError(f"只允许访问技能路径: {path}")
+        parts = PurePosixPath(raw).parts
+        if len(parts) < 4 or parts[1:3] != ("mnt", "skills"):
+            raise ValueError(f"技能路径无效: {path}")
+        name = parts[3]
+        if not name or name.startswith("."):
+            raise ValueError(f"技能路径无效: {path}")
+        await self._ensure_snapshot_async()
+        snapshot_root = self.runtime_skills_dir.resolve()
+        source_entry = self.runtime_skills_dir / name
+        source_dir = source_entry.resolve()
+        if (
+            source_entry.is_symlink()
+            or not source_dir.is_dir()
+            or snapshot_root not in source_dir.parents
+        ):
+            raise ValueError(f"技能不存在或无权限访问: {name}")
+        relative_parts = parts[4:]
+        if ".." in relative_parts:
+            raise ValueError(f"技能路径越界: {path}")
+        target = (source_dir.joinpath(*relative_parts)).resolve()
+        if target != source_dir and source_dir not in target.parents:
+            raise ValueError(f"技能路径越界: {path}")
+        visible = runtime_skill_visible_root(name)
+        if relative_parts:
+            visible += "/" + "/".join(relative_parts)
+        return target, visible
+
+    def _executable_backend(self) -> ExecutableWorkspaceBackend:
+        if not isinstance(self.backend, ExecutableWorkspaceBackend):
+            raise ValueError("当前工作区后端不支持命令执行")
+        return self.backend
+
+    async def read_text_file(
+        self,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await self.backend.read_text_file(
+            self, file_path=file_path, offset=offset, limit=limit, max_chars=max_chars
+        )
+
+    async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
+        return await self.backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
+
+    async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        """Write system-owned semantic model files through the active backend."""
+        return await semantic_model_workspace_service.write_files(self, entries)
+
+    async def replace_text_file(
+        self,
+        *,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
+        return await self.backend.replace_text_file(
+            self,
+            file_path=file_path,
+            old_content=old_content,
+            new_content=new_content,
+        )
+
+    async def write_tool_result(self, *, file_path: str, content: str) -> dict[str, Any]:
+        """Persist a middleware-owned hidden tool result through the active backend."""
+        return await workspace_tool_result_service.write(
+            self,
+            file_path=file_path,
+            content=content,
+        )
+
+    async def artifact_payload(self, *, file_path: str) -> dict[str, Any]:
+        return await workspace_artifact_service.load(self, file_path=file_path)
+
+    async def render_office_html(self, *, file_path: str, max_chars: int) -> dict[str, Any]:
+        return await workspace_office_preview_service.render_html(
+            self,
+            file_path=file_path,
+            max_chars=max_chars,
+        )
+
+    async def list_dir(self, *, path: str, max_depth: int) -> list[dict[str, Any]]:
+        return await self.backend.list_dir(self, path=path, max_depth=max_depth)
+
+    async def create_dir(self, *, path: str) -> dict[str, Any]:
+        return await self.backend.create_dir(self, path=path)
+
+    async def delete_path(
+        self,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await self.backend.delete_path(
+            self,
+            path=path,
+            recursive=recursive,
+            expected_type=expected_type,
+        )
+
+    async def move_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
+        return await self.backend.move_path(
+            self,
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def copy_path(self, *, source_path: str, destination_path: str) -> dict[str, Any]:
+        return await self.backend.copy_path(
+            self,
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def search_files(
+        self,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        return await self.backend.search_files(
+            self,
+            path=path,
+            pattern=pattern,
+            max_results=max_results,
+        )
+
+    async def grep_text(
+        self,
+        *,
+        path: str,
+        patterns: list[str],
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await self.backend.grep_text(
+            self,
+            path=path,
+            patterns=patterns,
+            glob=glob,
+            max_results=max_results,
+            max_chars=max_chars,
+        )
+
+    async def validate_bash_paths(self, *, command: str) -> None:
+        await self._executable_backend().validate_bash_paths(self, command=command)
+
+    async def run_bash(
+        self,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        return await self._executable_backend().run_bash(
+            self, command=command, cwd=cwd, timeout_seconds=timeout_seconds
+        )
+
+    async def run_officecli(
+        self,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        return await self._executable_backend().run_officecli(
+            self, args=args, cwd=cwd, timeout_seconds=timeout_seconds
+        )
+
+
+def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> ConversationWorkspaceRuntime:
+    """Rebuild a workspace runtime from serializable AgentState fields."""
+    values = state if isinstance(state, Mapping) else {}
+    workspace = values.get("workspace")
+    context = workspace if isinstance(workspace, Mapping) else {}
+    workspace_root = str(context.get("workspace_root") or "").strip()
+    if not workspace_root:
+        raise ValueError("当前请求缺少会话工作区")
+    backend_name = str(context.get("workspace_backend") or "local").strip().lower() or "local"
+    return ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=str(values.get("user_id") or "system").strip() or "system",
+        backend=backend_name,
+    )
+
+
+def _safe_segment(value: str) -> str:
+    """规整路径段，避免会话 ID 造成目录越界。"""
+    try:
+        return normalize_conversation_id(value)
+    except ValueError as exc:
+        raise ValueError("非法会话 ID") from exc
+
+
+def ensure_conversation_workspace(conversation_id: str, user_id: str = "system") -> dict[str, str]:
+    """创建并返回 ChatData 会话目录结构。
+
+    布局：``threads/<uid>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
+    ``user-data`` 为模型可写运行域；``runtime-skills`` 为会话级技能快照（由
+    ``runtime_skill_snapshot.build_runtime_skill_snapshot_async`` 惰性填充）。
+    """
+    thread_id = _safe_segment(conversation_id)
+    safe_user_id = normalize_user_id(user_id or "system")
+    base = (THREADS_DIR / safe_user_id / thread_id).resolve()
+    root = (base / "user-data").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    (base / "runtime-skills").mkdir(parents=True, exist_ok=True)
+    paths = {"root": str(root)}
+    for name in WORKSPACE_DIR_NAMES:
+        path = root / name
+        path.mkdir(parents=True, exist_ok=True)
+        paths[name.replace("-", "_")] = str(path)
+    (root / "outputs" / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def resolve_uploads_root(user_id: str, thread_id: str) -> Path:
+    """返回当前会话工作区 uploads 目录（上传文件权威存储根）。
+
+    不再回退到历史 ``server/uploads`` 目录；会话工作区未初始化时由
+    ``ensure_conversation_workspace`` 直接抛错，由调用方处理。
+    """
+    paths = ensure_conversation_workspace(thread_id, user_id)
+    return Path(paths["uploads"])
+
+
+def resolve_workspace_path(
+    workspace_root: str,
+    path: str,
+    *,
+    writable: bool = False,
+    allow_managed_semantic_model_write: bool = False,
+) -> Path:
+    """解析模型可见路径并按解析后的真实路径实施目录边界。"""
+    root = Path(workspace_root).resolve()
+    logical_path = WORKSPACE_PATH_POLICY.parse(path)
+    if logical_path.is_skill:
+        raise ValueError(f"技能路径必须通过技能快照读取: {path}")
+    if writable:
+        WORKSPACE_PATH_POLICY.assert_writable(
+            logical_path,
+            allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+        )
+    else:
+        WORKSPACE_PATH_POLICY.assert_readable(logical_path)
+
+    target = (root / logical_path.normalized).resolve()
+    if root not in target.parents:
+        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
+
+    visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
+    if not any(target == item or item in target.parents for item in visible_roots):
+        raise ValueError("只允许访问 workspace/、outputs/ 或 uploads/")
+
+    if writable:
+        if is_tool_result_workspace_path(str(root), target):
+            raise ValueError("不允许通过文件编辑工具修改 outputs/.tool-offload/")
+        if (
+            is_managed_semantic_model_workspace_path(str(root), target)
+            and not allow_managed_semantic_model_write
+        ):
+            raise ValueError("workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+
+    return target
+
+
+def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a resolved path belongs to hidden tool-result storage."""
+    results_root = (Path(workspace_root).resolve() / "outputs" / TOOL_OFFLOAD_DIR_NAME).resolve()
+    target = path.resolve()
+    return target == results_root or results_root in target.parents
+
+
+def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
+    """Return whether a path belongs to the system-owned semantic model directory."""
+    semantic_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+    target = path.resolve()
+    return target == semantic_root or semantic_root in target.parents
+
+
+def to_visible_path(workspace_root: str, path: Path) -> str:
+    """把物理路径转为模型/前端可见路径。"""
+    root = Path(workspace_root).resolve()
+    target = path.resolve()
+    try:
+        relative = target.relative_to(root).as_posix()
+    except ValueError:
+        return str(target)
+    return f"/{relative}"
+
+
+def resolve_output_skill_directory(workspace_root: str, path: str) -> Path:
+    """Return a generated skill directory that is eligible for user import."""
+    skill_dir = resolve_workspace_path(workspace_root, path)
+    if is_tool_result_workspace_path(workspace_root, skill_dir):
+        raise ValueError("不允许导入 outputs/.tool-offload/ 下的内容")
+    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    try:
+        relative = skill_dir.relative_to(outputs_root)
+    except ValueError as exc:
+        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录") from exc
+    if len(relative.parts) != 1 or relative.name.startswith("."):
+        raise ValueError("只允许导入 outputs/<skill-name>/ 下的技能目录")
+
+    skill_md_path = skill_dir / "SKILL.md"
+    if not skill_dir.is_dir() or skill_md_path.is_symlink() or not skill_md_path.is_file():
+        raise ValueError("技能目录必须包含有效的 SKILL.md")
+    artifact = parse_output_artifact(
+        visible_path=f"/outputs/{relative.name}/SKILL.md",
+        data=skill_md_path.read_bytes(),
+    )
+    if artifact.get("artifact_type") != "skill":
+        raise ValueError("SKILL.md 元数据无效或与技能目录名不一致")
+    return skill_dir
+
+
+@dataclass
+class WorkspacePathMapping:
+    """虚拟路径 ↔ 物理路径映射，本地模式命令翻译与输出遮蔽的单一入口。
+
+    虚拟前缀（白名单）：
+      - 工作区：``/mnt/user-data/{workspace,outputs,uploads}`` 及其裸别名
+        ``/workspace``、``/outputs``、``/uploads``
+      - 会话技能快照：``/mnt/skills/<name>/...``
+
+    - ``translate``：正向，把文本里的虚拟路径翻成物理路径，交给本地 subprocess。
+    - ``mask``：反向，把输出里的物理路径还原为虚拟路径，避免向模型泄漏宿主机路径。
+      边界感知，单次替换，物理根内含 ``/uploads`` 等段也不会自引用膨胀。
+    """
+
+    workspace_root: str
+    runtime_skills_dir: Path | None = None
+
+    # 裸别名仅在路径边界处匹配：前置负向断言挡住 server/uploads 之类内部段，
+    # 后置负向断言挡住 /workspaceX 误吞。与工作区虚拟前缀共用同一套边界规则。
+    _ALIAS_RE = re.compile(r"(?<![\w/])/(workspace|outputs|uploads)(?![\w])")
+    _VIRTUAL_RE = re.compile(r"/mnt/user-data/(workspace|outputs|uploads)(?![\w])")
+
+    def __post_init__(self) -> None:
+        root = self.workspace_root.rstrip("/")
+        # 物理根绝不能包含虚拟前缀 /mnt/user-data/；若包含说明 CHAT_DATA_HOME
+        # 被误配成 sandbox 挂载点路径，继续替换会导致路径指数膨胀。
+        if "/mnt/user-data/" in root:
+            raise ValueError(
+                "workspace_root 配置异常：物理根不应包含 /mnt/user-data/，"
+                "请检查 CHAT_DATA_HOME 环境变量是否误用了 sandbox 虚拟挂载点路径"
+            )
+        self._root = root
+        self._physical_workspace = {
+            "workspace": f"{root}/workspace",
+            "outputs": f"{root}/outputs",
+            "uploads": f"{root}/uploads",
+        }
+        # /mnt/skills/<name> -> 本会话快照目录/<name>；从快照目录直接枚举，无需逐技能登记。
+        # runtime_skills_dir 为 None 表示本映射不绑定技能快照（仅工作区路径翻译）。
+        self._skill_physical: dict[str, str] = {}
+        skills_dir = self.runtime_skills_dir
+        if skills_dir is not None and skills_dir.is_dir():
+            for item in skills_dir.iterdir():
+                if item.is_dir() and not item.is_symlink() and not item.name.startswith("."):
+                    self._skill_physical[runtime_skill_visible_root(item.name)] = str(item)
+
+    def translate(self, text: str) -> str:
+        """正向：命令/文本中的虚拟路径 → 物理路径。"""
+        if not text:
+            return text
+        out = text
+        # 1) 裸别名规范化成 /mnt/user-data/ 形式（边界安全，不误伤物理根内部段）。
+        out = self._ALIAS_RE.sub(r"/mnt/user-data/\1", out)
+        # 2) 技能虚拟 → 物理（最长优先）。
+        for virtual_root, physical in sorted(
+            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
+            out = out.replace(virtual_root, physical)
+        # 3) 工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
+        out = self._VIRTUAL_RE.sub(lambda m: f"{self._root}/{m.group(1)}", out)
+        return out
+
+    def mask(self, text: str) -> str:
+        """反向：输出中的物理路径 → 虚拟路径，遮蔽宿主机绝对路径。"""
+        if not text:
+            return text
+        out = text
+        # 1) 技能物理 → 虚拟（最长优先）。
+        for virtual_root, physical in sorted(
+            self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
+            if physical:
+                out = out.replace(physical, virtual_root)
+        # 2) 工作区物理 → 虚拟。
+        for name in ("workspace", "outputs", "uploads"):
+            out = out.replace(self._physical_workspace[name], f"/mnt/user-data/{name}")
+        return out
+
+
+def list_workspace_files(conversation_id: str, user_id: str = "system") -> list[dict[str, Any]]:
+    """列出会话工作区中的可见文件，不跟随逃逸符号链接。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id)
+    root = Path(paths["root"]).resolve()
+    files: list[dict[str, Any]] = []
+    for directory_name in WORKSPACE_DIR_NAMES:
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for item in sorted(directory.rglob("*")):
+            if not item.is_file():
+                continue
+            try:
+                relative_path = item.relative_to(root).as_posix()
+                resolved_item = resolve_workspace_path(str(root), relative_path)
+                if is_tool_result_workspace_path(str(root), resolved_item):
+                    continue
+                stat = item.stat()
+            except (OSError, ValueError):
+                continue
+            files.append({
+                "path": to_visible_path(str(root), resolved_item),
+                "relative_path": relative_path,
+                "directory": directory_name,
+                "name": item.name,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "source": directory_name,
+            })
+    return files
+
+
+def read_workspace_text_file(
+    conversation_id: str,
+    path: str,
+    max_bytes: int = 1024 * 1024,
+    user_id: str = "system",
+) -> dict[str, Any]:
+    """读取会话工作区中的文本文件。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id)
+    root = paths["root"]
+    target = resolve_workspace_path(root, path)
+    if is_tool_result_workspace_path(root, target):
+        raise ValueError("工具结果缓存不在工作区文件预览范围内")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    size = target.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
+    content = target.read_text(encoding="utf-8", errors="replace")
+    return {
+        "path": to_visible_path(root, target),
+        "relative_path": target.relative_to(Path(root).resolve()).as_posix(),
+        "content": content,
+        "size": size,
+    }
+
+
+async def can_access_conversation_workspace(conversation_id: str, user_id: str) -> bool:
+    """校验当前用户是否可访问 ChatData 会话工作区。"""
+    if not str(conversation_id or "").strip() or not str(user_id or "").strip():
+        return False
+    return await conversation_dao.exists_user_agent_thread(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        agent_id=AGENT_ID,
+    )
+
+
+async def list_conversation_workspace_files(
+    conversation_id: str,
+    *,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    """读取当前用户会话的持久化工作区文件。"""
+    return await asyncio.to_thread(list_workspace_files, conversation_id, user_id)
+
+
+async def read_conversation_workspace_file(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+    max_bytes: int = 1024 * 1024,
+) -> dict[str, Any]:
+    """读取当前用户会话持久化工作区中的文本文件。"""
+    return await asyncio.to_thread(read_workspace_text_file, conversation_id, path, max_bytes, user_id)
+
+
+async def read_conversation_workspace_raw_file(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+    max_bytes: int = 20 * 1024 * 1024,
+) -> dict[str, Any]:
+    """读取会话工作区中的原始字节文件（用于 PDF/Word 等二进制预览/下载）。"""
+    return await asyncio.to_thread(read_workspace_raw_file, conversation_id, path, max_bytes, user_id)
+
+
+def _validate_office_preview_source(workspace_root: str, path: str) -> None:
+    target = resolve_workspace_path(workspace_root, path)
+    if is_tool_result_workspace_path(workspace_root, target):
+        raise ValueError("工具结果缓存不支持 Office 预览")
+    if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+        raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
+    if not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    if target.stat().st_size > 50 * 1024 * 1024:
+        raise ValueError("文件过大，暂不支持预览超过 50MB 的 Office 文件")
+
+
+def _render_local_office_html(
+    workspace_root: str,
+    file_path: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    """在本地（local）后端用宿主机 ``officecli`` 将 Office 文件渲染为受控 HTML 预览。
+
+    逻辑与沙箱 ``sandbox_render_office_html`` 对齐：仅支持 .docx/.xlsx/.pptx，
+    转出的 HTML 受 ``max_chars``（上限 ``OFFICE_PREVIEW_MAX_CHARS``）约束，超出即标记
+    ``truncated``。宿主机未安装 ``officecli`` 或转换失败时抛错，由路由层统一降级为
+    ``preview_unavailable`` / ``preview_failed``。
+    """
+    target = resolve_workspace_path(workspace_root, file_path)
+    if target.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+        raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
+    if not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    officecli_bin = shutil.which("officecli")
+    if not officecli_bin:
+        raise RuntimeError("本地环境未安装 OfficeCLI，无法预览 Office 文件")
+    limit = max(1, min(int(max_chars), OFFICE_PREVIEW_MAX_CHARS))
+    fd, preview_path = tempfile.mkstemp(suffix=".html")
+    os.close(fd)
+    try:
+        exit_code = subprocess.run(
+            [officecli_bin, "view", str(target), "html", "--out", preview_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if exit_code.returncode != 0:
+            stderr = (exit_code.stderr or "").strip()
+            raise RuntimeError(stderr or "OfficeCLI HTML 预览失败")
+        preview_file = Path(preview_path)
+        if not preview_file.exists():
+            raise RuntimeError("OfficeCLI 未生成预览文件")
+        if preview_file.stat().st_size > limit:
+            return {
+                "renderer": "officecli-html",
+                "source_path": str(target),
+                "html": "",
+                "truncated": True,
+            }
+        html = preview_file.read_text(encoding="utf-8", errors="replace")
+    finally:
+        try:
+            os.unlink(preview_path)
+        except OSError:
+            pass
+    truncated = len(html) > limit
+    return {
+        "renderer": "officecli-html",
+        "source_path": str(target),
+        "html": html[:limit],
+        "truncated": truncated,
+    }
+
+
+async def render_conversation_workspace_office_preview(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Render an owned Office file from the application-side authoritative copy."""
+    workspace = ensure_conversation_workspace(conversation_id, user_id)
+    workspace_root = workspace["root"]
+    await asyncio.to_thread(
+        _validate_office_preview_source,
+        workspace_root,
+        path,
+    )
+    runtime = ConversationWorkspaceRuntime(
+        workspace_root=workspace_root,
+        user_id=user_id,
+        backend="local",
+    )
+    preview = await runtime.render_office_html(
+        file_path=path,
+        max_chars=OFFICE_PREVIEW_MAX_CHARS,
+    )
+    html = str(preview.get("html") or "")
+    if bool(preview.get("truncated")):
+        return {"available": False, "reason": "preview_too_large"}
+    if not html:
+        raise RuntimeError("OfficeCLI 未返回 HTML 预览内容")
+    return {
+        "available": True,
+        "renderer": "officecli-html",
+        "html": html,
+        "truncated": False,
+    }
+
+
+def read_workspace_raw_file(
+    conversation_id: str,
+    path: str,
+    max_bytes: int = 20 * 1024 * 1024,
+    user_id: str = "system",
+) -> dict[str, Any]:
+    """读取会话工作区中的原始字节文件，返回 bytes 与 mime 类型。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id)
+    root = paths["root"]
+    target = resolve_workspace_path(root, path)
+    if is_tool_result_workspace_path(root, target):
+        raise ValueError("工具结果缓存不在工作区文件预览范围内")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(f"文件不存在: {path}")
+    size = target.stat().st_size
+    if size > max_bytes:
+        raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
+    mime, _ = mimetypes.guess_type(str(target))
+    return {
+        "path": to_visible_path(root, target),
+        "relative_path": target.relative_to(Path(root).resolve()).as_posix(),
+        "data": target.read_bytes(),
+        "size": size,
+        "mime": mime or "application/octet-stream",
+    }
+
+
+async def read_conversation_query_result(
+    conversation_id: str,
+    *,
+    user_id: str,
+    result_id: str,
+) -> dict[str, Any] | None:
+    """读取当前用户当前会话内被卸载的大查询结果。"""
+    return await asyncio.to_thread(
+        ToolResultStore().load_query_result_for_conversation,
+        result_id=result_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+
+
+_TEXT_READ_CHUNK_CHARS = 64 * 1024
+_TEXT_LINE_SEPARATOR_RE = re.compile(r"[\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+MAX_FILE_READ_LINE_CHARS = 500
+_TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def _iter_text_line_fragments(file_obj: Any):
+    """逐块产出文本行片段，保持 ``str.splitlines()`` 的行分隔语义。
+
+    ``newline=None`` 已将 CR / CRLF 标准化为 LF；其余 Python 识别的行分隔符
+    仍需显式处理，避免大文件流式读取改变 ``offset`` 的按行语义。
+    """
+    while chunk := file_obj.read(_TEXT_READ_CHUNK_CHARS):
+        position = 0
+        for match in _TEXT_LINE_SEPARATOR_RE.finditer(chunk):
+            yield chunk[position:match.start()], True
+            position = match.end()
+        if position < len(chunk):
+            yield chunk[position:], False
+
+
+def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
+    """确保服务端直接读取的会话根仍属于 ChatData 共享数据目录。"""
+    root = Path(CHAT_DATA_HOME).expanduser().resolve()
+    target = Path(workspace_root).expanduser().resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
+
+
+def _allocate_line_budgets(line_lengths: list[int], max_chars: int) -> list[int]:
+    """按源顺序分配正文预算，单行最多保留固定字符数。"""
+    budgets: list[int] = []
+    remaining = max(0, int(max_chars))
+    for original_length in line_lengths:
+        separator_chars = 1 if budgets else 0
+        if remaining < separator_chars:
+            break
+        desired_chars = min(max(0, int(original_length)), MAX_FILE_READ_LINE_CHARS)
+        available_chars = remaining - separator_chars
+        if desired_chars > available_chars:
+            if available_chars <= 0 and desired_chars > 0:
+                break
+            budgets.append(max(0, available_chars))
+            break
+        budgets.append(desired_chars)
+        remaining -= desired_chars + separator_chars
+    return budgets
+
+
+def _scan_text_page_line_lengths(path: Path, *, offset: int, limit: int) -> dict[str, Any]:
+    selected_lines: list[dict[str, int]] = []
+    line_index = 0
+    pending_chars = 0
+
+    def finish_line() -> bool:
+        nonlocal line_index, pending_chars
+        if offset <= line_index < offset + limit:
+            selected_lines.append({
+                "line_number": line_index + 1,
+                "original_chars": pending_chars,
+            })
+        elif line_index >= offset + limit:
+            return True
+        line_index += 1
+        pending_chars = 0
+        return False
+
+    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+        for part, ends_line in _iter_text_line_fragments(file_obj):
+            pending_chars += len(part)
+            if ends_line and finish_line():
+                return {"selected_lines": selected_lines, "has_more_lines": True}
+            if len(selected_lines) == limit and pending_chars:
+                return {"selected_lines": selected_lines, "has_more_lines": True}
+    if pending_chars:
+        if finish_line():
+            return {"selected_lines": selected_lines, "has_more_lines": True}
+
+    return {"selected_lines": selected_lines, "has_more_lines": False, "observed_lines": line_index}
+
+
+def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], budgets: list[int]) -> list[str]:
+    selected_by_index = {
+        item["line_number"] - 1: (position, item)
+        for position, item in enumerate(selected_lines)
+    }
+    captured_parts = [[] for _ in selected_lines]
+    captured_chars = [0 for _ in selected_lines]
+    current_line_index = 0
+    current_line_char = 0
+    last_line_index = selected_lines[-1]["line_number"] - 1
+
+    def consume(part: str) -> None:
+        nonlocal current_line_char
+        selected = selected_by_index.get(current_line_index)
+        if selected is not None:
+            position, _metadata = selected
+            remaining = budgets[position] - captured_chars[position]
+            if remaining > 0:
+                piece = part[:remaining]
+                captured_parts[position].append(piece)
+                captured_chars[position] += len(piece)
+        current_line_char += len(part)
+
+    def finish_line() -> bool:
+        nonlocal current_line_index, current_line_char
+        current_line_index += 1
+        current_line_char = 0
+        return current_line_index > last_line_index
+
+    with path.open("r", encoding="utf-8", errors="replace", newline=None) as file_obj:
+        for part, ends_line in _iter_text_line_fragments(file_obj):
+            consume(part)
+            if ends_line and finish_line():
+                return ["".join(parts) for parts in captured_parts]
+    return ["".join(parts) for parts in captured_parts]
+
+
+def _read_text_page_from_path(
+    target: Path,
+    visible_path: str,
+    *,
+    offset: int,
+    limit: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    if not target.exists():
+        return {"exists": False, "path": visible_path}
+    if target.is_dir():
+        return {"exists": True, "is_dir": True, "path": visible_path}
+    with target.open("rb") as file_obj:
+        sample = file_obj.read(4096)
+    if b"\x00" in sample:
+        return {"exists": True, "is_binary": True, "path": visible_path}
+
+    page = _scan_text_page_line_lengths(target, offset=offset, limit=limit)
+    selected_lines = list(page["selected_lines"])
+    if not selected_lines:
+        observed_lines = int(page.get("observed_lines") or 0)
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": visible_path,
+            "total_lines": observed_lines,
+            "empty": observed_lines == 0,
+            "offset_out_of_range": observed_lines > 0,
+        }
+    budgets = _allocate_line_budgets(
+        [item["original_chars"] for item in selected_lines],
+        max_chars,
+    )
+    selected_lines = selected_lines[:len(budgets)]
+    if not selected_lines:
+        return {
+            "exists": True,
+            "is_dir": False,
+            "is_binary": False,
+            "path": visible_path,
+            "empty": True,
+        }
+    lines = _read_text_page_prefixes(target, selected_lines, budgets)
+    truncated_lines = [
+        {
+            "line_number": item["line_number"],
+            "original_chars": item["original_chars"],
+            "returned_chars": budget,
+        }
+        for item, budget in zip(selected_lines, budgets)
+        if budget < item["original_chars"]
+    ]
+    has_more_lines = bool(page["has_more_lines"]) or len(budgets) < len(page["selected_lines"])
+    return {
+        "exists": True,
+        "is_dir": False,
+        "is_binary": False,
+        "path": visible_path,
+        "lines": lines,
+        "total_lines": None,
+        "start_line": selected_lines[0]["line_number"],
+        "end_line": selected_lines[-1]["line_number"],
+        "next_offset": offset + len(selected_lines) if has_more_lines else None,
+        "has_more_lines": has_more_lines,
+        "has_more": has_more_lines,
+        "truncated_lines": truncated_lines,
+    }
+
+
+def _read_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    offset: int,
+    limit: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    target = resolve_workspace_path(workspace_root, file_path)
+    return _read_text_page_from_path(
+        target,
+        to_visible_path(workspace_root, target),
+        offset=offset,
+        limit=limit,
+        max_chars=max_chars,
+    )
+
+
+def _read_local_runtime_skill_file(
+    target: Path,
+    visible_path: str,
+    offset: int,
+    limit: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    return _read_text_page_from_path(
+        target,
+        visible_path,
+        offset=offset,
+        limit=limit,
+        max_chars=max_chars,
+    )
+
+
+def _write_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    content: str,
+    mode: str,
+    *,
+    allow_managed_semantic_model_write: bool = False,
+) -> dict[str, Any]:
+    if mode != "overwrite":
+        raise ValueError("内部文件写入只支持 overwrite")
+    target = resolve_workspace_path(
+        workspace_root,
+        file_path,
+        writable=True,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+    )
+    if allow_managed_semantic_model_write and (
+        not is_managed_semantic_model_workspace_path(workspace_root, target)
+        or target.suffix.lower() != ".yaml"
+    ):
+        raise ValueError("内部语义模型写入只能覆盖 workspace/semantic/ 下的 YAML 文件")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            temporary_path = Path(file_obj.name)
+            file_obj.write(content)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return {
+        "operation": "write",
+        "file_path": to_visible_path(workspace_root, target),
+        "mode": mode,
+        "bytes": len(content.encode("utf-8")),
+    }
+
+
+def _replace_local_text_file(
+    workspace_root: str,
+    file_path: str,
+    old_content: str,
+    new_content: str,
+) -> dict[str, Any]:
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    if not target.exists():
+        raise ValueError(f"文件不存在: {file_path}")
+    if not target.is_file():
+        raise ValueError(f"目标是目录，不是文件: {file_path}")
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"暂不支持修改二进制文件: {file_path}") from exc
+    match_count = content.count(old_content)
+    if match_count == 0:
+        raise ValueError("old_content 未在文件中找到；请先用 file_read 获取最新内容")
+    if match_count > 1:
+        raise ValueError("old_content 在文件中匹配多处；请提供更长且唯一的原文")
+    target.write_text(content.replace(old_content, new_content, 1), encoding="utf-8")
+    return {
+        "operation": "edit",
+        "file_path": to_visible_path(workspace_root, target),
+        "replaced_count": 1,
+        "bytes": len(new_content.encode("utf-8")),
+    }
+
+
+def _write_local_tool_result(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
+    """Write a private result once; this path is never exposed to file_edit."""
+    target = resolve_workspace_path(workspace_root, file_path)
+    if not is_tool_result_workspace_path(workspace_root, target):
+        raise ValueError("内部工具结果只能写入 outputs/.tool-offload/")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = content.encode("utf-8")
+    with target.open("xb") as file_obj:
+        file_obj.write(data)
+    return {"file_path": to_visible_path(workspace_root, target), "bytes": len(data)}
+
+
+def _load_local_artifact_payload(workspace_root: str, file_path: str) -> dict[str, Any]:
+    try:
+        target = resolve_workspace_path(workspace_root, file_path)
+    except ValueError:
+        return {}
+    if is_tool_result_workspace_path(workspace_root, target):
+        return {}
+    outputs_root = resolve_workspace_path(workspace_root, "outputs")
+    if target != outputs_root and outputs_root not in target.parents:
+        return {}
+    if not target.is_file():
+        return {}
+    try:
+        return parse_output_artifact(
+            visible_path=to_visible_path(workspace_root, target),
+            data=target.read_bytes(),
+        )
+    except OSError:
+        return {}
+
+
+def _list_local_workspace_dir(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    max_depth: int,
+) -> list[dict[str, Any]]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        visible_root = ""
+        is_skill = False
+    if not target.exists():
+        raise FileNotFoundError(f"目录不存在: {raw}")
+    if not target.is_dir():
+        raise ValueError(f"目标不是目录: {raw}")
+
+    entries: list[dict[str, Any]] = []
+    root = Path(runtime.workspace_root).resolve()
+
+    def visit(directory: Path, visible_dir: str, depth: int) -> None:
+        if len(entries) >= 500:
+            return
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name))
+        except OSError:
+            return
+        for child in children:
+            if len(entries) >= 500:
+                return
+            resolved = child.resolve()
+            if child.is_symlink():
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            if is_skill:
+                visible_path = f"{visible_dir}/{child.name}"
+            else:
+                try:
+                    visible_path = "/mnt/user-data/" + resolved.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+            is_dir = child.is_dir()
+            entries.append({
+                "type": "dir" if is_dir else "file",
+                "path": visible_path + ("/" if is_dir else ""),
+                "size": "-" if is_dir else stat.st_size,
+                "mtime": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+            if is_dir and depth + 1 < max_depth:
+                visit(child, visible_path, depth + 1)
+
+    visit(target, visible_root, 0)
+    return entries
+
+
+def _resolve_local_mutable_path(workspace_root: str, path: str) -> Path:
+    target = resolve_workspace_path(workspace_root, path, writable=True)
+    mutable_roots = {
+        resolve_workspace_path(workspace_root, "workspace"),
+        resolve_workspace_path(workspace_root, "outputs"),
+    }
+    if target in mutable_roots:
+        raise ValueError("不允许操作 workspace/ 或 outputs/ 根目录")
+    return target
+
+
+def _create_local_dir(workspace_root: str, path: str) -> dict[str, Any]:
+    target = _resolve_local_mutable_path(workspace_root, path)
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"目录已存在: {path}")
+    target.mkdir(parents=True, exist_ok=False)
+    return {"path": to_visible_path(workspace_root, target), "type": "dir"}
+
+
+def _delete_local_path(
+    workspace_root: str,
+    path: str,
+    recursive: bool,
+    expected_type: Literal["file", "dir"],
+) -> dict[str, Any]:
+    target = _resolve_local_mutable_path(workspace_root, path)
+    if target.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not target.exists():
+        raise FileNotFoundError(f"路径不存在: {path}")
+    is_dir = target.is_dir()
+    actual_type = "dir" if is_dir else "file"
+    if actual_type != expected_type:
+        raise ValueError(f"目标是{actual_type}，不能作为{expected_type}删除")
+    if is_dir:
+        if recursive:
+            shutil.rmtree(target)
+        else:
+            target.rmdir()
+    else:
+        target.unlink()
+    return {"path": to_visible_path(workspace_root, target), "type": "dir" if is_dir else "file"}
+
+
+def _move_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:
+    source = _resolve_local_mutable_path(workspace_root, source_path)
+    destination = _resolve_local_mutable_path(workspace_root, destination_path)
+    if source.is_symlink() or destination.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not source.exists():
+        raise FileNotFoundError(f"源路径不存在: {source_path}")
+    if destination.exists():
+        raise ValueError(f"目标路径已存在: {destination_path}")
+    if not destination.parent.is_dir():
+        raise ValueError(f"目标父目录不存在: {destination_path}")
+    source.rename(destination)
+    return {
+        "source_path": to_visible_path(workspace_root, source),
+        "destination_path": to_visible_path(workspace_root, destination),
+        "type": "dir" if destination.is_dir() else "file",
+    }
+
+
+def _copy_local_resolved_path(
+    workspace_root: str,
+    source: Path,
+    source_visible_path: str,
+    destination_path: str,
+) -> dict[str, Any]:
+    """Copy one already-resolved readable file into a mutable workspace destination."""
+    if source.is_symlink():
+        raise ValueError("不允许操作符号链接")
+    if not source.exists():
+        raise FileNotFoundError(f"源路径不存在: {source_visible_path}")
+    if not source.is_file():
+        raise ValueError(f"file_copy 只支持复制单个文件: {source_visible_path}")
+    destination = _resolve_local_mutable_path(workspace_root, destination_path)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError(f"目标路径已存在: {destination_path}")
+    if not destination.parent.is_dir():
+        raise ValueError(f"目标父目录不存在: {destination_path}")
+    shutil.copy2(source, destination)
+    return {
+        "source_path": source_visible_path,
+        "destination_path": to_visible_path(workspace_root, destination),
+        "type": "file",
+        "bytes": destination.stat().st_size,
+    }
+
+
+def _copy_local_path(workspace_root: str, source_path: str, destination_path: str) -> dict[str, Any]:
+    source = resolve_workspace_path(workspace_root, source_path)
+    if is_tool_result_workspace_path(workspace_root, source):
+        raise ValueError("outputs/.tool-offload/ 是隐藏的工具结果缓存，不能复制")
+    return _copy_local_resolved_path(
+        workspace_root,
+        source,
+        to_visible_path(workspace_root, source),
+        destination_path,
+    )
+
+
+def _search_local_workspace_files(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    pattern: str,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        visible_root = to_visible_path(runtime.workspace_root, target)
+        is_skill = False
+    if not target.is_dir() or target.is_symlink():
+        raise ValueError(f"搜索路径必须是目录: {path}")
+    matches: list[dict[str, Any]] = []
+    for item in sorted(target.rglob("*")):
+        if len(matches) >= max_results:
+            break
+        if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
+            continue
+        resolved = item.resolve()
+        if is_skill:
+            visible_path = visible_root.rstrip("/") + "/" + item.relative_to(target).as_posix()
+        else:
+            visible_path = to_visible_path(runtime.workspace_root, resolved)
+        matches.append({"path": visible_path, "type": "file"})
+    return matches
+
+
+_rg_available: bool | None = None
+
+
+def _check_rg_available() -> bool:
+    """Detect ripgrep at module level (cached)."""
+    global _rg_available
+    if _rg_available is None:
+        try:
+            subprocess.run(["rg", "--version"], capture_output=True, timeout=5)
+            _rg_available = True
+        except Exception:
+            _rg_available = False
+    return _rg_available
+
+
+def _grep_local_workspace_text(
+    runtime: ConversationWorkspaceRuntime,
+    path: str,
+    patterns: list[str],
+    glob: str,
+    max_results: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    raw = str(path or "workspace").strip().replace("\\", "/")
+    if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+        target, visible_root = _resolve_local_skill_path(runtime, raw)
+        is_skill = True
+    else:
+        target = resolve_workspace_path(runtime.workspace_root, raw)
+        visible_root = to_visible_path(runtime.workspace_root, target)
+        is_skill = False
+    if target.is_symlink() or not target.exists():
+        raise FileNotFoundError(f"路径不存在: {path}")
+
+    if not _check_rg_available():
+        raise RuntimeError("file_grep 需要 ripgrep (rg)，当前环境未安装。请安装 ripgrep: brew install ripgrep (macOS) 或 apt-get install ripgrep (Linux)")
+
+    args: list[str] = ["rg", "-F", "--json", "--hidden"]
+    if glob and glob != "**/*":
+        args.extend(["--glob", glob])
+    args.append(str(target))
+    for p in patterns:
+        args.extend(["-e", p])
+    proc = subprocess.run(args, capture_output=True, timeout=30)
+    if proc.returncode > 1:
+        raise RuntimeError(f"rg 执行失败 (exit={proc.returncode}): {proc.stderr.decode('utf-8', errors='replace')}")
+
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    raw_matches, has_more = parse_rg_output(
+        stdout, str(target), max_results=max_results, max_chars=max_chars,
+    )
+    matches: list[dict[str, Any]] = []
+    for m in raw_matches:
+        file_rel = m["file"]
+        if is_skill:
+            visible_path = visible_root.rstrip("/") + ("/" + file_rel if file_rel else "")
+        else:
+            resolved = (target / file_rel).resolve()
+            visible_path = to_visible_path(runtime.workspace_root, resolved)
+        matches.append({
+            "path": visible_path,
+            "line_number": m["line_number"],
+            "line": m["content"],
+        })
+    return {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
+
+
+def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:
+    raw = str(path or "").strip().replace("\\", "/")
+    prefix = f"{SKILLS_VIRTUAL_ROOT}/"
+    if not raw.startswith(prefix):
+        raise ValueError(f"只允许访问技能路径: {path}")
+    parts = PurePosixPath(raw).parts
+    if len(parts) < 4 or parts[1:3] != ("mnt", "skills") or ".." in parts[4:]:
+        raise ValueError(f"技能路径无效: {path}")
+    name = parts[3]
+    snapshot_root = runtime.runtime_skills_dir.resolve()
+    source_entry = runtime.runtime_skills_dir / name
+    source = source_entry.resolve()
+    if (
+        source_entry.is_symlink()
+        or not source.is_dir()
+        or snapshot_root not in source.parents
+    ):
+        raise ValueError(f"技能不存在或无权限访问: {name}")
+    target = source.joinpath(*parts[4:]).resolve()
+    if target != source and source not in target.parents:
+        raise ValueError(f"技能路径越界: {path}")
+    return target, runtime_skill_visible_root(name) + (
+        "/" + "/".join(parts[4:]) if parts[4:] else ""
+    )
+
+
+@dataclass
+class LocalWorkspaceBackend:
+    """Path-validated local filesystem backend for a conversation workspace."""
+
+    name: str = "local"
+
+    async def read_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        raw_path = str(file_path or "").strip()
+        if raw_path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            target, visible_path = await runtime.resolve_readonly_skill_path_async(file_path)
+            return await asyncio.to_thread(
+                _read_local_runtime_skill_file, target, visible_path, offset, limit, max_chars
+            )
+        _ensure_workspace_root_in_chat_data_home(runtime.workspace_root)
+        return await asyncio.to_thread(
+            _read_local_text_file, runtime.workspace_root, file_path, offset, limit, max_chars
+        )
+
+    async def write_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
+
+    async def write_internal_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        def write_batch() -> list[dict[str, Any]]:
+            return [
+                _write_local_text_file(
+                    runtime.workspace_root,
+                    path,
+                    content,
+                    "overwrite",
+                    allow_managed_semantic_model_write=True,
+                )
+                for path, content in entries
+            ]
+
+        return await asyncio.to_thread(write_batch)
+
+    async def write_tool_result(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _write_local_tool_result, runtime.workspace_root, file_path, content
+        )
+
+    async def replace_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _replace_local_text_file,
+            runtime.workspace_root,
+            file_path,
+            old_content,
+            new_content,
+        )
+
+    async def artifact_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_load_local_artifact_payload, runtime.workspace_root, file_path)
+
+    async def render_office_html(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _render_local_office_html,
+            runtime.workspace_root,
+            file_path,
+            max_chars,
+        )
+
+    async def list_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _list_local_workspace_dir, runtime, path, max_depth
+        )
+
+    async def create_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_create_local_dir, runtime.workspace_root, path)
+
+    async def delete_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _delete_local_path,
+            runtime.workspace_root,
+            path,
+            recursive,
+            expected_type,
+        )
+
+    async def move_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _move_local_path,
+            runtime.workspace_root,
+            source_path,
+            destination_path,
+        )
+
+    async def copy_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        raw_source = str(source_path or "").strip()
+        if raw_source.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            source, visible_source = await runtime.resolve_readonly_skill_path_async(raw_source)
+            return await asyncio.to_thread(
+                _copy_local_resolved_path,
+                runtime.workspace_root,
+                source,
+                visible_source,
+                destination_path,
+            )
+        return await asyncio.to_thread(
+            _copy_local_path,
+            runtime.workspace_root,
+            source_path,
+            destination_path,
+        )
+
+    async def search_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _search_local_workspace_files,
+            runtime,
+            path,
+            pattern,
+            max_results,
+        )
+
+    async def grep_text(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        patterns: list[str],
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        if str(path or "").strip().startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            await runtime._ensure_snapshot_async()
+        return await asyncio.to_thread(
+            _grep_local_workspace_text,
+            runtime,
+            path,
+            patterns,
+            glob,
+            max_results,
+            max_chars,
+        )
+
+    async def validate_bash_paths(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+    ) -> None:
+        for token in _absolute_command_path_tokens(command):
+            try:
+                if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                    await runtime.resolve_readonly_skill_path_async(token)
+                else:
+                    resolve_workspace_path(runtime.workspace_root, token)
+            except ValueError as exc:
+                raise ValueError(
+                    "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token
+                ) from exc
+
+    async def run_bash(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        raw_cwd = str(cwd or "workspace").strip()
+        if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            local_cwd = (await runtime.resolve_readonly_skill_path_async(raw_cwd))[0]
+        else:
+            local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+        path_mapping = WorkspacePathMapping(
+            workspace_root=runtime.workspace_root,
+            runtime_skills_dir=runtime.runtime_skills_dir,
+        )
+        inner = "cd {cwd} && {command}".format(
+            cwd=shlex.quote(str(local_cwd)),
+            command=path_mapping.translate(command),
+        )
+        process = await asyncio.create_subprocess_exec(
+            "bash",
+            "-o",
+            "pipefail",
+            "-lc",
+            inner,
+            cwd=str(local_cwd),
+            env={"PATH": os.environ.get("PATH", ""), "HOME": str(local_cwd), "LANG": "C.UTF-8"},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "exit_code": int(process.returncode or 0),
+                "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
+                "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
+                "timed_out": False,
+            }
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "exit_code": 124,
+                "stdout": "",
+                "stderr": "command timed out",
+                "timed_out": True,
+            }
+
+    async def run_officecli(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        """本地后端：用宿主机 ``officecli`` 二进制以 argv 数组直接 execve，不经过 shell。
+
+        路径按 bash 的越界校验（已排除 OfficeCLI DOM 选择器）后，**逐个 argv 元素**做
+        虚拟→物理翻译。不能走"拼串翻译再 shlex.split 还原"：物理根一旦含空格
+        （如 ``/Users/gao chao/...``），还原时参数会被劈成多个 token。
+        环境变量按 bash_run 同样的白名单裁剪，避免把服务进程的数据库口令等配置带给子进程。
+        """
+        officecli_bin = shutil.which("officecli")
+        if not officecli_bin:
+            raise RuntimeError("本地环境未安装 OfficeCLI，无法执行 officecli_run")
+        raw_cwd = str(cwd or "workspace").strip()
+        if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            raise ValueError("officecli_run 不允许将 cwd 设置为技能目录")
+        else:
+            local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+
+        command_spec = parse_officecli_args(args)
+        visible_cwd = str(cwd or "/mnt/user-data/workspace").strip()
+        for index, path in command_path_values(command_spec, visible_cwd):
+            if path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                raise ValueError(f"officecli_run 不支持技能路径: {path}")
+            try:
+                resolve_workspace_path(
+                    runtime.workspace_root,
+                    path,
+                    writable=index in command_spec.write_indices,
+                )
+            except ValueError as exc:
+                raise ValueError(f"officecli_run 路径校验失败: {exc}") from exc
+        path_mapping = WorkspacePathMapping(
+            workspace_root=runtime.workspace_root,
+            runtime_skills_dir=runtime.runtime_skills_dir,
+        )
+        translated_args = translate_command_args(
+            command_spec, visible_cwd, path_mapping.translate
+        )
+
+        process = await asyncio.create_subprocess_exec(
+            officecli_bin,
+            *translated_args,
+            cwd=str(local_cwd),
+            # HOME 指向会话根（非 workspace），officecli 的配置/缓存不会污染用户可见目录。
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": str(runtime.workspace_root),
+                "LANG": "C.UTF-8",
+            },
+            stdin=asyncio.subprocess.DEVNULL,  # batch 等子命令会读 stdin，避免继承并卡到超时
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "args": args,
+                "exit_code": int(process.returncode or 0),
+                "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
+                "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
+                "timed_out": False,
+            }
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "backend": self.name,
+                "sandbox_id": "",
+                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "args": args,
+                "exit_code": 124,
+                "stdout": "",
+                "stderr": "officecli 执行超时",
+                "timed_out": True,
+            }
+
+
+@dataclass
+class SandboxWorkspaceBackend:
+    """OpenSandbox backend; all remote filesystem calls stay behind this adapter."""
+
+    name: str = "sandbox"
+    session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
+    _session_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _session_error: str = field(default="", init=False, repr=False)
+
+    async def _session_ref(self, runtime: ConversationWorkspaceRuntime) -> SandboxExecutionSessionRef:
+        if self.session_ref.current is not None:
+            return self.session_ref
+        async with self._session_lock:
+            if self.session_ref.current is not None:
+                return self.session_ref
+            if self._session_error:
+                raise ValueError(self._session_error)
+            await runtime._ensure_snapshot_async()
+            try:
+                self.session_ref.current = await get_workspace_execution_session(
+                    runtime.workspace_root,
+                    runtime.user_id,
+                    runtime_skills_dir=runtime.runtime_skills_dir,
+                )
+            except Exception as exc:
+                self._session_error = str(exc) or "OpenSandbox 执行环境初始化失败"
+                raise
+        return self.session_ref
+
+    async def read_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_read_text_file(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            offset=offset,
+            limit=limit,
+            max_chars=max_chars,
+        )
+
+    async def write_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        return await sandbox_write_text_file(
+            session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
+        )
+
+    async def write_internal_text_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        entries: list[tuple[str, str]],
+    ) -> list[dict[str, Any]]:
+        return await sandbox_write_internal_text_files(
+            session_ref=await self._session_ref(runtime),
+            entries=entries,
+        )
+
+    async def write_tool_result(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        return await sandbox_write_tool_result(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            content=content,
+        )
+
+    async def replace_text_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> dict[str, Any]:
+        return await sandbox_replace_text_file(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            old_content=old_content,
+            new_content=new_content,
+        )
+
+    async def artifact_payload(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_artifact_payload(
+            session_ref=await self._session_ref(runtime), file_path=file_path
+        )
+
+    async def render_office_html(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_render_office_html(
+            session_ref=await self._session_ref(runtime),
+            file_path=file_path,
+            max_chars=max_chars,
+        )
+
+    async def list_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        max_depth: int,
+    ) -> list[dict[str, Any]]:
+        return await sandbox_list_dir(
+            session_ref=await self._session_ref(runtime), path=path, max_depth=max_depth
+        )
+
+    async def create_dir(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_create_dir(session_ref=await self._session_ref(runtime), path=path)
+
+    async def delete_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        recursive: bool,
+        expected_type: Literal["file", "dir"],
+    ) -> dict[str, Any]:
+        return await sandbox_delete_path(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            recursive=recursive,
+            expected_type=expected_type,
+        )
+
+    async def move_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_move_path(
+            session_ref=await self._session_ref(runtime),
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def copy_path(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        source_path: str,
+        destination_path: str,
+    ) -> dict[str, Any]:
+        return await sandbox_copy_path(
+            session_ref=await self._session_ref(runtime),
+            source_path=source_path,
+            destination_path=destination_path,
+        )
+
+    async def search_files(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        pattern: str,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        return await sandbox_search_files(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            pattern=pattern,
+            max_results=max_results,
+        )
+
+    async def grep_text(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        path: str,
+        patterns: list[str],
+        glob: str,
+        max_results: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        return await sandbox_grep_text(
+            session_ref=await self._session_ref(runtime),
+            path=path,
+            patterns=patterns,
+            glob=glob,
+            max_results=max_results,
+            max_chars=max_chars,
+        )
+
+    async def validate_bash_paths(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+    ) -> None:
+        invalid = []
+        for token in _absolute_command_path_tokens(command):
+            try:
+                sandbox_visible_path(token)
+            except ValueError:
+                invalid.append(token)
+        if invalid:
+            raise ValueError(
+                "bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: "
+                + ", ".join(invalid[:3])
+            )
+
+    async def run_bash(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        command: str,
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        sandbox_cwd = sandbox_visible_path(str(cwd or sandbox_workspace_dir()))
+        session_ref = await self._session_ref(runtime)
+        session = session_ref.current
+        if session is None:
+            raise ValueError("OpenSandbox 执行环境未准备")
+        async with session.operation_lock:
+            inner = "cd {cwd} && {command}".format(cwd=shlex.quote(sandbox_cwd), command=command)
+            exit_code, stdout, stderr = await run_command_in_sandbox(
+                session=session,
+                command=f"bash -o pipefail -lc {shlex.quote(inner)}",
+                timeout_seconds=timeout_seconds,
+            )
+            try:
+                await sync_sandbox_working_trees(session)
+            except Exception as exc:
+                raise ValueError(f"Bash 执行后的工作区同步失败: {exc}") from exc
+        return {
+            "backend": OPENSANDBOX_BACKEND,
+            "sandbox_id": session.sandbox_id,
+            "cwd": sandbox_path_to_visible(sandbox_cwd),
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
+        }
+
+    async def run_officecli(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        args: list[str],
+        cwd: str | None,
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        """沙箱后端：OpenSandbox SDK 仅接受字符串命令，故将 argv 数组 shlex.quote 后拼成
+        ``officecli ...`` 字符串，经 ``run_command_in_sandbox`` 执行；执行后同步工作区。
+
+        沙箱内 ``/mnt/user-data/*`` 即真实挂载路径，无需翻译；仅按沙箱边界校验真实路径参数
+        （排除 OfficeCLI DOM 选择器），拒绝越界访问。flag 内嵌路径（如 ``--out=/mnt/...``）
+        在沙箱内本就是合法路径，不做额外转换。技能路径与本地后端一样拒绝，保证两后端行为一致。
+        """
+        command_spec = parse_officecli_args(args)
+        visible_cwd = str(cwd or sandbox_workspace_dir())
+        if visible_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            raise ValueError("officecli_run 不允许将 cwd 设置为技能目录")
+        sandbox_cwd = sandbox_visible_path(visible_cwd)
+        for index, path in command_path_values(command_spec, visible_cwd):
+            if path.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                raise ValueError(f"officecli_run 不支持技能路径: {path}")
+            sandbox_visible_path(path, writable=index in command_spec.write_indices)
+        session_ref = await self._session_ref(runtime)
+        session = session_ref.current
+        if session is None:
+            raise ValueError("OpenSandbox 执行环境未准备")
+        async with session.operation_lock:
+            quoted = " ".join(shlex.quote(str(a)) for a in command_spec.args)
+            command = f"cd {shlex.quote(sandbox_cwd)} && officecli {quoted}"
+            exit_code, stdout, stderr = await run_command_in_sandbox(
+                session=session,
+                command=command,
+                timeout_seconds=timeout_seconds,
+            )
+            if exit_code == 0 and (command_spec.mutates or command_spec.write_indices):
+                try:
+                    await sync_sandbox_working_trees(session)
+                except Exception as exc:
+                    raise ValueError(f"officecli 执行后的工作区同步失败: {exc}") from exc
+        return {
+            "backend": OPENSANDBOX_BACKEND,
+            "sandbox_id": session.sandbox_id,
+            "cwd": sandbox_path_to_visible(sandbox_cwd),
+            "args": args,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
+        }
+
+
+_WORKSPACE_BACKEND_FACTORIES: dict[str, Callable[[], WorkspaceBackend]] = {
+    "local": LocalWorkspaceBackend,
+    "sandbox": SandboxWorkspaceBackend,
+}
+
+
+def create_workspace_backend(name: str) -> WorkspaceBackend:
+    """Create a server-registered backend; unknown names fail closed."""
+    backend_name = str(name or "").strip().lower()
+    factory = _WORKSPACE_BACKEND_FACTORIES.get(backend_name)
+    if factory is None:
+        supported = ", ".join(sorted(_WORKSPACE_BACKEND_FACTORIES))
+        raise ValueError(f"不支持的工作区后端: {name}；可用后端: {supported}")
+    return factory()
+
+
+def _absolute_command_path_tokens(command: str, *, tool_name: str = "bash_run") -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"command 解析失败: {exc}") from exc
+    officecli_selector_indices = _officecli_selector_token_indices(tokens)
+    invalid = []
+    paths: list[str] = []
+    for index, token in enumerate(tokens):
+        if index in officecli_selector_indices:
+            continue
+        normalized = token.lstrip("<>")
+        if ".." in PurePosixPath(normalized).parts:
+            invalid.append(token)
+        elif normalized.startswith("/"):
+            paths.append(normalized)
+    if invalid:
+        raise ValueError(f"{tool_name} 不允许路径越界: " + ", ".join(invalid[:3]))
+    return paths
+
+
+def _officecli_selector_token_indices(tokens: list[str]) -> set[int]:
+    """Exclude OfficeCLI DOM selectors from host-path validation."""
+    selector_indices: set[int] = set()
+    selector_commands = {"get", "query", "set", "add", "remove"}
+    for officecli_index, token in enumerate(tokens):
+        if Path(token).name not in {"officecli", "officecli.exe"}:
+            continue
+        verb_index = next(
+            (
+                index
+                for index in range(officecli_index + 1, len(tokens))
+                if tokens[index] in selector_commands | {"move", "swap"}
+            ),
+            None,
+        )
+        if verb_index is None:
+            continue
+        verb = tokens[verb_index]
+        if verb in selector_commands and verb_index + 2 < len(tokens):
+            selector_indices.add(verb_index + 2)
+        elif verb == "move":
+            if verb_index + 2 < len(tokens):
+                selector_indices.add(verb_index + 2)
+            for option in ("--to", "--after", "--before"):
+                for index in range(verb_index + 3, len(tokens) - 1):
+                    if tokens[index] == option:
+                        selector_indices.add(index + 1)
+        elif verb == "swap":
+            selector_indices.update(
+                index for index in (verb_index + 2, verb_index + 3) if index < len(tokens)
+            )
+    return selector_indices

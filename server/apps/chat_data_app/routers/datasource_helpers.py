@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from ..services.semantic_core.common import build_table_columns_map
+from ..services.semantic.core.common import build_table_columns_map
 
 SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
 

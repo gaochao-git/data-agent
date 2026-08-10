@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 from apps.chat_data_app.routers import uploaded_files as uploaded_file_routes
-from apps.chat_data_app.services.uploaded_file_service import UploadedFileService
+from apps.chat_data_app.services.agent_run.uploaded_file_service import UploadedFileService
 from utils.error_codes import ErrorCode
 
 

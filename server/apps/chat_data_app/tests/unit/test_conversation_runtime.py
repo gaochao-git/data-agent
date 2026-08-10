@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.conversation_runtime import stream_agent_turn
+from apps.chat_data_app.services.agent_run.conversation_runtime import stream_agent_turn
 
 
 class _FakeStreamAdapter:

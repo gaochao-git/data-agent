@@ -22,7 +22,7 @@ from utils.llm_json import parse_llm_json
 from utils.response import business_response
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..schema import AccuracyEvaluationCasesUpsertRequest, AccuracyEvaluationDraftCaseRequest, AccuracyEvaluationRunRequest
-from ..services.datasource_manager import get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager
 from ..services.evaluation_service import (
     EvaluationService,
     accuracy_bp,
@@ -40,8 +40,8 @@ from ..services.evaluation_service import (
 )
 from ..services.llm_config import get_chat_data_llm
 from .dependencies import _get_current_user
-from ..services.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
-from ..services.semantic_core.common import is_time_logical_dimension
+from ..services.semantic.run.semantic_config_service import can_mutate_semantic_config, get_semantic_config_service
+from ..services.semantic.core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
 router = APIRouter()

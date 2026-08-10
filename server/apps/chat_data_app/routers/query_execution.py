@@ -26,15 +26,15 @@ from ..schema import (
     QueryTaskCreateRequest,
     QuickSqlRequest,
 )
-from ..services.datasource_manager import get_datasource_manager
-from ..services.conversation_event_service import conversation_event_service
-from ..services.query_task_service import (
+from ..services.datasource.manager import get_datasource_manager
+from ..services.agent_run.conversation_event_service import conversation_event_service
+from ..services.sql_run.task_service import (
     QueryTaskNotFoundError,
     QueryTaskPermissionDeniedError,
     QueryTaskService,
 )
-from ..services.query_providers import get_query_task_service
-from ..services.semantic_query_service import compile_semantic_builder_sql
+from ..services.sql_run.providers import get_query_task_service
+from ..services.semantic.run.semantic_query_service import compile_semantic_builder_sql
 from ..services.sql_assist_context import get_all_tables_async, get_tables_create_format
 from .dependencies import _get_current_user
 

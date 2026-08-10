@@ -9,8 +9,8 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_metadata as hive_meta_http
-from apps.chat_data_app.services.datasource_metadata import _build_payload
+from apps.chat_data_app.services.datasource import metadata as hive_meta_http
+from apps.chat_data_app.services.datasource.metadata import _build_payload
 
 
 def test_hive_meta_payload_uses_internal_org_fields():

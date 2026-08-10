@@ -3,7 +3,7 @@ import os
 import shutil
 from pathlib import Path
 
-from apps.chat_data_app.services.conversation_workspace import (
+from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     ensure_conversation_workspace,
 )

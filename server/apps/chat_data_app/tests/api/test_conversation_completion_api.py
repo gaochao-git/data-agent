@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
-from apps.chat_data_app.services import semantic_query_service, semantic_conversation_context, semantic_model_repository
+from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
 

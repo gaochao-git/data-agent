@@ -15,9 +15,9 @@ import auth
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.routers import conversation_workspace, dependencies
-from apps.chat_data_app.services import conversation_workspace as conversation_workspace_service
-from apps.chat_data_app.services.semantic_core.common import build_table_columns_map
-from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.services.agent_run import conversation_workspace as conversation_workspace_service
+from apps.chat_data_app.services.semantic.core.common import build_table_columns_map
+from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from apps.chat_data_app.schema import DatasourceSourceItem, SkillImportFromWorkspaceRequest
 from middleware import api_logging as api_logging_module
 from utils.error_codes import ErrorCode

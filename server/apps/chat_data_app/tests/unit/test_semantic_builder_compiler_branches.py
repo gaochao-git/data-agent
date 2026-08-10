@@ -9,9 +9,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
-from apps.chat_data_app.services import semantic_query_service as compiler_module
-from apps.chat_data_app.services import semantic_query_service as ai_compiler_module
-from apps.chat_data_app.services.semantic_query_service import (
+from apps.chat_data_app.services.semantic.run import semantic_query_service as compiler_module
+from apps.chat_data_app.services.semantic.run import semantic_query_service as ai_compiler_module
+from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     SemanticBIQueryAdapter,
     _as_list,
     _field_keys,
@@ -110,7 +110,7 @@ def test_ai_and_bi_reject_disconnected_semantic_tables():
 def test_semantic_builder_adapter_returns_config_without_compiling(monkeypatch):
     compiler = SemanticBIQueryAdapter(build_semantic_config())
     monkeypatch.setattr(
-        "apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
+        "apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("adapt must not compile SQL")),
     )
 
@@ -543,7 +543,7 @@ def test_semantic_query_service_remaining_join_and_metric_branches(monkeypatch):
     def fail_compile(*_args, **_kwargs):
         raise RuntimeError("compile down")
 
-    monkeypatch.setattr("apps.chat_data_app.services.semantic_core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fail_compile)
+    monkeypatch.setattr("apps.chat_data_app.services.semantic.core.semantic_sql.query_plan_compiler.compile_query_plan_sql", fail_compile)
     failed = generator.generate_sql(metrics=["销售额"], dimensions=["城市"], filters=[], having=[])
     assert failed["success"] is False
     assert "SQL 转换失败" in failed["error"]

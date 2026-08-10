@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.services.semantic_config_service import SemanticConfigService
+from apps.chat_data_app.services.semantic.run.semantic_config_service import SemanticConfigService
 
 
 class _FakeDatasourceManager:

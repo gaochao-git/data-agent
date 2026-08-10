@@ -23,23 +23,23 @@ from ..schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from ..services.datasource_manager import get_datasource_manager
+from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic_history_learning_service import (
+from ..services.semantic.run.semantic_history_learning_service import (
     SemanticHistoryLearningService,
     _generate_history_learning_suggestions_by_llm as _service_generate_history_learning_suggestions_by_llm,
     _history_belongs_to_config as _service_history_belongs_to_config,
     _load_history_conversation_context,
     build_semantic_history_learning_service,
 )
-from ..services.semantic_config_service import (
+from ..services.semantic.run.semantic_config_service import (
     can_mutate_semantic_config,
     get_semantic_config_service,
     is_private_semantic_config_owner,
     is_public_semantic_config,
     validate_semantic_config_for_save,
 )
-from ..services.sql_parser import extract_physical_tables
+from ..services.sql_run.parser import extract_physical_tables
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

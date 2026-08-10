@@ -9,7 +9,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_credentials as credentials
+from apps.chat_data_app.services.datasource import credentials
 
 
 def test_sanitize_source_config_removes_sensitive_fields():

@@ -9,8 +9,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import conversation_context, semantic_conversation_context
-from apps.chat_data_app.services.execution_target_context import append_selected_execution_targets_to_context
+from apps.chat_data_app.services.agent_run import conversation_context
+from apps.chat_data_app.services.semantic.run import semantic_conversation_context
+from apps.chat_data_app.services.datasource.target_context import append_selected_execution_targets_to_context
 
 
 class _FakeDatasourceManager:

@@ -1,6 +1,6 @@
 import pytest
 
-from apps.chat_data_app.services.workspace_path_policy import WORKSPACE_PATH_POLICY
+from apps.chat_data_app.services.agent_run.workspace_path_policy import WORKSPACE_PATH_POLICY
 
 
 def test_policy_normalizes_shared_aliases_and_classifies_special_paths():

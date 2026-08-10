@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
-from apps.chat_data_app.services.conversation_event_service import ConversationEventService
+from apps.chat_data_app.services.agent_run.conversation_event_service import ConversationEventService
 from utils.models import Base, UserThread
 
 
@@ -229,7 +229,7 @@ async def test_event_append_retries_connection_errors_and_propagates_final_failu
     async def skip_retry_delay(_delay):
         return None
 
-    monkeypatch.setattr("apps.chat_data_app.services.conversation_event_service.asyncio.sleep", skip_retry_delay)
+    monkeypatch.setattr("apps.chat_data_app.services.agent_run.conversation_event_service.asyncio.sleep", skip_retry_delay)
     message = HumanMessage(content="重试写入", id="turn-retry")
     retry_dao = RetryDao(failures=2)
     await ConversationEventService(retry_dao).persist_user_message(

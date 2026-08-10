@@ -17,11 +17,11 @@ from typing import Any
 from langchain_core.tools import tool
 
 from utils.logger import get_logger
-from ...services.conversation_workspace import (
+from ...services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
     resolve_workspace_path,
 )
-from ...services.uploaded_file_parser import parse_uploaded_file_to_markdown
+from ...services.agent_run.uploaded_file_parser import parse_uploaded_file_to_markdown
 
 logger = get_logger(__name__)
 

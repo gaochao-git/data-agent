@@ -27,9 +27,9 @@ from ..schema import (
     DatasourceTableIndexesUpdateRequest,
     DatasourceUpdateRequest,
 )
-from ..services.datasource_manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
+from ..services.datasource.manager import DATASOURCE_SYNC_TIMEOUT_SECONDS, get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
-from ..services.semantic_config_service import get_semantic_config_service
+from ..services.semantic.run.semantic_config_service import get_semantic_config_service
 from .dependencies import _get_current_user
 from .datasource_helpers import (
     _build_datasource_schema_health,

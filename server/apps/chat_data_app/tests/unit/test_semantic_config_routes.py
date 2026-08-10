@@ -23,9 +23,9 @@ from apps.chat_data_app.schema import (
     SemanticHistoryLearningRequest,
     SemanticPrefillRequest,
 )
-from apps.chat_data_app.services import semantic_config_service
-from apps.chat_data_app.services import semantic_history_learning_service
-from apps.chat_data_app.services.semantic_history_learning_service import build_semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run import semantic_config_service
+from apps.chat_data_app.services.semantic.run import semantic_history_learning_service
+from apps.chat_data_app.services.semantic.run.semantic_history_learning_service import build_semantic_history_learning_service
 
 
 def _patch_history_learning_service_session(monkeypatch, session_factory):

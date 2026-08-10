@@ -11,8 +11,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_metadata, query_metadata
-from apps.chat_data_app.services.datasource_metadata import HiveSyncService, MySQLSyncService
+from apps.chat_data_app.services.datasource import metadata as datasource_metadata
+from apps.chat_data_app.services.dashboard import query_metadata
+from apps.chat_data_app.services.datasource.metadata import HiveSyncService, MySQLSyncService
 
 hive_sync = datasource_metadata
 mysql_sync = datasource_metadata

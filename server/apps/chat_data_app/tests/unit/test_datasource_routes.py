@@ -26,8 +26,9 @@ from apps.chat_data_app.routers import datasource_public as datasource_public_ro
 from apps.chat_data_app.routers import query_favorites as query_favorites_routes
 from apps.chat_data_app.routers import query_execution as query_execution_routes
 from apps.chat_data_app.routers import semantic_config as semantic_config_routes
-from apps.chat_data_app.services import dashboard_runtime, dashboard_spec_service, query_cache, query_providers, query_runtime
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime, spec_service as dashboard_spec_service
+from apps.chat_data_app.services.sql_run import cache as query_cache, providers as query_providers, runtime as query_runtime
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
 from apps.chat_data_app.routers.datasource_admin import (
     clear_default_datasource,
     create_datasource_group,

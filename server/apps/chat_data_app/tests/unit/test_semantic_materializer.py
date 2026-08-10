@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[4]))
 
-from apps.chat_data_app.services import semantic_materializer
+from apps.chat_data_app.services.semantic.run import semantic_materializer
 
 
 class _FakeRuntime:

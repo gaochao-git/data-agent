@@ -1,13 +1,13 @@
 import asyncio
 from types import SimpleNamespace
 
-from apps.chat_data_app.services.query_result import (
+from apps.chat_data_app.services.sql_run.result import (
     build_query_result_payload,
     query_result_status,
     query_result_succeeded,
 )
-from apps.chat_data_app.services.query_history_service import QueryHistoryService
-from apps.chat_data_app.services.query_task_service import QueryTaskService
+from apps.chat_data_app.services.sql_run.history_service import QueryHistoryService
+from apps.chat_data_app.services.sql_run.task_service import QueryTaskService
 
 
 def test_query_result_status_normalizes_legacy_success_and_cancelled_alias():

@@ -1,7 +1,7 @@
 """语义 SQL 编译器门面测试。"""
 
-from apps.chat_data_app.services.semantic_core.semantic_sql import query_plan_compiler
-from apps.chat_data_app.services.semantic_core.semantic_sql.compiler import SemanticSQLCompiler, compile_semantic_sql
+from apps.chat_data_app.services.semantic.core.semantic_sql import query_plan_compiler
+from apps.chat_data_app.services.semantic.core.semantic_sql.compiler import SemanticSQLCompiler, compile_semantic_sql
 
 
 def test_semantic_sql_compiler_keeps_dialect_context_per_instance(monkeypatch):

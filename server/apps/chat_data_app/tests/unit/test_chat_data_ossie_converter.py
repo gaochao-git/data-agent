@@ -7,7 +7,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[4]))
 
-from apps.chat_data_app.services.chat_data_ossie_converter import ChatDataToOssieConverter
+from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 
 
 def _config(relationship_type="many_to_one"):

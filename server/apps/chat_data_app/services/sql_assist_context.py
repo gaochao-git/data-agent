@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .datasource_manager import get_datasource_manager
+from .datasource.manager import get_datasource_manager
 
 
 async def get_all_tables_async(datasource_id: str | None) -> list[dict[str, Any]]:

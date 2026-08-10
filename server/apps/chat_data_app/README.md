@@ -98,10 +98,10 @@ index.vue
   -> handlers.py: sql_completion_handler()
   -> agent/data_agent.py
   -> dsl2sql_tool / semantic_query_tool
-  -> services/semantic_query_service.py
-  -> services/query_runtime.py: execute_agent_sql()
+  -> services/semantic/run/semantic_query_service.py
+  -> services/sql_run/runtime.py: execute_agent_sql()
   -> execute_sql_for_member()
-  -> services/sql_executor.py
+  -> services/sql_run/executor.py
 ```
 
 查询支持 DSL 模式和 SQL 模式。DSL 模式为默认主链路：`NL -> DSL -> SQL -> semantic_query_tool`；只有 DSL 模式无法表达查询结构时，智能体才允许使用 SQL 模式，通过 `semantic_query_tool(sql=...)` 直接执行只读 SQL。两种模式通过顶层 `dsl` / `sql` 参数二选一表达，不传 `mode`；分析、技能和产物处理都在同一 Agent 的会话工作区内完成。
@@ -146,15 +146,15 @@ index.vue
   -> api/query.ts: compileSemanticBuilderSql()
   -> POST /agents/api/chatdata/compile-semantic-builder-sql
   -> routers/query_execution.py: compile_semantic_builder_sql_endpoint()
-  -> services/semantic_query_service.py
+  -> services/semantic/run/semantic_query_service.py
 
 QueryBuilder/index.vue
   -> useQueryTask.submitSqlTask(query_type='builder')
   -> api/query.ts: createQueryTask()
   -> POST /agents/api/chatdata/query-tasks
   -> routers/query_execution.py: create_query_task()
-  -> services/query_task_service.py: create_query_task_for_user()
-  -> services/query_runtime.py: prepare_sql_batch_request_for_execution()
+  -> services/sql_run/task_service.py: create_query_task_for_user()
+  -> services/sql_run/runtime.py: prepare_sql_batch_request_for_execution()
   -> prepare_sql_request_for_execution()          # 服务端编译 DSL 为实际 SQL
   -> create_query_task()
   -> QueryTaskService.schedule_query_task()
@@ -187,15 +187,15 @@ index.vue
   -> api/query.ts: createQueryTask()
   -> POST /agents/api/chatdata/query-tasks
   -> routers/query_execution.py: create_query_task()
-  -> services/query_task_service.py: create_query_task_for_user()
-  -> services/query_runtime.py: prepare_sql_batch_request_for_execution()
+  -> services/sql_run/task_service.py: create_query_task_for_user()
+  -> services/sql_run/runtime.py: prepare_sql_batch_request_for_execution()
   -> create_query_task()
   -> QueryTaskService.schedule_query_task()
   -> query_runtime.run_sql_query_task() / run_sql_batch_query_task()
   -> create_query_executions_for_task()
   -> build_execute_sql_result_data()
   -> execute_sql_for_member()
-  -> services/sql_executor.py
+  -> services/sql_run/executor.py
 ```
 
 SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成 `sql: string[]` 一次提交。后端按数组长度派生内部任务类型：单条 SQL 为 `task_type=sql`，多条 SQL 为 `task_type=sql_batch`。`prepare_sql_batch_request_for_execution()` 在任务创建时逐条做快速 SQL 安全校验和 limit 改写预检；真正执行前仍在 `execute_sql_for_member()` / executor 边界按成员数据源再生成 `effective_sql` 并校验，保证 MySQL、Hive direct、Hive HTTP 等不同执行器不会绕过安全边界。
@@ -210,7 +210,7 @@ SQL 页面会把选中 SQL 或编辑器 SQL 按分号拆成 `sql: string[]` 一�
 
 ### 4. 看板查询
 
-看板配置和看板查询分开：配置类接口在 `routers/dashboard.py` / `services/dashboard_service.py`，面板刷新复用查询运行时。
+看板配置和看板查询分开：配置类接口在 `routers/dashboard.py` / `services/dashboard/service.py`，面板刷新复用查询运行时。
 
 ```text
 DashboardEditor.vue
@@ -218,7 +218,7 @@ DashboardEditor.vue
   -> api/dashboard.ts: getDashboard() / updateDashboard() / addPanel() / updatePanel()
   -> /agents/api/chatdata/dashboards...
   -> routers/dashboard.py
-  -> services/dashboard_service.py
+  -> services/dashboard/service.py
 ```
 
 看板面板执行有两种前端调用：
@@ -249,7 +249,7 @@ DashboardEditor.vue
   -> execute_sql_for_member()
 ```
 
-`services/query_providers.py` 初始化 `QueryTaskService` 后会调用 `query_task_service.configure_dashboard_runtime()`，把 `execute_sql_for_member`、任务创建、任务更新和调度函数注入 `dashboard_runtime.py`，避免看板 runtime 反向导入查询 router。
+`services/sql_run/providers.py` 初始化 `QueryTaskService` 后会调用 `query_task_service.configure_dashboard_runtime()`，把 `execute_sql_for_member`、任务创建、任务更新和调度函数注入 `dashboard_runtime.py`，避免看板 runtime 反向导入查询 router。
 
 执行模式：
 

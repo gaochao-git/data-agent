@@ -17,7 +17,7 @@ from apps.chat_data_app.schema import (
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
-from apps.chat_data_app.services import dashboard_runtime
+from apps.chat_data_app.services.dashboard import runtime as dashboard_runtime
 
 
 @pytest.fixture(autouse=True)

@@ -23,10 +23,10 @@ from ..schema import (
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
-from ..services import dashboard_runtime
-from ..services.dashboard_spec_service import create_dashboard_from_spec_payload
-from ..services.dashboard_service import get_dashboard_service
-from ..services.query_metadata import generate_query_metadata
+from ..services.dashboard import runtime as dashboard_runtime
+from ..services.dashboard.spec_service import create_dashboard_from_spec_payload
+from ..services.dashboard.service import get_dashboard_service
+from ..services.dashboard.query_metadata import generate_query_metadata
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

@@ -11,8 +11,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from ...schema import SemanticToolInput
-from ...services.semantic_model_search import search_semantic_models
-from ...services.semantic_materializer import materialize_runtime_semantic_models
+from ...services.semantic.run.semantic_model_search import search_semantic_models
+from ...services.semantic.run.semantic_materializer import materialize_runtime_semantic_models
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

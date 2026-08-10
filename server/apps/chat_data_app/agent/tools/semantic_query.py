@@ -9,8 +9,8 @@ from langgraph.prebuilt import InjectedState
 
 from utils.logger import get_logger
 from ...schema import SemanticQueryInput
-from ...services.semantic_model_repository import load_runtime_semantic_config
-from ...services.semantic_query_service import (
+from ...services.semantic.run.semantic_model_repository import load_runtime_semantic_config
+from ...services.semantic.run.semantic_query_service import (
     SemanticCompileOptions,
     compile_semantic_ai_dsl,
     execute_semantic_query_sql,

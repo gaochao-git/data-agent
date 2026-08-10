@@ -12,9 +12,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_credentials, sql_executor
-import apps.chat_data_app.services.sql_parser as sql_parser
-from apps.chat_data_app.services.sql_parser import prepare_sql_for_execution, validate_single_sql_statement
+from apps.chat_data_app.services.datasource import credentials as datasource_credentials
+from apps.chat_data_app.services.sql_run import executor as sql_executor
+import apps.chat_data_app.services.sql_run.parser as sql_parser
+from apps.chat_data_app.services.sql_run.parser import prepare_sql_for_execution, validate_single_sql_statement
 
 
 def test_default_allowed_sql_types_only_select():

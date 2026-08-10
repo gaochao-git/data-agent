@@ -11,9 +11,9 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services import datasource_manager as datasource_manager_module
-from apps.chat_data_app.services import execution_permission
-from apps.chat_data_app.services.datasource_manager import (
+from apps.chat_data_app.services.datasource import manager as datasource_manager_module
+from apps.chat_data_app.services.datasource import permission as execution_permission
+from apps.chat_data_app.services.datasource.manager import (
     _build_member_source_identity,
     _build_member_source_text_line,
     _build_meta_source_config,
@@ -26,7 +26,7 @@ from apps.chat_data_app.services.datasource_manager import (
     _validate_member_source_configs,
     DataSourceManager,
 )
-from apps.chat_data_app.services.datasource_metadata import MetadataAdapterNotFoundError
+from apps.chat_data_app.services.datasource.metadata import MetadataAdapterNotFoundError
 
 
 class _FakeStore:
@@ -607,7 +607,7 @@ def test_get_execution_datasources_injects_unified_mysql_credentials(monkeypatch
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"user": "db_query_ro", "password": "secret"}),
     )
 
@@ -636,7 +636,7 @@ def test_get_execution_datasources_keeps_hive_http_executor_type(monkeypatch):
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user"}),
     )
 
@@ -667,7 +667,7 @@ def test_get_execution_datasources_keeps_mysql_http_executor_type(monkeypatch):
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"user": "db_query_ro", "password": "secret"}),
     )
 
@@ -876,7 +876,7 @@ def test_get_execution_datasources_supports_hive_http_org_code_selection(monkeyp
     ]
     manager = _build_manager(fake_store)
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user"}),
     )
 
@@ -931,7 +931,7 @@ def test_merge_member_source_lines_keeps_new_template_first_and_existing_members
 
 def test_build_execution_datasource_targets_defaults_template_and_adds_credentials(monkeypatch):
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"user": "mysql_user", "password": "mysql_pwd"}),
     )
     manager = DataSourceManager.__new__(DataSourceManager)
@@ -1096,7 +1096,7 @@ def test_datasource_manager_create_update_group_from_sources(monkeypatch):
         saved_calls.append(kwargs)
         return {"id": kwargs["datasource_id"], "name": kwargs["group_name"]}
 
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.datetime", _FixedDatetime)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.datetime", _FixedDatetime)
     class FakeDao:
         def __init__(self):
             self.updated_kwargs = None
@@ -1207,7 +1207,7 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
         assert await manager.delete_datasource_async("ds_a") is True
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"user": "u", "password": "p"}),
     )
     asyncio.run(run_checks())
@@ -1378,12 +1378,12 @@ def test_datasource_manager_get_schema_timeout_and_connection_error(monkeypatch)
             return self.adapter
 
     async def run_checks():
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 0.001)
         manager.metadata_adapter_registry = FakeRegistry(TimeoutAdapter())
         with pytest.raises(ConnectionError, match="数据库连接超时"):
             await manager.get_live_schema_async("ds_a")
 
-        monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
+        monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DATASOURCE_SYNC_TIMEOUT_SECONDS", 30)
         manager.metadata_adapter_registry = FakeRegistry(FailingAdapter())
         with pytest.raises(ConnectionError, match="数据库连接失败"):
             await manager.get_live_schema_async("ds_a")
@@ -1482,7 +1482,7 @@ def test_datasource_manager_async_save_and_group_from_sources(monkeypatch):
     asyncio.run(run_checks())
 
     calls.clear()
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.datetime", _FixedDatetime)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.datetime", _FixedDatetime)
     manager._save_datasource_async = lambda **kwargs: asyncio.sleep(0, result={"id": kwargs["datasource_id"], "members": kwargs["member_source_configs"]})
 
     created = asyncio.run(manager.create_datasource_group_from_sources_async(
@@ -1591,7 +1591,7 @@ def test_datasource_manager_get_default_enriches_semantic_configs():
 
 def test_datasource_manager_remaining_execution_and_table_desc_branches(monkeypatch):
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user", "password": "hive_pwd"}),
     )
     manager = DataSourceManager.__new__(DataSourceManager)
@@ -1666,7 +1666,7 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     manager = DataSourceManager.__new__(DataSourceManager)
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver(),
     )
     no_credential_target = manager._build_execution_datasource_targets({
@@ -1678,7 +1678,7 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     assert "password" not in no_credential_target["source_config"]
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user"}),
     )
     username_only_target = manager._build_execution_datasource_targets({
@@ -1690,7 +1690,7 @@ def test_datasource_manager_more_execution_and_group_edge_branches(monkeypatch):
     assert "password" not in username_only_target["source_config"]
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"password": "hive_pwd"}),
     )
     password_only_target = manager._build_execution_datasource_targets({
@@ -1824,15 +1824,15 @@ def test_datasource_manager_init_and_singleton_use_datasource_dao(monkeypatch):
         def __init__(self):
             created["called"] = True
 
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager.DataSourceDao", FakeDatasourceDao)
-    monkeypatch.setattr("apps.chat_data_app.services.datasource_manager._datasource_manager_instance", None)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource.manager.DataSourceDao", FakeDatasourceDao)
+    monkeypatch.setattr("apps.chat_data_app.services.datasource.manager._datasource_manager_instance", None)
 
     manager = DataSourceManager()
 
     assert created["called"] is True
 
-    first = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
-    second = __import__("apps.chat_data_app.services.datasource_manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
+    first = __import__("apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
+    second = __import__("apps.chat_data_app.services.datasource.manager", fromlist=["get_datasource_manager"]).get_datasource_manager()
     assert first is second
     assert isinstance(first.datasource_dao, FakeDatasourceDao)
 
@@ -1851,7 +1851,7 @@ def test_datasource_manager_helper_fallback_branches(monkeypatch):
     assert [item["org_code"] for item in merged] == ["ORG_A", "ORG_B"]
 
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager._normalize_member_source_config",
+        "apps.chat_data_app.services.datasource.manager._normalize_member_source_config",
         lambda _source_type, source_config, _default=None: dict(source_config or {}),
     )
     assert _build_member_source_identity({"host": "h", "port": 3306, "database": "d"}, "mysql") == "h:3306:d"
@@ -1940,7 +1940,7 @@ def test_datasource_manager_lookup_and_table_failure_paths(monkeypatch):
     ]
     store.datasources["ds_a"]["template_datasource_id"] = "ORG_HIVE"
     monkeypatch.setattr(
-        "apps.chat_data_app.services.datasource_manager.resolve_execution_source_config",
+        "apps.chat_data_app.services.datasource.manager.resolve_execution_source_config",
         _execution_config_resolver({"username": "hive_user", "password": "hive_pwd"}),
     )
 

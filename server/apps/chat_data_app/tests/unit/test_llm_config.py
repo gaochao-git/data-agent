@@ -222,7 +222,7 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
     from apps.chat_data_app.agent import data_agent
     from apps.chat_data_app.agent.agent_state import ChatDataAgentState
     from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-    from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
+    from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 
     created_models = []
     created_temperatures = []

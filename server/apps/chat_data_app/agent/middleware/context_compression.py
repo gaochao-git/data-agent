@@ -14,7 +14,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.logger import get_logger
-from ...services.context_budget import (
+from ...services.agent_run.context_budget import (
     ContextInputLimitExceededError,
     HARD_INPUT_GUARD_RATIO,
     REQUEST_OVERHEAD_TOKENS,

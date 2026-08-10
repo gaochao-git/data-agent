@@ -10,13 +10,13 @@ from auth import AuthenticationError
 from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
 from utils.logger import get_logger
 from utils.response import business_response
-from ..services.query_history_service import QueryHistoryService
-from ..services.query_providers import (
+from ..services.sql_run.history_service import QueryHistoryService
+from ..services.sql_run.providers import (
     get_query_history_remote_result_fetcher,
     get_query_history_service,
     get_query_task_service,
 )
-from ..services.query_task_service import QueryTaskNotFoundError, QueryTaskService
+from ..services.sql_run.task_service import QueryTaskNotFoundError, QueryTaskService
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

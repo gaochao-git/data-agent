@@ -12,12 +12,12 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
 from apps.chat_data_app.agent.tools import dsl2sql
-from apps.chat_data_app.services import semantic_query_service
-from apps.chat_data_app.services.artifact_registry import (
+from apps.chat_data_app.services.semantic.run import semantic_query_service
+from apps.chat_data_app.services.agent_run.artifact_registry import (
     parse_chart_spec_payload_value,
     parse_output_artifact,
 )
-from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 
 
 def test_dsl2sql_tool_description_is_limited_to_dsl_mode():

@@ -28,18 +28,18 @@ from .agent import (
     get_checkpointer,
 )
 from .agent.skills import format_skills_prompt
-from .services.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
-from .services.conversation_runtime import stream_agent_turn
-from .services.conversation_event_service import conversation_event_service
-from .services.conversation_context import build_conversation_prompt_context
+from .services.agent_run.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
+from .services.agent_run.conversation_runtime import stream_agent_turn
+from .services.agent_run.conversation_event_service import conversation_event_service
+from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
-from .services.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
-from .services.uploaded_file_service import get_file_info
-from .services.runtime_skill_snapshot import (
+from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
+from .services.agent_run.uploaded_file_service import get_file_info
+from .services.agent_run.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
 )
-from .services.semantic_conversation_context import (
+from .services.semantic.run.semantic_conversation_context import (
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
 )

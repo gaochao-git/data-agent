@@ -9,22 +9,22 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "9xoGNhhQOhCKkg30NF/dPA==:teAdsWfDfAutVqg7GTFJHw==")
 
-from apps.chat_data_app.services.semantic_core.semantic_sql.dialect import (
+from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import (
     DialectRegistry,
     HiveDialect,
     MySQLDialect,
     SQLDialect,
     get_dialect,
 )
-from apps.chat_data_app.services.semantic_core.formatter import (
+from apps.chat_data_app.services.semantic.core.formatter import (
     format_error_message,
     format_params_for_display,
     format_sql_for_display,
 )
-from apps.chat_data_app.services.semantic_core.input_validator import InputValidator
-from apps.chat_data_app.services.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
-from apps.chat_data_app.services.semantic_model_repository import load_semantic_model
-from apps.chat_data_app.services.sql_parser import (
+from apps.chat_data_app.services.semantic.core.input_validator import InputValidator
+from apps.chat_data_app.services.semantic.run.semantic_query_service import SemanticCompileOptions, compile_semantic_ai_dsl
+from apps.chat_data_app.services.semantic.run.semantic_model_repository import load_semantic_model
+from apps.chat_data_app.services.sql_run.parser import (
     _is_query_sql,
     _parse_sql,
     _split_sql_statements,
@@ -33,7 +33,7 @@ from apps.chat_data_app.services.sql_parser import (
     extract_top_level_limit_count,
     prepare_sql_for_execution,
 )
-import apps.chat_data_app.services.sql_parser as sql_parser
+import apps.chat_data_app.services.sql_run.parser as sql_parser
 
 
 def test_formatter_outputs_display_text_and_truncates_sql():
@@ -564,7 +564,7 @@ def test_sql_parser_prepare_handles_empty_invalid_and_commands(monkeypatch):
     def fake_parse_sql(*_args, **_kwargs):
         raise RuntimeError("parse boom")
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", fake_parse_sql)
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", fake_parse_sql)
     result = prepare_sql_for_execution("select * from", "mysql")
     assert result.success is False
     assert result.error == "parse boom"
@@ -585,14 +585,14 @@ def test_sql_parser_parse_empty_expression_branches(monkeypatch):
     class BadLimitExpression:
         args = {"limit": BadLimit()}
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [])
     assert prepare_sql_for_execution("select 1", "mysql").error == "SQL 解析失败"
     assert extract_top_level_limit_count("select 1", "mysql") is None
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [EmptyExpression()])
     assert "注释移除后为空" in prepare_sql_for_execution("select 1", "mysql").error
 
-    monkeypatch.setattr("apps.chat_data_app.services.sql_parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()])
+    monkeypatch.setattr("apps.chat_data_app.services.sql_run.parser._parse_sql", lambda *_args, **_kwargs: [BadLimitExpression()])
     assert extract_top_level_limit_count("select * from orders limit bad", "mysql") is None
 
 

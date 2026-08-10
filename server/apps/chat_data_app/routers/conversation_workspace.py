@@ -11,7 +11,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillImportFromWorkspaceRequest
-from ..services.conversation_workspace import (
+from ..services.agent_run.conversation_workspace import (
     can_access_conversation_workspace,
     ensure_conversation_workspace,
     list_conversation_workspace_files as list_workspace_files_for_conversation,
@@ -21,7 +21,7 @@ from ..services.conversation_workspace import (
     render_conversation_workspace_office_preview,
     resolve_output_skill_directory,
 )
-from ..services.skill_service import skill_service
+from ..services.agent_run.skill_service import skill_service
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)

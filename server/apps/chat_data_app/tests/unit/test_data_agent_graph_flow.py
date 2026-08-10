@@ -16,7 +16,7 @@ from apps.chat_data_app.agent.agent_state import ChatDataAgentState
 from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
-from apps.chat_data_app.services.conversation_workspace import ConversationWorkspaceRuntime
+from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 
 
 def _runtime(tmp_path, *, bash_enabled=False):

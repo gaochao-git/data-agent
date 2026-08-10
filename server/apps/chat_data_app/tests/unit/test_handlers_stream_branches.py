@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from apps.chat_data_app import handlers
-from apps.chat_data_app.services.semantic_conversation_context import SemanticConversationContext
+from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 
 
 @pytest.fixture(autouse=True)
