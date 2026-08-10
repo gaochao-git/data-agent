@@ -1384,11 +1384,20 @@ async def sandbox_read_text_file(
         sample = bytes(await reader(target, range_header="bytes=0-4095"))
         if b"\x00" in sample:
             return {"exists": True, "is_binary": True, "path": visible_path}
-        total_lines = await _sandbox_text_line_count(
-            session=session,
-            path=target,
-            entry=entry,
-        )
+        try:
+            total_lines = await _sandbox_text_line_count(
+                session=session,
+                path=target,
+                entry=entry,
+            )
+        except Exception as exc:
+            total_lines = None
+            logger.warning(
+                "沙箱文本行数统计失败，继续读取正文: sandbox_id=%s path=%s error=%s",
+                session.sandbox_id,
+                target,
+                exc,
+            )
         source_offset = max(0, int(offset)) + 1
         source_limit = max(1, int(limit)) + 1
         page_text = bytes(await reader(target, offset=source_offset, limit=source_limit)).decode(
@@ -1407,8 +1416,8 @@ async def sandbox_read_text_file(
                 "is_binary": False,
                 "path": visible_path,
                 "total_lines": total_lines,
-                "empty": total_lines == 0,
-                "offset_out_of_range": total_lines > 0,
+                "empty": int(getattr(entry, "size", 0) or 0) == 0,
+                "offset_out_of_range": int(getattr(entry, "size", 0) or 0) > 0,
             }
         budgets = _allocate_file_read_line_budgets(
             [len(line) for line in selected_source_lines],

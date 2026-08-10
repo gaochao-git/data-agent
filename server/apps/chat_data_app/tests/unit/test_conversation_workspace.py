@@ -821,6 +821,26 @@ async def test_file_read_default_limit_is_200(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_file_read_keeps_content_and_reports_unknown_when_local_line_count_fails(monkeypatch):
+    paths = ensure_conversation_workspace(f"conv_workspace_file_read_count_failure_{uuid.uuid4().hex}")
+    tools = _create_local_workspace_tools(monkeypatch, paths)
+    target = Path(paths["workspace"]) / "report.txt"
+    target.write_text("one\ntwo", encoding="utf-8")
+
+    def fail_line_count(_target):
+        raise OSError("awk unavailable")
+
+    monkeypatch.setattr(conversation_workspace_module, "_count_local_text_lines", fail_line_count)
+
+    result = await tools["file_read"].ainvoke({"file_path": "workspace/report.txt"})
+
+    assert "total_lines=unknown" in result
+    assert "     1 one" in result
+    assert "     2 two" in result
+    assert "file_read 执行失败" not in result
+
+
+@pytest.mark.asyncio
 async def test_file_read_outputs_graph_chart_spec_returns_content(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_file_read_graph_chart_{uuid.uuid4().hex}")
     tools = _create_local_workspace_tools(monkeypatch, paths)
@@ -1044,8 +1064,8 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
 
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
-        newline_count = target.read_bytes().count(b"\n")
-        return SimpleNamespace(returncode=0, stdout=f"{newline_count} report with spaces.txt\n", stderr="")
+        line_count = target.read_text(encoding="utf-8").count("\n") + 1
+        return SimpleNamespace(returncode=0, stdout=f"{line_count}\n", stderr="")
 
     conversation_workspace_module._count_local_text_lines_cached.cache_clear()
     monkeypatch.setattr(conversation_workspace_module.subprocess, "run", fake_run)
@@ -1059,7 +1079,7 @@ def test_local_text_line_count_is_cached_and_uses_fixed_argv(monkeypatch, tmp_pa
 
     assert first["total_lines"] == second["total_lines"] == 3
     assert len(calls) == 1
-    assert calls[0][0][1:] == ["-l", str(target)]
+    assert calls[0][0][1:] == ["END { print NR }", str(target)]
     assert calls[0][1]["timeout"] == 30
     assert calls[0][1]["check"] is False
 

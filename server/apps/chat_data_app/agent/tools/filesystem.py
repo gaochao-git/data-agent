@@ -95,8 +95,11 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
             lines = [str(item) for item in result.get("lines") or []]
             total_lines = result.get("total_lines")
             if result.get("empty"):
-                return f"[file_read]\nfile_path={visible_path}\nstatus=empty\n"
+                total_lines_text = total_lines if total_lines is not None else "unknown"
+                return f"[file_read]\nfile_path={visible_path}\nstatus=empty\ntotal_lines={total_lines_text}\n"
             if result.get("offset_out_of_range"):
+                if total_lines is None:
+                    return f"offset {offset} 超出文件可读范围（总行数统计失败）"
                 return f"offset {offset} 超出文件总行数（共 {total_lines} 行）"
             start_line = int(result.get("start_line") or offset + 1)
             end_line = int(result.get("end_line") or offset + len(lines))

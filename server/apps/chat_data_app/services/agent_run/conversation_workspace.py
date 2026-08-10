@@ -1013,27 +1013,21 @@ def _count_local_text_lines_cached(
     modified_ns: int,
     inode: int,
 ) -> int:
-    """Count newline-separated lines without loading the file into Python memory."""
-    wc_path = shutil.which("wc") or "wc"
+    """Count text records without loading the file into Python memory."""
+    awk_path = shutil.which("awk") or "awk"
     completed = subprocess.run(
-        [wc_path, "-l", path_text],
+        [awk_path, "END { print NR }", path_text],
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
     )
     if completed.returncode != 0:
-        raise OSError((completed.stderr or "").strip() or "wc -l 执行失败")
+        raise OSError((completed.stderr or "").strip() or "awk 行数统计失败")
     try:
-        newline_count = int((completed.stdout or "").strip().split()[0])
+        return int((completed.stdout or "").strip())
     except (IndexError, ValueError) as exc:
-        raise OSError("wc -l 返回结果无效") from exc
-    if file_size <= 0:
-        return 0
-    with Path(path_text).open("rb") as file_obj:
-        file_obj.seek(-1, os.SEEK_END)
-        has_trailing_newline = file_obj.read(1) == b"\n"
-    return newline_count if has_trailing_newline else newline_count + 1
+        raise OSError("awk 行数统计结果无效") from exc
 
 
 def _count_local_text_lines(target: Path) -> int:
@@ -1101,7 +1095,11 @@ def _read_text_page_from_path(
     if b"\x00" in sample:
         return {"exists": True, "is_binary": True, "path": visible_path}
 
-    total_lines = _count_local_text_lines(target)
+    try:
+        total_lines = _count_local_text_lines(target)
+    except Exception as exc:
+        total_lines = None
+        logger.warning("本地文本行数统计失败，继续读取正文: path=%s error=%s", target, exc)
     page = _scan_text_page_line_lengths(target, offset=offset, limit=limit)
     selected_lines = list(page["selected_lines"])
     if not selected_lines:
@@ -1111,8 +1109,8 @@ def _read_text_page_from_path(
             "is_binary": False,
             "path": visible_path,
             "total_lines": total_lines,
-            "empty": total_lines == 0,
-            "offset_out_of_range": total_lines > 0,
+            "empty": target.stat().st_size == 0,
+            "offset_out_of_range": target.stat().st_size > 0,
         }
     budgets = _allocate_line_budgets(
         [item["original_chars"] for item in selected_lines],

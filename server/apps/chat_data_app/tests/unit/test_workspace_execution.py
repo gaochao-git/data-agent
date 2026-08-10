@@ -184,6 +184,49 @@ def test_sandbox_read_text_file_uses_resolved_path_and_returns_visible_path(monk
     assert result["has_more_lines"] is False
 
 
+def test_sandbox_read_text_file_keeps_content_when_line_count_fails(monkeypatch):
+    class FakeFiles:
+        async def get_file_info(self, paths):
+            return {
+                paths[0]: SimpleNamespace(
+                    path=paths[0], entry_type="file", size=8, modified_at="2026-08-10T00:00:00Z",
+                )
+            }
+
+        async def read_bytes(self, _path, *, range_header=None, offset=None, limit=None):
+            if range_header:
+                return b"one\ntwo\n"
+            return b"one\ntwo\n"
+
+    session_ref = SandboxExecutionSessionRef()
+    session_ref.current = SandboxExecutionSession(
+        sandbox=SimpleNamespace(files=FakeFiles()),
+        sandbox_id="sbx_1",
+        workspace_root="/host/user-data",
+    )
+
+    async def fake_resolve(**_kwargs):
+        return "/mnt/user-data/workspace/report.txt"
+
+    async def fail_line_count(**_kwargs):
+        raise RuntimeError("awk unavailable")
+
+    monkeypatch.setattr(workspace_execution, "_resolve_sandbox_real_path", fake_resolve)
+    monkeypatch.setattr(workspace_execution, "_sandbox_text_line_count", fail_line_count)
+
+    result = asyncio.run(workspace_execution.sandbox_read_text_file(
+        session_ref=session_ref,
+        file_path="workspace/report.txt",
+        offset=0,
+        limit=200,
+        max_chars=25000,
+    ))
+
+    assert result["lines"] == ["one", "two"]
+    assert result["total_lines"] is None
+    assert result["has_more"] is False
+
+
 def test_sandbox_text_line_count_uses_metadata_cache(monkeypatch):
     calls = []
     session = SandboxExecutionSession(
