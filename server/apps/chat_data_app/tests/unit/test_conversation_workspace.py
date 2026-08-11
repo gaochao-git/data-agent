@@ -35,6 +35,10 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     to_visible_path,
     workspace_runtime_from_state,
 )
+from apps.chat_data_app.services.agent_run.workspace_special_services import (
+    WorkspaceOfficePreviewService,
+    stabilize_office_preview_html,
+)
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.semantic_query")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
@@ -1798,3 +1802,46 @@ def test_render_local_office_html_missing_binary_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="未安装 OfficeCLI"):
         _render_local_office_html(str(root), "outputs/report.docx", 1024)
+
+
+def test_stabilize_office_preview_html_only_targets_word_pages():
+    word_html = '<html><head></head><body><div class="page" data-page="1"></div></body></html>'
+    word_result = stabilize_office_preview_html(word_html)
+
+    assert "chatdata-office-preview-pending" in word_result
+    assert "setInterval(reveal, 50)" in word_result
+    assert word_result.count("chatdata-office-preview-bootstrap") == 1
+
+    non_word_html = '<html><head></head><body><div class="slide"></div></body></html>'
+    assert stabilize_office_preview_html(non_word_html) == non_word_html
+
+
+@pytest.mark.asyncio
+async def test_workspace_office_preview_service_stabilizes_and_rechecks_size():
+    class PreviewBackend:
+        async def render_office_html(self, _runtime, *, file_path, max_chars):
+            assert file_path == "outputs/report.docx"
+            assert max_chars in {100, 10000}
+            return {
+                "renderer": "officecli-html",
+                "html": '<html><head></head><body><div class="page" data-page="1"></div></body></html>',
+                "truncated": False,
+            }
+
+    service = WorkspaceOfficePreviewService()
+    runtime = SimpleNamespace(backend=PreviewBackend())
+    result = await service.render_html(
+        runtime,
+        file_path="outputs/report.docx",
+        max_chars=10000,
+    )
+    assert "chatdata-office-preview-bootstrap" in result["html"]
+    assert result["truncated"] is False
+
+    oversized = await service.render_html(
+        runtime,
+        file_path="outputs/report.docx",
+        max_chars=100,
+    )
+    assert oversized["html"] == ""
+    assert oversized["truncated"] is True

@@ -83,6 +83,53 @@ class WorkspaceArtifactService:
         return await backend.artifact_payload(runtime, file_path=file_path)
 
 
+def stabilize_office_preview_html(html: str) -> str:
+    """Hide Word's unscaled first paint until its pagination script is ready."""
+    if not html or 'class="page"' not in html or "data-page=" not in html:
+        return html
+
+    bootstrap = """
+<style id="chatdata-office-preview-bootstrap">
+html.chatdata-office-preview-pending { visibility: hidden; }
+html.chatdata-office-preview-ready { visibility: visible; }
+</style>
+<script>
+(function () {
+  var root = document.documentElement;
+  root.classList.add('chatdata-office-preview-pending');
+  var revealed = false;
+  var timer;
+  var fallbackTimer;
+
+  function reveal() {
+    if (revealed) return;
+    var page = document.querySelector('.page[data-page]');
+    if (!page || !/^scale\\(/.test(page.style.transform || '')) return;
+    revealed = true;
+    root.classList.remove('chatdata-office-preview-pending');
+    root.classList.add('chatdata-office-preview-ready');
+    if (timer) clearInterval(timer);
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+  }
+
+  timer = setInterval(reveal, 50);
+  fallbackTimer = setTimeout(function () {
+    if (revealed) return;
+    revealed = true;
+    root.classList.remove('chatdata-office-preview-pending');
+    root.classList.add('chatdata-office-preview-ready');
+    clearInterval(timer);
+  }, 5000);
+  reveal();
+}());
+</script>
+"""
+    marker = "</head>"
+    if marker not in html:
+        return html
+    return html.replace(marker, bootstrap + marker, 1)
+
+
 class WorkspaceOfficePreviewService:
     async def render_html(
         self,
@@ -92,11 +139,17 @@ class WorkspaceOfficePreviewService:
         max_chars: int,
     ) -> dict[str, Any]:
         backend = _require_capability(runtime, OfficePreviewWorkspaceBackend, "Office 预览")
-        return await backend.render_office_html(
+        preview = await backend.render_office_html(
             runtime,
             file_path=file_path,
             max_chars=max_chars,
         )
+        if preview.get("truncated"):
+            return preview
+        html = stabilize_office_preview_html(str(preview.get("html") or ""))
+        if len(html) > max_chars:
+            return {**preview, "html": "", "truncated": True}
+        return {**preview, "html": html}
 
 
 semantic_model_workspace_service = SemanticModelWorkspaceService()
@@ -114,4 +167,5 @@ __all__ = [
     "workspace_artifact_service",
     "workspace_office_preview_service",
     "workspace_tool_result_service",
+    "stabilize_office_preview_html",
 ]
