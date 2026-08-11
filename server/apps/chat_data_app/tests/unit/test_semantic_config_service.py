@@ -297,15 +297,13 @@ def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idem
         {"table_name": "empty_table", "columns": []},
     ]
 
-    first = asyncio.run(service.generate_basic_single_table_configs_async(
+    first = asyncio.run(service.generate_basic_public_single_table_configs_async(
         "ds_a",
-        scope_type="private",
         create_by="u1",
         create_by_name="用户1",
     ))
-    second = asyncio.run(service.generate_basic_single_table_configs_async(
+    second = asyncio.run(service.generate_basic_public_single_table_configs_async(
         "ds_a",
-        scope_type="private",
         create_by="u1",
         create_by_name="用户1",
     ))
@@ -324,7 +322,7 @@ def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idem
     }
     orders = next(config for config in dao.configs if config["name"] == "orders基础模型")
     assert orders["enabled"] is False
-    assert orders["scope_type"] == "private"
+    assert orders["scope_type"] == "public"
     assert orders["create_by"] == "u1"
     assert orders["metrics"] == []
     assert orders["relationships"] == []
@@ -344,9 +342,8 @@ def test_generate_basic_single_table_configs_skips_existing_table_and_reports_fa
     ]
     dao.upsert_many_result = False
     dao.fail_names.add("users基础模型")
-    result = asyncio.run(service.generate_basic_single_table_configs_async(
+    result = asyncio.run(service.generate_basic_public_single_table_configs_async(
         "ds_a",
-        scope_type="public",
         create_by="admin",
     ))
 
@@ -364,6 +361,4 @@ def test_generate_basic_single_table_configs_rejects_invalid_inputs():
     service, _, _ = _build_service()
 
     with pytest.raises(ValueError, match="数据源不存在"):
-        asyncio.run(service.generate_basic_single_table_configs_async("missing"))
-    with pytest.raises(ValueError, match="只能是 public 或 private"):
-        asyncio.run(service.generate_basic_single_table_configs_async("ds_a", scope_type="invalid"))
+        asyncio.run(service.generate_basic_public_single_table_configs_async("missing"))

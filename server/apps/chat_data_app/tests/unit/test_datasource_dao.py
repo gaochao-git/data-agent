@@ -735,7 +735,8 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
     assert any("INSERT INTO semantic_config" in sql for sql in sql_texts)
     semantic_upserts = [sql for sql in sql_texts if re.search(r"INSERT INTO semantic_config\s", sql) is not None]
     assert len(semantic_upserts) == 1
-    assert semantic_upserts[0].count("VALUES") == 1
+    semantic_params = executed[sql_texts.index(semantic_upserts[0])].compile().params
+    assert {value for key, value in semantic_params.items() if key.startswith("semantic_config_id")} == {"sc_a", "sc_b"}
     assert any("UPDATE semantic_config" in sql for sql in sql_texts)
 
 

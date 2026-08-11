@@ -976,14 +976,6 @@ export interface GenerateBasicSemanticConfigsResult {
   }>
 }
 
-/** 为尚未建模的物理表批量创建禁用的个人基础模型 */
-export function generateBasicSemanticConfigs(datasourceId: string): Promise<ApiResponse<GenerateBasicSemanticConfigsResult>> {
-  return request({
-    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/generate-basic`,
-    method: 'post'
-  })
-}
-
 /** 后台为尚未建模的物理表批量创建禁用的公共基础模型 */
 export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise<ApiResponse<GenerateBasicSemanticConfigsResult>> {
   return request({

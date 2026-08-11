@@ -11,7 +11,6 @@ import {
   createAdminSemanticConfig,
   createSemanticConfig,
   generateAdminBasicSemanticConfigs,
-  generateBasicSemanticConfigs,
   updateAdminSemanticConfig,
   updateSemanticConfig,
   deleteAdminSemanticConfig,
@@ -540,7 +539,7 @@ const createConfig = async () => {
 }
 
 const generateBasicConfigs = async () => {
-  if (generatingBasicConfigs.value || !props.datasourceId) return
+  if (!props.adminMode || generatingBasicConfigs.value || !props.datasourceId) return
   try {
     await ElMessageBox.confirm(
       `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认禁用，需人工复核后逐个启用；已有模型不会被覆盖。`,
@@ -559,8 +558,7 @@ const generateBasicConfigs = async () => {
 
   generatingBasicConfigs.value = true
   try {
-    const generateApi = props.adminMode ? generateAdminBasicSemanticConfigs : generateBasicSemanticConfigs
-    const res = await generateApi(props.datasourceId)
+    const res = await generateAdminBasicSemanticConfigs(props.datasourceId)
     if (res.status !== 'success' || !res.data) {
       ElMessage.error(res.msg || '基础模型生成失败')
       return
@@ -2620,6 +2618,7 @@ const saveOntologyRules = (ontologyRules: string) => {
     <div v-if="!embedded" class="h-12 shrink-0 flex items-center gap-4 px-4 border-b border-gray-200 bg-white">
       <div class="flex items-center gap-3 shrink-0">
         <button
+          v-if="props.adminMode"
           class="w-8 h-8 flex items-center justify-center border-none rounded-lg bg-transparent text-gray-500 cursor-pointer transition-all duration-200 hover:bg-gray-100 hover:text-gray-700"
           title="返回"
           @click="emit('close')"
@@ -2666,6 +2665,7 @@ const saveOntologyRules = (ontologyRules: string) => {
           </el-option>
         </el-select>
         <button
+          v-if="props.adminMode"
           class="h-8 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-lg bg-blue-50 px-3 text-[13px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
           title="为尚未建模的物理表生成禁用的基础模型"
           :disabled="generatingBasicConfigs || props.tables.length === 0"
@@ -2695,8 +2695,9 @@ const saveOntologyRules = (ontologyRules: string) => {
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
         <p class="text-sm text-gray-500 m-0 mb-1">暂无语义模型</p>
-        <span class="text-xs text-gray-400">手动创建模型，或根据物理表生成待复核的基础模型</span>
+        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表生成待复核的基础模型' : '点击上方加号创建第一个语义模型' }}</span>
         <button
+          v-if="props.adminMode"
           class="mt-4 h-9 flex items-center gap-2 border border-blue-200 rounded-md bg-blue-50 px-4 text-[13px] text-blue-600 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
           :disabled="generatingBasicConfigs || props.tables.length === 0"
           @click="generateBasicConfigs"
@@ -2743,6 +2744,7 @@ const saveOntologyRules = (ontologyRules: string) => {
                   </el-option>
                 </el-select>
                 <button
+                  v-if="props.adminMode"
                   class="h-9 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-md bg-blue-50 px-3 text-[12px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
                   title="为尚未建模的物理表生成禁用的基础模型"
                   :disabled="generatingBasicConfigs || props.tables.length === 0"

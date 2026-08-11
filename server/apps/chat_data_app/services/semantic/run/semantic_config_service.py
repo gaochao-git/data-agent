@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from utils.logger import get_logger
 from ....daos.semantic_config_dao import SemanticConfigDao
@@ -311,33 +312,21 @@ class SemanticConfigService:
             return None
         return await self.get_config_async(datasource_id, config["id"])
 
-    async def generate_basic_single_table_configs_async(
+    async def generate_basic_public_single_table_configs_async(
         self,
         datasource_id: str,
         *,
-        scope_type: str = "private",
         create_by: str = "",
         create_by_name: str = "",
     ) -> Dict[str, Any]:
-        """为尚未建模的物理表创建禁用的基础单表模型。"""
+        """为尚未建模的物理表创建禁用的公共基础单表模型。"""
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         if not datasource:
             raise ValueError(f"数据源不存在: {datasource_id}")
-        normalized_scope = str(scope_type or "private").strip().lower()
-        if normalized_scope not in {"public", "private"}:
-            raise ValueError("语义配置范围只能是 public 或 private")
 
         group_id = str(datasource.get("group_id") or "").strip()
         all_configs = await self.dao.get_by_group_id_async(group_id)
-        visible_configs = (
-            [config for config in all_configs if is_public_semantic_config(config)]
-            if normalized_scope == "public"
-            else [
-                config
-                for config in all_configs
-                if is_public_semantic_config(config) or is_private_semantic_config_owner(config, create_by)
-            ]
-        )
+        visible_configs = [config for config in all_configs if is_public_semantic_config(config)]
         configured_tables = {
             table
             for config in visible_configs
@@ -357,6 +346,7 @@ class SemanticConfigService:
             if not table_name or table_name in seen_tables:
                 continue
             seen_tables.add(table_name)
+            item_order.append(table_name)
             generated_name = self._basic_single_table_name(table_name)
             if (
                 table_name in configured_tables
@@ -364,7 +354,7 @@ class SemanticConfigService:
                 or self._name_exists(
                     all_configs,
                     generated_name,
-                    scope_type=normalized_scope,
+                    scope_type="public",
                     create_by=create_by,
                 )
             ):
@@ -375,7 +365,6 @@ class SemanticConfigService:
                 config = self._build_basic_single_table_config(
                     table,
                     name=generated_name,
-                    scope_type=normalized_scope,
                     create_by=create_by,
                     create_by_name=create_by_name,
                 )
@@ -440,10 +429,9 @@ class SemanticConfigService:
             if current.get("table") == table_name:
                 result["items"][index] = item
                 return
-        item_order.append(table_name)
         existing_by_table = {current.get("table"): current for current in result["items"]}
         existing_by_table[table_name] = item
-        result["items"] = [existing_by_table[table] for table in item_order]
+        result["items"] = [existing_by_table[table] for table in item_order if table in existing_by_table]
 
     @staticmethod
     def _build_persisted_config(group_id: str, **kwargs: Any) -> Dict[str, Any]:
@@ -451,7 +439,7 @@ class SemanticConfigService:
         operator = str(kwargs.get("create_by") or "").strip()
         now = datetime.now().strftime(TIME_FORMAT)
         config = {
-            "id": kwargs.get("id") or f"sc_{datetime.now().strftime('%Y%m%d%H%M%S')}_{datetime.now().microsecond}",
+            "id": kwargs.get("id") or f"sc_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:12]}",
             "group_id": group_id,
             "name": str(kwargs.get("name") or "").strip(),
             "description": kwargs.get("description") or "",
@@ -495,7 +483,6 @@ class SemanticConfigService:
         table: Dict[str, Any],
         *,
         name: str,
-        scope_type: str,
         create_by: str,
         create_by_name: str,
     ) -> Dict[str, Any]:
@@ -533,7 +520,7 @@ class SemanticConfigService:
             "metrics": [],
             "dimensions": dimensions,
             "relationships": [],
-            "scope_type": scope_type,
+            "scope_type": "public",
             "create_by": create_by,
             "create_by_name": create_by_name,
         }

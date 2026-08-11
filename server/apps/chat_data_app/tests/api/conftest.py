@@ -328,7 +328,7 @@ class FakeSemanticConfigService:
         self._all_configs(datasource_id).append(config)
         return dict(config)
 
-    async def generate_basic_single_table_configs_async(self, datasource_id: str, **kwargs):
+    async def generate_basic_public_single_table_configs_async(self, datasource_id: str, **kwargs):
         self.created_kwargs = {"datasource_id": datasource_id, **kwargs}
         return {
             "created": 1,
