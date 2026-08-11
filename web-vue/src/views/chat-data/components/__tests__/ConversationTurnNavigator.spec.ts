@@ -58,4 +58,32 @@ describe('ConversationTurnNavigator', () => {
     wrapper.unmount()
     container.remove()
   })
+
+  it('expands a readable turn list on hover and collapses on leave', async () => {
+    const { container, scrollTo } = createContainer()
+    const wrapper = mount(ConversationTurnNavigator, {
+      props: { messages: turns, container },
+      attachTo: document.body,
+    })
+
+    expect(wrapper.findAll('button')).toHaveLength(6)
+    expect(wrapper.text()).not.toContain('第 1 次提问')
+
+    await wrapper.trigger('mouseenter')
+
+    const rows = wrapper.findAll('button')
+    expect(rows).toHaveLength(6)
+    expect(rows[0]!.text()).toContain('第 1 次提问')
+    expect(rows[5]!.text()).toContain('第 6 次提问')
+
+    await rows[1]!.trigger('click')
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 156, behavior: 'smooth' })
+
+    await wrapper.trigger('mouseleave')
+
+    expect(wrapper.findAll('button')).toHaveLength(6)
+    wrapper.unmount()
+    container.remove()
+  })
 })

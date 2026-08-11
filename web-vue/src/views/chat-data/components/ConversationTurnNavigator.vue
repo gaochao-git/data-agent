@@ -20,6 +20,7 @@ const props = defineProps({
 
 const activeTurnId = ref('')
 const contentIsLong = ref(false)
+const expanded = ref(false)
 let resizeObserver: ResizeObserver | null = null
 let observedContainer: HTMLElement | null = null
 
@@ -114,34 +115,60 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <nav
+  <div
     v-if="shouldShow"
-    class="absolute right-3 top-1/2 z-20 hidden max-h-[55vh] -translate-y-1/2 overflow-y-auto py-1 lg:flex lg:flex-col lg:items-center lg:gap-1"
+    class="absolute right-3 top-1/2 z-20 hidden -translate-y-1/2 lg:block"
     aria-label="对话轮次定位"
+    @mouseenter="expanded = true"
+    @mouseleave="expanded = false"
   >
-    <button
-      v-for="(turn, index) in turns"
-      :key="turn.id"
-      type="button"
-      :class="[
-        'group relative flex h-4 w-4 shrink-0 items-center justify-center border-none bg-transparent p-0',
-        activeTurnId === turn.id ? 'cursor-default' : 'cursor-pointer',
-      ]"
-      :aria-label="`定位到第 ${index + 1} 次提问：${turn.content || '空消息'}`"
-      :title="turn.content || `第 ${index + 1} 次提问`"
-      @click="scrollToTurn(turn.id)"
+    <div
+      v-if="expanded"
+      class="max-h-[55vh] w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.12)]"
     >
-      <span
+      <button
+        v-for="(turn, index) in turns"
+        :key="turn.id"
+        type="button"
         :class="[
-          'block rounded-full transition-colors duration-150',
+          'flex w-full items-center justify-end gap-2 rounded-lg border-none bg-transparent px-3 py-2 text-xs',
           activeTurnId === turn.id
-            ? 'h-2.5 w-2.5 bg-[#1677FF]'
-            : 'h-1.5 w-1.5 bg-slate-300 group-hover:bg-slate-500',
+            ? 'cursor-default font-medium text-[#1677FF]'
+            : 'cursor-pointer text-slate-600 hover:bg-slate-50',
         ]"
-      ></span>
-      <span class="pointer-events-none absolute right-5 hidden w-52 truncate rounded-md bg-slate-800 px-2 py-1.5 text-left text-xs text-white shadow-lg group-hover:block">
-        {{ turn.content || `第 ${index + 1} 次提问` }}
-      </span>
-    </button>
-  </nav>
+        @click="scrollToTurn(turn.id)"
+      >
+        <span class="min-w-0 truncate">{{ turn.content || `第 ${index + 1} 次提问` }}</span>
+        <span
+          :class="[
+            'h-0.5 w-3 shrink-0 rounded-full',
+            activeTurnId === turn.id ? 'bg-[#1677FF]' : 'bg-slate-300',
+          ]"
+        ></span>
+      </button>
+    </div>
+    <nav v-else class="flex max-h-[55vh] flex-col items-end gap-1.5 overflow-hidden py-1 pr-3">
+      <button
+        v-for="(turn, index) in turns"
+        :key="turn.id"
+        type="button"
+        :class="[
+          'flex h-3 shrink-0 items-center justify-end border-none bg-transparent p-0',
+          activeTurnId === turn.id ? 'cursor-default' : 'cursor-pointer',
+        ]"
+        :aria-label="`定位到第 ${index + 1} 次提问：${turn.content || '空消息'}`"
+        :title="turn.content || `第 ${index + 1} 次提问`"
+        @click="scrollToTurn(turn.id)"
+      >
+        <span
+          :class="[
+            'block rounded-full transition-colors duration-150',
+            activeTurnId === turn.id
+              ? 'h-0.5 w-4 bg-[#1677FF]'
+              : 'h-0.5 w-3 bg-slate-300 hover:bg-slate-500',
+          ]"
+        ></span>
+      </button>
+    </nav>
+  </div>
 </template>

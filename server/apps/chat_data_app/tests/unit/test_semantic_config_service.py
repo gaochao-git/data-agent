@@ -49,6 +49,10 @@ class _FakeSemanticConfigDao:
     def __init__(self, configs=None):
         self.configs = [dict(config) for config in (configs or [])]
         self.upsert_result = True
+        self.upsert_many_result = True
+        self.upsert_calls = 0
+        self.upsert_many_calls = 0
+        self.fail_names = set()
         self.deleted = None
 
     @staticmethod
@@ -78,8 +82,23 @@ class _FakeSemanticConfigDao:
         return next((config for config in configs if config.get("id") == config_id), None)
 
     async def upsert_async(self, group_id, config):
+        self.upsert_calls += 1
+        if config.get("name") in self.fail_names:
+            raise RuntimeError("write failed")
         if not self.upsert_result:
             return False
+        self._store(group_id, config)
+        return True
+
+    async def upsert_many_async(self, group_id, configs):
+        self.upsert_many_calls += 1
+        if not self.upsert_many_result:
+            raise RuntimeError("batch write failed")
+        for config in configs:
+            self._store(group_id, config)
+        return True
+
+    def _store(self, group_id, config):
         next_config = dict(config)
         next_config["group_id"] = group_id
         for index, current in enumerate(self.configs):
@@ -88,7 +107,6 @@ class _FakeSemanticConfigDao:
                 break
         else:
             self.configs.append(next_config)
-        return True
 
     async def soft_delete_async(self, config_id, update_by="", update_by_name=""):
         self.deleted = (config_id, update_by, update_by_name)
@@ -262,3 +280,90 @@ def test_persistence_failure_is_reported_as_empty_result():
 
     assert asyncio.run(service.create_async("ds_a", name="新配置")) is None
     assert asyncio.run(service.update_async("ds_a", "sc_a", description="更新")) is None
+
+
+def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idempotent():
+    service, datasource_manager, dao = _build_service()
+    datasource_manager.datasource["ds_tables"] = [
+        {
+            "table_name": "orders",
+            "columns": [
+                {"name": "id", "mysql_type": "bigint", "description": "订单ID"},
+                {"name": "created_at", "mysql_type": "datetime", "description": "创建时间"},
+                {"name": "status", "mysql_type": "varchar(20)", "description": "状态"},
+                {"name": "status_code", "mysql_type": "int", "description": "状态"},
+            ],
+        },
+        {"table_name": "empty_table", "columns": []},
+    ]
+
+    first = asyncio.run(service.generate_basic_single_table_configs_async(
+        "ds_a",
+        scope_type="private",
+        create_by="u1",
+        create_by_name="用户1",
+    ))
+    second = asyncio.run(service.generate_basic_single_table_configs_async(
+        "ds_a",
+        scope_type="private",
+        create_by="u1",
+        create_by_name="用户1",
+    ))
+
+    assert first["created"] == 2
+    assert first["failed"] == 0
+    assert [item["table"] for item in first["items"]] == ["orders", "empty_table"]
+    assert second == {
+        "created": 0,
+        "skipped": 2,
+        "failed": 0,
+        "items": [
+            {"table": "orders", "status": "skipped", "reason": "已有语义模型"},
+            {"table": "empty_table", "status": "skipped", "reason": "已有语义模型"},
+        ],
+    }
+    orders = next(config for config in dao.configs if config["name"] == "orders基础模型")
+    assert orders["enabled"] is False
+    assert orders["scope_type"] == "private"
+    assert orders["create_by"] == "u1"
+    assert orders["metrics"] == []
+    assert orders["relationships"] == []
+    assert [item["name"] for item in orders["dimensions"]] == ["订单ID", "创建时间", "状态", "状态2"]
+    assert [item["logical_type"] for item in orders["dimensions"]] == ["number", "datetime", "text", "number"]
+    assert all(item["table_alias"] == "orders" for item in orders["dimensions"])
+    assert all(item["description"] == "" for item in orders["dimensions"])
+    assert dao.upsert_many_calls == 1
+    assert dao.upsert_calls == 0
+
+
+def test_generate_basic_single_table_configs_skips_existing_table_and_reports_failure():
+    service, datasource_manager, dao = _build_service([_base_config(scope_type="public")])
+    datasource_manager.datasource["ds_tables"] = [
+        datasource_manager.datasource["ds_tables"][0],
+        {"table_name": "users", "columns": [{"name": "id", "type": "int"}]},
+    ]
+    dao.upsert_many_result = False
+    dao.fail_names.add("users基础模型")
+    result = asyncio.run(service.generate_basic_single_table_configs_async(
+        "ds_a",
+        scope_type="public",
+        create_by="admin",
+    ))
+
+    assert result["created"] == 0
+    assert result["skipped"] == 1
+    assert result["failed"] == 1
+    assert result["items"][0] == {"table": "orders", "status": "skipped", "reason": "已有语义模型"}
+    assert result["items"][1] == {"table": "users", "status": "failed", "reason": "write failed"}
+    assert len(dao.configs) == 1
+    assert dao.upsert_many_calls == 1
+    assert dao.upsert_calls == 1
+
+
+def test_generate_basic_single_table_configs_rejects_invalid_inputs():
+    service, _, _ = _build_service()
+
+    with pytest.raises(ValueError, match="数据源不存在"):
+        asyncio.run(service.generate_basic_single_table_configs_async("missing"))
+    with pytest.raises(ValueError, match="只能是 public 或 private"):
+        asyncio.run(service.generate_basic_single_table_configs_async("ds_a", scope_type="invalid"))

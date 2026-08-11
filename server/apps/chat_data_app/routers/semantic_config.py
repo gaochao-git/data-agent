@@ -548,6 +548,53 @@ async def create_admin_semantic_config(datasource_id: str, payload: SemanticConf
     return await _create_semantic_config_with_scope(datasource_id, payload, request, scope_type="public", admin_manage=True)
 
 
+async def _generate_basic_semantic_configs_route(
+    datasource_id: str,
+    request: Request,
+    *,
+    scope_type: str,
+):
+    """按物理表批量创建禁用的基础单表模型。"""
+    try:
+        current_user = _get_current_user(request)
+        user_id = str(current_user.user_id)
+        username = str(getattr(current_user, "username", "") or "")
+        result = await get_semantic_config_service().generate_basic_single_table_configs_async(
+            datasource_id,
+            scope_type=scope_type,
+            create_by=user_id,
+            create_by_name=username,
+        )
+        logger.info(
+            "批量生成基础语义模型: datasource_id=%s scope_type=%s created=%s skipped=%s failed=%s",
+            datasource_id,
+            scope_type,
+            result["created"],
+            result["skipped"],
+            result["failed"],
+        )
+        return business_response(data=result, msg="基础模型生成完成")
+    except ValueError as e:
+        code = ErrorCode.CHATDATA_NOT_FOUND if str(e).startswith("数据源不存在") else ErrorCode.CHATDATA_VALIDATION_FAILED
+        return business_response(msg=str(e), code=code, status="error")
+    except Exception as e:
+        logger.error("批量生成基础语义模型失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return business_response(msg=f"生成失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+
+
+@router.post("/datasources/{datasource_id}/semantic-configs/generate-basic")
+async def generate_basic_semantic_configs(datasource_id: str, request: Request):
+    """为当前用户批量创建禁用的个人基础单表模型。"""
+    return await _generate_basic_semantic_configs_route(datasource_id, request, scope_type="private")
+
+
+@router.post("/admin/datasources/{datasource_id}/semantic-configs/generate-basic")
+async def generate_admin_basic_semantic_configs(datasource_id: str, request: Request):
+    """后台批量创建禁用的公共基础单表模型。"""
+    _get_current_user(request)
+    return await _generate_basic_semantic_configs_route(datasource_id, request, scope_type="public")
+
+
 async def _auto_prefill_semantic_fields_route(
     datasource_id: str,
     config_id: str,

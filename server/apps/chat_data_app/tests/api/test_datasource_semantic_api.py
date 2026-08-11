@@ -137,6 +137,42 @@ def test_admin_create_semantic_config_sets_public_scope(client, auth_headers, fa
     assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
+def test_generate_basic_semantic_configs_uses_private_scope(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/datasources/ds_a/semantic-configs/generate-basic",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["created"] == 1
+    assert semantic_service.created_kwargs == {
+        "datasource_id": "ds_a",
+        "scope_type": "private",
+        "create_by": "user_a",
+        "create_by_name": "测试用户",
+    }
+
+
+def test_admin_generate_basic_semantic_configs_uses_public_scope(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
+
+    response = client.post(
+        "/api/chatdata/admin/datasources/ds_a/semantic-configs/generate-basic",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["items"][0]["status"] == "created"
+    assert semantic_service.created_kwargs["scope_type"] == "public"
+    assert semantic_service.created_kwargs["create_by"] == "user_a"
+
+
 def test_update_semantic_config_allows_private_owner(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
     semantic_service = patch_datasource_manager(fake_datasource_manager)
 

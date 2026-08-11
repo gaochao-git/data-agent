@@ -264,6 +264,17 @@ class SemanticConfigService:
 
     async def _name_exists_async(self, group_id: str, name: str, exclude_id: str = "", scope_type: str = "public", create_by: str = "") -> bool:
         configs = await self.dao.get_by_group_id_async(group_id)
+        return self._name_exists(configs, name, exclude_id=exclude_id, scope_type=scope_type, create_by=create_by)
+
+    @staticmethod
+    def _name_exists(
+        configs: List[Dict[str, Any]],
+        name: str,
+        *,
+        exclude_id: str = "",
+        scope_type: str = "public",
+        create_by: str = "",
+    ) -> bool:
         normalized_name = str(name or "").strip()
         normalized_scope = str(scope_type or "public").strip().lower()
         normalized_user = str(create_by or "").strip()
@@ -295,18 +306,161 @@ class SemanticConfigService:
         operator = str(kwargs.get("create_by") or "").strip()
         if await self._name_exists_async(group_id, name, scope_type=scope_type, create_by=operator):
             raise ValueError(f"语义配置名称已存在: {name}")
+        config = self._build_persisted_config(group_id, **kwargs)
+        if not await self.dao.upsert_async(group_id, config):
+            return None
+        return await self.get_config_async(datasource_id, config["id"])
+
+    async def generate_basic_single_table_configs_async(
+        self,
+        datasource_id: str,
+        *,
+        scope_type: str = "private",
+        create_by: str = "",
+        create_by_name: str = "",
+    ) -> Dict[str, Any]:
+        """为尚未建模的物理表创建禁用的基础单表模型。"""
+        datasource = await self.datasource_manager.get_datasource_async(datasource_id)
+        if not datasource:
+            raise ValueError(f"数据源不存在: {datasource_id}")
+        normalized_scope = str(scope_type or "private").strip().lower()
+        if normalized_scope not in {"public", "private"}:
+            raise ValueError("语义配置范围只能是 public 或 private")
+
+        group_id = str(datasource.get("group_id") or "").strip()
+        all_configs = await self.dao.get_by_group_id_async(group_id)
+        visible_configs = (
+            [config for config in all_configs if is_public_semantic_config(config)]
+            if normalized_scope == "public"
+            else [
+                config
+                for config in all_configs
+                if is_public_semantic_config(config) or is_private_semantic_config_owner(config, create_by)
+            ]
+        )
+        configured_tables = {
+            table
+            for config in visible_configs
+            for table in self._config_physical_tables(config)
+        }
+        existing_names = {
+            str(config.get("name") or "").strip()
+            for config in visible_configs
+            if str(config.get("name") or "").strip()
+        }
+        result = {"created": 0, "skipped": 0, "failed": 0, "items": []}
+        pending_configs = []
+        item_order: List[str] = []
+        seen_tables: set[str] = set()
+        for table in datasource.get("ds_tables") or []:
+            table_name = str((table or {}).get("table_name") or "").strip()
+            if not table_name or table_name in seen_tables:
+                continue
+            seen_tables.add(table_name)
+            generated_name = self._basic_single_table_name(table_name)
+            if (
+                table_name in configured_tables
+                or generated_name in existing_names
+                or self._name_exists(
+                    all_configs,
+                    generated_name,
+                    scope_type=normalized_scope,
+                    create_by=create_by,
+                )
+            ):
+                result["skipped"] += 1
+                self._set_generation_item(result, table_name, {"table": table_name, "status": "skipped", "reason": "已有语义模型"}, item_order)
+                continue
+            try:
+                config = self._build_basic_single_table_config(
+                    table,
+                    name=generated_name,
+                    scope_type=normalized_scope,
+                    create_by=create_by,
+                    create_by_name=create_by_name,
+                )
+                validation_error = await validate_semantic_config_for_save(
+                    self.datasource_manager,
+                    datasource_id,
+                    datasource,
+                    config["metrics"],
+                    config["dimensions"],
+                    config["relationships"],
+                )
+                if validation_error:
+                    raise ValueError(validation_error)
+                persisted = self._build_persisted_config(group_id, **config)
+                pending_configs.append((table_name, persisted))
+                configured_tables.add(table_name)
+                existing_names.add(generated_name)
+            except Exception as exc:
+                logger.warning("批量生成基础语义模型失败: table=%s error=%s", table_name, exc, exc_info=True)
+                result["failed"] += 1
+                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": str(exc) or "创建失败"}, item_order)
+        if not pending_configs:
+            return result
+        persisted_configs = [config for _, config in pending_configs]
+        try:
+            if not await self.dao.upsert_many_async(group_id, persisted_configs):
+                raise RuntimeError("批量写入失败")
+            for table_name, config in pending_configs:
+                result["created"] += 1
+                self._set_generation_item(
+                    result,
+                    table_name,
+                    {"table": table_name, "status": "created", "semantic_config_id": config["id"]},
+                    item_order,
+                )
+        except Exception as exc:
+            logger.warning("批量写入基础语义模型失败，回退到单表写入: datasource_id=%s error=%s", datasource_id, exc, exc_info=True)
+            for table_name, config in pending_configs:
+                try:
+                    if not await self.dao.upsert_async(group_id, config):
+                        raise RuntimeError("创建失败")
+                    result["created"] += 1
+                    self._set_generation_item(
+                        result,
+                        table_name,
+                        {"table": table_name, "status": "created", "semantic_config_id": config["id"]},
+                        item_order,
+                    )
+                except Exception as item_exc:
+                    result["failed"] += 1
+                    self._set_generation_item(
+                        result,
+                        table_name,
+                        {"table": table_name, "status": "failed", "reason": str(item_exc) or "创建失败"},
+                        item_order,
+                    )
+        return result
+
+    @staticmethod
+    def _set_generation_item(result: Dict[str, Any], table_name: str, item: Dict[str, Any], item_order: List[str]) -> None:
+        for index, current in enumerate(result["items"]):
+            if current.get("table") == table_name:
+                result["items"][index] = item
+                return
+        item_order.append(table_name)
+        existing_by_table = {current.get("table"): current for current in result["items"]}
+        existing_by_table[table_name] = item
+        result["items"] = [existing_by_table[table] for table in item_order]
+
+    @staticmethod
+    def _build_persisted_config(group_id: str, **kwargs: Any) -> Dict[str, Any]:
+        """构造统一的持久化配置，供单条和批量创建复用。"""
+        operator = str(kwargs.get("create_by") or "").strip()
         now = datetime.now().strftime(TIME_FORMAT)
         config = {
-            "id": f"sc_{datetime.now().strftime('%Y%m%d%H%M%S')}_{datetime.now().microsecond}",
+            "id": kwargs.get("id") or f"sc_{datetime.now().strftime('%Y%m%d%H%M%S')}_{datetime.now().microsecond}",
             "group_id": group_id,
-            "name": name,
+            "name": str(kwargs.get("name") or "").strip(),
             "description": kwargs.get("description") or "",
             "ontology_rules": kwargs.get("ontology_rules") or "",
             "enabled": kwargs.get("enabled", True),
             "metrics": kwargs.get("metrics") or [],
             "dimensions": kwargs.get("dimensions") or [],
             "relationships": kwargs.get("relationships") or [],
-            "scope_type": scope_type,
+            "scope_type": str(kwargs.get("scope_type") or "private").strip().lower(),
             "create_time": now,
             "update_time": now,
             "create_by": operator,
@@ -314,10 +468,95 @@ class SemanticConfigService:
             "update_by": operator,
             "update_by_name": kwargs.get("create_by_name") or "",
         }
-        config = self._normalize_relationships(config)
-        if not await self.dao.upsert_async(group_id, config):
-            return None
-        return await self.get_config_async(datasource_id, config["id"])
+        return SemanticConfigService._normalize_relationships(config)
+
+    @staticmethod
+    def _basic_single_table_name(table_name: str) -> str:
+        return f"{table_name}基础模型"
+
+    @staticmethod
+    def _config_physical_tables(config: Dict[str, Any]) -> set[str]:
+        tables: set[str] = set()
+        for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
+            if isinstance(item, dict) and item.get("table"):
+                tables.add(str(item["table"]).strip())
+        for relationship in config.get("relationships") or []:
+            if isinstance(relationship, dict):
+                tables.update(
+                    str(relationship.get(key) or "").strip()
+                    for key in ("left_table", "right_table")
+                    if str(relationship.get(key) or "").strip()
+                )
+        return tables
+
+    @classmethod
+    def _build_basic_single_table_config(
+        cls,
+        table: Dict[str, Any],
+        *,
+        name: str,
+        scope_type: str,
+        create_by: str,
+        create_by_name: str,
+    ) -> Dict[str, Any]:
+        table_name = str(table.get("table_name") or "").strip()
+        dimensions = []
+        used_names: set[str] = set()
+        for column in table.get("columns") or []:
+            if not isinstance(column, dict):
+                continue
+            column_name = str(column.get("name") or "").strip()
+            if not column_name:
+                continue
+            display_name = str(column.get("description") or "").strip() or column_name
+            display_name = cls._unique_dimension_name(display_name, used_names)
+            used_names.add(display_name)
+            physical_type = str(
+                column.get("mysql_type") or column.get("hive_type")
+                or column.get("type") or column.get("data_type") or ""
+            ).strip().lower()
+            dimensions.append({
+                "name": display_name,
+                "field_name": column_name,
+                "column": column_name,
+                "expression": f"`{column_name.replace('`', '``')}`",
+                "table": table_name,
+                "table_alias": table_name,
+                "logical_type": cls._infer_basic_logical_type(physical_type),
+                "description": "",
+            })
+        return {
+            "name": name,
+            "description": f"基于物理表 {table_name} 自动生成，待人工复核后启用",
+            "ontology_rules": "",
+            "enabled": False,
+            "metrics": [],
+            "dimensions": dimensions,
+            "relationships": [],
+            "scope_type": scope_type,
+            "create_by": create_by,
+            "create_by_name": create_by_name,
+        }
+
+    @staticmethod
+    def _unique_dimension_name(name: str, used_names: set[str]) -> str:
+        if name not in used_names:
+            return name
+        suffix = 2
+        while f"{name}{suffix}" in used_names:
+            suffix += 1
+        return f"{name}{suffix}"
+
+    @staticmethod
+    def _infer_basic_logical_type(physical_type: str) -> str:
+        normalized = str(physical_type or "").strip().lower()
+        if any(token in normalized for token in ("timestamp", "datetime")):
+            return "datetime"
+        if any(token in normalized for token in ("date", "time")):
+            return "date"
+        if any(token in normalized for token in ("int", "decimal", "numeric", "float", "double", "real")):
+            return "number"
+        return "text"
 
     async def update_async(self, datasource_id: str, config_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
         current = await self.get_config_async(datasource_id, config_id)

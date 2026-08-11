@@ -713,7 +713,10 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
         await store.replace_table_group_relations_async("group_a", [{"table_group_name": "订单域", "table_names": ["orders", "orders", "items"]}, {"table_group_name": "", "table_names": ["x"]}], create_by="u7", update_by="u8")
         await store.soft_delete_group_async("group_a", update_by="u9")
         assert await semantic_store.upsert_async("", {"id": "sc_missing"}) is False
-        assert await semantic_store.upsert_async("group_a", {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"}) is True
+        assert await semantic_store.upsert_many_async("group_a", [
+            {"id": "sc_a", "name": "订单分析", "enabled": False, "metrics": [{"name": "销售额"}], "scope_type": "private"},
+            {"id": "sc_b", "name": "用户分析", "enabled": False, "dimensions": [{"name": "用户"}], "scope_type": "public"},
+        ]) is True
         await semantic_store.soft_delete_async("sc_a", update_by="u10")
         assert saved_dict == {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
 
@@ -730,6 +733,9 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
     assert sum("INSERT INTO datasource_column_dict" in sql for sql in sql_texts) == 1
     assert sum("INSERT INTO datasource_table_group_rel" in sql for sql in sql_texts) == 1
     assert any("INSERT INTO semantic_config" in sql for sql in sql_texts)
+    semantic_upserts = [sql for sql in sql_texts if re.search(r"INSERT INTO semantic_config\s", sql) is not None]
+    assert len(semantic_upserts) == 1
+    assert semantic_upserts[0].count("VALUES") == 1
     assert any("UPDATE semantic_config" in sql for sql in sql_texts)
 
 

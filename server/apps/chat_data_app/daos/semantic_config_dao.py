@@ -11,7 +11,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from utils.logger import get_logger
 from utils.models import SemanticConfig
 from .dao_session import session_scope
-from .datasource_dao_helpers import _format_time, _load_json
+from .datasource_dao_helpers import _batch_items, _format_time, _load_json
 
 logger = get_logger(__name__)
 
@@ -138,30 +138,41 @@ class SemanticConfigDao:
         return self._map_row(self._model_to_row(model)) if model else None
 
     async def upsert_async(self, group_id: str, config: Dict[str, Any]) -> bool:
-        config_id = config.get("id") or config.get("semantic_config_id")
-        if not group_id or not config_id:
+        if not group_id or not ((config or {}).get("id") or (config or {}).get("semantic_config_id")):
             return False
-        statement = mysql_insert(SemanticConfig).values(
-            semantic_config_id=config_id,
-            group_id=group_id,
-            semantic_config_name=config.get("name") or config.get("semantic_config_name") or "",
-            semantic_config_desc=config.get("description") or config.get("semantic_config_desc"),
-            ontology_rules=config.get("ontology_rules"),
-            enabled_flag=1 if config.get("enabled", True) else 0,
-            metrics_json=json.dumps(config.get("metrics") or [], ensure_ascii=False),
-            dimensions_json=json.dumps(config.get("dimensions") or [], ensure_ascii=False),
-            relationships_json=json.dumps(config.get("relationships") or [], ensure_ascii=False),
-            scope_type=config.get("scope_type") or "public",
-            sort_no=int(config.get("sort_no") or 0),
-            create_by=config.get("create_by") or "",
-            create_by_name=config.get("create_by_name") or "",
-            update_by=config.get("update_by") or "",
-            update_by_name=config.get("update_by_name") or "",
-            delete_flag=0,
-        )
+        return await self.upsert_many_async(group_id, [config])
+
+    async def upsert_many_async(self, group_id: str, configs: List[Dict[str, Any]]) -> bool:
+        """在一个事务中批量保存语义配置。"""
+        if not group_id or not configs:
+            return False
+        rows = []
+        for config in configs:
+            config_id = (config or {}).get("id") or (config or {}).get("semantic_config_id")
+            if not config_id:
+                return False
+            rows.append({
+                "semantic_config_id": config_id,
+                "group_id": group_id,
+                "semantic_config_name": config.get("name") or config.get("semantic_config_name") or "",
+                "semantic_config_desc": config.get("description") or config.get("semantic_config_desc"),
+                "ontology_rules": config.get("ontology_rules"),
+                "enabled_flag": 1 if config.get("enabled", True) else 0,
+                "metrics_json": json.dumps(config.get("metrics") or [], ensure_ascii=False),
+                "dimensions_json": json.dumps(config.get("dimensions") or [], ensure_ascii=False),
+                "relationships_json": json.dumps(config.get("relationships") or [], ensure_ascii=False),
+                "scope_type": config.get("scope_type") or "public",
+                "sort_no": int(config.get("sort_no") or 0),
+                "create_by": config.get("create_by") or "",
+                "create_by_name": config.get("create_by_name") or "",
+                "update_by": config.get("update_by") or "",
+                "update_by_name": config.get("update_by_name") or "",
+                "delete_flag": 0,
+            })
         async with session_scope() as session:
-            await session.execute(
-                statement.on_duplicate_key_update(
+            for batch in _batch_items(rows):
+                statement = mysql_insert(SemanticConfig).values(batch)
+                statement = statement.on_duplicate_key_update(
                     group_id=statement.inserted.group_id,
                     semantic_config_name=statement.inserted.semantic_config_name,
                     semantic_config_desc=statement.inserted.semantic_config_desc,
@@ -176,7 +187,7 @@ class SemanticConfigDao:
                     update_by_name=statement.inserted.update_by_name,
                     delete_flag=0,
                 )
-            )
+                await session.execute(statement)
         return True
 
     async def soft_delete_async(self, config_id: str, update_by: str = "", update_by_name: str = "") -> None:

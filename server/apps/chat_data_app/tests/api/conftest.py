@@ -328,6 +328,19 @@ class FakeSemanticConfigService:
         self._all_configs(datasource_id).append(config)
         return dict(config)
 
+    async def generate_basic_single_table_configs_async(self, datasource_id: str, **kwargs):
+        self.created_kwargs = {"datasource_id": datasource_id, **kwargs}
+        return {
+            "created": 1,
+            "skipped": 0,
+            "failed": 0,
+            "items": [{
+                "table": "orders",
+                "status": "created",
+                "semantic_config_id": "cfg_basic_orders",
+            }],
+        }
+
     async def update_async(self, datasource_id: str, config_id: str, **kwargs):
         self.updated_kwargs = {"datasource_id": datasource_id, "config_id": config_id, **kwargs}
         for config in self._all_configs(datasource_id):

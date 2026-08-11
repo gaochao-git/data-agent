@@ -964,6 +964,34 @@ export function createAdminSemanticConfig(datasourceId: string, data: SemanticCo
   })
 }
 
+export interface GenerateBasicSemanticConfigsResult {
+  created: number
+  skipped: number
+  failed: number
+  items: Array<{
+    table: string
+    status: 'created' | 'skipped' | 'failed'
+    semantic_config_id?: string
+    reason?: string
+  }>
+}
+
+/** 为尚未建模的物理表批量创建禁用的个人基础模型 */
+export function generateBasicSemanticConfigs(datasourceId: string): Promise<ApiResponse<GenerateBasicSemanticConfigsResult>> {
+  return request({
+    url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/generate-basic`,
+    method: 'post'
+  })
+}
+
+/** 后台为尚未建模的物理表批量创建禁用的公共基础模型 */
+export function generateAdminBasicSemanticConfigs(datasourceId: string): Promise<ApiResponse<GenerateBasicSemanticConfigsResult>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/generate-basic`,
+    method: 'post'
+  })
+}
+
 /** 更新语义配置 */
 export function updateSemanticConfig(datasourceId: string, configId: string, data: Partial<SemanticConfigItem>): Promise<ApiResponse<SemanticConfigItem>> {
   return request({
