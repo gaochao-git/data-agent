@@ -111,7 +111,10 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
     patch_datasource_manager(fake_datasource_manager)
     monkeypatch.setattr(datasource_admin_routes, "get_chat_data_llm", lambda **_kwargs: FakeLlm())
 
-    list_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
+    public_get_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
+    admin_get_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict", headers=auth_headers)
+    public_table_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers)
+    admin_table_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/column-dicts", headers=auth_headers)
     save_response = client.put(
         "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict",
         json={"dict": {"enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}},
@@ -123,8 +126,14 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
         headers=auth_headers,
     )
 
-    assert list_response.status_code == 200
-    assert list_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}]
+    assert public_get_response.status_code == 200
+    assert public_get_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}]
+    assert admin_get_response.status_code == 200
+    assert admin_get_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}]
+    assert public_table_response.status_code == 200
+    assert public_table_response.json()["data"]["dicts"]["status"]["enum_values"] == [{"value": "1", "label": "有效"}]
+    assert admin_table_response.status_code == 200
+    assert admin_table_response.json()["data"]["dicts"]["status"]["enum_values"] == [{"value": "1", "label": "有效"}]
     assert save_response.status_code == 200
     assert save_response.json()["data"]["dict"]["enum_values"] == [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}]
     assert fake_datasource_manager.replaced_column_dict_operator == "user_a"
@@ -137,6 +146,7 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
     patch_datasource_manager(fake_datasource_manager)
 
     get_response = client.get("/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict")
+    admin_get_response = client.get("/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict")
     generate_response = client.post(
         "/api/chatdata/admin/datasources/ds_a/tables/orders/columns/status/dict/generate",
         json={"text": "订单状态：1 表示有效"},
@@ -145,9 +155,34 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
     assert get_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
     assert get_response.json()["status"] == "error"
     assert get_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+    assert admin_get_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert admin_get_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
     assert generate_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
     assert generate_response.json()["status"] == "error"
     assert generate_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+
+
+def test_public_column_dict_read_enforces_datasource_permission(client, fake_datasource_manager, patch_datasource_manager, auth_headers):
+    patch_datasource_manager(fake_datasource_manager)
+
+    async def deny_access(*_args, **_kwargs):
+        return False
+
+    fake_datasource_manager.can_access_datasource_async = deny_access
+
+    response = client.get(
+        "/api/chatdata/datasources/ds_a/tables/orders/columns/status/dict",
+        headers=auth_headers,
+    )
+    table_response = client.get(
+        "/api/chatdata/datasources/ds_a/tables/orders/column-dicts",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
+    assert table_response.status_code == 200
+    assert table_response.json()["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
 
 
 def test_set_and_clear_default_datasource_api_contract(client, fake_datasource_manager, patch_datasource_manager, auth_headers):

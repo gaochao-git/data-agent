@@ -3,16 +3,20 @@ import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   getDatasourceColumnDict,
+  getAdminDatasourceColumnDict,
   updateAdminDatasourceColumnDict,
   generateAdminDatasourceColumnDict,
 } from '../../api'
 import type { DatasourceColumnDictPayload, DatasourceColumnDictEnumItem } from '../../api'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   datasourceId: string
   tableName: string
   columnName: string
-}>()
+  adminMode?: boolean
+}>(), {
+  adminMode: false,
+})
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -56,7 +60,8 @@ watch(visible, async (value) => {
   columnDictGenerateText.value = ''
   loadingColumnDict.value = true
   try {
-    const res = await getDatasourceColumnDict(props.datasourceId, props.tableName, props.columnName)
+    const getColumnDict = props.adminMode ? getAdminDatasourceColumnDict : getDatasourceColumnDict
+    const res = await getColumnDict(props.datasourceId, props.tableName, props.columnName)
     if (seq !== loadSeq) return
     if (res.status === 'success') {
       applyColumnDictForm(res.data?.dict)
@@ -80,11 +85,12 @@ const closeColumnDictModal = () => {
 }
 
 const addColumnDictEnumRow = () => {
-  if (loadingColumnDict.value) return
+  if (!props.adminMode || loadingColumnDict.value) return
   columnDictRows.value = [...columnDictRows.value, { value: '', label: '' }]
 }
 
 const removeColumnDictEnumRow = (index: number) => {
+  if (!props.adminMode) return
   columnDictRows.value = columnDictRows.value.filter((_, itemIndex) => itemIndex !== index)
 }
 
@@ -144,6 +150,7 @@ const mergeGeneratedColumnDict = (generatedDict: Partial<DatasourceColumnDictPay
 }
 
 const generateColumnDict = async () => {
+  if (!props.adminMode) return
   const text = columnDictGenerateText.value.trim()
   if (!text) {
     ElMessage.warning('请输入用于生成字段字典的文本')
@@ -185,6 +192,7 @@ const generateColumnDict = async () => {
 }
 
 const saveColumnDict = async () => {
+  if (!props.adminMode) return
   const duplicateValues = columnDictRows.value
     .map(row => String(row.value || '').trim())
     .filter(Boolean)
@@ -244,7 +252,9 @@ const saveColumnDict = async () => {
 
     <div class="space-y-3">
       <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
-        字段字典用于维护物理字段的枚举值、数据存储格式和单位，供语义模型展示和智能问数理解字段。
+        {{ props.adminMode
+          ? '字段字典用于维护物理字段的枚举值、数据存储格式和单位，供语义模型展示和智能问数理解字段。'
+          : '字段字典由系统统一维护，当前页面仅供查看，内容用于语义模型展示和智能问数理解字段。' }}
       </div>
 
       <div v-if="loadingColumnDict" class="flex min-h-[220px] flex-col items-center justify-center text-slate-400">
@@ -252,7 +262,7 @@ const saveColumnDict = async () => {
         <span class="text-sm">正在加载字段字典...</span>
       </div>
       <template v-else>
-        <div class="rounded-xl border border-blue-100 bg-blue-50 p-3">
+        <div v-if="props.adminMode" class="rounded-xl border border-blue-100 bg-blue-50 p-3">
           <div class="mb-2 flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 text-xs font-medium text-blue-700">
               <i class="fa-solid fa-wand-magic-sparkles text-[11px]"></i>
@@ -278,10 +288,15 @@ const saveColumnDict = async () => {
         </div>
 
         <div class="rounded-xl border border-slate-200 bg-white">
-          <div class="grid grid-cols-[1fr_1.5fr_56px] gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+          <div
+            :class="[
+              props.adminMode ? 'grid-cols-[1fr_1.5fr_56px]' : 'grid-cols-[1fr_1.5fr]',
+              'grid gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500',
+            ]"
+          >
             <span>枚举值</span>
             <span>枚举含义</span>
-            <span class="text-right">操作</span>
+            <span v-if="props.adminMode" class="text-right">操作</span>
           </div>
           <div class="max-h-[320px] overflow-y-auto p-2">
             <div v-if="columnDictRows.length === 0" class="flex min-h-[120px] items-center justify-center text-sm text-slate-400">
@@ -290,29 +305,36 @@ const saveColumnDict = async () => {
             <div
               v-for="(row, index) in columnDictRows"
               :key="index"
-              class="grid grid-cols-[1fr_1.5fr_56px] gap-2 rounded px-1 py-1.5 hover:bg-slate-50"
+              :class="[
+                props.adminMode ? 'grid-cols-[1fr_1.5fr_56px]' : 'grid-cols-[1fr_1.5fr]',
+                'grid gap-2 rounded px-1 py-1.5 hover:bg-slate-50',
+              ]"
             >
               <input
                 v-model="row.value"
                 type="text"
                 maxlength="128"
+                :readonly="!props.adminMode"
                 placeholder="如 1"
-                class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs font-mono text-slate-700 outline-none focus:border-blue-500"
+                class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs font-mono text-slate-700 outline-none read-only:bg-slate-50 read-only:text-slate-500 focus:border-blue-500"
               />
               <input
                 v-model="row.label"
                 type="text"
                 maxlength="255"
+                :readonly="!props.adminMode"
                 placeholder="如 在线"
-                class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+                class="min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs text-slate-700 outline-none read-only:bg-slate-50 read-only:text-slate-500 focus:border-blue-500"
               />
               <button
+                v-if="props.adminMode"
                 type="button"
                 class="justify-self-end rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50"
                 @click="removeColumnDictEnumRow(index)"
               >删除</button>
             </div>
             <button
+              v-if="props.adminMode"
               type="button"
               :disabled="loadingColumnDict"
               class="mt-2 flex items-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -331,8 +353,9 @@ const saveColumnDict = async () => {
               v-model="columnDictStorageFormat"
               type="text"
               maxlength="255"
+              :readonly="!props.adminMode"
               placeholder="如 yyyyMMdd、yyyy-MM-dd HH:mm:ss"
-              class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+              class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none read-only:bg-slate-50 read-only:text-slate-500 focus:border-blue-500"
             />
           </label>
           <label class="block">
@@ -341,8 +364,9 @@ const saveColumnDict = async () => {
               v-model="columnDictUnit"
               type="text"
               maxlength="100"
+              :readonly="!props.adminMode"
               placeholder="如 元、万元、秒"
-              class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500"
+              class="w-full rounded border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 outline-none read-only:bg-slate-50 read-only:text-slate-500 focus:border-blue-500"
             />
           </label>
         </div>
@@ -356,8 +380,9 @@ const saveColumnDict = async () => {
             :disabled="savingColumnDict"
             class="rounded px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
             @click="closeColumnDictModal"
-          >取消</button>
+          >{{ props.adminMode ? '取消' : '关闭' }}</button>
           <button
+            v-if="props.adminMode"
             type="button"
             :disabled="savingColumnDict || loadingColumnDict"
             class="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"

@@ -271,6 +271,25 @@ def test_authorized_datasources_filter_http_missing_permission_and_direct_allowl
     assert datasources[0]["template_datasource_id"] == "m_direct_allowed"
 
 
+def test_can_access_datasource_uses_authorized_datasource_scope(monkeypatch):
+    manager = _build_manager(_FakeStore())
+    captured = {}
+
+    async def authorized(include_tables=True, user_id=None, username=None):
+        captured.update({
+            "include_tables": include_tables,
+            "user_id": user_id,
+            "username": username,
+        })
+        return [{"id": "ds_a"}]
+
+    monkeypatch.setattr(manager, "get_authorized_datasources_async", authorized)
+
+    assert asyncio.run(manager.can_access_datasource_async("ds_a", user_id="u1", username="用户1")) is True
+    assert asyncio.run(manager.can_access_datasource_async("ds_b", user_id="u1", username="用户1")) is False
+    assert captured == {"include_tables": False, "user_id": "u1", "username": "用户1"}
+
+
 def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     store = _FakeStore()
     store.datasources["ds_a"].update({

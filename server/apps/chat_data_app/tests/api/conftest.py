@@ -164,6 +164,9 @@ class FakeDatasourceManager:
     async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
         return await self.get_all_datasources_async(include_tables=include_tables)
 
+    async def can_access_datasource_async(self, datasource_id: str, user_id: str = "", username: str = ""):
+        return datasource_id in self.datasources
+
     async def has_datasource_async(self, datasource_id: str):
         return datasource_id in self.datasources
 
@@ -234,6 +237,20 @@ class FakeDatasourceManager:
             if any(column.get("name") == column_name for column in table.get("columns") or []):
                 return {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""}
         return None
+
+    async def get_table_column_dicts_async(self, datasource_id: str, table_name: str):
+        datasource = self.datasources.get(datasource_id)
+        if not datasource:
+            return None
+        table = next((item for item in datasource.get("ds_tables") or [] if item.get("table_name") == table_name), None)
+        if table is None:
+            return None
+        result = {}
+        for column in table.get("columns") or []:
+            column_dict = await self.get_column_dict_async(datasource_id, table_name, column.get("name") or "")
+            if column_dict and any(column_dict.get(key) for key in ("enum_values", "storage_format", "unit")):
+                result[column.get("name") or ""] = column_dict
+        return result
 
     async def replace_column_dict_async(self, datasource_id: str, table_name: str, column_name: str, column_dict, operator: str = "", operator_name: str = ""):
         current_dict = await self.get_column_dict_async(datasource_id, table_name, column_name)

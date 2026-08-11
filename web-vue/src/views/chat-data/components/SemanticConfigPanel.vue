@@ -19,6 +19,7 @@ import {
   toggleSemanticConfig,
   autoPrefillSemanticFields,
   getDatasourceTableColumnDicts,
+  getAdminDatasourceTableColumnDicts,
 } from '../api'
 import {
   SQL_EXPRESSION_FUNCTION_KEYWORDS,
@@ -231,6 +232,7 @@ const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticC
 const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
 const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
 const semanticConfigToggleApi = computed(() => props.adminMode ? toggleAdminSemanticConfig : toggleSemanticConfig)
+const columnDictListApi = computed(() => props.adminMode ? getAdminDatasourceTableColumnDicts : getDatasourceTableColumnDicts)
 
 const formatConfigOperator = (value?: string) => {
   const text = String(value || '').trim()
@@ -2149,7 +2151,7 @@ const refreshFieldColumnDictVisibleMap = async () => {
   })
   const entries = await Promise.all(Array.from(tableTargets.entries()).map(async ([tableName, columnNames]) => {
     try {
-      const res = await getDatasourceTableColumnDicts(datasourceId, tableName)
+      const res = await columnDictListApi.value(datasourceId, tableName)
       const dicts = res.status === 'success' ? (res.data?.dicts || {}) : {}
       return Array.from(columnNames).map(columnName => {
         const dict = dicts[columnName]
@@ -2171,7 +2173,7 @@ const refreshFieldColumnDictVisibleMap = async () => {
   columnDictEnumVisibleMap.value = Object.fromEntries(flattened.map(([key, value]) => [key, value.enumVisible]))
 }
 
-const editColumnDict = (row: FieldConfigRow) => {
+const openColumnDict = (row: FieldConfigRow) => {
   const tableName = String(row.table || '').trim()
   const columnName = getFieldPhysicalColumn(row)
   if (!props.datasourceId || !tableName || !columnName || row.isMissingPhysical) {
@@ -3231,10 +3233,14 @@ const saveOntologyRules = (ontologyRules: string) => {
                                 ? 'border-blue-200 text-blue-600 hover:border-blue-400 hover:bg-blue-50'
                                 : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'"
                               :disabled="row.isMissingPhysical || !row.table || !getFieldPhysicalColumn(row)"
-                              :title="row.isMissingPhysical ? '物理字段不存在' : (hasFieldColumnDict(row) ? `编辑 ${row.table}.${getFieldPhysicalColumn(row)} 的字段字典` : `为 ${row.table}.${getFieldPhysicalColumn(row)} 新增字段字典`)"
-                              @click="editColumnDict(row)"
+                              :title="row.isMissingPhysical
+                                ? '物理字段不存在'
+                                : props.adminMode
+                                  ? (hasFieldColumnDict(row) ? `编辑 ${row.table}.${getFieldPhysicalColumn(row)} 的字段字典` : `为 ${row.table}.${getFieldPhysicalColumn(row)} 新增字段字典`)
+                                  : `查看 ${row.table}.${getFieldPhysicalColumn(row)} 的字段字典`"
+                              @click="openColumnDict(row)"
                             >
-                              {{ hasFieldColumnDict(row) ? '编辑' : '新增字典' }}
+                              {{ props.adminMode ? (hasFieldColumnDict(row) ? '编辑' : '新增字典') : '查看' }}
                             </button>
                             <span v-else class="text-gray-300">-</span>
                           </td>
@@ -3333,6 +3339,7 @@ const saveOntologyRules = (ontologyRules: string) => {
       :datasource-id="props.datasourceId"
       :table-name="columnDictTarget.tableName"
       :column-name="columnDictTarget.columnName"
+      :admin-mode="props.adminMode"
       @saved="handleColumnDictSaved"
     />
 

@@ -33,6 +33,8 @@ from apps.chat_data_app.routers.datasource_admin import (
     clear_default_datasource,
     create_datasource_group,
     delete_datasource,
+    get_admin_datasource_column_dict,
+    get_admin_datasource_table_column_dicts,
     get_admin_datasources,
     generate_datasource_column_dict,
     get_datasource_table_groups,
@@ -176,6 +178,9 @@ class _FakeDatasourceManager:
 
     async def get_authorized_datasources_async(self, include_tables: bool = True, user_id: str = "", username: str = ""):
         return self.get_all_datasources(include_tables=include_tables)
+
+    async def can_access_datasource_async(self, datasource_id: str, user_id: str = "", username: str = ""):
+        return datasource_id in self.datasources
 
     def get_datasource(self, datasource_id: str):
         item = self.datasources.get(datasource_id)
@@ -2857,13 +2862,17 @@ def test_datasource_column_dict_not_found_branches(monkeypatch):
     _mock_datasource_manager(monkeypatch, manager)
 
     get_resp = asyncio.run(get_datasource_column_dict("ds_a", "t_a", "missing", SimpleNamespace()))
+    admin_get_resp = asyncio.run(get_admin_datasource_column_dict("ds_a", "t_a", "missing", SimpleNamespace()))
     save_resp = asyncio.run(update_datasource_column_dict("ds_a", "t_a", "missing", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace()))
     list_resp = asyncio.run(get_datasource_table_column_dicts("ds_a", "missing", SimpleNamespace()))
+    admin_list_resp = asyncio.run(get_admin_datasource_table_column_dicts("ds_a", "missing", SimpleNamespace()))
     gen_resp = asyncio.run(generate_datasource_column_dict("ds_a", "t_a", "missing", DatasourceColumnDictGenerateRequest(text="无"), SimpleNamespace()))
 
     assert _payload(get_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(admin_get_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(save_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(list_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert _payload(admin_list_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert _payload(gen_resp)["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
@@ -4592,6 +4601,8 @@ def test_routes_more_missing_branches_for_health_dict_cancel_and_tasks(monkeypat
     _mock_datasource_manager(monkeypatch, DictCrashManager())
     assert _payload(asyncio.run(datasource_public_routes.get_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_public_routes.get_datasource_table_column_dicts("ds_a", "t_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_admin_datasource_column_dict("ds_a", "t_a", "status", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
+    assert _payload(asyncio.run(datasource_admin_routes.get_admin_datasource_table_column_dicts("ds_a", "t_a", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
     assert _payload(asyncio.run(datasource_admin_routes.update_datasource_column_dict("ds_a", "t_a", "status", DatasourceColumnDictUpdateRequest(column_dict={}), SimpleNamespace())))["code"] == ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED
 
     class GenerateManager(_FakeDatasourceManager):

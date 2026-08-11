@@ -5,9 +5,60 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
+from utils.error_codes import ErrorCode
+from utils.response import business_response
+
 from ..services.semantic.core.common import build_table_columns_map
 
 SOURCE_DEFAULT_PORTS = {"mysql": 3306, "hive": 10000}
+
+
+async def _get_datasource_column_dict_response(
+    datasource_manager: Any,
+    datasource_id: str,
+    table_name: str,
+    column_name: str,
+):
+    """构造单字段字典读取响应，供普通与后台权限入口复用。"""
+    column_dict = await datasource_manager.get_column_dict_async(datasource_id, table_name, column_name)
+    if column_dict is None:
+        return business_response(
+            msg=f"数据源、表或字段不存在: {datasource_id}/{table_name}/{column_name}",
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+        )
+    return business_response(
+        data={
+            "datasource_id": datasource_id,
+            "table_name": table_name,
+            "column_name": column_name,
+            "dict": column_dict,
+        },
+        msg="获取成功",
+    )
+
+
+async def _get_datasource_table_column_dicts_response(
+    datasource_manager: Any,
+    datasource_id: str,
+    table_name: str,
+):
+    """构造表字段字典读取响应，供普通与后台权限入口复用。"""
+    column_dicts = await datasource_manager.get_table_column_dicts_async(datasource_id, table_name)
+    if column_dicts is None:
+        return business_response(
+            msg=f"数据源或表不存在: {datasource_id}/{table_name}",
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+        )
+    return business_response(
+        data={
+            "datasource_id": datasource_id,
+            "table_name": table_name,
+            "dicts": column_dicts,
+        },
+        msg="获取成功",
+    )
 
 
 def _normalize_source_item(

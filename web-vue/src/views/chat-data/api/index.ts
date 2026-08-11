@@ -642,6 +642,27 @@ export function getDatasourceTableColumnDicts(
   })
 }
 
+export function getAdminDatasourceColumnDict(
+  datasourceId: string,
+  tableName: string,
+  columnName: string
+): Promise<ApiResponse<{ datasource_id: string; table_name: string; column_name: string; dict: DatasourceColumnDictPayload }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict`,
+    method: 'get'
+  })
+}
+
+export function getAdminDatasourceTableColumnDicts(
+  datasourceId: string,
+  tableName: string
+): Promise<ApiResponse<{ datasource_id: string; table_name: string; dicts: Record<string, DatasourceColumnDictPayload> }>> {
+  return request({
+    url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/column-dicts`,
+    method: 'get'
+  })
+}
+
 export function updateAdminDatasourceColumnDict(
   datasourceId: string,
   tableName: string,

@@ -34,6 +34,8 @@ from .dependencies import _get_current_user
 from .datasource_helpers import (
     _build_datasource_schema_health,
     _build_datasource_semantic_health,
+    _get_datasource_column_dict_response,
+    _get_datasource_table_column_dicts_response,
     _merge_health_status,
     _normalize_source_item,
 )
@@ -420,6 +422,55 @@ async def update_datasource_column_dict(datasource_id: str, table_name: str, col
     except Exception as e:
         logger.error("保存字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s", datasource_id, table_name, column_name, e, exc_info=True)
         return business_response(msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error")
+
+
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
+async def get_admin_datasource_column_dict(datasource_id: str, table_name: str, column_name: str, request: Request):
+    """获取后台数据源字段数据字典。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        return await _get_datasource_column_dict_response(ds_manager, datasource_id, table_name, column_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "后台获取字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s",
+            datasource_id,
+            table_name,
+            column_name,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg=f"获取失败: {str(e)}",
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
+            status="error",
+        )
+
+
+@router.get("/admin/datasources/{datasource_id}/tables/{table_name}/column-dicts")
+async def get_admin_datasource_table_column_dicts(datasource_id: str, table_name: str, request: Request):
+    """批量获取后台数据源单张表已维护字段数据字典。"""
+    try:
+        _get_current_user(request)
+        ds_manager = get_datasource_manager()
+        return await _get_datasource_table_column_dicts_response(ds_manager, datasource_id, table_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "后台批量获取字段数据字典失败: datasource_id=%s table_name=%s error=%s",
+            datasource_id,
+            table_name,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg=f"获取失败: {str(e)}",
+            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
+            status="error",
+        )
 
 
 def _build_column_dict_generate_prompt(table_name: str, column_name: str, column: Dict[str, Any], text: str) -> str:

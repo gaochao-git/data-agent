@@ -17,8 +17,8 @@ import {
   getAdminDatasourceTableGroups,
   updateAdminDatasourceTableGroups,
   updateAdminDatasourceTableBusinessDesc,
-  getDatasourceColumnDict,
-  getDatasourceTableColumnDicts,
+  getAdminDatasourceColumnDict,
+  getAdminDatasourceTableColumnDicts,
   updateAdminDatasourceColumnDict,
   generateAdminDatasourceColumnDict,
   getAdminDatasourceSemanticHealth,
@@ -411,7 +411,7 @@ const loadColumnDictStatusForTable = async (ds: DataSource, table: TableInfo) =>
   try {
     let dicts: Record<string, DatasourceColumnDictPayload> = {}
     try {
-      const res = await getDatasourceTableColumnDicts(ds.id, table.table_name)
+      const res = await getAdminDatasourceTableColumnDicts(ds.id, table.table_name)
       dicts = res.status === 'success' ? (res.data?.dicts || {}) : {}
     } catch {
       dicts = {}
@@ -493,7 +493,7 @@ const openColumnDictModal = async (ds: DataSource, table: TableInfo, column: Col
   const tableName = table.table_name
   const columnName = column.name
   try {
-    const res = await getDatasourceColumnDict(dsId, tableName, columnName)
+    const res = await getAdminDatasourceColumnDict(dsId, tableName, columnName)
     if (!isSameColumnDictContext(dsId, tableName, columnName)) return
     if (res.status === 'success') {
       applyColumnDictForm(res.data?.dict)

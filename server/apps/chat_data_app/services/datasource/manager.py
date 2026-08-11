@@ -510,6 +510,21 @@ class DataSourceManager:
         allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
         return filter_datasources_by_allowed_org_codes(datasources, allowed_org_codes)
 
+    async def can_access_datasource_async(
+        self,
+        datasource_id: str,
+        user_id: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> bool:
+        """判断当前用户是否有权读取指定数据源。"""
+        authorized = await self.get_authorized_datasources_async(
+            include_tables=False,
+            user_id=user_id,
+            username=username,
+        )
+        normalized_id = str(datasource_id or "").strip()
+        return any(str(item.get("id") or item.get("group_id") or "").strip() == normalized_id for item in authorized)
+
     async def has_datasource_async(self, datasource_id: str) -> bool:
         """异步判断数据源是否存在。"""
         return await self.datasource_dao.has_datasource_async(datasource_id)
