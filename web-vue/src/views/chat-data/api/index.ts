@@ -820,20 +820,20 @@ export function getConversationWorkspaceFiles(conversationId: string): Promise<A
 }
 
 /** 读取会话工作区文本文件。 */
-export function getConversationWorkspaceFileContent(conversationId: string, path: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
+export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
     method: 'get',
-    params: { path }
+    params: refreshToken ? { path, _refresh: refreshToken } : { path }
   })
 }
 
 /** 读取工作区原始字节文件（PDF/Word 等二进制预览，返回 Blob） */
-export function getConversationWorkspaceRawFile(conversationId: string, path: string): Promise<Blob> {
+export function getConversationWorkspaceRawFile(conversationId: string, path: string, refreshToken?: string): Promise<Blob> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/raw`,
     method: 'get',
-    params: { path },
+    params: refreshToken ? { path, _refresh: refreshToken } : { path },
     responseType: 'blob',
   }) as unknown as Promise<Blob>
 }
@@ -850,11 +850,12 @@ export interface ConversationWorkspaceOfficeHtmlPreview {
 export function getConversationWorkspaceOfficeHtmlPreview(
   conversationId: string,
   path: string,
+  refreshToken?: string,
 ): Promise<ApiResponse<ConversationWorkspaceOfficeHtmlPreview>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/office-html`,
     method: 'get',
-    params: { path },
+    params: refreshToken ? { path, _refresh: refreshToken } : { path },
   })
 }
 

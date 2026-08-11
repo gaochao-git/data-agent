@@ -284,6 +284,9 @@ const isWorkspaceFilePreviewFullscreen = ref(false)
 const selectedConsoleOfficeHtml = ref<string | null>(null)
 const selectedConsoleOfficePreviewReason = ref<string | null>(null)
 const loadingOfficePreviewKey = ref<string | null>(null)
+const workspaceFilePreviewRequestSequence = ref(0)
+const loadingOfficePreviewSequence = ref<number | null>(null)
+const loadingWorkspaceFileSequence = ref<number | null>(null)
 const isWorkspaceFilesLoading = ref(false)
 const loadingWorkspaceFilePath = ref<string | null>(null)
 const presentedArtifactContents = ref<Record<string, string>>({})
@@ -590,7 +593,7 @@ const selectConsoleFile = (path: string) => {
   // Keep the current preview visible while explicitly reloading it instead
   // of clearing the content and leaving the panel without a request.
   if (sameFileSelected) {
-    void loadWorkspaceFileContent(localConversationId.value, normalizedPath)
+    void loadWorkspaceFileContent(localConversationId.value, normalizedPath, { forceReload: true })
     return
   }
 
@@ -1021,47 +1024,95 @@ const isBinaryPreviewPath = (path: string) => {
   return BINARY_PREVIEW_EXTENSIONS.has(ext)
 }
 
-const loadWorkspaceFileContent = async (conversationId: string | null | undefined, path: string | null) => {
+type WorkspaceFileLoadOptions = {
+  forceReload?: boolean
+}
+
+const loadWorkspaceFileContent = async (
+  conversationId: string | null | undefined,
+  path: string | null,
+  options: WorkspaceFileLoadOptions = {},
+) => {
   if (!conversationId || !path) return
+  const ext = path.split('.').pop()?.toLowerCase() || ''
+  const officeRequestKey = `${conversationId}:${path}`
+  if (
+    !options.forceReload
+    && OFFICE_HTML_PREVIEW_EXTENSIONS.has(ext)
+    && loadingOfficePreviewKey.value === officeRequestKey
+    && loadingOfficePreviewSequence.value === workspaceFilePreviewRequestSequence.value
+  ) return
+  const requestSequence = ++workspaceFilePreviewRequestSequence.value
+  const refreshToken = options.forceReload ? `${Date.now()}-${requestSequence}` : undefined
   if (isBinaryPreviewPath(path)) {
-    const ext = path.split('.').pop()?.toLowerCase() || ''
     if (OFFICE_HTML_PREVIEW_EXTENSIONS.has(ext)) {
-      await loadWorkspaceOfficeHtmlPreview(conversationId, path)
+      await loadWorkspaceOfficeHtmlPreview(
+        conversationId,
+        path,
+        requestSequence,
+        options.forceReload === true,
+      )
     } else {
-      await loadWorkspaceBinaryFile(conversationId, path)
+      await loadWorkspaceBinaryFile(
+        conversationId,
+        path,
+        requestSequence,
+        options.forceReload === true,
+        refreshToken,
+      )
     }
     return
   }
-  if (workspaceFileContents.value[path] !== undefined) return
+  if (!options.forceReload && workspaceFileContents.value[path] !== undefined) return
   loadingWorkspaceFilePath.value = path
+  loadingWorkspaceFileSequence.value = requestSequence
   try {
-    const response = await getConversationWorkspaceFileContent(conversationId, path)
-    if (conversationId !== localConversationId.value) return
+    const response = await getConversationWorkspaceFileContent(conversationId, path, refreshToken)
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     workspaceFileContents.value = {
       ...workspaceFileContents.value,
       [path]: response.data?.content || '',
     }
   } catch (err) {
-    if (conversationId !== localConversationId.value) return
-    workspaceFileContents.value = {
-      ...workspaceFileContents.value,
-      [path]: '文件内容加载失败。',
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
+    if (!options.forceReload || workspaceFileContents.value[path] === undefined) {
+      workspaceFileContents.value = {
+        ...workspaceFileContents.value,
+        [path]: '文件内容加载失败。',
+      }
     }
     console.error('加载智能分析工作区文件内容失败:', err)
   } finally {
-    if (loadingWorkspaceFilePath.value === path) {
+    if (loadingWorkspaceFileSequence.value === requestSequence) {
       loadingWorkspaceFilePath.value = null
+      loadingWorkspaceFileSequence.value = null
     }
   }
 }
 
-const loadWorkspaceOfficeHtmlPreview = async (conversationId: string, path: string) => {
+const isCurrentWorkspaceFilePreviewRequest = (
+  conversationId: string,
+  path: string,
+  requestSequence: number,
+) => (
+  requestSequence === workspaceFilePreviewRequestSequence.value
+  && conversationId === localConversationId.value
+  && path === selectedConsoleFilePath.value
+)
+
+const loadWorkspaceOfficeHtmlPreview = async (
+  conversationId: string,
+  path: string,
+  requestSequence: number,
+  forceReload = false,
+) => {
   const requestKey = `${conversationId}:${path}`
-  if (loadingOfficePreviewKey.value === requestKey) return
+  const refreshToken = forceReload ? `${Date.now()}-${requestSequence}` : undefined
   loadingOfficePreviewKey.value = requestKey
+  loadingOfficePreviewSequence.value = requestSequence
   try {
-    const response = await getConversationWorkspaceOfficeHtmlPreview(conversationId, path)
-    if (conversationId !== localConversationId.value || path !== selectedConsoleFilePath.value) return
+    const response = await getConversationWorkspaceOfficeHtmlPreview(conversationId, path, refreshToken)
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     const preview = response.data
     selectedConsoleOfficeHtml.value = preview?.available && !preview.truncated && preview.html
       ? preview.html
@@ -1070,41 +1121,57 @@ const loadWorkspaceOfficeHtmlPreview = async (conversationId: string, path: stri
       ? null
       : (preview?.reason || 'preview_unavailable')
   } catch (err) {
-    if (conversationId !== localConversationId.value || path !== selectedConsoleFilePath.value) return
-    selectedConsoleOfficeHtml.value = null
-    selectedConsoleOfficePreviewReason.value = 'preview_failed'
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
+    if (!forceReload || !selectedConsoleOfficeHtml.value) {
+      selectedConsoleOfficeHtml.value = null
+      selectedConsoleOfficePreviewReason.value = 'preview_failed'
+    }
     console.warn('OfficeCLI 文件预览不可用:', err)
   } finally {
-    if (loadingOfficePreviewKey.value === requestKey) {
+    if (loadingOfficePreviewSequence.value === requestSequence) {
       loadingOfficePreviewKey.value = null
+      loadingOfficePreviewSequence.value = null
     }
   }
 }
 
-const loadWorkspaceBinaryFile = async (conversationId: string, path: string) => {
-  if (workspaceFileBlobs.value[path] !== undefined) return
+const loadWorkspaceBinaryFile = async (
+  conversationId: string,
+  path: string,
+  requestSequence: number,
+  forceReload = false,
+  refreshToken?: string,
+) => {
+  if (!forceReload && workspaceFileBlobs.value[path] !== undefined) return
   loadingWorkspaceFilePath.value = path
+  loadingWorkspaceFileSequence.value = requestSequence
   try {
-    const blob = await getConversationWorkspaceRawFile(conversationId, path)
-    if (conversationId !== localConversationId.value) return
+    const blob = await getConversationWorkspaceRawFile(conversationId, path, refreshToken)
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     const arrayBuffer = await blob.arrayBuffer()
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     const ext = path.split('.').pop()?.toLowerCase() || ''
     const mime = blob.type || 'application/octet-stream'
     const url = URL.createObjectURL(new Blob([arrayBuffer], { type: mime }))
+    const previousUrl = workspaceFileBlobs.value[path]?.url
+    if (previousUrl) URL.revokeObjectURL(previousUrl)
     workspaceFileBlobs.value = {
       ...workspaceFileBlobs.value,
       [path]: { url, arrayBuffer, ext, mime },
     }
   } catch (err) {
-    if (conversationId !== localConversationId.value) return
-    workspaceFileBlobs.value = {
-      ...workspaceFileBlobs.value,
-      [path]: { url: '', arrayBuffer: new ArrayBuffer(0), ext: '', mime: '', error: true },
+    if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
+    if (!forceReload || workspaceFileBlobs.value[path] === undefined) {
+      workspaceFileBlobs.value = {
+        ...workspaceFileBlobs.value,
+        [path]: { url: '', arrayBuffer: new ArrayBuffer(0), ext: '', mime: '', error: true },
+      }
     }
     console.error('加载工作区二进制文件失败:', err)
   } finally {
-    if (loadingWorkspaceFilePath.value === path) {
+    if (loadingWorkspaceFileSequence.value === requestSequence) {
       loadingWorkspaceFilePath.value = null
+      loadingWorkspaceFileSequence.value = null
     }
   }
 }
