@@ -580,7 +580,20 @@ const toggleConsoleDirectory = (path: string) => {
 }
 
 const selectConsoleFile = (path: string) => {
-  selectedConsoleFilePath.value = normalizeVisiblePath(path)
+  const normalizedPath = normalizeVisiblePath(path)
+  if (!normalizedPath) return
+
+  const sameFileSelected = selectedConsoleFilePath.value === normalizedPath
+  selectedConsoleFilePath.value = normalizedPath
+
+  // Clicking the already selected file does not trigger the path watcher.
+  // Keep the current preview visible while explicitly reloading it instead
+  // of clearing the content and leaving the panel without a request.
+  if (sameFileSelected) {
+    void loadWorkspaceFileContent(localConversationId.value, normalizedPath)
+    return
+  }
+
   selectedConsoleOfficeHtml.value = null
   selectedConsoleOfficePreviewReason.value = null
   loadingOfficePreviewKey.value = null
