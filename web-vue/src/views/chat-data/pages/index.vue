@@ -950,7 +950,7 @@ const loadSemanticConfigs = async () => {
     const res = await getSemanticConfigs(selectedDatasourceId.value)
     if (res.status === 'success') {
       semanticConfigs.value = res.data?.configs || []
-      if (selectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === selectedSemanticConfigId.value)) {
+      if (selectedSemanticConfigId.value && !semanticConfigs.value.find(c => c.id === selectedSemanticConfigId.value && c.enabled)) {
         selectedSemanticConfigId.value = null
       }
       const savedConversationConfigId = readConversationSemanticConfigSelection(selectedDatasourceId.value)
@@ -1075,18 +1075,18 @@ const resolveDatasourceType = (datasource: DataSource | null | undefined) => {
   return memberTypes.length === 1 ? memberTypes[0] : ''
 }
 
+const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
+const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
+
 const currentSemanticConfig = computed(() => {
   if (!selectedSemanticConfigId.value) return null
-  return semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value) || null
+  return enabledSemanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value) || null
 })
 
 const currentMetricSemanticConfig = computed(() => {
   if (!metricSelectedSemanticConfigId.value) return null
   return metricSemanticConfigs.value.find(cfg => cfg.id === metricSelectedSemanticConfigId.value) || null
 })
-
-const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
-const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
 
 const getSemanticConfigIndex = (config: SemanticConfigItem) => {
   return semanticConfigs.value.findIndex(item => item.id === config.id)
@@ -1131,8 +1131,8 @@ const ensureStructuredViewSemanticConfig = () => {
     return
   }
   if (viewMode.value !== 'builder') return
-  if (selectedSemanticConfigId.value && semanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value)) return
-  selectedSemanticConfigId.value = enabledSemanticConfigs.value[0]?.id || semanticConfigs.value[0]?.id || null
+  if (selectedSemanticConfigId.value && enabledSemanticConfigs.value.find(cfg => cfg.id === selectedSemanticConfigId.value)) return
+  selectedSemanticConfigId.value = enabledSemanticConfigs.value[0]?.id || null
 }
 
 const conversationSidebarBootstrapLoading = computed(() => {
@@ -1370,7 +1370,7 @@ watch(selectedConversationModelId, (modelId) => {
 })
 
 watch(
-  [viewMode, () => semanticConfigs.value.map(cfg => cfg.id).join('|'), () => metricSemanticConfigs.value.map(cfg => cfg.id).join('|')],
+  [viewMode, () => semanticConfigs.value.map(cfg => `${cfg.id}:${Number(cfg.enabled)}`).join('|'), () => metricSemanticConfigs.value.map(cfg => cfg.id).join('|')],
   ensureStructuredViewSemanticConfig,
   { immediate: true }
 )
@@ -1460,10 +1460,16 @@ const handleConversationDatasetSelected = (configId: string | null) => {
   writeConversationSemanticConfigSelection(selectedDatasourceId.value, configId)
 }
 
+const handleBuilderSemanticConfigSelected = (configId: string) => {
+  const normalizedId = String(configId || '').trim()
+  if (!enabledSemanticConfigs.value.some(config => config.id === normalizedId)) return
+  selectedSemanticConfigId.value = normalizedId
+}
+
 const handleConversationSemanticConfigSelected = (payload: SemanticConfigSelectionInfo) => {
   const selectedId = String(payload.semantic_config_id || '').trim()
   if (!selectedId || !payload.user_selected) return
-  if (!semanticConfigs.value.some(config => config.id === selectedId)) return
+  if (!enabledSemanticConfigs.value.some(config => config.id === selectedId)) return
   conversationSelectedSemanticConfigId.value = selectedId
   writeConversationSemanticConfigSelection(selectedDatasourceId.value, selectedId)
 }
@@ -1728,7 +1734,7 @@ onUnmounted(() => {
             <BuilderSidebar
               :datasource="currentDatasource"
               :semantic-config="currentSemanticConfig"
-              :semantic-configs="semanticConfigs"
+              :semantic-configs="enabledSemanticConfigs"
               :selected-dataset-id="selectedSemanticConfigId"
               :tables="currentDatasource?.ds_tables || []"
               :loading="loadingSemanticConfigs"
@@ -1736,7 +1742,7 @@ onUnmounted(() => {
               @drag-end="handleBuilderDragEnd"
               @add-dimension="handleBuilderAddDimension"
               @add-metric="handleBuilderAddMetric"
-              @dataset-change="(id: string) => selectedSemanticConfigId = id"
+              @dataset-change="handleBuilderSemanticConfigSelected"
               @refresh-semantic-configs="loadSemanticConfigs"
             />
           </div>
@@ -1844,7 +1850,7 @@ onUnmounted(() => {
               :datasources="datasources"
               :semantic-config-id="selectedSemanticConfigId"
               :semantic-config="currentSemanticConfig"
-              :semantic-configs="semanticConfigs"
+              :semantic-configs="enabledSemanticConfigs"
               :initial-builder-config="options?.initialBuilderConfig as BuilderConfig | undefined"
               :execution-targets="executionTargets"
               :execution-target-multiple="true"
@@ -1855,7 +1861,7 @@ onUnmounted(() => {
               hide-sidebar
               class="h-full"
               @datasource-change="handleDatasourceChange"
-              @semantic-config-change="(id: string) => selectedSemanticConfigId = id"
+              @semantic-config-change="handleBuilderSemanticConfigSelected"
               @update:selected-member-datasource-ids="selectedMemberDatasourceIds = $event"
             />
           </div>

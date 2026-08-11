@@ -6,6 +6,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
+from apps.chat_data_app.services.semantic.core import config_validator as config_validator_module
+from apps.chat_data_app.services.semantic.run import semantic_config_service as semantic_config_service_module
 from apps.chat_data_app.services.semantic.run.semantic_config_service import SemanticConfigService
 
 
@@ -282,8 +284,22 @@ def test_persistence_failure_is_reported_as_empty_result():
     assert asyncio.run(service.update_async("ds_a", "sc_a", description="更新")) is None
 
 
-def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idempotent():
+def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idempotent(monkeypatch):
     service, datasource_manager, dao = _build_service()
+    build_map_calls = 0
+    original_build_table_columns_map = semantic_config_service_module.build_table_columns_map
+
+    def tracked_build_table_columns_map(datasource):
+        nonlocal build_map_calls
+        build_map_calls += 1
+        return original_build_table_columns_map(datasource)
+
+    monkeypatch.setattr(semantic_config_service_module, "build_table_columns_map", tracked_build_table_columns_map)
+    monkeypatch.setattr(
+        config_validator_module,
+        "build_table_columns_map",
+        lambda _datasource: pytest.fail("批量校验不应重复构建字段映射"),
+    )
     datasource_manager.datasource["ds_tables"] = [
         {
             "table_name": "orders",
@@ -332,6 +348,7 @@ def test_generate_basic_single_table_configs_creates_disabled_models_and_is_idem
     assert all(item["description"] == "" for item in orders["dimensions"])
     assert dao.upsert_many_calls == 1
     assert dao.upsert_calls == 0
+    assert build_map_calls == 2
 
 
 def test_generate_basic_single_table_configs_skips_existing_table_and_reports_failure():
@@ -351,7 +368,7 @@ def test_generate_basic_single_table_configs_skips_existing_table_and_reports_fa
     assert result["skipped"] == 1
     assert result["failed"] == 1
     assert result["items"][0] == {"table": "orders", "status": "skipped", "reason": "已有语义模型"}
-    assert result["items"][1] == {"table": "users", "status": "failed", "reason": "write failed"}
+    assert result["items"][1] == {"table": "users", "status": "failed", "reason": "写入失败"}
     assert len(dao.configs) == 1
     assert dao.upsert_many_calls == 1
     assert dao.upsert_calls == 1
@@ -362,3 +379,20 @@ def test_generate_basic_single_table_configs_rejects_invalid_inputs():
 
     with pytest.raises(ValueError, match="数据源不存在"):
         asyncio.run(service.generate_basic_public_single_table_configs_async("missing"))
+
+
+def test_basic_single_table_text_is_stable_and_within_database_limits():
+    long_table_name = "table_" + "x" * 140
+    another_table_name = "table_" + "x" * 139 + "y"
+
+    generated_name = SemanticConfigService._basic_single_table_name(long_table_name)
+    another_name = SemanticConfigService._basic_single_table_name(another_table_name)
+    description = SemanticConfigService._basic_single_table_description(long_table_name)
+
+    assert len(generated_name) == 128
+    assert generated_name.endswith("基础模型")
+    assert generated_name == SemanticConfigService._basic_single_table_name(long_table_name)
+    assert generated_name != another_name
+    assert len(description) == 128
+    assert description.startswith("基于物理表 ")
+    assert description.endswith(" 自动生成，待人工复核后启用")

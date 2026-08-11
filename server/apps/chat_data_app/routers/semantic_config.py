@@ -569,11 +569,14 @@ async def generate_admin_basic_semantic_configs(datasource_id: str, request: Req
         )
         return business_response(data=result, msg="基础模型生成完成")
     except ValueError as e:
-        code = ErrorCode.CHATDATA_NOT_FOUND if str(e).startswith("数据源不存在") else ErrorCode.CHATDATA_VALIDATION_FAILED
-        return business_response(msg=str(e), code=code, status="error")
+        datasource_missing = str(e).startswith("数据源不存在")
+        code = ErrorCode.CHATDATA_NOT_FOUND if datasource_missing else ErrorCode.CHATDATA_VALIDATION_FAILED
+        msg = "数据源不存在" if datasource_missing else "生成参数校验失败"
+        logger.warning("批量生成基础语义模型参数校验失败: datasource_id=%s error=%s", datasource_id, e)
+        return business_response(msg=msg, code=code, status="error")
     except Exception as e:
         logger.error("批量生成基础语义模型失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(msg=f"生成失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return business_response(msg="生成失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
 
 
 async def _auto_prefill_semantic_fields_route(

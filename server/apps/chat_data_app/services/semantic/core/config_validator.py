@@ -28,9 +28,11 @@ def validate_semantic_fields(
     metrics: List[Dict],
     dimensions: List[Dict],
     relationships: Optional[List[Dict]] = None,
+    *,
+    table_columns_map: Optional[Dict[str, Set[str]]] = None,
 ) -> Optional[str]:
-    table_columns_map = build_table_columns_map(datasource)
-    if not table_columns_map:
+    effective_table_columns_map = table_columns_map if table_columns_map is not None else build_table_columns_map(datasource)
+    if not effective_table_columns_map:
         return "当前数据源缺少表结构信息，请先完成数据源同步"
 
     seen_names: Set[str] = set()
@@ -46,9 +48,9 @@ def validate_semantic_fields(
     for dimension in dimensions or []:
         table_name = dimension.get("table")
         column_name = dimension.get("column")
-        if not table_name or table_name not in table_columns_map:
+        if not table_name or table_name not in effective_table_columns_map:
             return f"维度 {dimension.get('name', '')} 所属表不存在: {table_name}"
-        if not column_name or column_name not in table_columns_map[table_name]:
+        if not column_name or column_name not in effective_table_columns_map[table_name]:
             return f"维度 {dimension.get('name', '')} 字段不存在: {table_name}.{column_name}"
         allowed_operators_error = _validate_allowed_operators(dimension)
         if allowed_operators_error:
@@ -57,12 +59,12 @@ def validate_semantic_fields(
     for metric in metrics or []:
         table_name = metric.get("table")
         expression = str(metric.get("expression") or "").strip()
-        if not table_name or table_name not in table_columns_map:
+        if not table_name or table_name not in effective_table_columns_map:
             return f"指标 {metric.get('name', '')} 所属表不存在: {table_name}"
-        if not expression_uses_physical_column(expression, table_columns_map[table_name]):
+        if not expression_uses_physical_column(expression, effective_table_columns_map[table_name]):
             return f"指标 {metric.get('name', '')} 表达式必须引用表 {table_name} 的物理字段"
     return validate_semantic_relationships(
-        table_columns_map,
+        effective_table_columns_map,
         metrics or [],
         dimensions or [],
         relationships or [],

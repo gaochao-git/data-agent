@@ -153,6 +153,24 @@ def test_admin_generate_basic_semantic_configs_uses_public_scope(client, auth_he
     assert semantic_service.created_kwargs["create_by"] == "user_a"
 
 
+def test_admin_generate_basic_semantic_configs_hides_internal_error(client, auth_headers, fake_datasource_manager, patch_datasource_manager, monkeypatch):
+    semantic_service = patch_datasource_manager(fake_datasource_manager)
+
+    async def raise_internal_error(*_args, **_kwargs):
+        raise RuntimeError("database password leaked")
+
+    monkeypatch.setattr(semantic_service, "generate_basic_public_single_table_configs_async", raise_internal_error)
+    response = client.post(
+        "/api/chatdata/admin/datasources/ds_a/semantic-configs/generate-basic",
+        headers=auth_headers,
+    )
+
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["msg"] == "生成失败，请稍后重试"
+    assert "password" not in payload["msg"]
+
+
 def test_generate_basic_semantic_configs_has_no_user_route(client, auth_headers):
     response = client.post(
         "/api/chatdata/datasources/ds_a/semantic-configs/generate-basic",

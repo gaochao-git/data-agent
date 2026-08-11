@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from hashlib import sha1
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 from utils.logger import get_logger
 from ....daos.semantic_config_dao import SemanticConfigDao
-from ..core.common import ensure_dimension_logical_type, normalize_relationship_type
+from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import expression_uses_physical_column, validate_semantic_fields
 
 logger = get_logger(__name__)
@@ -66,8 +67,16 @@ async def validate_semantic_config_for_save(
     metrics: List[Dict],
     dimensions: List[Dict],
     relationships: Optional[List[Dict]] = None,
+    *,
+    table_columns_map: Optional[Dict[str, Set[str]]] = None,
 ) -> Optional[str]:
-    validation_error = validate_semantic_fields(datasource, metrics, dimensions, relationships)
+    validation_error = validate_semantic_fields(
+        datasource,
+        metrics,
+        dimensions,
+        relationships,
+        table_columns_map=table_columns_map,
+    )
     if validation_error:
         return validation_error
     return await validate_semantic_logical_types(ds_manager, datasource_id, dimensions)
@@ -341,6 +350,7 @@ class SemanticConfigService:
         pending_configs = []
         item_order: List[str] = []
         seen_tables: set[str] = set()
+        table_columns_map = build_table_columns_map(datasource)
         for table in datasource.get("ds_tables") or []:
             table_name = str((table or {}).get("table_name") or "").strip()
             if not table_name or table_name in seen_tables:
@@ -375,9 +385,18 @@ class SemanticConfigService:
                     config["metrics"],
                     config["dimensions"],
                     config["relationships"],
+                    table_columns_map=table_columns_map,
                 )
                 if validation_error:
-                    raise ValueError(validation_error)
+                    logger.warning("批量生成基础语义模型字段校验失败: table=%s error=%s", table_name, validation_error)
+                    result["failed"] += 1
+                    self._set_generation_item(
+                        result,
+                        table_name,
+                        {"table": table_name, "status": "failed", "reason": "字段校验失败"},
+                        item_order,
+                    )
+                    continue
                 persisted = self._build_persisted_config(group_id, **config)
                 pending_configs.append((table_name, persisted))
                 configured_tables.add(table_name)
@@ -385,7 +404,7 @@ class SemanticConfigService:
             except Exception as exc:
                 logger.warning("批量生成基础语义模型失败: table=%s error=%s", table_name, exc, exc_info=True)
                 result["failed"] += 1
-                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": str(exc) or "创建失败"}, item_order)
+                self._set_generation_item(result, table_name, {"table": table_name, "status": "failed", "reason": "模型生成失败"}, item_order)
         if not pending_configs:
             return result
         persisted_configs = [config for _, config in pending_configs]
@@ -414,11 +433,12 @@ class SemanticConfigService:
                         item_order,
                     )
                 except Exception as item_exc:
+                    logger.warning("单表写入基础语义模型失败: table=%s error=%s", table_name, item_exc, exc_info=True)
                     result["failed"] += 1
                     self._set_generation_item(
                         result,
                         table_name,
-                        {"table": table_name, "status": "failed", "reason": str(item_exc) or "创建失败"},
+                        {"table": table_name, "status": "failed", "reason": "写入失败"},
                         item_order,
                     )
         return result
@@ -460,7 +480,20 @@ class SemanticConfigService:
 
     @staticmethod
     def _basic_single_table_name(table_name: str) -> str:
-        return f"{table_name}基础模型"
+        suffix = "基础模型"
+        raw_name = f"{table_name}{suffix}"
+        if len(raw_name) <= 128:
+            return raw_name
+        digest = sha1(table_name.encode("utf-8")).hexdigest()[:8]
+        stable_suffix = f"_{digest}{suffix}"
+        return f"{table_name[:128 - len(stable_suffix)]}{stable_suffix}"
+
+    @staticmethod
+    def _basic_single_table_description(table_name: str) -> str:
+        prefix = "基于物理表 "
+        suffix = " 自动生成，待人工复核后启用"
+        available = max(128 - len(prefix) - len(suffix), 0)
+        return f"{prefix}{table_name[:available]}{suffix}"[:128]
 
     @staticmethod
     def _config_physical_tables(config: Dict[str, Any]) -> set[str]:
@@ -514,7 +547,7 @@ class SemanticConfigService:
             })
         return {
             "name": name,
-            "description": f"基于物理表 {table_name} 自动生成，待人工复核后启用",
+            "description": cls._basic_single_table_description(table_name),
             "ontology_rules": "",
             "enabled": False,
             "metrics": [],
