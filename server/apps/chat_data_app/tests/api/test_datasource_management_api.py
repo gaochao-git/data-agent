@@ -91,15 +91,15 @@ def test_admin_datasource_read_routes_require_auth(client, fake_datasource_manag
     table_groups_response = client.get("/api/chatdata/admin/datasources/ds_a/table-groups")
     semantic_health_response = client.get("/api/chatdata/admin/datasources/ds_a/semantic-health")
 
-    assert list_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert list_response.status_code == 401
     assert list_response.json()["status"] == "error"
-    assert list_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
-    assert table_groups_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert list_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert table_groups_response.status_code == 401
     assert table_groups_response.json()["status"] == "error"
-    assert table_groups_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
-    assert semantic_health_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert table_groups_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert semantic_health_response.status_code == 401
     assert semantic_health_response.json()["status"] == "error"
-    assert semantic_health_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+    assert semantic_health_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, patch_datasource_manager, auth_headers):
@@ -152,14 +152,14 @@ def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_
         json={"text": "订单状态：1 表示有效"},
     )
 
-    assert get_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert get_response.status_code == 401
     assert get_response.json()["status"] == "error"
-    assert get_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
-    assert admin_get_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
-    assert admin_get_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
-    assert generate_response.status_code == ErrorCode.HTTP_UNAUTHORIZED
+    assert get_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert admin_get_response.status_code == 401
+    assert admin_get_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert generate_response.status_code == 401
     assert generate_response.json()["status"] == "error"
-    assert generate_response.json()["code"] == ErrorCode.HTTP_UNAUTHORIZED
+    assert generate_response.json()["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 
 def test_public_column_dict_read_enforces_datasource_permission(client, fake_datasource_manager, patch_datasource_manager, auth_headers):

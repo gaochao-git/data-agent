@@ -84,7 +84,7 @@ def test_conversation_workspace_raw_route_hides_internal_context_file(client, au
         headers=auth_headers,
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 

@@ -11,12 +11,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status as http_status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
 from utils.llm_json import parse_llm_json
 from utils.response import business_response
@@ -59,9 +59,9 @@ def _build_evaluation_service() -> EvaluationService:
 
 def _evaluation_http_exception_code(exc: HTTPException) -> int:
     """评测路由 HTTPException 固定业务码映射。"""
-    if exc.status_code == 404:
+    if exc.status_code == http_status.HTTP_404_NOT_FOUND:
         return SEMANTIC_CONFIG_NOT_FOUND_CODE
-    return chatdata_http_exception_error_code(exc.status_code)
+    return chatdata_http_exception_business_code(exc.status_code)
 
 
 def _sanitize_scene_segment(value: str, fallback: str) -> str:
@@ -590,10 +590,10 @@ async def _ensure_evaluation_semantic_permission(
     """评测入口按指标集维护权限校验。"""
     config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
     if not config:
-        raise HTTPException(status_code=404, detail=f"语义配置不存在: {config_id}")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=f"语义配置不存在: {config_id}")
     user_id = str(getattr(current_user, "user_id", "") or "").strip()
     if not can_mutate_semantic_config(config, user_id, admin_manage):
-        raise HTTPException(status_code=403, detail="无权限操作该指标集")
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权限操作该指标集")
     return config
 
 

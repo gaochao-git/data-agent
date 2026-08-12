@@ -6,6 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -1432,15 +1433,16 @@ def test_history_learning_route_skip_and_auth_branches(monkeypatch):
     assert response["data"]["source_stats"]["builder"]["skipped"] == 1
 
     monkeypatch.setattr(semantic_config, "_get_current_user", lambda _request: (_ for _ in ()).throw(semantic_config.AuthenticationError("未登录")))
-    auth_response = _response_payload(asyncio.run(semantic_config.learn_semantic_config_from_history(
-        "ds_a",
-        "cfg_a",
-        SemanticHistoryLearningRequest(days=7, limit=1, sources=["agent"], include_failed=True),
-        object(),
-    )))
+    with pytest.raises(HTTPException) as auth_error:
+        asyncio.run(semantic_config.learn_semantic_config_from_history(
+            "ds_a",
+            "cfg_a",
+            SemanticHistoryLearningRequest(days=7, limit=1, sources=["agent"], include_failed=True),
+            object(),
+        ))
 
     assert manager.datasource["id"] == "ds_a"
-    assert auth_response["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert auth_error.value.status_code == 401
 
 
 def test_semantic_config_low_level_helper_branches(monkeypatch):

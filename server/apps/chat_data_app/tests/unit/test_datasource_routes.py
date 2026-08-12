@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -3352,20 +3353,24 @@ def test_query_favorite_exception_branches(monkeypatch):
 
 def test_task_endpoint_auth_and_error_branches(monkeypatch):
     monkeypatch.setattr(query_execution_routes, "_get_current_user", lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")))
-    create_resp = asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
-    get_resp = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
-    cancel_resp = asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
-    assert _payload(create_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert _payload(get_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert _payload(cancel_resp)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    with pytest.raises(HTTPException) as create_error:
+        asyncio.run(query_execution_routes.create_query_task(SimpleNamespace(), QueryTaskCreateRequest(datasource_id="ds_a", sql=["select 1"])))
+    assert create_error.value.status_code == 401
+    with pytest.raises(HTTPException) as get_error:
+        asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
+    assert get_error.value.status_code == 401
+    with pytest.raises(HTTPException) as cancel_error:
+        asyncio.run(query_execution_routes.cancel_query_task("task_001", SimpleNamespace()))
+    assert cancel_error.value.status_code == 401
 
     _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result=None))
     assert _payload(asyncio.run(query_execution_routes.get_query_task("missing", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: asyncio.sleep(0, result={"task_id": "task_001"}))
     monkeypatch.setattr(query_runtime, "build_query_task_response_data", lambda _task_data: (_ for _ in ()).throw(query_execution_routes.HTTPException(status_code=418, detail="teapot")))
-    http_error = asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
-    assert _payload(http_error)["code"] == 500
+    with pytest.raises(HTTPException) as http_error:
+        asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace()))
+    assert http_error.value.status_code == 418
     monkeypatch.setattr(query_runtime, "build_query_task_response_data", lambda _task_data: (_ for _ in ()).throw(RuntimeError("boom")))
     assert _payload(asyncio.run(query_execution_routes.get_query_task("task_001", SimpleNamespace())))["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
 
@@ -3454,8 +3459,9 @@ def test_cancel_query_task_missing_final_partial_and_http_error(monkeypatch):
     assert updates[-1][1]["progress_text"] == "部分停止失败"
 
     monkeypatch.setattr(query_runtime, "get_query_task", lambda _task_id: (_ for _ in ()).throw(query_execution_routes.HTTPException(status_code=409, detail="busy")))
-    http_resp = asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace()))
-    assert _payload(http_resp)["code"] == 409
+    with pytest.raises(HTTPException) as http_error:
+        asyncio.run(query_execution_routes.cancel_query_task("task_running", SimpleNamespace()))
+    assert http_error.value.status_code == 409
 
 
 def test_cancel_query_task_owner_from_task_payload_and_generic_error(monkeypatch):
@@ -3607,8 +3613,9 @@ def test_compile_semantic_builder_sql_endpoint_error_branches(monkeypatch):
         "_get_current_user",
         lambda _request: (_ for _ in ()).throw(query_execution_routes.AuthenticationError("未登录")),
     )
-    unauthenticated = asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
-    assert _payload(unauthenticated)["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    with pytest.raises(HTTPException) as auth_error:
+        asyncio.run(query_execution_routes.compile_semantic_builder_sql_endpoint(SimpleNamespace(), body))
+    assert auth_error.value.status_code == 401
 
     _mock_authenticated_user(monkeypatch, user_id="other_user")
 

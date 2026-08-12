@@ -7,7 +7,7 @@ from typing import Annotated, Any, Awaitable, Callable, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import AuthenticationError
-from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..services.sql_run.history_service import QueryHistoryService
@@ -59,8 +59,8 @@ async def get_query_history(
         return business_response(data=data, msg="获取成功")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取查询历史失败: %s", e, exc_info=True)
         return business_response(msg="获取查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
@@ -101,8 +101,8 @@ async def get_admin_query_history(
         return business_response(data=data, msg="获取成功")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取全局查询历史失败: %s", e, exc_info=True)
         return business_response(msg="获取全局查询历史失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")
@@ -124,9 +124,9 @@ async def cancel_my_running_query_history(
         )
         return business_response(data=result, msg="停止请求已提交")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("批量停止个人查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg="批量停止失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -148,11 +148,11 @@ async def cancel_query_history_execution(
         )
         return business_response(data=result.data, msg=result.message)
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except QueryTaskNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("停止查询历史明细失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
         return business_response(msg="停止查询明细失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -173,9 +173,9 @@ async def cancel_admin_running_query_history(
         )
         return business_response(data=result, msg="停止请求已提交")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("批量停止全局查询历史失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
         return business_response(msg="批量停止失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -199,8 +199,8 @@ async def get_query_history_result(
         if not data:
             return business_response(msg="查询历史不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=data, msg="获取成功")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取查询历史结果失败: execution_id=%s error=%s", execution_id, e, exc_info=True)
         return business_response(msg="获取查询历史结果失败，请稍后重试", code=ErrorCode.CHATDATA_QUERY_HISTORY_FAILED, status="error")

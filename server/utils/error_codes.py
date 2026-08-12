@@ -5,20 +5,13 @@
 
 from enum import IntEnum
 
+from fastapi import status as http_status
+
 
 class ErrorCode(IntEnum):
     """接口响应业务码。"""
 
     SUCCESS = 2000
-
-    HTTP_BAD_REQUEST = 400
-    HTTP_UNAUTHORIZED = 401
-    HTTP_FORBIDDEN = 403
-    HTTP_NOT_FOUND = 404
-    HTTP_METHOD_NOT_ALLOWED = 405
-    HTTP_CONFLICT = 409
-    HTTP_VALIDATION_ERROR = 422
-    HTTP_INTERNAL_SERVER_ERROR = 500
 
     CHATDATA_BAD_REQUEST = 40001
     CHATDATA_REQUIRED_FIELD = 40002
@@ -146,18 +139,6 @@ _assert_unique_error_code_values()
 
 _DEFINED_ERROR_CODE_VALUES = frozenset(int(item.value) for item in ErrorCode)
 
-_HTTP_STATUS_ERROR_CODE_MAP = {
-    int(ErrorCode.HTTP_BAD_REQUEST): ErrorCode.HTTP_BAD_REQUEST,
-    int(ErrorCode.HTTP_UNAUTHORIZED): ErrorCode.HTTP_UNAUTHORIZED,
-    int(ErrorCode.HTTP_FORBIDDEN): ErrorCode.HTTP_FORBIDDEN,
-    int(ErrorCode.HTTP_NOT_FOUND): ErrorCode.HTTP_NOT_FOUND,
-    int(ErrorCode.HTTP_METHOD_NOT_ALLOWED): ErrorCode.HTTP_METHOD_NOT_ALLOWED,
-    int(ErrorCode.HTTP_CONFLICT): ErrorCode.HTTP_CONFLICT,
-    int(ErrorCode.HTTP_VALIDATION_ERROR): ErrorCode.HTTP_VALIDATION_ERROR,
-    int(ErrorCode.HTTP_INTERNAL_SERVER_ERROR): ErrorCode.HTTP_INTERNAL_SERVER_ERROR,
-}
-
-
 def ensure_defined_error_code(code: int | ErrorCode) -> int:
     """校验业务响应错误码必须已在 ErrorCode 中定义。"""
     try:
@@ -169,28 +150,21 @@ def ensure_defined_error_code(code: int | ErrorCode) -> int:
     return value
 
 
-def http_status_error_code(status_code: int) -> ErrorCode:
-    """将框架 HTTP 状态码转换为固定响应码，未知状态统一归入 500。"""
-    try:
-        value = int(status_code)
-    except (TypeError, ValueError):
-        return ErrorCode.HTTP_INTERNAL_SERVER_ERROR
-    return _HTTP_STATUS_ERROR_CODE_MAP.get(value, ErrorCode.HTTP_INTERNAL_SERVER_ERROR)
-
-
 _CHATDATA_HTTP_EXCEPTION_CODE_MAP = {
-    int(ErrorCode.HTTP_BAD_REQUEST): ErrorCode.CHATDATA_BAD_REQUEST,
-    int(ErrorCode.HTTP_UNAUTHORIZED): ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
-    int(ErrorCode.HTTP_FORBIDDEN): ErrorCode.CHATDATA_PERMISSION_DENIED,
-    int(ErrorCode.HTTP_NOT_FOUND): ErrorCode.CHATDATA_NOT_FOUND,
-    int(ErrorCode.HTTP_CONFLICT): ErrorCode.HTTP_CONFLICT,
+    http_status.HTTP_400_BAD_REQUEST: ErrorCode.CHATDATA_BAD_REQUEST,
+    http_status.HTTP_401_UNAUTHORIZED: ErrorCode.CHATDATA_AUTHENTICATION_FAILED,
+    http_status.HTTP_403_FORBIDDEN: ErrorCode.CHATDATA_PERMISSION_DENIED,
+    http_status.HTTP_404_NOT_FOUND: ErrorCode.CHATDATA_NOT_FOUND,
+    http_status.HTTP_405_METHOD_NOT_ALLOWED: ErrorCode.CHATDATA_BAD_REQUEST,
+    http_status.HTTP_409_CONFLICT: ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED,
+    http_status.HTTP_422_UNPROCESSABLE_CONTENT: ErrorCode.CHATDATA_VALIDATION_FAILED,
 }
 
 
-def chatdata_http_exception_error_code(status_code: int) -> ErrorCode:
-    """将业务路由内捕获的 HTTPException 转换为固定业务码。"""
+def chatdata_http_exception_business_code(status_code: int) -> ErrorCode:
+    """将 HTTP 异常转换为 ChatData 业务码，HTTP 状态码单独保留。"""
     try:
         value = int(status_code)
     except (TypeError, ValueError):
-        return ErrorCode.HTTP_INTERNAL_SERVER_ERROR
-    return _CHATDATA_HTTP_EXCEPTION_CODE_MAP.get(value, ErrorCode.HTTP_INTERNAL_SERVER_ERROR)
+        return ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED
+    return _CHATDATA_HTTP_EXCEPTION_CODE_MAP.get(value, ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED)

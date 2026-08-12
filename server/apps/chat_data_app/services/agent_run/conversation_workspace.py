@@ -542,11 +542,6 @@ def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
     return any(target == root or root in target.parents for root in result_roots)
 
 
-def is_tool_result_workspace_path(workspace_root: str, path: Path) -> bool:
-    """Backward-compatible alias for system-managed result path checks."""
-    return is_system_result_workspace_path(workspace_root, path)
-
-
 def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a path belongs to the system-owned semantic model directory."""
     semantic_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()

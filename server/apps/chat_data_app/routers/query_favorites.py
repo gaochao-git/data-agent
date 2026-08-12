@@ -6,7 +6,7 @@ from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import QueryFavoriteCreateRequest, QueryFavoriteUpdateRequest
@@ -46,8 +46,8 @@ async def get_query_favorites(
             limit=limit,
         )
         return business_response(data=data, msg="获取成功")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="获取收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_LIST_FAILED, status="error")
@@ -70,8 +70,8 @@ async def create_query_favorite(
         return business_response(data=data, msg="收藏成功")
     except QueryFavoriteValidationError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_INVALID_FAVORITE_CONFIG, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("创建收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="创建收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_CREATE_FAILED, status="error")
@@ -98,8 +98,8 @@ async def update_query_favorite(
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
     except QueryFavoriteOperationNotAllowedError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("更新收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="更新收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_UPDATE_FAILED, status="error")
@@ -122,8 +122,8 @@ async def delete_query_favorite(
         return business_response(data=data, msg="删除成功")
     except QueryFavoriteNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_FAVORITE_NOT_FOUND, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("删除收藏查询失败: %s", e, exc_info=True)
         return business_response(msg="删除收藏查询失败，请稍后重试", code=ErrorCode.CHATDATA_FAVORITE_DELETE_FAILED, status="error")

@@ -9,14 +9,14 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status as http_status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
 from auth import AuthenticationError
 from utils import conversation
 from utils.alarm import emit_llm_connection_alarm_if_needed
-from utils.error_codes import ErrorCode, chatdata_http_exception_error_code
+from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 from .. import agent as agent_module
@@ -254,7 +254,7 @@ async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request):
         user_id=user_id,
         username=username,
     ):
-        raise HTTPException(status_code=403, detail="无权限访问该数据源")
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权限访问该数据源")
     return StreamingResponse(
         _generate_quick_sql_stream(
             payload,
@@ -282,9 +282,9 @@ async def create_query_task(
         )
         return business_response(data=task_info, msg="任务已创建")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except HTTPException:
+        raise
     except QueryTaskNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as e:
@@ -306,11 +306,11 @@ async def get_query_task(
         data = await (task_service or get_query_task_service()).get_query_task_for_user(task_id, user_id=str(current_user.user_id))
         return business_response(data=data, msg="查询成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except QueryTaskNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("查询异步任务失败: %s", e, exc_info=True)
         return business_response(msg="查询异步任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -332,13 +332,13 @@ async def cancel_query_task(
         )
         return business_response(data=result.data, msg=result.message)
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except QueryTaskNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except QueryTaskPermissionDeniedError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_PERMISSION_DENIED, status="error")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=chatdata_http_exception_error_code(e.status_code), status="error")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("停止查询任务失败: task_id=%s error=%s", task_id, e, exc_info=True)
         return business_response(msg="停止查询任务失败，请稍后重试", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -360,9 +360,9 @@ async def compile_semantic_builder_sql_endpoint(
         )
         return business_response(data={"sql": result["sql"], "builder_config": result["builder_config"]}, msg="编译成功")
     except AuthenticationError as err:
-        return business_response(msg=err.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except HTTPException as err:
-        return business_response(msg=str(err.detail), code=chatdata_http_exception_error_code(err.status_code), status="error")
+        raise HTTPException(status_code=err.status_code, detail=err.message) from err
+    except HTTPException:
+        raise
     except LookupError as err:
         return business_response(msg=str(err), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as err:

@@ -112,7 +112,6 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
                 msg="文件不存在",
                 code=ErrorCode.CHATDATA_NOT_FOUND,
                 status="error",
-                http_status_code=ErrorCode.HTTP_NOT_FOUND,
             )
         payload = await read_conversation_workspace_raw_file(
             conversation_id, user_id=str(current_user.user_id), path=path
@@ -128,12 +127,16 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
     except HTTPException:
         raise
     except FileNotFoundError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error", http_status_code=ErrorCode.HTTP_NOT_FOUND)
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
     except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error", http_status_code=ErrorCode.HTTP_BAD_REQUEST)
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except Exception as e:
         logger.error("读取工作区原始文件失败: conversation_id=%s path=%s error=%s", conversation_id, path, e, exc_info=True)
-        return business_response(msg="读取文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error", http_status_code=ErrorCode.HTTP_INTERNAL_SERVER_ERROR)
+        return business_response(
+            msg="读取文件失败，请稍后重试",
+            code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED,
+            status="error",
+        )
 
 
 @router.get(

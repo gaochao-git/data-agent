@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 
 from auth import AuthenticationError, get_forwarded_user
 
@@ -17,7 +17,7 @@ def _get_current_user(request: Request):
         raise HTTPException(status_code=err.status_code, detail=err.message) from err
     user_id = str(user.user_id or "").strip()
     if not user_id:
-        raise HTTPException(status_code=401, detail="Missing user_id in token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing user_id in token")
     return user
 
 

@@ -6,7 +6,7 @@
 import inspect
 from typing import Callable, Optional, Dict, Any, List
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
@@ -226,7 +226,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
                 logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
         return business_response(data=result, msg="创建对话成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"创建对话失败: {e}", exc_info=True)
         return business_response(msg=f"创建对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_CREATE_FAILED, status="error")
@@ -290,7 +290,7 @@ async def list_conversations(
             result = await conversation.list_all(_agent_configs, user_id, page_size)
         return business_response(data=result, msg="获取对话列表成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话列表失败: {e}", exc_info=True)
         return business_response(msg=f"获取对话列表失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_LIST_FAILED, status="error")
@@ -327,7 +327,7 @@ async def get_conversation_detail(conversation_id: str, req: Request):
 
         return business_response(data=result, msg="获取对话详情成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话详情失败: {e}", exc_info=True)
         return business_response(msg=f"获取对话详情失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
@@ -366,7 +366,7 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
 
         return business_response(data={"id": conversation_id, "title": title}, msg="标题更新成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"更新标题失败: {e}", exc_info=True)
         return business_response(msg=f"更新标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_UPDATE_FAILED, status="error")
@@ -404,7 +404,7 @@ async def generate_conversation_title(conversation_id: str, req: Request):
 
         return business_response(data={"id": conversation_id, "title": title}, msg="标题生成成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"生成标题失败: {e}", exc_info=True)
         return business_response(msg=f"生成标题失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_TITLE_GENERATE_FAILED, status="error")
@@ -441,7 +441,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
             msg="收藏成功" if is_favorited else "取消收藏成功"
         )
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"切换收藏状态失败: {e}", exc_info=True)
         return business_response(msg=f"切换收藏状态失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
@@ -491,7 +491,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
 
         return await handler(**kwargs)
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
         return business_response(msg=f"对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
@@ -512,7 +512,7 @@ async def get_conversation_context(conversation_id: str, req: Request):
         datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
         return business_response(data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"获取对话上下文失败: {e}", exc_info=True)
         return business_response(msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")

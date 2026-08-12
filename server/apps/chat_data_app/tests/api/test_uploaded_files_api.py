@@ -49,16 +49,16 @@ def test_uploaded_file_error_branches_use_business_response(client, monkeypatch,
     info_response = client.get("/api/chatdata/uploaded-files/missing", headers=auth_headers)
     delete_response = client.delete("/api/chatdata/uploaded-files/missing", headers=auth_headers)
 
-    assert info_response.status_code == 404
+    assert info_response.status_code == 200
     assert info_response.json()["status"] == "error"
-    assert info_response.json()["code"] == ErrorCode.HTTP_NOT_FOUND
-    assert delete_response.status_code == 404
+    assert info_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+    assert delete_response.status_code == 200
     assert delete_response.json()["status"] == "error"
-    assert delete_response.json()["code"] == ErrorCode.HTTP_NOT_FOUND
+    assert delete_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
 def test_chatdata_http_and_validation_errors_use_business_response(client, auth_headers):
-    missing_response = client.get("/api/chatdata/not-exist")
+    missing_response = client.get("/api/chatdata/not-exist", headers=auth_headers)
     validation_response = client.post(
         "/api/chatdata/uploaded-files/upload",
         data={"thread_id": "thread_1"},
@@ -67,10 +67,10 @@ def test_chatdata_http_and_validation_errors_use_business_response(client, auth_
 
     assert missing_response.status_code == 404
     assert missing_response.json()["status"] == "error"
-    assert missing_response.json()["code"] == ErrorCode.HTTP_NOT_FOUND
+    assert missing_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert validation_response.status_code == 422
     assert validation_response.json()["status"] == "error"
-    assert validation_response.json()["code"] == ErrorCode.HTTP_VALIDATION_ERROR
+    assert validation_response.json()["code"] == ErrorCode.CHATDATA_VALIDATION_FAILED
 
 
 def test_uploaded_file_download_success_keeps_binary_response(client, monkeypatch, auth_headers):

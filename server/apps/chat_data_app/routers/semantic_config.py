@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage
 
 from auth import AuthenticationError
@@ -710,7 +710,7 @@ async def _learn_semantic_config_from_history_route(
         )
         return business_response(data=data, msg="学习完成")
     except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
     except Exception as e:

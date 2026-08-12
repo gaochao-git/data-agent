@@ -60,9 +60,8 @@ async def upload_file_api(
     if not file.filename:
         return business_response(
             msg="文件名不能为空",
-            code=ErrorCode.HTTP_BAD_REQUEST,
+            code=ErrorCode.CHATDATA_REQUIRED_FIELD,
             status="error",
-            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
         )
 
     # 限制文件类型（与前端白名单一致，防止绕过）
@@ -70,9 +69,8 @@ async def upload_file_api(
     if ext not in ALLOWED_FILE_EXTENSIONS:
         return business_response(
             msg=f"不支持的文件类型: .{ext}，仅支持 {', '.join(sorted(ALLOWED_FILE_EXTENSIONS))}",
-            code=ErrorCode.HTTP_BAD_REQUEST,
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error",
-            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
         )
 
     try:
@@ -85,17 +83,15 @@ async def upload_file_api(
     except ValueError as e:
         return business_response(
             msg=str(e),
-            code=ErrorCode.HTTP_BAD_REQUEST,
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error",
-            http_status_code=ErrorCode.HTTP_BAD_REQUEST,
         )
     except Exception as e:
         logger.error(f"文件上传失败: {e}", exc_info=True)
         return business_response(
             msg="文件上传失败，请稍后重试",
-            code=ErrorCode.HTTP_INTERNAL_SERVER_ERROR,
+            code=ErrorCode.CHATDATA_UPLOAD_FAILED,
             status="error",
-            http_status_code=ErrorCode.HTTP_INTERNAL_SERVER_ERROR,
         )
 
 
@@ -134,9 +130,8 @@ async def get_file_info_api(file_id: str, req: Request = None):
     if not info:
         return business_response(
             msg="文件不存在",
-            code=ErrorCode.HTTP_NOT_FOUND,
+            code=ErrorCode.CHATDATA_NOT_FOUND,
             status="error",
-            http_status_code=ErrorCode.HTTP_NOT_FOUND,
         )
 
     return business_response(data=info, msg="获取成功")
@@ -153,9 +148,8 @@ async def delete_file_api(file_id: str, req: Request = None):
     if not success:
         return business_response(
             msg="文件不存在",
-            code=ErrorCode.HTTP_NOT_FOUND,
+            code=ErrorCode.CHATDATA_NOT_FOUND,
             status="error",
-            http_status_code=ErrorCode.HTTP_NOT_FOUND,
         )
 
     return business_response(data={"file_id": file_id}, msg="删除成功")
@@ -172,18 +166,16 @@ async def get_file_content_api(file_id: str, req: Request = None):
     if not info:
         return business_response(
             msg="文件不存在",
-            code=ErrorCode.HTTP_NOT_FOUND,
+            code=ErrorCode.CHATDATA_NOT_FOUND,
             status="error",
-            http_status_code=ErrorCode.HTTP_NOT_FOUND,
         )
 
     content = await get_file_content(file_id, user_id=user_id)
     if content is None:
         return business_response(
             msg="文件内容不存在",
-            code=ErrorCode.HTTP_NOT_FOUND,
+            code=ErrorCode.CHATDATA_NOT_FOUND,
             status="error",
-            http_status_code=ErrorCode.HTTP_NOT_FOUND,
         )
 
     # 设置Content-Type

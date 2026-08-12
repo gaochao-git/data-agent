@@ -1,7 +1,6 @@
 """ChatData API 路由聚合入口。"""
 
-from fastapi import APIRouter, Depends
-from fastapi import HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from auth import AuthenticationError, service_token_header, validate_service_token
 from utils.logger import get_logger
 from .routers.config import router as config_router

@@ -46,12 +46,8 @@ class LogicalWorkspacePath:
 
     @property
     def is_system_result(self) -> bool:
+        """系统管理的结果目录（outputs/query_result 与 outputs/.tool-offload）。"""
         return self.is_tool_offload or self.is_query_result
-
-    @property
-    def is_tool_result(self) -> bool:
-        """Backward-compatible name for system-managed result paths."""
-        return self.is_system_result
 
     @property
     def is_skill(self) -> bool:

@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -315,8 +316,12 @@ async def test_routes_convert_authentication_and_unexpected_errors(router_state,
         raise AuthenticationError("login required", status_code=401)
 
     monkeypatch.setattr(conversation_router, "get_forwarded_user", raise_auth)
-    assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-    assert payload(await conversation_router.list_conversations(request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    with pytest.raises(HTTPException) as create_error:
+        await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request)
+    assert create_error.value.status_code == 401
+    with pytest.raises(HTTPException) as list_error:
+        await conversation_router.list_conversations(request)
+    assert list_error.value.status_code == 401
 
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)

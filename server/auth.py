@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Request
+from fastapi import Request, status
 from fastapi.security import APIKeyHeader
 
 from utils.crypto import decrypt_env_value
@@ -21,7 +21,7 @@ service_token_header = APIKeyHeader(
 class AuthenticationError(Exception):
     """Raised when service-forward authentication fails."""
 
-    def __init__(self, message: str, status_code: int = 401) -> None:
+    def __init__(self, message: str, status_code: int = status.HTTP_401_UNAUTHORIZED) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
@@ -45,9 +45,9 @@ def _normalize_header_text(value: Optional[str]) -> str:
 def validate_service_token(token: Optional[str]) -> None:
     """Validate a service-to-service token value."""
     if not SERVICE_AUTH_TOKEN:
-        raise AuthenticationError("Missing or invalid service token.", status_code=401)
+        raise AuthenticationError("Missing or invalid service token.", status_code=status.HTTP_401_UNAUTHORIZED)
     if not token or token != SERVICE_AUTH_TOKEN:
-        raise AuthenticationError("Missing or invalid service token.", status_code=401)
+        raise AuthenticationError("Missing or invalid service token.", status_code=status.HTTP_401_UNAUTHORIZED)
 
 
 def get_forwarded_user(req: Request) -> AuthenticatedUser:
@@ -55,7 +55,7 @@ def get_forwarded_user(req: Request) -> AuthenticatedUser:
     user_id = _normalize_header_text(req.headers.get(SERVICE_USER_ID_HEADER))
     username = _normalize_header_text(req.headers.get(SERVICE_USERNAME_HEADER))
     if not user_id or not username:
-        raise AuthenticationError("Missing forwarded user headers.", status_code=401)
+        raise AuthenticationError("Missing forwarded user headers.", status_code=status.HTTP_401_UNAUTHORIZED)
 
     return AuthenticatedUser(user_id=user_id, username=username)
 
