@@ -23,9 +23,10 @@ from ..services.agent_run.conversation_workspace import (
 )
 from ..services.agent_run.skill_service import skill_service
 from .dependencies import _get_current_user
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 会话工作区文件"])
+router = APIRouter(tags=["ChatData 会话工作区文件"], responses=JSON_API_RESPONSES)
 
 
 INTERNAL_WORKSPACE_FILE_PATHS = {"workspace/data_context.json"}
@@ -95,7 +96,11 @@ async def read_conversation_workspace_file(conversation_id: str, path: str, requ
         return business_response(msg="读取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error")
 
 
-@router.get("/conversations/{conversation_id}/workspace-files/raw")
+@router.get(
+    "/conversations/{conversation_id}/workspace-files/raw",
+    operation_id="read_conversation_workspace_raw_file",
+    responses=BINARY_RESPONSES,
+)
 async def read_conversation_workspace_raw_file_api(conversation_id: str, path: str, request: Request):
     """读取会话工作区原始字节文件（PDF/Word 等二进制预览/下载）。"""
     try:
@@ -131,7 +136,10 @@ async def read_conversation_workspace_raw_file_api(conversation_id: str, path: s
         return business_response(msg="读取文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error", http_status_code=ErrorCode.HTTP_INTERNAL_SERVER_ERROR)
 
 
-@router.get("/conversations/{conversation_id}/workspace-files/office-html")
+@router.get(
+    "/conversations/{conversation_id}/workspace-files/office-html",
+    operation_id="render_conversation_workspace_office_preview",
+)
 async def render_conversation_workspace_office_preview_api(conversation_id: str, path: str, request: Request):
     """渲染当前会话 Office 文件的受控 OfficeCLI HTML 预览。"""
     try:

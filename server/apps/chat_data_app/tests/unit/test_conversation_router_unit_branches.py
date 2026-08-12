@@ -33,15 +33,11 @@ def router_state(monkeypatch):
             "db_path": "db",
             "get_graph": lambda _checkpointer: None,
             "get_checkpointer": lambda: None,
-            "file_base_dir": "/tmp/files",
-            "allowed_extensions": [".txt"],
         },
         "agent_nograph": {
             "db_path": "db",
             "get_graph": None,
             "get_checkpointer": None,
-            "file_base_dir": None,
-            "allowed_extensions": None,
         },
     })
 
@@ -312,57 +308,6 @@ async def test_get_conversation_context_returns_business_datasource(router_state
 
 
 @pytest.mark.asyncio
-async def test_file_and_artifact_routes(router_state, monkeypatch):
-    request = FakeRequest()
-    async def get_config(*_args, **_kwargs):
-        return conversation_router._agent_configs["agent_a"]
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-
-    async def fake_save_file(**kwargs):
-        assert kwargs["base_dir"] == "/tmp/files"
-        assert kwargs["allowed_extensions"] == [".txt"]
-        return {"file_id": "f1", "file_name": "a.txt"}
-
-    async def fake_read_file(**kwargs):
-        assert kwargs["preview"] is True
-        return {"download": kwargs["file_id"]}
-
-    monkeypatch.setattr(conversation_router.file_manager, "save_file", fake_save_file)
-    monkeypatch.setattr(conversation_router.file_manager, "read_file", fake_read_file)
-    monkeypatch.setattr(conversation_router.file_manager, "list_files", lambda base_dir, conversation_id: [{"file_id": f"{conversation_id}:f1", "base_dir": base_dir}])
-
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["data"]["file_id"] == "f1"
-    assert await conversation_router.download_file("conv", "f1", request, preview=True) == {"download": "f1"}
-    assert payload(await conversation_router.list_files("conv", request))["data"][0]["file_id"] == "conv:f1"
-
-    no_files = dict(conversation_router._agent_configs["agent_a"], file_base_dir="")
-    async def get_no_files_config(*_args, **_kwargs):
-        return no_files
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_no_files_config)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
-    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
-    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-
-    async def bad_save_file(**_kwargs):
-        raise ValueError("bad extension")
-
-    async def missing_read_file(**_kwargs):
-        raise FileNotFoundError("missing")
-
-    monkeypatch.setattr(conversation_router.file_manager, "save_file", bad_save_file)
-    monkeypatch.setattr(conversation_router.file_manager, "read_file", missing_read_file)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.exe")))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
-    assert payload(await conversation_router.download_file("conv", "missing", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
-    assert payload(await conversation_router.upload_file("", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert payload(await conversation_router.download_file("", "f1", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert payload(await conversation_router.list_files("", request))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-
-@pytest.mark.asyncio
 async def test_routes_convert_authentication_and_unexpected_errors(router_state, monkeypatch):
     request = FakeRequest()
 
@@ -447,50 +392,6 @@ async def test_router_additional_error_branches(router_state, monkeypatch):
     conversation_router._completion_handlers["agent_a"] = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("sync boom"))
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent)
     assert payload(await conversation_router.completion("conv", conversation_router.CompletionRequest(agent_id="agent_a", query="hello"), request))["code"] == ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED
-
-@pytest.mark.asyncio
-async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeypatch):
-    request = FakeRequest()
-
-    async def missing_config(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", missing_config)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert payload(await conversation_router.download_file("conv", "f1", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
-    async def get_config(*_args, **_kwargs):
-        return conversation_router._agent_configs["agent_a"]
-
-    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", get_config)
-
-    async def save_raises(**_kwargs):
-        raise RuntimeError("save down")
-
-    async def read_value_error(**_kwargs):
-        raise ValueError("bad file id")
-
-    async def read_raises(**_kwargs):
-        raise RuntimeError("read down")
-
-    monkeypatch.setattr(conversation_router.file_manager, "save_file", save_raises)
-    assert payload(await conversation_router.upload_file("conv", request, file=SimpleNamespace(filename="a.txt")))["code"] == ErrorCode.CHATDATA_UPLOAD_FAILED
-
-    monkeypatch.setattr(conversation_router.file_manager, "read_file", read_value_error)
-    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
-    monkeypatch.setattr(conversation_router.file_manager, "read_file", read_raises)
-    assert payload(await conversation_router.download_file("conv", "bad", request))["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-
-    monkeypatch.setattr(conversation_router.file_manager, "list_files", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("list files down")))
-    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_FILE_LIST_FAILED
-
-    def auth_fails(_request):
-        raise AuthenticationError("login required", status_code=401)
-
-    monkeypatch.setattr(conversation_router, "get_forwarded_user", auth_fails)
-    assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
-
 
 @pytest.mark.asyncio
 async def test_router_conversation_routes_return_not_found_when_config_missing(router_state, monkeypatch):

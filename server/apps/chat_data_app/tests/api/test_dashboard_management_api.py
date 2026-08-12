@@ -13,7 +13,6 @@ from apps.chat_data_app.schema import (
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
     PanelCreateRequest,
-    PanelExecuteRequest,
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
@@ -355,16 +354,8 @@ def test_create_dashboard_query_task_and_panel_alias(fake_dashboard_service, mon
         SimpleNamespace(),
         PanelBatchExecuteRequest(panel_ids=["panel_a"], panel_member_datasource_ids={"panel_a": "member_a"}),
     )))
-    alias_payload = _payload(asyncio.run(dashboard_routes.create_panel_query_task(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="member_a"),
-    )))
-
     assert task_payload["data"]["task_id"] == "task_1"
-    assert alias_payload["data"]["task_id"] == "task_2"
-    assert runtime.scheduled == ["task_1", "task_2"]
+    assert runtime.scheduled == ["task_1"]
 
 
 def test_execute_panels_batch_streams_success_and_failure(fake_dashboard_service, monkeypatch):

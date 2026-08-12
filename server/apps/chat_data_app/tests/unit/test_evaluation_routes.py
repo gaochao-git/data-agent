@@ -610,29 +610,6 @@ async def test_eval_run_record_db_lifecycle_and_history_routes(eval_db, monkeypa
     assert missing_payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_accuracy_routes_error_mapping(monkeypatch):
-    monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: SimpleNamespace(user_id="u1", username="测试人员"))
-    monkeypatch.setattr(evaluation, "_ensure_evaluation_semantic_permission", lambda *_args, **_kwargs: asyncio.sleep(0, result={}))
-
-    async def raise_value_error(_payload, _request, _current_user):
-        raise ValueError("测试集为空")
-
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", raise_value_error)
-    value_response = asyncio.run(evaluation.run_accuracy_evaluation(AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None))
-
-    async def raise_runtime_error(_payload, _request, _current_user):
-        raise RuntimeError("llm down")
-
-    monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", raise_runtime_error)
-    runtime_response = asyncio.run(evaluation.run_accuracy_evaluation(AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"), None))
-
-    value_payload = json.loads(value_response.body.decode("utf-8"))
-    runtime_payload = json.loads(runtime_response.body.decode("utf-8"))
-
-    assert value_payload["code"] == ErrorCode.CHATDATA_BAD_REQUEST
-    assert runtime_payload["code"] == ErrorCode.CHATDATA_EVALUATION_RUN_FAILED
-
-
 def test_run_accuracy_stream_returns_auth_error(monkeypatch):
     from fastapi import HTTPException
 
@@ -758,27 +735,12 @@ def test_accuracy_routes_success_auth_and_stream_response(monkeypatch):
         return {"summary": {"total": payload.limit}, "user": current_user.username}
 
     monkeypatch.setattr(evaluation, "_run_accuracy_evaluation_payload", fake_run)
-    success_response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a", limit=3),
-        None,
-    ))
     stream_response = asyncio.run(evaluation.run_accuracy_evaluation_stream(
         AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
         None,
     ))
 
     monkeypatch.setattr(evaluation, "_get_current_user", lambda _request: (_ for _ in ()).throw(HTTPException(status_code=403, detail="无权限")))
-    auth_response = asyncio.run(evaluation.run_accuracy_evaluation(
-        AccuracyEvaluationRunRequest(datasource_id="ds_a", semantic_config_id="cfg_a"),
-        None,
-    ))
-
-    success_payload = _json_body(success_response)
-    auth_payload = _json_body(auth_response)
-
-    assert success_payload["msg"] == "评测完成"
-    assert success_payload["data"]["summary"]["total"] == 3
-    assert auth_payload["code"] == ErrorCode.CHATDATA_PERMISSION_DENIED
     assert stream_response.media_type == "text/event-stream"
     assert stream_response.headers["Cache-Control"] == "no-cache"
 

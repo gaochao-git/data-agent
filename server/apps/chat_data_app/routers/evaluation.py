@@ -44,7 +44,9 @@ from ..services.semantic.run.semantic_config_service import can_mutate_semantic_
 from ..services.semantic.core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 语义评估"])
+from . import JSON_API_RESPONSES, SSE_RESPONSES
+
+router = APIRouter(tags=["ChatData 语义评估"], responses=JSON_API_RESPONSES)
 ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
 ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
 SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND
@@ -595,22 +597,6 @@ async def _ensure_evaluation_semantic_permission(
     return config
 
 
-async def _run_accuracy_evaluation_route(payload: AccuracyEvaluationRunRequest, request: Request, *, admin_manage: bool = False):
-    """运行智能问数准确率评测。"""
-    try:
-        current_user = _get_current_user(request)
-        await _ensure_evaluation_semantic_permission(payload.datasource_id or "", payload.semantic_config_id or "", current_user, admin_manage=admin_manage)
-        report = await _run_accuracy_evaluation_payload(payload, request, current_user)
-        return business_response(data=report, msg="评测完成")
-    except HTTPException as e:
-        return business_response(msg=str(e.detail), code=_evaluation_http_exception_code(e), status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except Exception as e:
-        logger.error("智能问数准确率评测失败: %s", e, exc_info=True)
-        return business_response(msg=f"评测失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_RUN_FAILED, status="error")
-
-
 async def _accuracy_error_stream(message: str):
     yield f"data: {json.dumps({'event': 'error', 'message': message}, ensure_ascii=False)}\n\n"
 
@@ -677,26 +663,13 @@ async def _get_accuracy_evaluation_run_detail_route(run_id: str, request: Reques
         return business_response(msg="获取评测历史详情失败，请稍后重试", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error")
 
 
-@router.post("/evaluations/accuracy/run")
-async def run_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
-    """运行个人指标集准确率评测。"""
-    return await _run_accuracy_evaluation_route(payload, request, admin_manage=False)
-
-
-@router.post("/admin/evaluations/accuracy/run")
-async def run_admin_accuracy_evaluation(payload: AccuracyEvaluationRunRequest, request: Request):
-    """后台运行公共指标集准确率评测。"""
-    _get_current_user(request)
-    return await _run_accuracy_evaluation_route(payload, request, admin_manage=True)
-
-
-@router.post("/evaluations/accuracy/run-stream")
+@router.post("/evaluations/accuracy/run-stream", responses=SSE_RESPONSES)
 async def run_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
     """流式运行个人指标集准确率评测，逐条返回用例结果。"""
     return await _run_accuracy_evaluation_stream_route(payload, request, admin_manage=False)
 
 
-@router.post("/admin/evaluations/accuracy/run-stream")
+@router.post("/admin/evaluations/accuracy/run-stream", responses=SSE_RESPONSES)
 async def run_admin_accuracy_evaluation_stream(payload: AccuracyEvaluationRunRequest, request: Request):
     """后台流式运行公共指标集准确率评测，逐条返回用例结果。"""
     try:

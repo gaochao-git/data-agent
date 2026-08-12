@@ -16,7 +16,9 @@ from .datasource_helpers import (
 )
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 数据源（普通）"])
+from . import JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 数据源（普通）"], responses=JSON_API_RESPONSES)
 
 
 @router.get("/datasources")

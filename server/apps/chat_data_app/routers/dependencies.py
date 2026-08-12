@@ -21,14 +21,6 @@ def _get_current_user(request: Request):
     return user
 
 
-def _optional_current_user(request: Request):
-    """尽量解析当前用户，兼容未登录测试场景。"""
-    try:
-        return _get_current_user(request)
-    except Exception:
-        return None
-
-
 def _current_user_names(user: Any) -> Dict[str, str]:
     """构造当前用户 ID 到用户名的映射。"""
     user_id = str(getattr(user, "user_id", "") or "").strip()

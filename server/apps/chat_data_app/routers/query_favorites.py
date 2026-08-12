@@ -20,7 +20,9 @@ from ..services.sql_run.favorite_service import (
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 查询收藏"])
+from . import JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 查询收藏"], responses=JSON_API_RESPONSES)
 
 def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
     return current_user if current_user is not None else _get_current_user(request)

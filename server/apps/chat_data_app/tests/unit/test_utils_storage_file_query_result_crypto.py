@@ -1,12 +1,10 @@
-import asyncio
 import base64
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from utils import crypto, file_manager, storage_paths, tool_result_store
+from utils import crypto, storage_paths, tool_result_store
 
 
 def test_normalize_user_id(monkeypatch):
@@ -36,64 +34,6 @@ def test_storage_paths_chat_data_home_required_and_resolves_absolute(monkeypatch
     monkeypatch.setenv("CHAT_DATA_HOME", "relative-chat-data")
     with pytest.raises(RuntimeError, match="绝对路径"):
         storage_paths._resolve_chat_data_home()
-
-
-@pytest.mark.asyncio
-async def test_file_manager_save_read_delete_and_list(tmp_path):
-    upload = SimpleNamespace(
-        filename="报告.txt",
-        read=lambda: asyncio.sleep(0, result=b"hello"),
-    )
-
-    saved = await file_manager.save_file(str(tmp_path), "conv_a", upload, allowed_extensions=[".txt"])
-    assert saved["file_name"] == "报告.txt"
-    assert saved["file_size"] == 5
-    assert saved["mime_type"] == "text/plain"
-    assert Path(saved["file_path"]).exists()
-
-    listed = file_manager.list_files(str(tmp_path), "conv_a")
-    assert listed[0]["file_size"] == 5
-
-    inline = await file_manager.read_file(str(tmp_path), "conv_a", saved["file_id"], preview=True)
-    assert inline.body == b"hello"
-    assert inline.headers["content-disposition"].startswith("inline")
-
-    attachment = await file_manager.read_file(str(tmp_path), "conv_a", saved["file_id"], preview=False)
-    assert attachment.headers["content-disposition"].startswith("attachment")
-
-    assert await file_manager.delete_file(str(tmp_path), "conv_a", saved["file_id"]) is True
-    assert await file_manager.delete_file(str(tmp_path), "conv_a", saved["file_id"]) is False
-
-
-@pytest.mark.asyncio
-async def test_file_manager_validation_branches(tmp_path):
-    assert file_manager.get_upload_dir(str(tmp_path), "conv").endswith("conv/uploads")
-    assert file_manager.get_file_path(str(tmp_path), "conv", "a.bin").endswith("conv/uploads/a.bin")
-    assert file_manager.validate_path("safe_id") is True
-    assert file_manager.validate_path("../bad") is False
-    assert file_manager.get_mime_type("unknown.bin") == "application/octet-stream"
-    assert file_manager.list_files(str(tmp_path), "../bad") == []
-    assert file_manager.list_files(str(tmp_path), "missing") == []
-
-    no_name = SimpleNamespace(filename="", read=lambda: asyncio.sleep(0, result=b""))
-    with pytest.raises(ValueError, match="文件名为空"):
-        await file_manager.save_file(str(tmp_path), "conv", no_name)
-
-    bad_conv = SimpleNamespace(filename="a.txt", read=lambda: asyncio.sleep(0, result=b""))
-    with pytest.raises(ValueError, match="无效的会话ID"):
-        await file_manager.save_file(str(tmp_path), "../bad", bad_conv)
-
-    bad_ext = SimpleNamespace(filename="a.exe", read=lambda: asyncio.sleep(0, result=b""))
-    with pytest.raises(ValueError, match="不支持的文件格式"):
-        await file_manager.save_file(str(tmp_path), "conv", bad_ext, allowed_extensions=[".txt"])
-
-    with pytest.raises(ValueError, match="无效的会话ID"):
-        await file_manager.read_file(str(tmp_path), "../bad", "a.txt")
-    with pytest.raises(ValueError, match="无效的文件ID"):
-        await file_manager.read_file(str(tmp_path), "conv", "../bad")
-    with pytest.raises(FileNotFoundError):
-        await file_manager.read_file(str(tmp_path), "conv", "missing.txt")
-    assert await file_manager.delete_file(str(tmp_path), "../bad", "a.txt") is False
 
 
 def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):

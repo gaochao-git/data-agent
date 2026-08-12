@@ -8,6 +8,15 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .chart_types import ChartType
 from .services.runtime_config import DEFAULT_ROW_LIMIT
 
+
+class ApiResponse(BaseModel):
+    """ChatData JSON 接口统一响应包络。"""
+
+    status: Literal["success", "error"]
+    msg: str
+    code: int
+    data: Any | None = None
+
 QueryExecutorType = Literal["direct", "http"]
 MAX_RECOMMENDED_QUESTION_COUNT = 50
 MAX_RECOMMENDED_QUESTION_LENGTH = 50
@@ -807,11 +816,6 @@ class DashboardFromSpecRequest(BaseModel):
     datasource_id: Optional[str] = Field(default=None, description="数据源ID")
     semantic_config_id: Optional[str] = Field(default=None, description="语义配置ID")
     conversation_id: Optional[str] = Field(default=None, description="来源会话ID")
-
-
-class PanelExecuteRequest(BaseModel):
-    """执行单个面板请求"""
-    member_datasource_id: Optional[str] = Field(default=None, description="指定执行的成员数据源ID")
 
 
 class PanelBatchExecuteRequest(BaseModel):

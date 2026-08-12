@@ -6,12 +6,11 @@
 import inspect
 from typing import Callable, Optional, Dict, Any, List
 
-from fastapi import APIRouter, Query, UploadFile, File, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
 from utils import conversation
-from utils import file_manager
 from utils.response import business_response
 from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
@@ -52,8 +51,6 @@ _default_db_path: Optional[str] = None  # 默认数据库路径（用于通过 c
 def register_agent(
     agent_id: str,
     get_graph: Callable = None,
-    file_base_dir: str = None,
-    allowed_extensions: List[str] = None
 ):
     """
     注册 agent 配置
@@ -61,8 +58,6 @@ def register_agent(
     Args:
         agent_id: 代理标识
         get_graph: 获取graph的函数（可选，某些 agent 无 LangGraph 图）
-        file_base_dir: 文件存储基础目录
-        allowed_extensions: 允许上传的文件扩展名列表
     """
     global _default_db_path
 
@@ -73,8 +68,6 @@ def register_agent(
         "db_path": DB_PATH,  # 保留用于兼容，实际已不使用
         "get_graph": get_graph,
         "get_checkpointer": get_checkpointer,
-        "file_base_dir": file_base_dir,
-        "allowed_extensions": allowed_extensions,
     }
     # 设置默认数据库路径（用于通过 conversation_id 查询 agent_id）
     if _default_db_path is None:
@@ -198,10 +191,12 @@ def _get_current_user_identity(request: Request) -> tuple[str, str]:
 
 # ============ 路由 ============
 
-router = APIRouter(prefix="/conversations", tags=["ChatData 会话"])
+from . import JSON_API_RESPONSES, SSE_RESPONSES
+
+router = APIRouter(prefix="/conversations", tags=["ChatData 会话"], responses=JSON_API_RESPONSES)
 
 
-@router.post("", status_code=201)
+@router.post("")
 async def create_conversation(request: CreateConversationRequest, req: Request):
     """
     创建新会话
@@ -452,7 +447,7 @@ async def toggle_conversation_favorite(conversation_id: str, req: Request):
         return business_response(msg=f"切换收藏状态失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_FAVORITE_FAILED, status="error")
 
 
-@router.post("/{conversation_id}/completion")
+@router.post("/{conversation_id}/completion", responses=SSE_RESPONSES)
 async def completion(conversation_id: str, request: CompletionRequest, req: Request):
     """
     对话（发送消息）
@@ -521,138 +516,3 @@ async def get_conversation_context(conversation_id: str, req: Request):
     except Exception as e:
         logger.error(f"获取对话上下文失败: {e}", exc_info=True)
         return business_response(msg="获取对话上下文失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error")
-
-
-@router.post("/{conversation_id}/files")
-async def upload_file(
-    conversation_id: str,
-    req: Request,
-    file: UploadFile = File(...)
-):
-    """
-    上传文件
-
-    POST /api/chatdata/conversations/{id}/files
-    Form: file
-
-    返回：
-    {
-        "status": "success",
-        "data": {
-            "file_id": "upload_xxx.docx",
-            "file_name": "原始文件名.docx",
-            "file_path": "/path/to/file",
-            "file_size": 1234,
-            "mime_type": "application/..."
-        }
-    }
-    """
-    try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        user_id = _get_user_id(req)
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        file_base_dir = config.get("file_base_dir")
-        if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
-
-        allowed_extensions = config.get("allowed_extensions")
-
-        result = await file_manager.save_file(
-            base_dir=file_base_dir,
-            conversation_id=conversation_id,
-            file=file,
-            allowed_extensions=allowed_extensions
-        )
-
-        return business_response(data=result, msg="文件上传成功")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
-    except Exception as e:
-        logger.error(f"文件上传失败: {e}", exc_info=True)
-        return business_response(msg=f"文件上传失败: {str(e)}", code=ErrorCode.CHATDATA_UPLOAD_FAILED, status="error")
-
-
-@router.get("/{conversation_id}/files/{file_id}")
-async def download_file(
-    conversation_id: str,
-    file_id: str,
-    req: Request,
-    preview: bool = Query(False, description="是否预览模式")
-):
-    """
-    下载或预览文件
-
-    GET /api/chatdata/conversations/{id}/files/{file_id}?preview=false
-
-    返回：文件内容
-    """
-    try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        user_id = _get_user_id(req)
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        file_base_dir = config.get("file_base_dir")
-        if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
-
-        return await file_manager.read_file(
-            base_dir=file_base_dir,
-            conversation_id=conversation_id,
-            file_id=file_id,
-            preview=preview
-        )
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except ValueError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_REQUIRED_FIELD, status="error")
-    except FileNotFoundError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-    except Exception as e:
-        logger.error(f"文件下载失败: {e}", exc_info=True)
-        return business_response(msg=f"文件下载失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
-
-
-@router.get("/{conversation_id}/files")
-async def list_files(conversation_id: str, req: Request):
-    """
-    列出会话的所有文件
-
-    GET /api/chatdata/conversations/{id}/files
-
-    返回：
-    {
-        "status": "success",
-        "data": [{"file_id": "...", "file_size": 123, "mime_type": "..."}, ...]
-    }
-    """
-    try:
-        if not conversation_id:
-            return business_response(msg="对话ID不能为空", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-
-        user_id = _get_user_id(req)
-        config = await get_agent_config_by_conversation(conversation_id, user_id)
-        if not config:
-            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
-
-        file_base_dir = config.get("file_base_dir")
-        if not file_base_dir:
-            return business_response(msg="该 agent 未配置文件存储目录", code=ErrorCode.CHATDATA_FILE_STORAGE_NOT_CONFIGURED, status="error")
-
-        files = file_manager.list_files(file_base_dir, conversation_id)
-        return business_response(data=files, msg="获取文件列表成功")
-    except AuthenticationError as e:
-        return business_response(msg=e.message, code=ErrorCode.CHATDATA_AUTHENTICATION_FAILED, status="error")
-    except Exception as e:
-        logger.error(f"获取文件列表失败: {e}", exc_info=True)
-        return business_response(msg=f"获取文件列表失败: {str(e)}", code=ErrorCode.CHATDATA_FILE_LIST_FAILED, status="error")

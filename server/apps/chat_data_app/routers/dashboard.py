@@ -19,7 +19,6 @@ from ..schema import (
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
     PanelCreateRequest,
-    PanelExecuteRequest,
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
@@ -30,7 +29,9 @@ from ..services.dashboard.query_metadata import generate_query_metadata
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 数据看板"])
+from . import JSON_API_RESPONSES, SSE_RESPONSES
+
+router = APIRouter(tags=["ChatData 数据看板"], responses=JSON_API_RESPONSES)
 
 
 def _current_user(request: Request) -> Any:
@@ -578,26 +579,7 @@ async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_re
         )
 
 
-@router.post("/dashboards/{dashboard_id}/panels/{panel_id}/query-tasks")
-async def create_panel_query_task(
-    dashboard_id: str,
-    panel_id: str,
-    http_request: Request,
-    request: Optional[PanelExecuteRequest] = None,
-):
-    """创建单面板异步执行任务，兼容代理到批量任务接口。"""
-    batch_request = PanelBatchExecuteRequest(
-        panel_ids=[panel_id],
-        panel_member_datasource_ids=(
-            {panel_id: request.member_datasource_id}
-            if request and request.member_datasource_id
-            else {}
-        ),
-    )
-    return await create_dashboard_query_task(dashboard_id, http_request, batch_request)
-
-
-@router.post("/dashboards/{dashboard_id}/panels/execute-batch")
+@router.post("/dashboards/{dashboard_id}/panels/execute-batch", responses=SSE_RESPONSES)
 async def execute_panels_batch(
     dashboard_id: str,
     http_request: Request,

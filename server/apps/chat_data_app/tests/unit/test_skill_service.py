@@ -674,13 +674,6 @@ def test_update_skill_metadata_async_does_not_create_draft_or_touch_skill_body(t
     assert updated["skill_publish_status"] == "published"
 
 
-def test_skill_service_reload_async_clears_and_reloads_cache():
-    result = asyncio.run(skill_service.reload_async())
-
-    assert result["total"] >= 1
-    assert "dashboard-generation" in result["skills"]
-
-
 def test_skill_service_helper_conversions_and_name_generation(tmp_path, monkeypatch):
     service = skill_service_module.SkillService()
 

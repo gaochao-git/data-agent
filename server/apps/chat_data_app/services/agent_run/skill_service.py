@@ -383,15 +383,6 @@ class SkillService:
             return skill
         return await self._get_db_skill_detail_async(resolved_name, include_draft=include_draft, user_id=user_id, user_names=user_names)
 
-    async def reload_async(self) -> Dict[str, Any]:
-        """异步刷新专家技能元数据缓存。"""
-        clear_metadata_cache()
-        metadata = await asyncio.to_thread(load_metadata)
-        return {
-            "total": len(metadata),
-            "skills": sorted(metadata.keys()),
-        }
-
     async def resolve_skill_path_async(self, name: str, user_id: str = "") -> Optional[Dict[str, Any]]:
         """异步解析可加载技能的 SKILL.md 路径。"""
         system_meta = await self._get_system_skill_metadata_async(name)

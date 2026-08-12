@@ -252,7 +252,7 @@ ChatData
 - 操作：打开 ChatData，依次切换数据智能体、可视化查询、SQL 查询、数据看板；切换数据源、语义模型和执行对象。
 - 预期：四个模式都能加载；模式、数据源、语义模型、执行对象状态互不串台；切换后不会重复提交上一个模式的查询。
 - 边界：数据源为空时显示空状态，不自动执行查询；刷新后仍进入配置的默认模式。
-- 关联：`web-vue/src/views/chat-data/pages/index.vue`；`GET /models`、`GET /config`、`GET /datasources`。
+- 关联：`web-vue/src/views/chat-data/pages/index.vue`；`GET /config`、`GET /datasources`。
 
 #### ENT-02 管理入口可见性
 

@@ -11,53 +11,29 @@ from utils.logger import get_logger
 from utils.response import business_response
 from ..schema import SkillCreateRequest, SkillFileUpsertRequest, SkillUpdateRequest
 from ..services.agent_run.skill_service import skill_service
-from .dependencies import _current_user_names, _get_current_user, _optional_current_user
+from .dependencies import _current_user_names, _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 技能"])
+from . import JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 技能"], responses=JSON_API_RESPONSES)
 
 @router.get("/skills")
 async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None):
     """获取可用专家技能列表。"""
     try:
-        user = _optional_current_user(request)
-        user_id = str(getattr(user, "user_id", "") or "").strip()
+        user = _get_current_user(request)
+        user_id = str(user.user_id).strip()
         normalized_scope = str(scope or "all").strip().lower()
         if normalized_scope not in {"all", "favorites", "mine", "system", "runtime"}:
             normalized_scope = "all"
         skills = await skill_service.list_skills_async(search=search, category=category, user_id=user_id, scope=normalized_scope, user_names=_current_user_names(user))
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取技能列表失败: %s", e, exc_info=True)
         return business_response(msg="获取技能列表失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_LIST_FAILED, status="error")
-
-
-@router.get("/skills/mine")
-async def list_my_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None):
-    """获取我的技能。"""
-    try:
-        user = _get_current_user(request)
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=str(user.user_id), scope="mine", user_names=_current_user_names(user))
-        return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("获取我的技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取我的技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_MINE_LIST_FAILED, status="error")
-
-
-@router.get("/skills/favorites")
-async def list_favorite_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None):
-    """获取收藏技能。"""
-    try:
-        user = _get_current_user(request)
-        skills = await skill_service.list_skills_async(search=search, category=category, user_id=str(user.user_id), scope="favorites", user_names=_current_user_names(user))
-        return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("获取收藏技能失败: %s", e, exc_info=True)
-        return business_response(msg="获取收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FAVORITE_LIST_FAILED, status="error")
 
 
 @router.post("/skills")
@@ -304,26 +280,18 @@ async def unfavorite_skill(skill_id: str, request: Request):
         return business_response(msg="取消收藏技能失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED, status="error")
 
 
-@router.post("/skills/reload")
-async def reload_skills():
-    """刷新专家技能元数据缓存。"""
-    try:
-        return business_response(data=await skill_service.reload_async(), msg="刷新成功")
-    except Exception as e:
-        logger.error("刷新技能缓存失败: %s", e, exc_info=True)
-        return business_response(msg="刷新技能缓存失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_RELOAD_FAILED, status="error")
-
-
 @router.get("/skills/{skill_name}")
 async def get_skill(skill_name: str, request: Request):
     """获取专家技能详情。"""
     try:
-        user = _optional_current_user(request)
-        user_id = str(getattr(user, "user_id", "") or "").strip()
+        user = _get_current_user(request)
+        user_id = str(user.user_id).strip()
         skill = await skill_service.get_skill_async(skill_name, include_draft=True, user_id=user_id, user_names=_current_user_names(user))
         if not skill:
             return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=skill, msg="获取成功")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("获取技能详情失败: skill_name=%s error=%s", skill_name, e, exc_info=True)
         return business_response(msg="获取技能详情失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_DETAIL_FAILED, status="error")

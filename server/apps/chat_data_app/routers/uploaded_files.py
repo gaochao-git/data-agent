@@ -22,13 +22,15 @@ from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"])
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
+
+router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], responses=JSON_API_RESPONSES)
 
 # 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）
 ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf"}
 
 
-@router.post("/upload")
+@router.post("/upload", operation_id="upload_chatdata_file")
 async def upload_file_api(
     file: UploadFile = File(...),
     thread_id: str = Form(...),
@@ -97,7 +99,7 @@ async def upload_file_api(
         )
 
 
-@router.get("/thread/{thread_id}")
+@router.get("/thread/{thread_id}", operation_id="list_chatdata_thread_files")
 async def list_thread_files_api(thread_id: str, req: Request = None):
     """
     获取会话下的所有文件
@@ -107,7 +109,7 @@ async def list_thread_files_api(thread_id: str, req: Request = None):
     return business_response(data={"files": files}, msg="获取成功")
 
 
-@router.get("/{file_id}")
+@router.get("/{file_id}", operation_id="get_chatdata_file_info")
 async def get_file_info_api(file_id: str, req: Request = None):
     """
     获取文件信息（用于轮询状态）
@@ -140,7 +142,7 @@ async def get_file_info_api(file_id: str, req: Request = None):
     return business_response(data=info, msg="获取成功")
 
 
-@router.delete("/{file_id}")
+@router.delete("/{file_id}", operation_id="delete_chatdata_file")
 async def delete_file_api(file_id: str, req: Request = None):
     """
     删除文件
@@ -159,7 +161,7 @@ async def delete_file_api(file_id: str, req: Request = None):
     return business_response(data={"file_id": file_id}, msg="删除成功")
 
 
-@router.get("/{file_id}/content")
+@router.get("/{file_id}/content", operation_id="download_chatdata_file", responses=BINARY_RESPONSES)
 async def get_file_content_api(file_id: str, req: Request = None):
     """
     获取原始文件内容（下载）

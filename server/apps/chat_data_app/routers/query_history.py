@@ -20,7 +20,9 @@ from ..services.sql_run.task_service import QueryTaskNotFoundError, QueryTaskSer
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 查询历史"])
+from . import JSON_API_RESPONSES
+
+router = APIRouter(tags=["ChatData 查询历史"], responses=JSON_API_RESPONSES)
 
 RemoteResultFetcher = Callable[..., Awaitable[Dict[str, Any]]]
 

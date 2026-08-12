@@ -71,7 +71,6 @@ from apps.chat_data_app.schema import (
     PanelBatchExecuteRequest,
     PanelCreateRequest,
     PanelUpdateRequest,
-    PanelExecuteRequest,
     QuickSqlRequest,
     QueryFavoriteCreateRequest,
     QueryFavoriteUpdateRequest,
@@ -958,6 +957,7 @@ def test_get_datasources_does_not_build_display_name_from_current_user(monkeypat
 def test_quick_sql_endpoint_returns_errors_for_missing_tables_and_conversation(monkeypatch):
     manager = _FakeDatasourceManager()
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[]))
 
     no_tables_response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
@@ -1076,6 +1076,7 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
             return False
 
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", lambda _datasource_id: asyncio.sleep(0, result=[
         {"table_name": "orders", "columns": [{"name": "id", "type": "bigint"}]},
@@ -1099,8 +1100,9 @@ def test_quick_sql_endpoint_streams_plain_content_when_no_sql_block(monkeypatch)
 
 def test_quick_sql_persists_partial_assistant_output_after_model_failure(monkeypatch):
     captured = {"turns": []}
+    _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
 
-    async def fake_context(_payload):
+    async def fake_context(_payload, **_kwargs):
         return "mysql", "CREATE TABLE orders(id bigint)", None
 
     async def fake_ensure(_payload, _user_id):
@@ -1121,6 +1123,7 @@ def test_quick_sql_persists_partial_assistant_output_after_model_failure(monkeyp
     monkeypatch.setattr(query_execution_routes, "_stream_sql_assist_chunks", fake_stream)
     monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_user_message", persist_user_message)
     monkeypatch.setattr(query_execution_routes.conversation_event_service, "persist_turn", persist_turn)
+    _mock_authenticated_user(monkeypatch)
 
     response = asyncio.run(query_execution_routes.quick_sql_endpoint(QuickSqlRequest(
         query="生成 SQL",
@@ -2288,48 +2291,6 @@ def test_add_panel_persists_member_datasource_id(monkeypatch):
     assert service.panels[data["data"]["id"]]["member_datasource_id"] == "phy_b"
 
 
-def test_create_panel_query_task_schedules_dashboard_panel_task(monkeypatch):
-    manager = _FakeDatasourceManager()
-    _mock_datasource_manager(monkeypatch, manager)
-    monkeypatch.setattr(dashboard_routes, "get_dashboard_service", lambda: _FakeDashboardService())
-    _mock_authenticated_user(monkeypatch)
-
-    captured = {}
-
-    async def fake_create_task_record(**kwargs):
-        captured["kwargs"] = kwargs
-        return {
-            "task_id": "panel_task_001",
-            "task_type": "dashboard_batch",
-            "status": "pending",
-        }
-
-    def fake_schedule(task_id: str):
-        captured["task_id"] = task_id
-
-    monkeypatch.setattr(query_providers.query_task_service, "create_task_record", fake_create_task_record)
-    monkeypatch.setattr(query_providers.query_task_service, "schedule_query_task", fake_schedule)
-
-    resp = asyncio.run(dashboard_routes.create_panel_query_task(
-        "dash_a",
-        "panel_a",
-        SimpleNamespace(),
-        PanelExecuteRequest(member_datasource_id="phy_b"),
-    ))
-    data = _payload(resp)
-    assert data["status"] == "success"
-    assert data["data"]["task_id"] == "panel_task_001"
-    assert captured["kwargs"]["task_type"] == "dashboard_batch"
-    assert captured["kwargs"]["request_payload"]["panel_ids"] == ["panel_a"]
-    assert captured["kwargs"]["request_payload"]["panel_member_datasource_ids"]["panel_a"] == "phy_b"
-    assert captured["kwargs"]["request_payload"]["panel_execution_plan"]["panel_a"] == {
-        "mode": "single",
-        "member_datasource_ids": ["phy_b"],
-        "primary_member_datasource_id": "phy_b",
-    }
-    assert captured["task_id"] == "panel_task_001"
-
-
 def test_run_dashboard_panel_task_marks_failed_when_member_execution_fails(monkeypatch):
 
     updates = []
@@ -2634,6 +2595,7 @@ def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     _mock_datasource_manager(monkeypatch, _FakeDatasourceManager())
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_runtime, "get_datasource_manager", lambda: _FakeDatasourceManager())
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
@@ -2642,7 +2604,7 @@ def test_quick_sql_endpoint_requires_conversation_id(monkeypatch):
         query="有多少个用户",
         datasource_id="ds_a",
         member_datasource_ids=["phy_b"],
-    )))
+    ), SimpleNamespace()))
     chunks = asyncio.run(_collect_stream_chunks(response))
     content = "".join(chunks)
 
@@ -2688,6 +2650,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         return [{"table_name": "users", "description": "用户表", "columns": []}]
 
     _mock_datasource_manager(monkeypatch, manager)
+    _mock_authenticated_user(monkeypatch)
     monkeypatch.setattr(query_execution_routes, "get_all_tables_async", _fake_get_all_tables)
     monkeypatch.setattr(query_execution_routes, "get_tables_create_format", lambda _tables, _table_names: "CREATE TABLE users(id bigint);")
     monkeypatch.setattr(query_execution_routes.conversation, "get_or_create_conversation", _fake_get_or_create_conversation)
@@ -2704,7 +2667,7 @@ def test_quick_sql_endpoint_uses_sql_assist_conversation(monkeypatch):
         datasource_id="ds_a",
         member_datasource_ids=["phy_b"],
         conversation_id="conv_sql_assist",
-    )))
+    ), SimpleNamespace()))
     chunks = asyncio.run(_collect_stream_chunks(response))
     content = "".join(chunks)
 

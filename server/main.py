@@ -65,7 +65,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Service-Token", "X-User-Id", "X-Username"],
 )
 app.add_middleware(APIAccessLogMiddleware)
 app.include_router(chat_data_router)

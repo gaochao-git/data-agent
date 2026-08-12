@@ -39,7 +39,9 @@ from ..services.sql_assist_context import get_all_tables_async, get_tables_creat
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["ChatData 查询执行"])
+from . import JSON_API_RESPONSES, SSE_RESPONSES
+
+router = APIRouter(tags=["ChatData 查询执行"], responses=JSON_API_RESPONSES)
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 
@@ -64,8 +66,13 @@ def _current_user_identity(request: Request | None) -> tuple[str, str]:
     return user_id, username
 
 
-async def _load_quick_sql_context(payload: QuickSqlRequest) -> tuple[str | None, str | None, str | None]:
-    datasource = await get_datasource_manager().get_datasource_async(payload.datasource_id)
+async def _load_quick_sql_context(
+    payload: QuickSqlRequest,
+    *,
+    datasource_manager: Any | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    manager = datasource_manager or get_datasource_manager()
+    datasource = await manager.get_datasource_async(payload.datasource_id)
     if not datasource:
         return None, None, "数据源不存在"
 
@@ -172,10 +179,19 @@ async def _stream_sql_assist_chunks(
                 yield chunk.content
 
 
-async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request | None):
+async def _generate_quick_sql_stream(
+    payload: QuickSqlRequest,
+    *,
+    user_id: str,
+    username: str,
+    datasource_manager: Any,
+):
     try:
         logger.info("收到快速SQL生成请求: %s...", payload.query[:100])
-        source_type, tables_ddl_info, context_error = await _load_quick_sql_context(payload)
+        source_type, tables_ddl_info, context_error = await _load_quick_sql_context(
+            payload,
+            datasource_manager=datasource_manager,
+        )
         if context_error:
             yield _sse_error(context_error)
             return
@@ -183,7 +199,6 @@ async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request 
         if not payload.conversation_id:
             yield _sse_error("缺少 SQL 辅助会话ID")
             return
-        user_id, username = _current_user_identity(request)
         conversation_error = await _ensure_sql_assist_conversation(payload, user_id)
         if conversation_error:
             yield _sse_error(conversation_error)
@@ -227,10 +242,28 @@ async def _generate_quick_sql_stream(payload: QuickSqlRequest, request: Request 
         yield _sse_error(str(e))
 
 
-@router.post("/nl2sql")
-async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request = None):
+@router.post("/nl2sql", responses=SSE_RESPONSES)
+async def quick_sql_endpoint(payload: QuickSqlRequest, request: Request):
     """快速 SQL 生成接口（流式输出，用于 SQL 编辑器的 AI 辅助）。"""
-    return StreamingResponse(_generate_quick_sql_stream(payload, request), media_type="text/event-stream")
+    current_user = _get_current_user(request)
+    user_id = str(current_user.user_id)
+    username = str(current_user.username or "")
+    datasource_manager = get_datasource_manager()
+    if not await datasource_manager.can_access_datasource_async(
+        payload.datasource_id,
+        user_id=user_id,
+        username=username,
+    ):
+        raise HTTPException(status_code=403, detail="无权限访问该数据源")
+    return StreamingResponse(
+        _generate_quick_sql_stream(
+            payload,
+            user_id=user_id,
+            username=username,
+            datasource_manager=datasource_manager,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/query-tasks")

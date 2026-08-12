@@ -151,10 +151,6 @@ class FakeSkillService:
             raise RuntimeError("favorite down")
         return {"skill_id": skill_id, "favorite": favorite}
 
-    async def reload_async(self):
-        self._record("reload_async")
-        return {"reloaded": True}
-
     async def get_skill_async(self, skill_name, include_draft=False, user_id="", user_names=None):
         self._record("get_skill_async", skill_name, include_draft=include_draft, user_id=user_id, user_names=user_names)
         if skill_name == "missing":
@@ -170,7 +166,6 @@ def skills_context(monkeypatch):
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(skills_routes, "skill_service", service)
     monkeypatch.setattr(skills_routes, "_get_current_user", lambda _request: user)
-    monkeypatch.setattr(skills_routes, "_optional_current_user", lambda _request: user)
     return service, user, SimpleNamespace()
 
 
@@ -187,11 +182,11 @@ async def test_skill_list_routes_normalize_scope_and_handle_errors(skills_contex
     assert runtime["data"]["total"] == 1
     assert service.calls[-1][2]["scope"] == "runtime"
 
-    mine = payload(await skills_routes.list_my_skills(request))
+    mine = payload(await skills_routes.list_skills(request, scope="mine"))
     assert mine["data"]["skills"][0]["name"] == "demo-skill"
     assert service.calls[-1][2]["scope"] == "mine"
 
-    favorites = payload(await skills_routes.list_favorite_skills(request))
+    favorites = payload(await skills_routes.list_skills(request, scope="favorites"))
     assert favorites["data"]["total"] == 1
     assert service.calls[-1][2]["scope"] == "favorites"
 
@@ -272,8 +267,8 @@ async def test_skill_version_and_file_routes_success_and_error_branches(skills_c
 
 
 @pytest.mark.asyncio
-async def test_skill_favorite_sync_reload_and_detail_routes(skills_context, monkeypatch):
-    service, user, request = skills_context
+async def test_skill_favorite_and_detail_routes(skills_context, monkeypatch):
+    service, _user, request = skills_context
 
     assert payload(await skills_routes.favorite_skill("demo", request))["data"]["favorite"] is True
     assert payload(await skills_routes.favorite_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_FAVORITE_INVALID
@@ -282,8 +277,6 @@ async def test_skill_favorite_sync_reload_and_detail_routes(skills_context, monk
     assert payload(await skills_routes.unfavorite_skill("demo", request))["data"]["favorite"] is False
     assert payload(await skills_routes.unfavorite_skill("missing", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_INVALID
     assert payload(await skills_routes.unfavorite_skill("boom", request))["code"] == ErrorCode.CHATDATA_SKILL_UNFAVORITE_FAILED
-
-    assert payload(await skills_routes.reload_skills())["data"]["reloaded"] is True
 
     detail = payload(await skills_routes.get_skill("demo", request))
     assert detail["data"]["name"] == "demo"
@@ -301,8 +294,8 @@ async def test_skill_routes_reraise_http_exception(skills_context, monkeypatch):
 
     monkeypatch.setattr(skills_routes, "_get_current_user", raise_http)
     with pytest.raises(HTTPException):
-        await skills_routes.list_my_skills(request)
+        await skills_routes.list_skills(request, scope="mine")
     with pytest.raises(HTTPException):
-        await skills_routes.list_favorite_skills(request)
+        await skills_routes.list_skills(request, scope="favorites")
     with pytest.raises(HTTPException):
         await skills_routes.create_user_skill(SkillCreateRequest(skill_name="demo-skill", skill_title="Demo"), request)

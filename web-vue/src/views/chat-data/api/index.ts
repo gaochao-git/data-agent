@@ -197,14 +197,6 @@ export interface AccuracyEvaluationRunCaseHistoryItem {
   update_time?: string | null
 }
 
-/** 获取智能问数模型列表 */
-export function getChatDataModels(): Promise<ApiResponse<{ models: ChatDataModelOption[]; default_model: string }>> {
-  return request({
-    url: `/agents/api/chatdata/models`,
-    method: 'get'
-  })
-}
-
 /** 获取智能问数运行时配置 */
 export function getChatDataConfig(): Promise<ApiResponse<ChatDataRuntimeConfig>> {
   return request({

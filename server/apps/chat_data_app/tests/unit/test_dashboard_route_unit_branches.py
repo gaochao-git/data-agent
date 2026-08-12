@@ -14,7 +14,6 @@ from apps.chat_data_app.schema import (
     LayoutUpdateRequest,
     PanelBatchExecuteRequest,
     PanelCreateRequest,
-    PanelExecuteRequest,
     PanelNameGenerateRequest,
     PanelUpdateRequest,
 )
@@ -758,8 +757,6 @@ async def test_dashboard_from_spec_and_execute_routes(dashboard_context, monkeyp
     ))
     assert failed_spec["code"] == ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED
 
-    task = response_payload(await dashboard_routes.create_panel_query_task("dash_a", "panel_a", request, PanelExecuteRequest(member_datasource_id="member_a")))
-    assert task["data"]["task_id"].startswith("task_")
     batch_task = response_payload(await dashboard_routes.create_dashboard_query_task("dash_a", request, PanelBatchExecuteRequest(panel_ids=["panel_a"])))
     assert batch_task["data"]["poll_interval_ms"] == 1500
     assert runtime.created_tasks[-1]["request_payload"]["panel_member_datasource_ids"] == {}
