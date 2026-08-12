@@ -22,7 +22,7 @@ from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/uploaded-files", tags=["uploaded-files"])
+router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"])
 
 # 允许上传的文件类型（与前端白名单一致，防止绕过前端校验）
 ALLOWED_FILE_EXTENSIONS = {"txt", "md", "sql", "docx", "xlsx", "pptx", "pdf"}

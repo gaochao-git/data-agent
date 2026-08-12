@@ -198,7 +198,7 @@ def _get_current_user_identity(request: Request) -> tuple[str, str]:
 
 # ============ 路由 ============
 
-router = APIRouter(prefix="/conversations", tags=["conversations"])
+router = APIRouter(prefix="/conversations", tags=["ChatData 会话"])
 
 
 @router.post("", status_code=201)

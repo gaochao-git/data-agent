@@ -43,7 +43,7 @@ from ..services.sql_run.parser import extract_physical_tables
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 语义模型"])
 
 PREFILL_MAX_RECOMMENDED_METRICS = 10
 PREFILL_ALLOWED_METRIC_AGGS = {"SUM", "AVG", "MAX", "MIN", "COUNT"}

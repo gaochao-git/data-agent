@@ -41,7 +41,7 @@ from .datasource_helpers import (
 )
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 数据源管理（Admin）"])
 
 
 def _selected_table_names(raw_table_names: List[str]) -> List[str]:

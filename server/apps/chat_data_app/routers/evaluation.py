@@ -44,7 +44,7 @@ from ..services.semantic.run.semantic_config_service import can_mutate_semantic_
 from ..services.semantic.core.common import is_time_logical_dimension
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 语义评估"])
 ACCURACY_QUERY_TYPES = {"filter", "join", "aggregation", "subquery"}
 ACCURACY_DIFFICULTIES = {"easy", "medium", "hard"}
 SEMANTIC_CONFIG_NOT_FOUND_CODE = ErrorCode.CHATDATA_NOT_FOUND

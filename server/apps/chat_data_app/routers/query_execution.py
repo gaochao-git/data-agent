@@ -39,7 +39,7 @@ from ..services.sql_assist_context import get_all_tables_async, get_tables_creat
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 查询执行"])
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 

@@ -25,7 +25,7 @@ from ..services.agent_run.skill_service import skill_service
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 会话工作区文件"])
 
 
 INTERNAL_WORKSPACE_FILE_PATHS = {"workspace/data_context.json"}

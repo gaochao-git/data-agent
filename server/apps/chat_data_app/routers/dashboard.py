@@ -30,7 +30,7 @@ from ..services.dashboard.query_metadata import generate_query_metadata
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 数据看板"])
 
 
 def _current_user(request: Request) -> Any:

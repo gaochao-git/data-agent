@@ -21,7 +21,7 @@ AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 # 创建路由器
-router = APIRouter(prefix="/api/chatdata",tags=["ChatData NL2SQL"])
+router = APIRouter(prefix="/api/chatdata")
 router.include_router(conversations_router)
 router.include_router(config_router)
 router.include_router(evaluation_router)

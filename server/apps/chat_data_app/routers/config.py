@@ -11,7 +11,7 @@ from ..services.llm_config import get_chat_data_model_options
 from ..services.runtime_config import get_chat_data_runtime_config
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 配置与模型"])
 
 
 @router.get("/models")

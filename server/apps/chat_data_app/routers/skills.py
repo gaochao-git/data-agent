@@ -14,7 +14,7 @@ from ..services.agent_run.skill_service import skill_service
 from .dependencies import _current_user_names, _get_current_user, _optional_current_user
 
 logger = get_logger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["ChatData 技能"])
 
 @router.get("/skills")
 async def list_skills(request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None):
