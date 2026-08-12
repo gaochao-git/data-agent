@@ -144,6 +144,7 @@ ChatData
         |-- 私有模型 CRUD
         |-- 字段、表达式与物理信息
         |-- 关系、自关联与历史学习
+        |-- 私有模型评估
         `-- 字段字典只读查看
 ```
 
@@ -168,7 +169,7 @@ ChatData
 | 模块 | 模块目标 | 功能范围 | 主要页面/入口 | 用例范围 |
 | --- | --- | --- | --- | --- |
 | `ENT` 业务端入口与权限 | 建立普通用户进入 ChatData 后的模式和资源选择边界 | 模式切换、数据源/模型/执行对象选择、空态、权限回收、状态恢复 | `pages/index.vue`、查询入口 | `ENT-01/03/04` |
-| `SEM` 用户自定义语义模型 | 让用户维护个人查询所需的私有语义模型 | 私有模型 CRUD、表范围、别名、维度、指标、物理详情、自定义字段、表达式、聚合、关系/自关联、ontology、自动预填、字段字典只读、历史学习、校验和删除 | `SemanticConfigPanel.vue`、`components/semantic/` | `SEM-02/06-15` |
+| `SEM` 用户自定义语义模型 | 让用户维护个人查询所需的私有语义模型并验证其查询质量 | 私有模型 CRUD、表范围、别名、维度、指标、物理详情、自定义字段、表达式、聚合、关系/自关联、ontology、自动预填、字段字典只读、历史学习、私有模型评估、校验和删除 | `SemanticConfigPanel.vue`、`SemanticEvaluationDrawer.vue`、`components/semantic/` | `SEM-02/06-15`、`EVAL-*` |
 | `AG` 数据智能体 | 通过自然语言完成语义查询、后续分析和技能使用与管理 | 入口与资源选择（数据源组切换、执行对象选择与成员勾选、语义模型智能选择/手动切换/搜索、推荐问题使用、模型选择与深度思考开关、上传文件入口）；安全防护（内容安全：输入输出合规、system prompt 与敏感信息不泄漏；行动安全：查询语言控制（SQL 只读校验、危险语句拦截）、运行能力控制（不引入沙箱、不启用 Bash、安全模式配置）、资源访问控制（文件虚拟目录边界、执行对象权限边界））；DSL/SQL 两种模式、模型检索、单/多成员查询、空结果、错误、结果落盘、文件读取、分段分析、工具轨迹、流式停止和恢复；会话新建、切换、标题、收藏、删除与恢复，消息与上下文详情，Token 与缓存，上下文压缩，轮次导航；技能使用（搜索、命令选择、发布状态与权限范围、运行期快照执行）与技能管理（列表与分类搜索、草稿创建与元数据校验、文件树与内容编辑、版本查看、发布与回滚、复制、收藏、删除、工作区导入与运行期加载） | `AnalysisConversation.vue`、`ConversationInputBar.vue`、`ToolCallCard.vue`、`ConversationSidebar.vue`、`ConversationTokenUsage.vue`、`ConversationTurnNavigator.vue`、`SkillManager.vue`、技能命令菜单 | `AG-*`、`CTX-*`（会话与上下文子分类）、`SKILL-*`（技能子分类） |
 | `BI` 可视化查询 | 通过 Builder DSL 配置并执行语义查询 | 模型/主表、维度、指标、聚合、时间粒度、过滤、字段引用、`rightExpression`、排序、limit/offset、预览、执行、多成员、图表和结果分析 | `QueryBuilder/` | `BI-*` |
 | `SQL` SQL 查询 | 提供普通用户可控的只读 SQL 编辑和执行 | 编辑器、格式化、AI 辅助、多语句、多成员、limit、安全校验、异步任务、停止、错误、历史、结果和收藏 | `SqlEditor.vue`、查询结果组件 | `SQL-*` |
@@ -233,7 +234,7 @@ ChatData
 | 页面入口与权限 | `pages/index.vue`、后台管理弹窗 | 全角色 | `ENT-*`、`SYS-*` |
 | 数据源管理 | `DataSourceManager.vue`、`TableIndexDialog.vue` | `SYS_ADMIN`、普通用户 | `DS-*` |
 | 管理端 | 后台管理入口、数据源、公共语义模型、评估、全局 SQL 历史、系统配置 | `SYS_ADMIN` | `ENT-02/03`、`DS-*`、`SEM-01/03/04/05`、`EVAL-*`、`GH-*`、`SYS-*`、管理页面上的 `ST-*` |
-| 业务端 | 查询入口、私有语义模型、数据智能体（含会话、上下文与技能）、文件/Office、SQL、Builder、看板、收藏 | `USER_A`、`USER_B`、`NO_SCOPE_USER`、`REVOKED_USER` | `ENT-01/03/04`、`SEM-02/06-15`、`AG-*`、`FILE-*`、`CTX-*`、`SQL-*`、`BI-*`、`DB-*`、`FAV-*`、`SKILL-*`、业务页面上的 `ST-*` |
+| 业务端 | 查询入口、私有语义模型（含私有模型评估）、数据智能体（含会话、上下文与技能）、文件/Office、SQL、Builder、看板、收藏 | `USER_A`、`USER_B`、`NO_SCOPE_USER`、`REVOKED_USER` | `ENT-01/03/04`、`SEM-02/06-15`、`EVAL-*`、`AG-*`、`FILE-*`、`CTX-*`、`SQL-*`、`BI-*`、`DB-*`、`FAV-*`、`SKILL-*`、业务页面上的 `ST-*` |
 
 ## 4. 详细功能用例
 
