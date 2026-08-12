@@ -14,7 +14,7 @@ from utils import conversation
 from utils import file_manager
 from utils.response import business_response
 from utils.logger import get_logger
-from auth import authenticate_request, AuthenticationError
+from auth import get_forwarded_user, AuthenticationError
 
 from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from .. import AGENT_ID
@@ -174,9 +174,9 @@ def _build_completion_handler_kwargs(
 # ============ 认证辅助 ============
 
 def _get_current_user(request: Request):
-    """强制认证，未登录返回 401"""
+    """解析可信代理转发的当前用户，不负责 service token 校验。"""
     try:
-        return authenticate_request(request)
+        return get_forwarded_user(request)
     except AuthenticationError as exc:
         logger.warning(f"认证失败: {exc.message}, path={request.url.path}")
         raise exc

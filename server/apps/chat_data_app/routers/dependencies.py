@@ -6,13 +6,13 @@ from typing import Any, Dict
 
 from fastapi import HTTPException, Request
 
-from auth import AuthenticationError, authenticate_request
+from auth import AuthenticationError, get_forwarded_user
 
 
 def _get_current_user(request: Request):
-    """解析当前登录用户。"""
+    """解析可信代理转发的当前用户，不负责 service token 校验。"""
     try:
-        user = authenticate_request(request)
+        user = get_forwarded_user(request)
     except AuthenticationError as err:
         raise HTTPException(status_code=err.status_code, detail=err.message) from err
     user_id = str(user.user_id or "").strip()

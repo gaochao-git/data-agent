@@ -25,7 +25,8 @@ ChatData 在 `data-agent` 中按 service 层定位，不直接承担后台菜单
 
 本模块仍负责服务层身份和业务数据权限：
 
-- 所有 `/api/chatdata/admin/**` 路由入口至少调用 `_get_current_user(request)`，保证服务 token、当前用户和审计身份一致。
+- 所有 `/api/chatdata/**` 接口由 `routes.py` 的根路由依赖统一校验 `X-Service-Token`，不依赖业务路由逐个记忆 service token 校验。
+- 需要用户归属、审计或下游透传的接口，再调用 `_get_current_user(request)` 解析 `X-User-Id`、`X-Username`；所有 `/api/chatdata/admin/**` 接口必须解析当前用户。
 - 用户侧数据按 `user_id`、owner、public/global 状态隔离。
 - 数据源执行对象权限在 service 层校验；HTTP 执行对象通过权限接口获取当前用户可用机构编码，direct 执行对象使用服务端固定允许编码。
 - 上层 controller 负责 admin 角色权限，本模块不重复实现菜单/角色授权，避免两套权限口径漂移。

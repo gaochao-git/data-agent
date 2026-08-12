@@ -149,12 +149,12 @@ def test_dashboard_not_found_error_paths(client, auth_headers, fake_dashboard_se
         assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_generate_panel_name_prefers_provided_name_and_fallbacks(client, monkeypatch):
+def test_generate_panel_name_prefers_provided_name_and_fallbacks(client, auth_headers, monkeypatch):
     monkeypatch.setattr(dashboard_routes, "generate_query_metadata", lambda sql: (_ for _ in ()).throw(RuntimeError("llm failed")))
     monkeypatch.setattr(dashboard_routes, "_get_timestamp", lambda: "unused", raising=False)
 
-    explicit = client.post("/api/chatdata/panel-name-generate", json={"name": "  明确标题  ", "sql": "select 1", "chart_type": "bar"})
-    fallback = client.post("/api/chatdata/panel-name-generate", json={"name": "", "sql": "select 1", "chart_type": "bar"})
+    explicit = client.post("/api/chatdata/panel-name-generate", json={"name": "  明确标题  ", "sql": "select 1", "chart_type": "bar"}, headers=auth_headers)
+    fallback = client.post("/api/chatdata/panel-name-generate", json={"name": "", "sql": "select 1", "chart_type": "bar"}, headers=auth_headers)
 
     assert explicit.json()["data"]["name"] == "明确标题"
     assert "柱状图_" in fallback.json()["data"]["name"]

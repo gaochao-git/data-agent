@@ -24,7 +24,7 @@ def router_state(monkeypatch):
     original_db_path = conversation_router._default_db_path
 
     user = SimpleNamespace(user_id="u1", username="用户一")
-    monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: user)
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     conversation_router._agent_configs.clear()
     conversation_router._completion_handlers.clear()
     conversation_router._default_db_path = "db"
@@ -59,14 +59,14 @@ def test_registration_and_auth_helpers(router_state, monkeypatch):
     assert "agent_b" in conversation_router._completion_handlers
     assert conversation_router.get_agent_config("agent_a")["db_path"] == "db"
 
-    monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: SimpleNamespace(username="name-only"))
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(username="name-only"))
     assert conversation_router._get_user_id(FakeRequest()) == "name-only"
     assert conversation_router._get_current_user_identity(FakeRequest()) == ("name-only", "name-only")
 
     def raise_auth(_request):
         raise AuthenticationError("bad token", status_code=401)
 
-    monkeypatch.setattr(conversation_router, "authenticate_request", raise_auth)
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", raise_auth)
     with pytest.raises(AuthenticationError):
         conversation_router._get_current_user(FakeRequest("/private"))
 
@@ -369,12 +369,12 @@ async def test_routes_convert_authentication_and_unexpected_errors(router_state,
     def raise_auth(_request):
         raise AuthenticationError("login required", status_code=401)
 
-    monkeypatch.setattr(conversation_router, "authenticate_request", raise_auth)
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", raise_auth)
     assert payload(await conversation_router.create_conversation(conversation_router.CreateConversationRequest(agent_id="agent_a"), request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
     assert payload(await conversation_router.list_conversations(request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
     user = SimpleNamespace(user_id="u1", username="用户一")
-    monkeypatch.setattr(conversation_router, "authenticate_request", lambda _request: user)
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
 
@@ -488,7 +488,7 @@ async def test_router_file_artifact_and_auth_edge_branches(router_state, monkeyp
     def auth_fails(_request):
         raise AuthenticationError("login required", status_code=401)
 
-    monkeypatch.setattr(conversation_router, "authenticate_request", auth_fails)
+    monkeypatch.setattr(conversation_router, "get_forwarded_user", auth_fails)
     assert payload(await conversation_router.list_files("conv", request))["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
 
 

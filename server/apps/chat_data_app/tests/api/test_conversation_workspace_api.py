@@ -22,7 +22,7 @@ def _install_accessible_workspace(monkeypatch):
     monkeypatch.setattr(workspace_routes, "can_access_conversation_workspace", can_access)
 
 
-def test_conversation_workspace_file_routes_read_shared_persisted_workspace(client, monkeypatch):
+def test_conversation_workspace_file_routes_read_shared_persisted_workspace(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def list_files(conversation_id, *, user_id):
@@ -39,10 +39,11 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
     monkeypatch.setattr(workspace_routes, "list_workspace_files_for_conversation", list_files)
     monkeypatch.setattr(workspace_routes, "read_workspace_file_for_conversation", read_file)
 
-    list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files")
+    list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files", headers=auth_headers)
     read_response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/content",
         params={"path": "/outputs/chart.json"},
+        headers=auth_headers,
     )
 
     assert list_response.status_code == 200
@@ -51,7 +52,7 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
     assert read_response.json()["data"]["content"] == "{}"
 
 
-def test_conversation_workspace_hides_internal_context_file(client, monkeypatch):
+def test_conversation_workspace_hides_internal_context_file(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def read_file(**_kwargs):
@@ -62,13 +63,14 @@ def test_conversation_workspace_hides_internal_context_file(client, monkeypatch)
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/content",
         params={"path": "/mnt/user-data/workspace/data_context.json"},
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_conversation_workspace_raw_route_hides_internal_context_file(client, monkeypatch):
+def test_conversation_workspace_raw_route_hides_internal_context_file(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def read_raw_file(**_kwargs):
@@ -79,6 +81,7 @@ def test_conversation_workspace_raw_route_hides_internal_context_file(client, mo
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/raw",
         params={"path": "/mnt/user-data/workspace/data_context.json"},
+        headers=auth_headers,
     )
 
     assert response.status_code == 404
@@ -86,7 +89,7 @@ def test_conversation_workspace_raw_route_hides_internal_context_file(client, mo
 
 
 @pytest.mark.parametrize("path", ["outputs/report.docx", "outputs/data.xlsx", "outputs/briefing.pptx"])
-def test_conversation_workspace_office_html_uses_application_copy(client, monkeypatch, path):
+def test_conversation_workspace_office_html_uses_application_copy(client, auth_headers, monkeypatch, path):
     _install_accessible_workspace(monkeypatch)
 
     async def render_preview(conversation_id, *, user_id, path):
@@ -98,13 +101,14 @@ def test_conversation_workspace_office_html_uses_application_copy(client, monkey
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/office-html",
         params={"path": path},
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
     assert response.json()["data"]["html"] == "<main>report</main>"
 
 
-def test_conversation_workspace_office_html_reports_oversized_preview(client, monkeypatch):
+def test_conversation_workspace_office_html_reports_oversized_preview(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def render_preview(*_args, **_kwargs):
@@ -115,13 +119,14 @@ def test_conversation_workspace_office_html_reports_oversized_preview(client, mo
     response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/office-html",
         params={"path": "outputs/large-report.docx"},
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
     assert response.json()["data"] == {"available": False, "reason": "preview_too_large"}
 
 
-def test_conversation_workspace_rejects_inaccessible_conversation(client, monkeypatch):
+def test_conversation_workspace_rejects_inaccessible_conversation(client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         workspace_routes,
         "_get_current_user",
@@ -133,13 +138,13 @@ def test_conversation_workspace_rejects_inaccessible_conversation(client, monkey
 
     monkeypatch.setattr(workspace_routes, "can_access_conversation_workspace", can_access)
 
-    response = client.get("/api/chatdata/conversations/missing/workspace-files")
+    response = client.get("/api/chatdata/conversations/missing/workspace-files", headers=auth_headers)
 
     assert response.status_code == 200
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_conversation_query_result_route_scopes_result_to_owned_conversation(client, monkeypatch):
+def test_conversation_query_result_route_scopes_result_to_owned_conversation(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def read_result(conversation_id, *, user_id, result_id):
@@ -148,38 +153,38 @@ def test_conversation_query_result_route_scopes_result_to_owned_conversation(cli
 
     monkeypatch.setattr(workspace_routes, "read_conversation_query_result", read_result)
 
-    response = client.get("/api/chatdata/conversations/conv_a/query-results/result_a")
+    response = client.get("/api/chatdata/conversations/conv_a/query-results/result_a", headers=auth_headers)
 
     assert response.status_code == 200
     assert response.json()["data"]["data"] == [{"amount": 1}]
 
 
-def test_conversation_query_result_route_handles_missing_invalid_and_inaccessible(client, monkeypatch):
+def test_conversation_query_result_route_handles_missing_invalid_and_inaccessible(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def missing_result(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(workspace_routes, "read_conversation_query_result", missing_result)
-    missing = client.get("/api/chatdata/conversations/conv_a/query-results/missing")
+    missing = client.get("/api/chatdata/conversations/conv_a/query-results/missing", headers=auth_headers)
     assert missing.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
     async def invalid_result(*_args, **_kwargs):
         raise ValueError("result_id 非法")
 
     monkeypatch.setattr(workspace_routes, "read_conversation_query_result", invalid_result)
-    invalid = client.get("/api/chatdata/conversations/conv_a/query-results/invalid")
+    invalid = client.get("/api/chatdata/conversations/conv_a/query-results/invalid", headers=auth_headers)
     assert invalid.json()["code"] == ErrorCode.CHATDATA_BAD_REQUEST
 
     async def cannot_access(_conversation_id, _user_id):
         return False
 
     monkeypatch.setattr(workspace_routes, "can_access_conversation_workspace", cannot_access)
-    inaccessible = client.get("/api/chatdata/conversations/other/query-results/result_a")
+    inaccessible = client.get("/api/chatdata/conversations/other/query-results/result_a", headers=auth_headers)
     assert inaccessible.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
-def test_conversation_workspace_file_error_mapping(client, monkeypatch):
+def test_conversation_workspace_file_error_mapping(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 
     async def missing_file(*_args, **_kwargs):
@@ -198,20 +203,23 @@ def test_conversation_workspace_file_error_mapping(client, monkeypatch):
     missing_response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/content",
         params={"path": "/outputs/missing.json"},
+        headers=auth_headers,
     )
     monkeypatch.setattr(workspace_routes, "list_workspace_files_for_conversation", bad_list)
-    bad_list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files")
+    bad_list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files", headers=auth_headers)
     monkeypatch.setattr(workspace_routes, "read_workspace_file_for_conversation", bad_read)
     bad_read_response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/content",
         params={"path": "/outputs/../bad.json"},
+        headers=auth_headers,
     )
     monkeypatch.setattr(workspace_routes, "list_workspace_files_for_conversation", crashed)
-    crashed_list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files")
+    crashed_list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files", headers=auth_headers)
     monkeypatch.setattr(workspace_routes, "read_workspace_file_for_conversation", crashed)
     crashed_read_response = client.get(
         "/api/chatdata/conversations/conv_a/workspace-files/content",
         params={"path": "/outputs/chart.json"},
+        headers=auth_headers,
     )
 
     assert missing_response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
@@ -221,7 +229,7 @@ def test_conversation_workspace_file_error_mapping(client, monkeypatch):
     assert crashed_read_response.json()["code"] == ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED
 
 
-def test_conversation_workspace_imports_presented_output_skill(client, monkeypatch, tmp_path):
+def test_conversation_workspace_imports_presented_output_skill(client, auth_headers, monkeypatch, tmp_path):
     _install_accessible_workspace(monkeypatch)
     skill_dir = tmp_path / "outputs" / "generated-skill"
     skill_dir.mkdir(parents=True)
@@ -246,10 +254,12 @@ def test_conversation_workspace_imports_presented_output_skill(client, monkeypat
     success_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",
         json={"skill_dir_path": "outputs/generated-skill"},
+        headers=auth_headers,
     )
     rejected_response = client.post(
         "/api/chatdata/conversations/conv_a/workspace-skills/import",
         json={"skill_dir_path": "/mnt/skills/dashboard-generation"},
+        headers=auth_headers,
     )
 
     assert success_response.status_code == 200

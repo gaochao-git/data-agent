@@ -103,24 +103,25 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert alarm_module.emit_llm_connection_alarm_if_needed(llm_error, ext1={"purpose": "test"}) is False
 
 
-def test_authenticate_request_success_and_error_branches(monkeypatch):
+def test_service_token_and_forwarded_user_auth_branches(monkeypatch):
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "")
     with pytest.raises(auth.AuthenticationError, match="service token"):
-        auth.authenticate_request(SimpleNamespace(headers={}))
+        auth.validate_service_token(None)
 
     monkeypatch.setattr(auth, "SERVICE_AUTH_TOKEN", "secret")
     with pytest.raises(auth.AuthenticationError, match="service token"):
-        auth.authenticate_request(SimpleNamespace(headers={auth.SERVICE_AUTH_HEADER: "bad"}))
+        auth.validate_service_token("bad")
 
     with pytest.raises(auth.AuthenticationError, match="forwarded user"):
-        auth.authenticate_request(SimpleNamespace(headers={auth.SERVICE_AUTH_HEADER: "secret"}))
+        auth.get_forwarded_user(SimpleNamespace(headers={}))
 
     headers = {
         auth.SERVICE_AUTH_HEADER: "secret",
         auth.SERVICE_USER_ID_HEADER: "u1",
         auth.SERVICE_USERNAME_HEADER: "å¼ ä¸\u0089",
     }
-    user = auth.authenticate_request(SimpleNamespace(headers=headers))
+    auth.validate_service_token(headers[auth.SERVICE_AUTH_HEADER])
+    user = auth.get_forwarded_user(SimpleNamespace(headers=headers))
     assert user.user_id == "u1"
     assert user.username == "张三"
     assert auth._normalize_header_text(" plain ") == "plain"
@@ -1180,11 +1181,11 @@ def test_route_common_and_schema_edge_branches(monkeypatch):
     success = _payload(response_module.business_response(msg=internal_error, status="success"))
     assert success["msg"] == internal_error
 
-    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="", username="用户"))
+    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="用户"))
     with pytest.raises(dependencies.HTTPException, match="Missing user_id"):
         dependencies._get_current_user(SimpleNamespace(headers={}))
 
-    monkeypatch.setattr(dependencies, "authenticate_request", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
+    monkeypatch.setattr(dependencies, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="用户"))
     assert dependencies._get_current_user(SimpleNamespace(headers={})).user_id == "u1"
 
     assert build_table_columns_map({"ds_tables": [{"table_name": ""}, {"table_name": "orders", "columns": [{"name": "id"}, {"name": ""}]}]}) == {"orders": {"id"}}

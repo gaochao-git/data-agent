@@ -1,6 +1,8 @@
 """ChatData API 路由聚合入口。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from fastapi import HTTPException
+from auth import AuthenticationError, service_token_header, validate_service_token
 from utils.logger import get_logger
 from .routers.config import router as config_router
 from .routers.conversations import router as conversations_router
@@ -21,7 +23,18 @@ AGENT_ID = "chat_data"
 SQL_ASSIST_AGENT_ID = "chat_data_sql_assist"
 
 # 创建路由器
-router = APIRouter(prefix="/api/chatdata")
+async def require_service_token(service_token: str | None = Depends(service_token_header)) -> None:
+    """统一保护 ChatData service 接口，避免路由遗漏 service token 校验。"""
+    try:
+        validate_service_token(service_token)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+router = APIRouter(
+    prefix="/api/chatdata",
+    dependencies=[Depends(require_service_token)],
+)
 router.include_router(conversations_router)
 router.include_router(config_router)
 router.include_router(evaluation_router)

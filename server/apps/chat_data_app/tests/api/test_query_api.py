@@ -362,7 +362,7 @@ def test_compile_semantic_builder_sql_requires_auth(client, fake_datasource_mana
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert payload["code"] == ErrorCode.HTTP_UNAUTHORIZED
 
 
 def test_compile_semantic_builder_sql_rejects_other_users_private_config(client, auth_headers, fake_datasource_manager, monkeypatch):
@@ -611,7 +611,7 @@ def test_get_query_task_requires_auth(client, monkeypatch):
 
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["code"] == ErrorCode.CHATDATA_AUTHENTICATION_FAILED
+    assert payload["code"] == ErrorCode.HTTP_UNAUTHORIZED
 
 
 def test_get_query_task_rejects_other_user(client, auth_headers, monkeypatch):

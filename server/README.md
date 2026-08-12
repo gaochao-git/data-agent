@@ -112,8 +112,9 @@ kill -9 $(lsof -ti :5001)
 
 `data-agent` 仍然必须校验服务间调用身份和业务数据权限：
 
-- 只信任带有正确 `X-Service-Token`、`X-User-Id`、`X-Username` 的请求。
-- 所有 `/api/chatdata/admin/**` 接口至少解析当前用户，用于身份确认、审计字段和下游 HTTP 元数据服务透传。
+- 所有 `/api/chatdata/**` 接口先由 ChatData 根路由统一校验正确的 `X-Service-Token`；该校验不依赖各业务 handler 手动调用认证函数。
+- 需要用户归属、审计或下游 HTTP 元数据透传的接口，再解析可信代理转发的 `X-User-Id`、`X-Username`。
+- 所有 `/api/chatdata/admin/**` 接口必须解析当前用户；后台角色和权限点由上层 controller/BFF 负责。
 - 会话、收藏、查询历史、看板、用户技能等按 `user_id`、owner 或 public/global 状态做业务数据隔离。
 - 数据源执行对象权限在 service 层强制校验。HTTP 执行对象通过 `CHAT_DATA_HTTP_PERMISSION_URL` 获取当前用户可用机构编码；direct 执行对象使用服务端固定允许编码。未配置或无权限的执行对象不可见、不可执行。
 

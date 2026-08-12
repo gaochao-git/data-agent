@@ -57,11 +57,12 @@ def test_uploaded_file_error_branches_use_business_response(client, monkeypatch,
     assert delete_response.json()["code"] == ErrorCode.HTTP_NOT_FOUND
 
 
-def test_chatdata_http_and_validation_errors_use_business_response(client):
+def test_chatdata_http_and_validation_errors_use_business_response(client, auth_headers):
     missing_response = client.get("/api/chatdata/not-exist")
     validation_response = client.post(
         "/api/chatdata/uploaded-files/upload",
         data={"thread_id": "thread_1"},
+        headers=auth_headers,
     )
 
     assert missing_response.status_code == 404
