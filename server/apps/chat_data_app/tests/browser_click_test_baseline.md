@@ -8,7 +8,12 @@
 
 ### 1.1 产品功能分层
 
-ChatData 只有两个产品端：管理端负责系统级资源治理，业务端负责日常查询、分析和产物使用。两端共用同一套后端能力，但测试基线按用户实际进入的端组织，不再单列共享层。
+ChatData管理端负责系统级资源治理，业务端负责日常查询、分析和产物使用，他的上面还有一个jave controller服务会进行权限管控，权限通过后通过proxy路由到我们的服务，路由标识我们在controller设置了agents:chatData:admin、agents:chatData:common进行标识和路由，具体的请求为：
+用户请求路径：
+-> 浏览器页面
+-> Java Controller：控制登录、权限校验
+-> Proxy：携带 service token、用户身份转发
+-> ChatData service：校验 service token 和用户身份，执行业务权限
 
 ```text
 ChatData
