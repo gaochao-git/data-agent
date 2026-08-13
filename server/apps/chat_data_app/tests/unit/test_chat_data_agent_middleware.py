@@ -21,7 +21,8 @@ from apps.chat_data_app.agent.middleware.context_compression import build_contex
 from apps.chat_data_app.agent.middleware.tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from apps.chat_data_app.agent.prompts.context_compression import build_context_compression_summary_prompt
 from apps.chat_data_app.agent.tool_results import build_tool_result_recovery, merge_tool_result_recovery_artifact
-from apps.chat_data_app.agent.middleware import tool_error
+from apps.chat_data_app.agent import agent_runtime
+from langchain.agents.middleware import ToolErrorMiddleware
 from apps.chat_data_app.services.agent_run.context_budget import (
     ContextBudget,
     build_runtime_context_summary_message,
@@ -974,11 +975,11 @@ async def test_chat_data_context_usage_middleware_raises_when_model_fails(monkey
 
 def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     errors = []
-    monkeypatch.setattr(tool_error.logger, "error", lambda *args, **_kwargs: errors.append(args))
+    monkeypatch.setattr(agent_runtime.logger, "error", lambda *args, **_kwargs: errors.append(args))
 
-    assert tool_error.format_tool_error(ValueError("")) == "ValueError('')"
+    assert agent_runtime._format_tool_error(ValueError("内部连接信息")) == "工具执行失败，请稍后重试"
     assert errors
-    assert tool_error.format_tool_error(RuntimeError("boom")) == "boom"
+    assert agent_runtime._format_tool_error(RuntimeError("boom")) == "工具执行失败，请稍后重试"
 
     captured = {}
     selection_tool_kwargs = {}
@@ -1059,16 +1060,16 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tool_error_middleware_returns_error_tool_message(monkeypatch):
-    monkeypatch.setattr(tool_error.logger, "error", lambda *args, **_kwargs: None)
-    middleware = tool_error.create_tool_error_middleware()
+    monkeypatch.setattr(agent_runtime.logger, "error", lambda *args, **_kwargs: None)
+    middleware = ToolErrorMiddleware(agent_runtime._on_tool_error)
 
     async def handler(_request):
         raise RuntimeError("tool down")
 
-    request = SimpleNamespace(tool_call={"id": "call_1", "name": "semantic_query_tool"})
+    request = SimpleNamespace(tool=None, tool_call={"id": "call_1", "name": "semantic_query_tool"})
     message = await middleware.awrap_tool_call(request, handler)
 
-    assert message.content == "tool down"
+    assert message.content == "工具执行失败，请稍后重试"
     assert message.name == "semantic_query_tool"
     assert message.tool_call_id == "call_1"
     assert message.status == "error"

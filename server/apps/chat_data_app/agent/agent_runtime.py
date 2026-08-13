@@ -3,13 +3,12 @@
 from datetime import datetime
 from typing import Any, Callable
 
-from langchain.agents.middleware import wrap_model_call
+from langchain.agents.middleware import ToolErrorMiddleware, wrap_model_call
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
 from ..services.llm_config import get_chat_data_llm
-from .middleware.tool_error import create_tool_error_middleware
 
 logger = get_logger(__name__)
 
@@ -68,6 +67,17 @@ def create_response_timestamp_middleware():
     return response_timestamp_middleware
 
 
+def _format_tool_error(exc: Exception) -> str:
+    """记录完整异常，但只向模型和前端返回固定提示。"""
+    logger.error("[tools] 工具执行异常: %s", exc, exc_info=True)
+    return "工具执行失败，请稍后重试"
+
+
+def _on_tool_error(exc: Exception, _request: Any) -> str:
+    """官方 ``ToolErrorMiddleware`` 回调：始终把异常转为 error ``ToolMessage`` 内容。"""
+    return _format_tool_error(exc)
+
+
 def build_standard_agent_middleware(
     tools: list[Any],
     *,
@@ -93,7 +103,7 @@ def build_standard_agent_middleware(
         middleware.append(create_tool_call_name_normalizer_middleware(tools))
     if tool_result_middleware is not None:
         middleware.append(tool_result_middleware)
-    middleware.append(create_tool_error_middleware())
+    middleware.append(ToolErrorMiddleware(_on_tool_error))
     return middleware
 
 
