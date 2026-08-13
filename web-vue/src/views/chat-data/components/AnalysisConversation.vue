@@ -2021,7 +2021,23 @@ const submitAnalysisQuery = async (
       enableDeepThinking.value,
       selectedRuntimeOptions.value,
       (event) => appendContextCompressionEvent(event),
-      options.fileIds
+      options.fileIds,
+      (event) => {
+        if (!event.tool_call_id) return
+        const existing = toolCallsMap.value.get(event.tool_call_id)
+        const isFailed = event.type === 'tool_failed'
+        const isCompleted = event.type === 'tool_completed'
+        const toolInfo: ToolCallInfo = {
+          tool_call_id: event.tool_call_id,
+          tool_name: event.tool_name || existing?.tool_name || 'tool_call',
+          args: { ...(existing?.args || {}), ...(event.args || {}), ...(event.accumulated_args || {}) },
+          result: event.content || event.result || existing?.result,
+          progressMessage: event.message || existing?.progressMessage,
+          progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
+          status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
+        }
+        upsertToolMessage(toolInfo)
+      }
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'

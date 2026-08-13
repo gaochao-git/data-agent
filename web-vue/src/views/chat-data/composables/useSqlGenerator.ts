@@ -14,6 +14,7 @@ import type {
   ChatDataContextCompressionEvent,
   ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
+  ToolLifecycleEventData,
 } from '../types'
 
 /**
@@ -92,6 +93,7 @@ export function useSqlGenerator() {
     runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null,
     onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
     fileIds?: string[],
+    onToolLifecycle?: (payload: ToolLifecycleEventData) => void,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -166,6 +168,7 @@ export function useSqlGenerator() {
       const decoder = new TextDecoder()
       let buffer = ''
       let streamEnded = false
+      const lifecycleToolCallIds = new Set<string>()
 
       while (true) {
         const { done, value } = await reader.read()
@@ -251,10 +254,24 @@ export function useSqlGenerator() {
             continue
           }
 
+          if (event === 'tool_started' || event === 'tool_progress' || event === 'tool_completed' || event === 'tool_failed') {
+            try {
+              const data = JSON.parse(dataStr) as ToolLifecycleEventData
+              if (data.tool_call_id) lifecycleToolCallIds.add(data.tool_call_id)
+              onToolLifecycle?.({ ...data, type: event })
+            } catch (err) {
+              console.error(`解析 ${event} 数据失败:`, err, dataStr)
+            }
+            continue
+          }
+
           // 处理 tool 事件（根据 status 区分）
           if (event === 'tool') {
             try {
               const data = JSON.parse(dataStr)
+              if (data.tool_call_id && lifecycleToolCallIds.has(data.tool_call_id)) {
+                continue
+              }
               // 根据 status 字段分发处理
               if (data.status === 'running') {
                 // 工具开始执行

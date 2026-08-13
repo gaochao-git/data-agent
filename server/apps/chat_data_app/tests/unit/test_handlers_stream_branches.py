@@ -72,8 +72,68 @@ def tool_event_contents(events: list[str]) -> list[str]:
     return contents
 
 
+def sse_event_name(event: str) -> str:
+    """读取单个 SSE 块的事件名。"""
+    return event.split("\n", 1)[0].removeprefix("event: ")
+
+
 async def collect_stream(generator):
     return [chunk async for chunk in generator]
+
+
+def test_tool_lifecycle_events_keep_legacy_tool_payload_and_map_failure():
+    state = handlers._ToolStreamState()
+
+    started = state.handle_tool_calls([
+        {"id": "call-1", "name": "semantic_query_tool", "args": {"dsl": {}}},
+    ])
+    completed_payload = state.build_tool_message_payload(FakeChunk(
+        content="查询完成",
+        msg_type="tool",
+        tool_call_id="call-1",
+        name="semantic_query_tool",
+    ))
+    completed = state.build_completion_event(completed_payload)
+
+    assert [sse_event_name(event) for event in started] == ["tool_started", "tool"]
+    assert sse_event_name(completed) == "tool_completed"
+    assert '"status": "completed"' in completed
+    assert '"content": "查询完成"' in completed
+
+    state.handle_tool_calls([{"id": "call-2", "name": "semantic_query_tool"}])
+    failed_payload = state.build_tool_message_payload(FakeChunk(
+        content="执行失败",
+        msg_type="tool",
+        tool_call_id="call-2",
+        name="semantic_query_tool",
+    ))
+
+    assert sse_event_name(state.build_completion_event(failed_payload)) == "tool_failed"
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_stream_adapter_forwards_valid_tool_progress_only():
+    class Agent:
+        async def astream(self, *_args, **_kwargs):
+            yield "custom", {
+                "type": "tool_progress",
+                "tool_call_id": "call-1",
+                "tool_name": "officecli_run",
+                "message": "正在生成预览",
+                "progress": 50,
+            }
+            yield "custom", {"type": "tool_progress", "tool_call_id": "call-2"}
+
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=Agent(),
+        initial_state={},
+        config={},
+    )
+    events = await collect_stream(adapter.stream_events())
+
+    assert [sse_event_name(event) for event in events] == ["tool_progress"]
+    assert '"tool_name": "officecli_run"' in events[0]
+    assert '"progress": 50' in events[0]
 
 
 class FakeChunk:
@@ -668,7 +728,11 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
     ))
     text = "".join(chunks)
 
-    assert text.count('"tool_call_id": "tc_dup"') == 1
+    duplicate_blocks = [
+        block for block in text.split("\n\n")
+        if '"tool_call_id": "tc_dup"' in block
+    ]
+    assert [sse_event_name(block) for block in duplicate_blocks] == ["tool_started", "tool"]
     assert "fresh done" in text
     assert "message_end" in text
 

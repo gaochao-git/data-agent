@@ -454,6 +454,17 @@ def _format_tool_event(
     return _format_sse("tool", data)
 
 
+def _format_tool_lifecycle_event(
+    event_type: str,
+    payload: dict[str, Any],
+) -> str:
+    """发送工具生命周期事件，保留旧 ``tool`` 事件供现有客户端兼容。"""
+    data = dict(payload)
+    data["type"] = event_type
+    data.setdefault("timestamp", _get_timestamp())
+    return _format_sse(event_type, data)
+
+
 def _normalize_semantic_selection_payload(value: Any) -> Dict[str, Any] | None:
     """标准化前端传入的指标集选择留痕。"""
     if not isinstance(value, dict):
@@ -619,17 +630,27 @@ class _ToolStreamState:
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
         return msg_data
 
+    def build_completion_event(self, tool_payload: dict[str, Any]) -> str:
+        """将工具结果映射为完成或失败的统一生命周期事件。"""
+        status = str(tool_payload.get("status") or "completed")
+        event_type = "tool_failed" if status == "error" else "tool_completed"
+        return _format_tool_lifecycle_event(event_type, tool_payload)
+
     def _running_event(self, tool_call_id: str, tool_name: str, args: dict[str, Any] | None) -> list[str]:
         _register_running_tool(self.running_tool_ids, tool_call_id)
         if tool_call_id in self.emitted_running_tool_ids:
             return []
         self.emitted_running_tool_ids.add(tool_call_id)
-        return [_format_tool_event(
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            status="running",
-            args=args or {},
-        )]
+        payload = {
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "status": "running",
+            "args": args or {},
+        }
+        return [
+            _format_tool_lifecycle_event("tool_started", payload),
+            _format_tool_event(**payload),
+        ]
 
 
 class _AgentSseStreamAdapter:
@@ -742,6 +763,20 @@ class _AgentSseStreamAdapter:
                     archived_messages,
                 )
             return [_format_sse("context_compression", payload["event"])]
+        if payload.get("type") == "tool_progress":
+            tool_call_id = str(payload.get("tool_call_id") or "").strip()
+            tool_name = str(payload.get("tool_name") or "").strip()
+            message = str(payload.get("message") or "").strip()
+            if not tool_call_id or not tool_name or not message:
+                logger.warning("忽略无效工具进度事件: %s", payload)
+                return []
+            return [_format_tool_lifecycle_event("tool_progress", {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "status": "running",
+                "message": message,
+                "progress": payload.get("progress"),
+            })]
         return []
 
     def _alarm_context(self) -> dict[str, Any]:
@@ -822,7 +857,9 @@ class _AgentSseStreamAdapter:
             for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
                 yield tool_event
         if msg_type == "tool":
-            yield _format_sse("tool", self.tool_stream_state.build_tool_message_payload(message_chunk))
+            tool_payload = self.tool_stream_state.build_tool_message_payload(message_chunk)
+            yield self.tool_stream_state.build_completion_event(tool_payload)
+            yield _format_sse("tool", tool_payload)
             return
         msg_data = message_chunk.model_dump()
         msg_data["timestamp"] = _get_timestamp()

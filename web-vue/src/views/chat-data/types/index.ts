@@ -415,6 +415,8 @@ export interface ToolCallInfo {
   tool_name: string
   args: Record<string, unknown>
   result?: string
+  progressMessage?: string
+  progress?: number
   status: 'generating' | 'running' | 'completed' | 'error'
   // 关联的渲染内容
   renderId?: string
@@ -530,10 +532,10 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'error' | 'done' | 'dashboard_spec'
 
 // 工具状态
-export type ToolStatus = 'running' | 'completed'
+export type ToolStatus = 'running' | 'completed' | 'error'
 
 // 工具事件数据
 export interface ToolEventData {
@@ -544,6 +546,13 @@ export interface ToolEventData {
   result?: string
   message?: string
   timestamp?: string
+}
+
+export interface ToolLifecycleEventData extends ToolEventData {
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed'
+  progress?: number
+  accumulated_args?: Record<string, unknown>
+  content?: string
 }
 
 // 语义层配置
