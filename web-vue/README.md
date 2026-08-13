@@ -53,7 +53,7 @@ npm run build-only
 npm run build
 ```
 
-说明：当前代码中仍有部分历史 TypeScript 类型问题。如果只验证运行和打包，可先使用 `npm run build-only`。
+说明：`npm run build` 会同时执行 `vue-tsc` 类型检查与 Vite 打包，当前可完整通过；仅需快速验证打包时可用 `npm run build-only`。
 
 ## 路由说明
 

@@ -56,12 +56,12 @@ npm run dev
 cd server
 pytest apps/chat_data_app/tests
 
-# 前端构建
+# 前端构建（含 vue-tsc 类型检查）
 cd web-vue
-npm run build-only
+npm run build
 ```
 
-说明：当前前端完整 `npm run build` 会执行 `vue-tsc`，可能暴露历史 TypeScript 类型问题；仅验证 Vite 打包可使用 `npm run build-only`。
+说明：`npm run build` 会同时执行 `vue-tsc` 类型检查与 Vite 打包，当前可完整通过；仅需快速验证打包时可用 `npm run build-only`。
 
 ## 远程仓库
 
