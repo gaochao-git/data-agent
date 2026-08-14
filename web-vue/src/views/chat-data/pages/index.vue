@@ -27,6 +27,7 @@ import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
 import { formatSemanticConfigOptionLabel } from '../utils'
+import { buildConversationGroups, type ConversationViewMode } from '../utils/conversationHistory'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -601,6 +602,7 @@ const normalizeConversationResponse = (
       created_at: conv.update_time || conv.create_time || conv.created_at || '',
       updated_at: conv.update_time || conv.updated_at || conv.create_time || conv.created_at || '',
       agent_id: conv.agent_id || fallbackAgentId,
+      datasource_id: typeof conv.datasource_id === 'string' ? conv.datasource_id : '',
       is_favorited: Boolean(conv.is_favorited),
     }
   }).filter((conv) => !!conv.id)
@@ -683,54 +685,41 @@ const ensureConversationId = async (): Promise<string | null> => {
   return null
 }
 
-// 会话分组
-const groupedConversations = computed(() => {
-  if (conversations.value.length === 0) return []
+// 会话列表视图模式：grouped 按数据源分组（默认），flat 平铺
+const CONVERSATION_VIEW_MODE_KEY = 'chatdata-conversation-view-mode'
 
-  const now = new Date()
-  const groups: { label: string; items: ConversationItem[] }[] = []
-  const groupMap: Record<string, ConversationItem[]> = {}
-
-  const getGroupLabel = (dateStr: string): string => {
-    if (!dateStr) return '更早'
-    const date = new Date(dateStr.replace(' ', 'T'))
-    if (isNaN(date.getTime())) return '更早'
-
-    const diffMs = now.getTime() - date.getTime()
-    const diffDays = diffMs / (1000 * 60 * 60 * 24)
-
-    if (diffDays < 7) return '7天内'
-    if (diffDays < 30) return '30天内'
-    if (diffDays < 183) return '半年内'
-    return '更早'
+const readLocalStorage = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    // 嵌入宿主禁用 storage 时降级为默认模式，不阻断页面
+    return null
   }
+}
 
-  // 收藏的会话单独置顶分组
-  const favoritedItems: ConversationItem[] = []
-  for (const conv of conversations.value) {
-    if (conv.is_favorited) {
-      favoritedItems.push(conv)
-      continue
-    }
-    const label = getGroupLabel(conv.created_at)
-    if (!groupMap[label]) groupMap[label] = []
-    groupMap[label].push(conv)
+const writeLocalStorage = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // 写入失败只丢失偏好记忆，不影响功能
   }
+}
 
-  if (favoritedItems.length > 0) {
-    groups.push({ label: '置顶', items: favoritedItems })
-  }
+const conversationViewMode = ref<ConversationViewMode>(
+  readLocalStorage(CONVERSATION_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'grouped',
+)
 
-  const order = ['7天内', '30天内', '半年内', '更早']
-  for (const label of order) {
-    const items = groupMap[label]
-    if (items && items.length > 0) {
-      groups.push({ label, items })
-    }
-  }
+const toggleConversationViewMode = () => {
+  conversationViewMode.value = conversationViewMode.value === 'grouped' ? 'flat' : 'grouped'
+  writeLocalStorage(CONVERSATION_VIEW_MODE_KEY, conversationViewMode.value)
+}
 
-  return groups
-})
+// 使用全部授权数据源解析历史名称，避免嵌入模块过滤导致其他模块会话被误判为未知。
+const groupedConversations = computed(() => buildConversationGroups(
+  conversations.value,
+  allDatasources.value,
+  conversationViewMode.value,
+))
 
 // 切换模式
 const changeMode = (mode: ViewMode) => {
@@ -1590,12 +1579,14 @@ onUnmounted(() => {
                 :is-loading-more="isLoadingMoreConversations"
                 :has-more="hasMoreConversations"
                 :show-new-conversation-button="false"
+                :conversation-view-mode="conversationViewMode"
                 :hide-management="!!parentComponentName"
                 @select-conversation="handleHistoryConversationSelect"
                 @new-conversation="handleNewConversation"
                 @load-more-conversations="loadMoreConversations"
                 @update-conversation-title="handleUpdateConversationTitle"
                 @toggle-conversation-favorite="handleToggleConversationFavorite"
+                @toggle-conversation-view-mode="toggleConversationViewMode"
               />
             </div>
           </div>

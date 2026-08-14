@@ -792,9 +792,9 @@ class _AgentSseStreamAdapter:
                     archived_messages,
                 )
             return [_format_sse("context_compression", payload["event"])]
-        if payload.get("type") == "steer_consumed" and isinstance(payload.get("message_ids"), list):
+        if payload.get("type") == "inbox_admitted" and isinstance(payload.get("message_ids"), list):
             message_ids = [str(message_id) for message_id in payload["message_ids"] if str(message_id)]
-            return [_format_sse("steer_consumed", {"message_ids": message_ids})] if message_ids else []
+            return [_format_sse("inbox_admitted", {"message_ids": message_ids})] if message_ids else []
         if payload.get("type") == "tool_progress":
             tool_call_id = str(payload.get("tool_call_id") or "").strip()
             tool_name = str(payload.get("tool_name") or "").strip()
@@ -953,6 +953,7 @@ async def _generate_chat_data_stream(
     options: Optional[Dict[str, Any]] = None,
     file_ids: list[str] | None = None,
     run_id: str | None = None,
+    adopted_messages: list[HumanMessage] | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -997,6 +998,7 @@ async def _generate_chat_data_stream(
             options=options,
             file_ids=file_ids,
             run_id=run_id,
+            adopted_messages=adopted_messages,
             log_phase=log_phase,
         ):
             yield event
@@ -1039,6 +1041,7 @@ async def _run_chat_data_agent_stream(
     options: Optional[Dict[str, Any]],
     file_ids: list[str] | None,
     run_id: str | None,
+    adopted_messages: list[HumanMessage] | None = None,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
@@ -1178,7 +1181,7 @@ async def _run_chat_data_agent_stream(
                 user_id=user_id,
                 operator_name=username,
                 conversation_id=thread_id,
-                messages=[user_message],
+                messages=[*(adopted_messages or []), user_message],
                 execution_context={
                     "datasource_id": datasource_id,
                     "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
@@ -1199,6 +1202,15 @@ async def _run_chat_data_agent_stream(
             )
             log_phase("build_system_prompt")
 
+            async def admit_inbox_messages(messages: list[HumanMessage]) -> None:
+                for message in messages:
+                    await conversation_event_service.persist_user_message(
+                        conversation_id=thread_id,
+                        user_id=user_id or "system",
+                        operator_name=username or user_id or "system",
+                        message=message,
+                    )
+
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
@@ -1213,6 +1225,7 @@ async def _run_chat_data_agent_stream(
                 source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
                 run_id=run_id,
                 inbox_service=agent_inbox_service,
+                admit_inbox_messages=admit_inbox_messages,
                 steering_tracker=steering_tracker,
             )
             log_phase("create_agent")
@@ -1273,16 +1286,10 @@ async def _run_chat_data_agent_stream(
                 )
                 if not claimed.messages:
                     return False
-                for message in claimed.messages:
-                    await conversation_event_service.persist_user_message(
-                        conversation_id=thread_id,
-                        user_id=user_id or "system",
-                        operator_name=username or user_id or "system",
-                        message=message,
-                    )
+                await admit_inbox_messages(claimed.messages)
                 steering_tracker.record([str(message.id or "") for message in claimed.messages])
                 stream_adapter.set_input_state({"messages": claimed.messages})
-                stream_adapter.queue_event(_format_sse("steer_consumed", {
+                stream_adapter.queue_event(_format_sse("inbox_admitted", {
                     "message_ids": [str(message.id or "") for message in claimed.messages],
                 }))
                 return True
@@ -1292,6 +1299,16 @@ async def _run_chat_data_agent_stream(
                     logger.info("客户端已断开，停止流式输出: %s", thread_id)
                     return False
                 return True
+
+            # 上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
+            # 先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
+            await admit_inbox_messages(adopted_messages or [])
+            if adopted_messages:
+                adopted_ids = [str(message.id or "") for message in adopted_messages]
+                steering_tracker.record(adopted_ids)
+                stream_adapter.queue_event(_format_sse("inbox_admitted", {
+                    "message_ids": adopted_ids,
+                }))
 
             async def finalize_resources(success: bool) -> None:
                 _ = success
@@ -1353,7 +1370,7 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
-    run_id = await agent_inbox_service.start_run(conversation_id, user_id, username or user_id)
+    run_id, adopted_messages = await agent_inbox_service.start_run(conversation_id, user_id, username or user_id)
 
     return StreamingResponse(
         _generate_chat_data_stream(
@@ -1372,6 +1389,7 @@ async def sql_completion_handler(
             options=options,
             file_ids=file_ids,
             run_id=run_id,
+            adopted_messages=adopted_messages,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}

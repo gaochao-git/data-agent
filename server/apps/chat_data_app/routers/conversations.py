@@ -4,7 +4,7 @@
 """
 
 import inspect
-from typing import Callable, Optional, Dict, Any, List
+from typing import Callable, Literal, Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Query, Request, status as http_status
 from pydantic import BaseModel
@@ -19,6 +19,8 @@ from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snap
 from ..services.agent_run.agent_inbox_service import (
     AgentRunConflictError,
     AgentRunNotActiveError,
+    SteerMessageNotFoundError,
+    SteerMessageNotPendingError,
     agent_inbox_service,
 )
 from .. import AGENT_ID
@@ -46,9 +48,19 @@ class CompletionRequest(BaseModel):
     file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
 
 
+SteerQueueType = Literal["next-step", "next-turn"]
+
+
 class SteerRequest(BaseModel):
     """运行中追加纯文本消息。"""
     query: str
+    queue_type: Optional[SteerQueueType] = None  # 缺省 next-turn：本轮结束后作为下一轮处理
+
+
+class SteerMessageUpdateRequest(BaseModel):
+    """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
+    content: Optional[str] = None
+    queue_type: Optional[SteerQueueType] = None
 
 
 # ============ Agent 配置注册 ============
@@ -540,6 +552,7 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
             user_id,
             username,
             content,
+            queue_type=request.queue_type or "next-turn",
         )
         return business_response(data={"message_id": message_id}, msg="消息已发送")
     except AgentRunNotActiveError as exc:
@@ -556,6 +569,143 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
         return business_response(
             msg="运行中追加消息失败，请稍后重试",
             code=ErrorCode.CHATDATA_STEER_ENQUEUE_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get("/{conversation_id}/steer")
+async def list_steer_messages(conversation_id: str, req: Request):
+    """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        queue = await agent_inbox_service.list_message_states(conversation_id, user_id)
+        return business_response(data=queue, msg="ok")
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_AGENT_RUN_NOT_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("读取队列消息失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="读取队列消息失败，请稍后重试",
+            code=ErrorCode.CHATDATA_STEER_LIST_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.put("/{conversation_id}/steer/{message_id}")
+async def update_steer_message(
+    conversation_id: str,
+    message_id: str,
+    request: SteerMessageUpdateRequest,
+    req: Request,
+):
+    """编辑排队中的追加消息内容或切换队列类型。"""
+    if request.content is None and request.queue_type is None:
+        return business_response(
+            msg="请提供要修改的内容或队列类型",
+            code=ErrorCode.CHATDATA_REQUIRED_FIELD,
+            status="error",
+            http_status_code=http_status.HTTP_400_BAD_REQUEST,
+        )
+    if request.content is not None and not request.content.strip():
+        return business_response(
+            msg="消息不能为空",
+            code=ErrorCode.CHATDATA_REQUIRED_FIELD,
+            status="error",
+            http_status_code=http_status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        user_id, username = _get_current_user_identity(req)
+        updated = await agent_inbox_service.update_pending_message(
+            conversation_id,
+            user_id,
+            username,
+            message_id,
+            content=request.content,
+            queue_type=request.queue_type,
+        )
+        return business_response(data=updated, msg="消息已更新")
+    except SteerMessageNotFoundError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except SteerMessageNotPendingError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_PENDING,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_AGENT_RUN_NOT_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("编辑队列消息失败: conversation_id=%s message_id=%s", conversation_id, message_id, exc_info=True)
+        return business_response(
+            msg="编辑队列消息失败，请稍后重试",
+            code=ErrorCode.CHATDATA_STEER_UPDATE_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.delete("/{conversation_id}/steer/{message_id}")
+async def cancel_steer_message(conversation_id: str, message_id: str, req: Request):
+    """删除仍在排队等待注入的追加消息。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        await agent_inbox_service.cancel_pending_message(
+            conversation_id,
+            user_id,
+            username,
+            message_id,
+        )
+        return business_response(data={"message_id": message_id}, msg="消息已移除")
+    except SteerMessageNotFoundError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except SteerMessageNotPendingError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_STEER_MESSAGE_NOT_PENDING,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_AGENT_RUN_NOT_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("删除队列消息失败: conversation_id=%s message_id=%s", conversation_id, message_id, exc_info=True)
+        return business_response(
+            msg="删除队列消息失败，请稍后重试",
+            code=ErrorCode.CHATDATA_STEER_CANCEL_FAILED,
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

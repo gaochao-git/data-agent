@@ -49,6 +49,7 @@ def test_conversation_formatting_helpers():
         thread_id="conv_a",
         thread_title="标题",
         agent_id="agent_a",
+        datasource_id="ds_a",
         create_time=now,
         update_time=now,
         is_favorited=1,
@@ -57,10 +58,12 @@ def test_conversation_formatting_helpers():
         "id": "conv_a",
         "title": "标题",
         "agent_id": "agent_a",
+        "datasource_id": "ds_a",
         "create_time": "2026-01-02 03:04:05",
         "update_time": "2026-01-02 03:04:05",
         "is_favorited": True,
     }
+    assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))["datasource_id"] == ""
     assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "create_time": None, "update_time": None, "is_favorited": None}))["is_favorited"] is False
     assert conversation_module._clean_title("《销售额分析!!!》", fallback="fallback") == "销售额分析"
     assert conversation_module._clean_title("!!", fallback="fallback-title") == "fallback-title"

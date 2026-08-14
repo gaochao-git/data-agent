@@ -16,6 +16,7 @@ import {
   type FieldTooltipSection
 } from '../../utils/fieldDict'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
+import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
 interface ConversationItem {
@@ -26,6 +27,7 @@ interface ConversationItem {
 }
 
 interface ConversationGroup {
+  key: string
   label: string
   items: ConversationItem[]
 }
@@ -53,6 +55,7 @@ interface Props {
   isLoadingMore?: boolean
   hasMore?: boolean
   showNewConversationButton?: boolean
+  conversationViewMode?: 'grouped' | 'flat'
   datasourceId?: string
   semanticConfigs?: SemanticConfigItem[]
   tables?: TableInfo[]
@@ -69,6 +72,7 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingMore: false,
   hasMore: false,
   showNewConversationButton: true,
+  conversationViewMode: 'grouped',
   datasourceId: '',
   semanticConfigs: undefined,
   tables: () => [],
@@ -84,10 +88,62 @@ const emit = defineEmits<{
   loadMoreConversations: []
   updateConversationTitle: [conversationId: string, title: string]
   toggleConversationFavorite: [conversationId: string, isFavorited: boolean]
+  toggleConversationViewMode: []
   selectDataset: [configId: string | null]
   refreshSemanticConfigs: []
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
 }>()
+
+// 分组文件夹折叠状态使用稳定 key，展示名称变化或与系统分组同名时不会串组。
+const COLLAPSED_GROUPS_KEY = 'chatdata-conversation-collapsed-groups'
+
+const readCollapsedGroups = (): string[] => {
+  try {
+    const raw = sessionStorage.getItem(COLLAPSED_GROUPS_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const collapsedGroups = ref<Set<string>>(new Set(readCollapsedGroups()))
+
+const isConversationGroupCollapsed = (key: string): boolean => collapsedGroups.value.has(key)
+
+const conversationScrollRef = ref<HTMLElement | null>(null)
+
+const requestMoreConversationsIfNeeded = async () => {
+  await nextTick()
+  const target = conversationScrollRef.value
+  if (!target) return
+  if (shouldLoadMoreConversations({
+    hasMore: props.hasMore,
+    isLoading: props.isLoading,
+    isLoadingMore: props.isLoadingMore,
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+    clientHeight: target.clientHeight,
+  })) {
+    emit('loadMoreConversations')
+  }
+}
+
+const toggleConversationGroup = (key: string) => {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  collapsedGroups.value = next
+  try {
+    sessionStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...next]))
+  } catch {
+    // 写入失败只丢失折叠记忆，不影响功能
+  }
+  void requestMoreConversationsIfNeeded()
+}
 
 // 指标集列表
 const internalSemanticConfigs = ref<SemanticConfigItem[]>([])
@@ -118,7 +174,7 @@ const tooltipState = reactive({
   sections: [] as FieldTooltipSection[],
 })
 const { getColumnDict, loadTablesColumnDicts, resetColumnDictCache } = useColumnDictCache()
-let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
+let tooltipHideTimer: number | null = null
 
 const clearTooltipHideTimer = () => {
   if (!tooltipHideTimer) return
@@ -303,12 +359,24 @@ const selectedConfigId = ref<string | null>(null)
 const expandedConfigIds = ref<Set<string>>(new Set())
 
 const handleConversationScroll = (event: Event) => {
-  if (!props.hasMore || props.isLoading || props.isLoadingMore) return
   const target = event.currentTarget as HTMLElement
-  if (target.scrollHeight - target.scrollTop - target.clientHeight <= 80) {
+  if (shouldLoadMoreConversations({
+    hasMore: props.hasMore,
+    isLoading: props.isLoading,
+    isLoadingMore: props.isLoadingMore,
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+    clientHeight: target.clientHeight,
+  })) {
     emit('loadMoreConversations')
   }
 }
+
+watch(
+  () => [props.groupedConversations, props.hasMore, props.isLoading, props.isLoadingMore, props.conversationViewMode],
+  () => void requestMoreConversationsIfNeeded(),
+  { deep: true, flush: 'post', immediate: true },
+)
 
 // 会话标题编辑状态
 const editingConversationId = ref<string | null>(null)
@@ -614,7 +682,18 @@ onUnmounted(() => {
       </div>
 
       <!-- 会话列表 -->
-      <div class="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+      <div ref="conversationScrollRef" class="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+        <div class="flex justify-end pt-1">
+          <button
+            type="button"
+            class="flex h-7 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-400 transition-colors hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+            :title="props.conversationViewMode === 'grouped' ? '切换为平铺列表' : '切换为按数据源分组'"
+            @click="emit('toggleConversationViewMode')"
+          >
+            <i :class="props.conversationViewMode === 'grouped' ? 'fa-solid fa-list' : 'fa-solid fa-layer-group'" class="text-[10px]"></i>
+            {{ props.conversationViewMode === 'grouped' ? '平铺' : '分组' }}
+          </button>
+        </div>
         <div v-if="isLoading" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
           <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
           <span>加载历史会话...</span>
@@ -626,20 +705,37 @@ onUnmounted(() => {
         </div>
 
         <template v-else>
-          <template v-for="group in groupedConversations" :key="group.label">
-            <div class="mb-2">
-              <div class="py-2 text-xs text-gray-400 font-medium uppercase tracking-wide">{{ group.label }}</div>
-              <div
-                v-for="conv in group.items"
-                :key="conv.id"
-                class="group flex items-center gap-2 py-2.5 px-1 -mx-1 rounded-md cursor-pointer transition-all duration-150"
-                :class="currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50'"
-                @click="emit('selectConversation', conv.id)"
+          <template v-for="group in groupedConversations" :key="group.key">
+            <div class="mb-1">
+              <button
+                v-if="group.label"
+                type="button"
+                class="flex w-full items-center gap-1.5 rounded-md px-1.5 py-2 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                @click="toggleConversationGroup(group.key)"
               >
                 <i
-                  :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
-                  :style="{ color: getConversationIconMeta(conv.id).color }"
+                  class="fa-solid fa-chevron-down shrink-0 text-[9px] text-gray-400 transition-transform duration-150"
+                  :class="{ '-rotate-90': isConversationGroupCollapsed(group.key) }"
                 ></i>
+                <i
+                  class="fa-solid shrink-0 text-[11px] text-amber-400"
+                  :class="isConversationGroupCollapsed(group.key) ? 'fa-folder' : 'fa-folder-open'"
+                ></i>
+                <span class="min-w-0 flex-1 truncate text-left">{{ group.label }}</span>
+                <span class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-400">{{ group.items.length }}</span>
+              </button>
+              <template v-if="!group.label || !isConversationGroupCollapsed(group.key)">
+                <div
+                  v-for="conv in group.items"
+                  :key="conv.id"
+                  class="group flex items-center gap-2 py-2.5 px-1 -mx-1 rounded-md cursor-pointer transition-all duration-150"
+                  :class="currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50'"
+                  @click="emit('selectConversation', conv.id)"
+                >
+                  <i
+                    :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
+                    :style="{ color: getConversationIconMeta(conv.id).color }"
+                  ></i>
 
                 <!-- 标题编辑态 -->
                 <template v-if="editingConversationId === conv.id">
@@ -681,6 +777,7 @@ onUnmounted(() => {
                   </button>
                 </template>
               </div>
+              </template>
             </div>
           </template>
           <div v-if="isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">

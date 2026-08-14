@@ -45,28 +45,55 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_run(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+    ) -> ChatDataAgentInbox | None:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def claim_messages(
         self,
         session: AsyncSession,
         run_id: str,
         now: datetime,
         lease_expire_time: datetime,
+        queue_type: str | None = None,
+        limit: int | None = None,
     ) -> list[ChatDataAgentInbox]:
-        result = await session.execute(
+        conditions = [
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "message",
+            ChatDataAgentInbox.delete_flag == 0,
+            or_(
+                ChatDataAgentInbox.status == "pending",
+                (ChatDataAgentInbox.status == "claimed")
+                & (ChatDataAgentInbox.lease_expire_time < now),
+            ),
+        ]
+        if queue_type:
+            conditions.append(ChatDataAgentInbox.queue_type == queue_type)
+        statement = (
             select(ChatDataAgentInbox)
-            .where(
-                ChatDataAgentInbox.run_id == run_id,
-                ChatDataAgentInbox.record_type == "message",
-                ChatDataAgentInbox.delete_flag == 0,
-                or_(
-                    ChatDataAgentInbox.status == "pending",
-                    (ChatDataAgentInbox.status == "claimed")
-                    & (ChatDataAgentInbox.lease_expire_time < now),
-                ),
-            )
+            .where(*conditions)
             .order_by(ChatDataAgentInbox.id.asc())
             .with_for_update()
         )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await session.execute(statement)
         messages = list(result.scalars().all())
         for message in messages:
             message.status = "claimed"
@@ -74,6 +101,39 @@ class AgentInboxDao:
             message.lease_expire_time = lease_expire_time
             message.update_time = now
         return messages
+
+    async def get_message_by_id(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        message_id: str,
+    ) -> ChatDataAgentInbox | None:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.message_id == message_id,
+                ChatDataAgentInbox.record_type == "message",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def list_run_messages(
+        self,
+        session: AsyncSession,
+        run_id: str,
+    ) -> list[ChatDataAgentInbox]:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "message",
+            )
+            .order_by(ChatDataAgentInbox.id.asc())
+        )
+        return list(result.scalars().all())
 
     async def get_claimed_messages(
         self,

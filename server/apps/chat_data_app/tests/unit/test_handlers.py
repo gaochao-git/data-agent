@@ -1089,7 +1089,7 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     monkeypatch.setattr("apps.chat_data_app.handlers._generate_chat_data_stream", fake_stream)
     monkeypatch.setattr(
         "apps.chat_data_app.handlers.agent_inbox_service.start_run",
-        lambda *_args, **_kwargs: asyncio.sleep(0, result="run-test"),
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=("run-test", [])),
     )
 
     response = asyncio.run(sql_completion_handler(
@@ -1105,3 +1105,5 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert chunks == ["event: done\ndata: [DONE]\n\n"]
     assert captured["stream_kwargs"]["username"] == "测试用户"
     assert captured["stream_kwargs"]["member_datasource_ids"] == ["m1"]
+    assert captured["stream_kwargs"]["run_id"] == "run-test"
+    assert captured["stream_kwargs"]["adopted_messages"] == []

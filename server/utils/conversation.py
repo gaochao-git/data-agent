@@ -61,6 +61,7 @@ def _format_thread(t: UserThread) -> Dict[str, Any]:
         "id": t.thread_id,
         "title": t.thread_title,
         "agent_id": t.agent_id,
+        "datasource_id": t.datasource_id or "",
         "create_time": t.create_time.strftime('%Y-%m-%d %H:%M:%S') if t.create_time else "",
         "update_time": t.update_time.strftime('%Y-%m-%d %H:%M:%S') if t.update_time else "",
         "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False

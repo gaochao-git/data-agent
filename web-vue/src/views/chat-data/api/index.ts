@@ -1291,11 +1291,58 @@ export function streamCompletion(conversationId: string, data: {
 export function steerConversation(
   conversationId: string,
   query: string,
+  queueType?: 'next-step' | 'next-turn',
 ): Promise<ApiResponse<{ message_id: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
     method: 'post',
-    data: { query },
+    data: { query, ...(queueType ? { queue_type: queueType } : {}) },
+  })
+}
+
+/** 编辑排队中的追加消息内容或切换队列类型。 */
+export function updateSteerMessage(
+  conversationId: string,
+  messageId: string,
+  payload: { content?: string; queueType?: 'next-step' | 'next-turn' },
+): Promise<ApiResponse<{ message_id: string; content: string; queue_type: 'next-step' | 'next-turn' }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/steer/${messageId}`,
+    method: 'put',
+    data: {
+      ...(payload.content !== undefined ? { content: payload.content } : {}),
+      ...(payload.queueType ? { queue_type: payload.queueType } : {}),
+    },
+  })
+}
+
+/** 删除仍在排队等待注入的追加消息。 */
+export function cancelSteerMessage(
+  conversationId: string,
+  messageId: string,
+): Promise<ApiResponse<{ message_id: string }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/steer/${messageId}`,
+    method: 'delete',
+  })
+}
+
+/** 读取仍排队的追加消息与运行状态，供页面刷新后恢复展示。 */
+export function listSteerMessages(
+  conversationId: string,
+): Promise<ApiResponse<{
+  has_active_run: boolean
+  messages: Array<{
+    message_id: string
+    content: string
+    queue_type: 'next-step' | 'next-turn'
+    status: 'pending' | 'claimed' | 'consumed' | 'cancelled'
+    create_time: string
+  }>
+}>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
+    method: 'get',
   })
 }
 

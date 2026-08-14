@@ -415,3 +415,145 @@ async def test_router_conversation_routes_return_not_found_when_config_missing(r
     ))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.generate_conversation_title("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
     assert payload(await conversation_router.toggle_conversation_favorite("conv", request))["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+# ============ steer 队列接口分支 ============
+
+@pytest.fixture()
+def steer_router_state(router_state, monkeypatch):
+    """steer 接口测试环境：会话归属校验通过，inbox service 可观察。"""
+    calls = {}
+
+    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+        return "chat_data"
+
+    async def enqueue(conversation_id, user_id, operator_name, content, queue_type="next-turn"):
+        calls["enqueue"] = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "operator_name": operator_name,
+            "content": content,
+            "queue_type": queue_type,
+        }
+        return "message-1"
+
+    async def update(conversation_id, user_id, operator_name, message_id, *, content=None, queue_type=None):
+        calls["update"] = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "message_id": message_id,
+            "content": content,
+            "queue_type": queue_type,
+        }
+        return {"message_id": message_id, "content": content or "原内容", "queue_type": queue_type or "next-step"}
+
+    async def cancel(conversation_id, user_id, operator_name, message_id):
+        calls["cancel"] = {"conversation_id": conversation_id, "message_id": message_id}
+        return None
+
+    async def list_pending(conversation_id, user_id):
+        calls["list_pending"] = {"conversation_id": conversation_id, "user_id": user_id}
+        return {
+            "has_active_run": True,
+            "messages": [
+                {"message_id": "message-1", "content": "排队一", "queue_type": "next-turn", "status": "pending", "create_time": "2025-01-01 00:00:00"},
+            ],
+        }
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "enqueue_message", enqueue)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "update_pending_message", update)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_pending_message", cancel)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "list_message_states", list_pending)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_steer_enqueue_default_and_explicit_queue_type(steer_router_state):
+    calls = steer_router_state
+    request = conversation_router.SteerRequest(query=" 默认下轮 ")
+    response = await conversation_router.steer("conv-1", request, FakeRequest())
+    assert payload(response)["code"] == ErrorCode.SUCCESS
+    assert calls["enqueue"]["content"] == "默认下轮"
+    assert calls["enqueue"]["queue_type"] == "next-turn"
+
+    request = conversation_router.SteerRequest(query="立即插入", queue_type="next-step")
+    response = await conversation_router.steer("conv-1", request, FakeRequest())
+    assert calls["enqueue"]["queue_type"] == "next-step"
+
+
+@pytest.mark.asyncio
+async def test_steer_enqueue_rejects_blank_content(steer_router_state):
+    response = await conversation_router.steer("conv-1", conversation_router.SteerRequest(query="   "), FakeRequest())
+    assert payload(response)["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
+
+
+@pytest.mark.asyncio
+async def test_update_steer_message_success(steer_router_state):
+    calls = steer_router_state
+    request = conversation_router.SteerMessageUpdateRequest(content="改内容", queue_type="next-turn")
+    response = await conversation_router.update_steer_message("conv-1", "message-1", request, FakeRequest())
+    assert payload(response)["code"] == ErrorCode.SUCCESS
+    assert calls["update"]["message_id"] == "message-1"
+    assert calls["update"]["content"] == "改内容"
+    assert calls["update"]["queue_type"] == "next-turn"
+
+
+@pytest.mark.asyncio
+async def test_update_steer_message_requires_field(steer_router_state):
+    response = await conversation_router.update_steer_message(
+        "conv-1", "message-1", conversation_router.SteerMessageUpdateRequest(), FakeRequest(),
+    )
+    assert payload(response)["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
+
+
+@pytest.mark.asyncio
+async def test_update_steer_message_not_found_and_not_pending(steer_router_state, monkeypatch):
+    async def not_found(*_args, **_kwargs):
+        raise conversation_router.SteerMessageNotFoundError("队列消息不存在")
+
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "update_pending_message", not_found)
+    response = await conversation_router.update_steer_message(
+        "conv-1", "message-1",
+        conversation_router.SteerMessageUpdateRequest(content="x"),
+        FakeRequest(),
+    )
+    assert payload(response)["code"] == ErrorCode.CHATDATA_STEER_MESSAGE_NOT_FOUND
+
+    async def not_pending(*_args, **_kwargs):
+        raise conversation_router.SteerMessageNotPendingError("消息已进入注入流程，无法修改")
+
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "update_pending_message", not_pending)
+    response = await conversation_router.update_steer_message(
+        "conv-1", "message-1",
+        conversation_router.SteerMessageUpdateRequest(content="x"),
+        FakeRequest(),
+    )
+    assert payload(response)["code"] == ErrorCode.CHATDATA_STEER_MESSAGE_NOT_PENDING
+
+
+@pytest.mark.asyncio
+async def test_cancel_steer_message_success_and_not_found(steer_router_state, monkeypatch):
+    calls = steer_router_state
+    response = await conversation_router.cancel_steer_message("conv-1", "message-1", FakeRequest())
+    assert payload(response)["code"] == ErrorCode.SUCCESS
+    assert calls["cancel"]["message_id"] == "message-1"
+
+    async def not_found(*_args, **_kwargs):
+        raise conversation_router.SteerMessageNotFoundError("队列消息不存在")
+
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_pending_message", not_found)
+    response = await conversation_router.cancel_steer_message("conv-1", "missing", FakeRequest())
+    assert payload(response)["code"] == ErrorCode.CHATDATA_STEER_MESSAGE_NOT_FOUND
+
+
+
+@pytest.mark.asyncio
+async def test_list_steer_messages_restores_queue(steer_router_state):
+    calls = steer_router_state
+    response = await conversation_router.list_steer_messages("conv-1", FakeRequest())
+    body = payload(response)
+    assert body["code"] == ErrorCode.SUCCESS
+    assert calls["list_pending"] == {"conversation_id": "conv-1", "user_id": "u1"}
+    assert body["data"]["has_active_run"] is True
+    assert [item["content"] for item in body["data"]["messages"]] == ["排队一"]

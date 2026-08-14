@@ -335,6 +335,7 @@ export interface ConversationItem {
   created_at: string
   updated_at?: string
   agent_id?: string
+  datasource_id?: string
   is_favorited?: boolean
 }
 
@@ -532,7 +533,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'steer_consumed' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'inbox_admitted' | 'error' | 'done' | 'dashboard_spec'
 
 // 工具状态
 export type ToolStatus = 'running' | 'completed' | 'error'

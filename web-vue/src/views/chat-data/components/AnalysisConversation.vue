@@ -10,7 +10,7 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, steerConversation, uploadFile } from '../api'
+import { cancelSteerMessage, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -28,6 +28,7 @@ import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPayloads } from '../utils'
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
+import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
 interface Props {
@@ -79,13 +80,13 @@ const input = ref('')
 const inputFocused = ref(false)
 const isGenerating = ref(false)
 const isSteering = ref(false)
-const consumedSteerMessageIds = ref<Set<string>>(new Set())
-const pendingSteerMessages = ref<Array<{
-  clientId: string
-  messageId?: string
-  content: string
-  timestamp: Date
-}>>([])
+const admittedInboxMessageIds = ref<Set<string>>(new Set())
+const editingSteerId = ref<string | null>(null)
+const editingSteerDraft = ref('')
+const steerActionBusy = ref(false)
+const hasActiveRun = ref(false)
+let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
+const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
@@ -95,36 +96,148 @@ const focusInput = () => {
   inputBarRef.value?.focus()
 }
 
-const consumeSteerMessages = (messageIds: string[]) => {
-  const consumedIds = new Set(messageIds)
-  const consumed = pendingSteerMessages.value.filter(item => item.messageId && consumedIds.has(item.messageId))
-  if (!consumed.length) return
+const admitPendingMessages = (messageIds: string[]) => {
+  if (!messageIds.length) return
   const active = activeAssistantMessageId.value
     ? messages.value.find(item => item.id === activeAssistantMessageId.value)
     : null
   if (active?.role === 'assistant') active.isStreaming = false
   activeAssistantMessageId.value = null
-  for (const item of consumed) {
-    messages.value.push({
-      id: item.messageId!,
-      role: 'user',
-      content: item.content,
-      timestamp: item.timestamp,
-    })
-    consumedSteerMessageIds.value.delete(item.messageId!)
+  const result = admitInboxMessages(pendingSteerMessages.value, messages.value, messageIds)
+  pendingSteerMessages.value = result.queue
+  messages.value = result.messages
+  for (const messageId of messageIds) {
+    admittedInboxMessageIds.value.delete(messageId)
+    if (editingSteerId.value === messageId) cancelEditSteer()
   }
-  pendingSteerMessages.value = pendingSteerMessages.value.filter(
-    item => !item.messageId || !consumedIds.has(item.messageId),
-  )
+}
+
+const startEditSteerMessage = (item: { content: string; messageId?: string }) => {
+  if (!item.messageId || editingSteerId.value === item.messageId) return
+  editingSteerId.value = item.messageId
+  editingSteerDraft.value = item.content
+}
+
+/** 以服务端状态和持久历史共同恢复队列，不以 pending 暂时缺失作为删除依据。 */
+const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) => {
+  const conversationId = localConversationId.value || props.conversationId
+  if (!conversationId) return
+  try {
+    const response = await listSteerMessages(conversationId)
+    const serverMessages = response.data?.messages ?? []
+    hasActiveRun.value = Boolean(response.data?.has_active_run)
+    const persistedMessageIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
+    const reconciled = reconcileInboxSnapshot(pendingSteerMessages.value, serverMessages, persistedMessageIds)
+    pendingSteerMessages.value = reconciled.queue
+    admitPendingMessages(reconciled.admittedMessageIds)
+  } catch {
+    // 恢复失败保持本地现状，不打断用户操作
+  }
+  if (hasActiveRun.value && !isGenerating.value && (options?.restartPolling ?? true)) {
+    startSteerRestorePolling()
+  }
+}
+
+const stopSteerRestorePolling = () => {
+  if (steerRestoreTimer) {
+    window.clearInterval(steerRestoreTimer)
+    steerRestoreTimer = null
+  }
+}
+
+/** 刷新页面后模型仍在运行时，轮询同步队列消费状态。 */
+const startSteerRestorePolling = () => {
+  stopSteerRestorePolling()
+  steerRestoreTimer = window.setInterval(() => {
+    if (!hasActiveRun.value || isGenerating.value) {
+      stopSteerRestorePolling()
+      return
+    }
+    restorePendingSteerQueue({ restartPolling: false })
+  }, 5000)
+}
+
+watch(isGenerating, (generating) => {
+  if (!generating) {
+    // 本轮结束：队列消息可能已被系统取走或新增，同步一次
+    restorePendingSteerQueue()
+  }
+})
+
+const saveEditSteerMessage = async (item: { messageId?: string; content: string }) => {
+  const conversationId = localConversationId.value || props.conversationId
+  if (!item.messageId || !conversationId || steerActionBusy.value) return
+  const draft = editingSteerDraft.value.trim()
+  if (!draft) {
+    ElMessage.warning('消息内容不能为空')
+    return
+  }
+  steerActionBusy.value = true
+  try {
+    const response = await updateSteerMessage(conversationId, item.messageId, { content: draft })
+    if (response.data?.content) item.content = response.data.content
+    editingSteerId.value = null
+    ElMessage.success('消息已更新')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '修改队列消息失败')
+    // 以系统为准：消息可能已被取走，同步服务端队列状态
+    restorePendingSteerQueue()
+  } finally {
+    steerActionBusy.value = false
+  }
+}
+
+const cancelEditSteer = () => {
+  editingSteerId.value = null
+  editingSteerDraft.value = ''
+}
+
+const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType: InboxQueueType }) => {
+  const conversationId = localConversationId.value || props.conversationId
+  if (!item.messageId || !conversationId || steerActionBusy.value) return
+  const nextType = item.queueType === 'next-step' ? 'next-turn' : 'next-step'
+  steerActionBusy.value = true
+  try {
+    const response = await updateSteerMessage(conversationId, item.messageId, { queueType: nextType })
+    if (response.data?.queue_type) item.queueType = response.data.queue_type
+    ElMessage.success(nextType === 'next-step' ? '已切换为立即插入' : '已切换为下一轮处理')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '切换队列类型失败')
+    restorePendingSteerQueue()
+  } finally {
+    steerActionBusy.value = false
+  }
+}
+
+const removePendingSteerMessage = async (item: { clientId: string; messageId?: string }) => {
+  const conversationId = localConversationId.value || props.conversationId
+  if (steerActionBusy.value || !conversationId) return
+  if (!item.messageId) {
+    pendingSteerMessages.value = pendingSteerMessages.value.filter(entry => entry.clientId !== item.clientId)
+    return
+  }
+  steerActionBusy.value = true
+  try {
+    await cancelSteerMessage(conversationId, item.messageId)
+    pendingSteerMessages.value = pendingSteerMessages.value.filter(entry => entry.clientId !== item.clientId)
+    if (editingSteerId.value === item.messageId) cancelEditSteer()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '移除队列消息失败')
+    restorePendingSteerQueue()
+  } finally {
+    steerActionBusy.value = false
+  }
 }
 
 onMounted(() => {
   focusInput()
   document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
+  restorePendingSteerQueue()
 })
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
+  stopSteerRestorePolling()
 })
 const isNearBottom = ref(true)
 
@@ -1500,6 +1613,22 @@ const { isLoadingHistory, loadedConversationId, resetHistory } = useConversation
   tokenUsage,
 })
 
+watch(
+  () => messages.value.filter(item => item.role === 'user').map(item => item.id).join('\u0000'),
+  () => {
+    const persistedIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
+    const retiredIds = pendingSteerMessages.value
+      .filter(item => item.messageId && persistedIds.has(item.messageId))
+      .map(item => item.messageId!)
+    if (!retiredIds.length) return
+    const retiredSet = new Set(retiredIds)
+    pendingSteerMessages.value = pendingSteerMessages.value.filter(
+      item => !item.messageId || !retiredSet.has(item.messageId),
+    )
+    if (editingSteerId.value && retiredSet.has(editingSteerId.value)) cancelEditSteer()
+  },
+)
+
 const getConversationDisplayContent = (content: string) => hideSemanticConfigSelectionPayloads(content).trim()
 
 const handleScroll = () => {
@@ -2070,8 +2199,8 @@ const submitAnalysisQuery = async (
         upsertToolMessage(toolInfo)
       },
       (messageIds) => {
-        consumedSteerMessageIds.value = new Set([...consumedSteerMessageIds.value, ...messageIds])
-        consumeSteerMessages(messageIds)
+        admittedInboxMessageIds.value = new Set([...admittedInboxMessageIds.value, ...messageIds])
+        admitPendingMessages(messageIds)
       },
     )
   } catch (err) {
@@ -2083,7 +2212,8 @@ const submitAnalysisQuery = async (
 }
 
 const handleSubmit = async () => {
-  if (isGenerating.value) {
+  // 本地正在流式生成，或刷新后服务端仍有运行中的任务：输入都进入队列
+  if (isGenerating.value || hasActiveRun.value) {
     const query = input.value.trim()
     const conversationId = localConversationId.value || props.conversationId
     if (!query || !conversationId || isSteering.value) return
@@ -2091,17 +2221,20 @@ const handleSubmit = async () => {
     pendingSteerMessages.value.push({
       clientId: temporaryId,
       content: query,
+      queueType: 'next-turn',
+      status: 'submitting',
       timestamp: new Date(),
     })
     input.value = ''
     isSteering.value = true
     try {
-      const response = await steerConversation(conversationId, query)
+      const response = await steerConversation(conversationId, query, 'next-turn')
       const queuedMessage = pendingSteerMessages.value.find(item => item.clientId === temporaryId)
       if (queuedMessage && response.data?.message_id) {
         queuedMessage.messageId = response.data.message_id
-        if (consumedSteerMessageIds.value.has(queuedMessage.messageId)) {
-          consumeSteerMessages([queuedMessage.messageId])
+        queuedMessage.status = 'pending'
+        if (admittedInboxMessageIds.value.has(queuedMessage.messageId)) {
+          admitPendingMessages([queuedMessage.messageId])
         }
       }
     } catch (error) {
@@ -2406,17 +2539,81 @@ const handleKeyDown = (event: KeyboardEvent) => {
             <div class="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               <i class="fa-solid fa-chevron-down text-[9px]"></i>
               <span>{{ pendingSteerMessages.length }} 个队列任务</span>
+              <span class="ml-auto text-[10px] text-slate-400">发送默认下一轮处理，可手动立即插入</span>
             </div>
             <div class="max-h-[120px] overflow-y-auto">
               <div
                 v-for="item in pendingSteerMessages"
                 :key="item.clientId"
-                class="flex items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-sm text-slate-700 last:border-b-0"
+                class="group flex items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-sm text-slate-700 last:border-b-0"
               >
-                <span class="min-w-0 flex-1 truncate">{{ item.content }}</span>
-                <span class="flex shrink-0 items-center gap-1.5 text-[10px] text-slate-400">
-                  <i class="fa-solid fa-circle-notch fa-spin text-[9px]"></i>
-                  等待处理
+                <span
+                  class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+                  :class="item.queueType === 'next-step' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'"
+                >{{ item.queueType === 'next-step' ? '立即' : '下轮' }}</span>
+                <input
+                  v-if="editingSteerId === item.messageId"
+                  v-model="editingSteerDraft"
+                  type="text"
+                  autofocus
+                  class="min-w-0 flex-1 rounded border border-[#1677FF]/50 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-[#1677FF]"
+                  placeholder="修改消息内容"
+                  @keydown.enter.prevent="saveEditSteerMessage(item)"
+                  @keydown.esc.prevent="cancelEditSteer()"
+                />
+                <span v-else class="min-w-0 flex-1 truncate">{{ item.content }}</span>
+                <span v-if="editingSteerId !== item.messageId" class="flex shrink-0 items-center gap-1.5 text-[10px] text-slate-400">
+                  <i v-if="!item.messageId" class="fa-solid fa-circle-notch fa-spin text-[9px]"></i>
+                  <span v-if="item.status === 'submitting'">入队中</span>
+                  <span v-else-if="item.status === 'claimed' || item.status === 'consumed'">处理中</span>
+                  <span v-else>等待处理</span>
+                  <button
+                    v-if="item.messageId"
+                    type="button"
+                    class="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
+                    :class="item.queueType === 'next-step' ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-blue-50 text-[#1677FF] hover:bg-blue-100'"
+                    :title="item.queueType === 'next-step' ? '改为下一轮处理' : '立即插入当前对话'"
+                    @click="toggleSteerMessageQueueType(item)"
+                  >
+                    <i :class="item.queueType === 'next-step' ? 'fa-solid fa-arrow-right-arrow-left text-[9px]' : 'fa-solid fa-bolt text-[9px]'"></i>
+                    {{ item.queueType === 'next-step' ? '转下轮' : '立即插入' }}
+                  </button>
+                  <button
+                    v-if="item.messageId"
+                    type="button"
+                    class="flex h-5 w-5 items-center justify-center rounded text-slate-400 transition-colors hover:bg-blue-50 hover:text-[#1677FF]"
+                    title="编辑"
+                    @click="startEditSteerMessage(item)"
+                  >
+                    <i class="fa-solid fa-pen text-[9px]"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-5 w-5 items-center justify-center rounded text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                    title="移除"
+                    @click="removePendingSteerMessage(item)"
+                  >
+                    <i class="fa-solid fa-xmark text-[10px]"></i>
+                  </button>
+                </span>
+                <span v-else class="flex shrink-0 items-center gap-1.5 text-[10px]">
+                  <button
+                    type="button"
+                    class="rounded bg-[#1677FF] px-1.5 py-0.5 text-white transition-colors hover:bg-[#1677FF]/85"
+                    title="保存修改"
+                    @click="saveEditSteerMessage(item)"
+                  >
+                    <i class="fa-solid fa-check text-[9px]"></i>
+                    保存
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-slate-200"
+                    title="取消编辑"
+                    @click="cancelEditSteer()"
+                  >
+                    取消
+                  </button>
                 </span>
               </div>
             </div>

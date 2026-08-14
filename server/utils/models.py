@@ -78,6 +78,13 @@ class ChatDataAgentInbox(Base):
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     record_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    queue_type: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="next-step",
+        server_default="next-step",
+        comment="队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理",
+    )
     content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)

@@ -138,11 +138,6 @@ const normalizeVisiblePath = (path: unknown): string => {
     .replace(/\/+/g, '/')
 }
 
-const getFileName = (path: unknown): string => {
-  const normalizedPath = normalizeVisiblePath(path)
-  return normalizedPath.split('/').filter(Boolean).pop() || normalizedPath
-}
-
 const getResultField = (field: string): string => {
   const result = String(props.toolCall.result || '')
   const match = result.match(new RegExp(`^${field}=([^\\n]+)`, 'm'))
@@ -152,10 +147,10 @@ const getResultField = (field: string): string => {
 const compactDescription = computed(() => {
   const args = props.toolCall.args || {}
   if (props.toolCall.tool_name === 'file_read') {
-    return getFileName(args.file_path || args.path)
+    return normalizeVisiblePath(args.file_path || args.path)
   }
   if (props.toolCall.tool_name === 'file_edit') {
-    return getFileName(args.file_path || args.path)
+    return normalizeVisiblePath(args.file_path || args.path)
   }
   if (props.toolCall.tool_name === 'semantic_query_tool') {
     return normalizeVisiblePath(args.save_as)
@@ -480,9 +475,9 @@ function getSqlTokenClass(type: string): string {
     @click="emit('select')"
   >
     <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
-    <span class="min-w-0 truncate" :title="toolCall.tool_name">
-      <span class="font-semibold">{{ displayName }}</span>
-      <span v-if="compactDescription" class="ml-2 font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
+    <span class="flex min-w-0 items-center" :title="compactDescription || toolCall.tool_name">
+      <span class="shrink-0 font-semibold">{{ displayName }}</span>
+      <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
     </span>
     <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
     <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>

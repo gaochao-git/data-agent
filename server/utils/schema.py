@@ -63,6 +63,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   `run_id` varchar(64) NOT NULL COMMENT '运行ID',
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
+  `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
   `content` mediumtext NOT NULL COMMENT '追加消息内容，运行记录为空',
   `status` varchar(16) NOT NULL COMMENT '运行或消息状态',
   `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',

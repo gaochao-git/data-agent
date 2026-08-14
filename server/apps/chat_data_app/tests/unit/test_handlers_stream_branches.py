@@ -140,14 +140,14 @@ async def test_agent_sse_stream_adapter_forwards_valid_tool_progress_only():
 async def test_agent_sse_stream_adapter_emits_queued_and_custom_steer_events():
     class Agent:
         async def astream(self, *_args, **_kwargs):
-            yield "custom", {"type": "steer_consumed", "message_ids": ["message-2"]}
+            yield "custom", {"type": "inbox_admitted", "message_ids": ["message-2"]}
 
     adapter = handlers._AgentSseStreamAdapter(agent=Agent(), initial_state={}, config={})
-    adapter.queue_event(handlers._format_sse("steer_consumed", {"message_ids": ["message-1"]}))
+    adapter.queue_event(handlers._format_sse("inbox_admitted", {"message_ids": ["message-1"]}))
 
     events = await collect_stream(adapter.stream_events())
 
-    assert [sse_event_name(event) for event in events] == ["steer_consumed", "steer_consumed"]
+    assert [sse_event_name(event) for event in events] == ["inbox_admitted", "inbox_admitted"]
     assert '"message_ids": ["message-1"]' in events[0]
     assert '"message_ids": ["message-2"]' in events[1]
 
@@ -707,6 +707,40 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
     assert "prompt_context" not in graph.initial_state
     assert "tables_ddl_info" not in graph.initial_state
     assert "loaded_table_names" not in graph.initial_state
+
+
+@pytest.mark.asyncio
+async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypatch):
+    """上一轮遗留的排队消息接管为新轮首批输入：持久化 + inbox_admitted + 注入 initial_state。"""
+    class Graph:
+        def __init__(self):
+            self.initial_state = None
+
+        async def aget_state(self, _config):
+            return SimpleNamespace(values={}, tasks=[])
+
+        async def astream(self, initial_state, *_args, **_kwargs):
+            self.initial_state = initial_state
+            yield FakeChunk(content="继续回答", msg_type="ai"), {"langgraph_node": "model"}
+
+    graph = Graph()
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+
+    adopted = [HumanMessage(content="遗留排队消息", id="adopted-1")]
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
+        thread_id="conv",
+        user_query="新问题",
+        datasource_id="ds_a",
+        adopted_messages=adopted,
+    ))
+
+    text = "".join(chunks)
+    assert "inbox_admitted" in text
+    assert "adopted-1" in text
+    state_messages = graph.initial_state["messages"]
+    assert [message.content for message in state_messages] == ["遗留排队消息", "新问题"]
+    assert [str(message.id) for message in state_messages][0] == "adopted-1"
 
 
 @pytest.mark.asyncio

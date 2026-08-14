@@ -25,7 +25,7 @@ def _stub_conversation_event_writes(monkeypatch):
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
 
     async def start_run(*_args, **_kwargs):
-        return "run-test"
+        return "run-test", []
 
     async def no_messages(*_args, **_kwargs):
         return ClaimedAgentMessages("run-test", [])
