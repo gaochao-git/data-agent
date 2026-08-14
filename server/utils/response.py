@@ -2,6 +2,8 @@
 统一响应格式封装
 提供标准的 API 响应格式，便于前后端统一处理
 """
+from http import HTTPStatus
+
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
@@ -111,5 +113,5 @@ async def chatdata_validation_exception_handler(request: Request, exc: RequestVa
         msg="请求参数不合法",
         code=ErrorCode.CHATDATA_VALIDATION_FAILED,
         status="error",
-        http_status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+        http_status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
     )

@@ -59,7 +59,7 @@ async def test_stream_agent_turn_runs_persistence_and_resource_lifecycle_in_orde
 
     assert events == ["event: message\n\n", "event: message_end\n\n", "event: done\n\n"]
     assert adapter.finish_calls == [{"persist_latest_ai_timestamp": True}]
-    assert calls == ["user", "before", "finalize:True", "history", "after"]
+    assert calls == ["user", "before", "history", "finalize:True", "after"]
 
 
 @pytest.mark.asyncio
@@ -109,6 +109,39 @@ async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_o
         ))
 
     assert calls == ["user", "partial", "finalize:False"]
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_turn_continues_before_emitting_final_events():
+    calls: list[str] = []
+    adapter = _FakeStreamAdapter(["event: message\n\n"])
+    continuation_checks = 0
+
+    async def hook(name: str):
+        calls.append(name)
+
+    async def continue_once():
+        nonlocal continuation_checks
+        continuation_checks += 1
+        return continuation_checks == 1
+
+    events = await _collect(stream_agent_turn(
+        stream_adapter=adapter,
+        format_sse=lambda event, _data: f"event: {event}\n\n",
+        persist_user_message=lambda: hook("user"),
+        persist_turn_history=lambda: hook("history"),
+        persist_partial_history=lambda: hook("partial"),
+        after_stream=lambda: hook("after_stream"),
+        continue_stream=continue_once,
+    ))
+
+    assert events == [
+        "event: message\n\n",
+        "event: message\n\n",
+        "event: message_end\n\n",
+        "event: done\n\n",
+    ]
+    assert calls == ["user", "history", "after_stream", "history", "after_stream"]
 
 
 async def _before_stream(calls: list[str]) -> bool:

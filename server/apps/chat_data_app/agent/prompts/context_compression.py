@@ -58,7 +58,7 @@ def _message_role(message: BaseMessage) -> str:
         return "助手"
     if isinstance(message, ToolMessage):
         return f"工具({getattr(message, 'name', None) or '-'})"
-    return str(getattr(message, "type", "") or "消息")
+    return "消息"
 
 
 def _message_content(message: BaseMessage) -> str:

@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -508,7 +509,8 @@ def test_request_message_and_model_helpers():
     )
 
     messages = _build_request_messages(request)
-    assert [message.type for message in messages] == ["system", "human"]
+    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[1], HumanMessage)
     assert _request_model_name(request) == "qwen-test"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model="model-field"))) == "model-field"
     assert _request_model_name(SimpleNamespace(model=SimpleNamespace(model_id="model-id-field"))) == "model-id-field"

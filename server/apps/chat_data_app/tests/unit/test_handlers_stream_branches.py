@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, HumanMessageChunk, ToolMessage, ToolMessageChunk
 
 from apps.chat_data_app import handlers
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
@@ -136,42 +136,51 @@ async def test_agent_sse_stream_adapter_forwards_valid_tool_progress_only():
     assert '"progress": 50' in events[0]
 
 
-class FakeChunk:
-    def __init__(
-        self,
-        content="",
-        *,
-        msg_type="ai",
-        tool_calls=None,
-        tool_call_chunks=None,
-        tool_call_id="",
-        name="",
-        additional_kwargs=None,
-        response_metadata=None,
-    ):
-        self.content = content
-        self.type = msg_type
-        self.tool_calls = tool_calls or []
-        self.tool_call_chunks = tool_call_chunks or []
-        self.tool_call_id = tool_call_id
-        self.name = name
-        self.additional_kwargs = additional_kwargs or {}
-        self.response_metadata = response_metadata or {}
+@pytest.mark.asyncio
+async def test_agent_sse_stream_adapter_emits_queued_and_custom_steer_events():
+    class Agent:
+        async def astream(self, *_args, **_kwargs):
+            yield "custom", {"type": "steer_consumed", "message_ids": ["message-2"]}
 
-    def model_dump(self):
-        data = {
-            "content": self.content,
-            "type": self.type,
-        }
-        if self.tool_call_id:
-            data["tool_call_id"] = self.tool_call_id
-        if self.name:
-            data["name"] = self.name
-        if self.additional_kwargs:
-            data["additional_kwargs"] = self.additional_kwargs
-        if self.response_metadata:
-            data["response_metadata"] = self.response_metadata
-        return data
+    adapter = handlers._AgentSseStreamAdapter(agent=Agent(), initial_state={}, config={})
+    adapter.queue_event(handlers._format_sse("steer_consumed", {"message_ids": ["message-1"]}))
+
+    events = await collect_stream(adapter.stream_events())
+
+    assert [sse_event_name(event) for event in events] == ["steer_consumed", "steer_consumed"]
+    assert '"message_ids": ["message-1"]' in events[0]
+    assert '"message_ids": ["message-2"]' in events[1]
+
+
+def FakeChunk(
+    content="",
+    *,
+    msg_type="ai",
+    tool_calls=None,
+    tool_call_chunks=None,
+    tool_call_id="",
+    name="",
+    additional_kwargs=None,
+    response_metadata=None,
+):
+    """测试工厂：只返回 LangChain 标准消息 Chunk。"""
+    if msg_type == "human":
+        return HumanMessageChunk(content=content, additional_kwargs=additional_kwargs or {})
+    if msg_type == "tool":
+        return ToolMessageChunk(
+            content=content,
+            tool_call_id=tool_call_id,
+            name=name or None,
+            additional_kwargs=additional_kwargs or {},
+        )
+    normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
+    return AIMessageChunk(
+        content=content,
+        tool_calls=normalized_tool_calls,
+        tool_call_chunks=tool_call_chunks or [],
+        additional_kwargs=additional_kwargs or {},
+        response_metadata=response_metadata or {},
+    )
 
 
 class FakeCheckpointer:
@@ -277,6 +286,62 @@ async def test_agent_sse_stream_adapter_emits_shared_events_and_message_end():
     assert end_payload["timestamp"] == "2026-07-15 09:00:00"
     assert end_payload["usage"]["total_tokens"] == 7
     assert agent.updated == []
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_stream_adapter_does_not_emit_steer_human_message():
+    class Agent:
+        async def astream(self, *_args, **_kwargs):
+            yield "messages", (FakeChunk(content="追加要求", msg_type="human"), {"langgraph_node": "model"})
+            yield "messages", (FakeChunk(content="已按要求处理", msg_type="ai"), {"langgraph_node": "model"})
+
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=Agent(),
+        initial_state={"messages": []},
+        config={"thread_id": "t"},
+        visible_message_filter=handlers._is_chat_data_visible_stream_message,
+    )
+
+    text = "".join(await collect_stream(adapter.stream_events()))
+
+    assert "追加要求" not in text
+    assert "已按要求处理" in text
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_stream_adapter_supports_langchain_chunk_message_types():
+    class Agent:
+        async def astream(self, *_args, **_kwargs):
+            yield "messages", (
+                HumanMessageChunk(content="不要输出的 steer 消息"),
+                {"langgraph_node": "model"},
+            )
+            yield "messages", (
+                AIMessageChunk(content="", additional_kwargs={"reasoning_content": "正在思考"}),
+                {"langgraph_node": "model"},
+            )
+            yield "messages", (
+                AIMessageChunk(content="千问正常回答"),
+                {"langgraph_node": "model"},
+            )
+            yield "messages", (
+                ToolMessageChunk(content="工具结果", tool_call_id="call-1", name="file_read"),
+                {"langgraph_node": "tools"},
+            )
+
+    adapter = handlers._AgentSseStreamAdapter(
+        agent=Agent(),
+        initial_state={"messages": []},
+        config={"thread_id": "t"},
+        visible_message_filter=handlers._is_chat_data_visible_stream_message,
+    )
+
+    text = "".join(await collect_stream(adapter.stream_events()))
+
+    assert "不要输出的 steer 消息" not in text
+    assert "正在思考" in text
+    assert "千问正常回答" in text
+    assert "工具结果" in text
 
 
 def test_agent_sse_stream_adapter_first_token_timeout_alarm(monkeypatch):

@@ -68,6 +68,36 @@ class ChatDataConversationEvent(Base):
     )
 
 
+class ChatDataAgentInbox(Base):
+    """跨进程协调 ChatData 活跃运行和运行中追加消息。"""
+    __tablename__ = "chat_data_agent_inbox"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    record_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    consumed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    lease_expire_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("record_type", "message_id", name="uniq_agent_inbox_msg"),
+        Index("idx_agent_inbox_conv", "conversation_id", "user_id", "record_type", "status"),
+        Index("idx_agent_inbox_run", "run_id", "record_type", "status"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
     __tablename__ = "uploaded_files"

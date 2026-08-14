@@ -4,13 +4,14 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 
 from apps.chat_data_app.agent.tools import dsl2sql
 from apps.chat_data_app.services.semantic.run import semantic_query_service, semantic_conversation_context, semantic_model_repository
 from apps.chat_data_app.tests.api.conftest import FakeDatasourceManager, FakeSemanticConfigService
 from apps.chat_data_app.routers import conversations as conversation_router
+from apps.chat_data_app.services.agent_run.agent_inbox_service import ClaimedAgentMessages
 
 
 @pytest.fixture(autouse=True)
@@ -23,36 +24,42 @@ def _stub_conversation_event_writes(monkeypatch):
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_user_message", noop_event_write)
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
 
+    async def start_run(*_args, **_kwargs):
+        return "run-test"
 
-class FakeMessageChunk:
-    def __init__(
-        self,
-        *,
-        content="",
-        msg_type="ai",
-        tool_calls=None,
-        tool_call_chunks=None,
-        tool_call_id="",
-        name="",
-    ):
-        self.content = content
-        self.type = msg_type
-        self.tool_calls = tool_calls or []
-        self.tool_call_chunks = tool_call_chunks or []
-        self.tool_call_id = tool_call_id
-        self.name = name
+    async def no_messages(*_args, **_kwargs):
+        return ClaimedAgentMessages("run-test", [])
 
-    def model_dump(self):
-        data = {"content": self.content, "type": self.type}
-        if self.tool_calls:
-            data["tool_calls"] = self.tool_calls
-        if self.tool_call_chunks:
-            data["tool_call_chunks"] = self.tool_call_chunks
-        if self.tool_call_id:
-            data["tool_call_id"] = self.tool_call_id
-        if self.name:
-            data["name"] = self.name
-        return data
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(handler_module.agent_inbox_service, "start_run", start_run)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_messages", no_messages)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_or_finish_run", no_messages)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "mark_consumed", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "finish_run", noop)
+
+
+def FakeMessageChunk(
+    *,
+    content="",
+    msg_type="ai",
+    tool_calls=None,
+    tool_call_chunks=None,
+    tool_call_id="",
+    name="",
+):
+    """测试工厂：返回真实 LangChain 消息 Chunk。"""
+    if msg_type == "human":
+        return HumanMessageChunk(content=content)
+    if msg_type == "tool":
+        return ToolMessageChunk(content=content, tool_call_id=tool_call_id, name=name or None)
+    normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
+    return AIMessageChunk(
+        content=content,
+        tool_calls=normalized_tool_calls,
+        tool_call_chunks=tool_call_chunks or [],
+    )
 
 
 class FakeGraph:

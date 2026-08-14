@@ -894,7 +894,7 @@ async def test_chat_data_context_usage_middleware_merges_persisted_compression_s
     assert sent_messages[0].additional_kwargs["context_summary"] is True
     assert "历史问题" in sent_messages[0].content
     assert sent_messages[-1].content == "当前问题"
-    assert all(message.type != "system" for message in sent_messages)
+    assert all(not isinstance(message, SystemMessage) for message in sent_messages)
     token_usage = response.command.update["token_usage"]
     assert token_usage["context_compression"]["triggered"] is False
 

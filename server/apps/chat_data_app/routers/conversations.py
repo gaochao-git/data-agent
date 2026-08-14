@@ -6,7 +6,7 @@
 import inspect
 from typing import Callable, Optional, Dict, Any, List
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, status as http_status
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
@@ -16,6 +16,11 @@ from utils.logger import get_logger
 from auth import get_forwarded_user, AuthenticationError
 
 from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snapshot_async
+from ..services.agent_run.agent_inbox_service import (
+    AgentRunConflictError,
+    AgentRunNotActiveError,
+    agent_inbox_service,
+)
 from .. import AGENT_ID
 
 logger = get_logger(__name__)
@@ -39,6 +44,11 @@ class CompletionRequest(BaseModel):
     agent_id: str
     options: Optional[Dict[str, Any]] = None  # 通用扩展参数
     file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
+
+
+class SteerRequest(BaseModel):
+    """运行中追加纯文本消息。"""
+    query: str
 
 
 # ============ Agent 配置注册 ============
@@ -490,11 +500,65 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         kwargs = _build_completion_handler_kwargs(handler, conversation_id, request, options, req, user_id, username)
 
         return await handler(**kwargs)
+    except AgentRunConflictError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_AGENT_RUN_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"对话失败: {e}", exc_info=True)
         return business_response(msg=f"对话失败: {str(e)}", code=ErrorCode.CHATDATA_CONVERSATION_COMPLETION_FAILED, status="error")
+
+
+@router.post("/{conversation_id}/steer")
+async def steer(conversation_id: str, request: SteerRequest, req: Request):
+    """向当前用户正在运行的 ChatData Agent 追加一条纯文本消息。"""
+    content = request.query.strip()
+    if not content:
+        return business_response(
+            msg="消息不能为空",
+            code=ErrorCode.CHATDATA_REQUIRED_FIELD,
+            status="error",
+            http_status_code=http_status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        user_id, username = _get_current_user_identity(req)
+        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
+        if existing_agent_id != AGENT_ID:
+            return business_response(
+                msg="对话不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        message_id = await agent_inbox_service.enqueue_message(
+            conversation_id,
+            user_id,
+            username,
+            content,
+        )
+        return business_response(data={"message_id": message_id}, msg="消息已发送")
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_AGENT_RUN_NOT_ACTIVE,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("运行中追加消息失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="运行中追加消息失败，请稍后重试",
+            code=ErrorCode.CHATDATA_STEER_ENQUEUE_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get("/{conversation_id}/context")

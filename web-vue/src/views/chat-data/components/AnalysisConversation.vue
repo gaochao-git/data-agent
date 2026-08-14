@@ -10,7 +10,7 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, uploadFile } from '../api'
+import { createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, steerConversation, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -78,6 +78,14 @@ const messages = ref<Message[]>([])
 const input = ref('')
 const inputFocused = ref(false)
 const isGenerating = ref(false)
+const isSteering = ref(false)
+const consumedSteerMessageIds = ref<Set<string>>(new Set())
+const pendingSteerMessages = ref<Array<{
+  clientId: string
+  messageId?: string
+  content: string
+  timestamp: Date
+}>>([])
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
@@ -85,6 +93,29 @@ const chatContainerRef = ref<HTMLDivElement | null>(null)
 const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
 const focusInput = () => {
   inputBarRef.value?.focus()
+}
+
+const consumeSteerMessages = (messageIds: string[]) => {
+  const consumedIds = new Set(messageIds)
+  const consumed = pendingSteerMessages.value.filter(item => item.messageId && consumedIds.has(item.messageId))
+  if (!consumed.length) return
+  const active = activeAssistantMessageId.value
+    ? messages.value.find(item => item.id === activeAssistantMessageId.value)
+    : null
+  if (active?.role === 'assistant') active.isStreaming = false
+  activeAssistantMessageId.value = null
+  for (const item of consumed) {
+    messages.value.push({
+      id: item.messageId!,
+      role: 'user',
+      content: item.content,
+      timestamp: item.timestamp,
+    })
+    consumedSteerMessageIds.value.delete(item.messageId!)
+  }
+  pendingSteerMessages.value = pendingSteerMessages.value.filter(
+    item => !item.messageId || !consumedIds.has(item.messageId),
+  )
 }
 
 onMounted(() => {
@@ -2037,7 +2068,11 @@ const submitAnalysisQuery = async (
           status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
         }
         upsertToolMessage(toolInfo)
-      }
+      },
+      (messageIds) => {
+        consumedSteerMessageIds.value = new Set([...consumedSteerMessageIds.value, ...messageIds])
+        consumeSteerMessages(messageIds)
+      },
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
@@ -2048,10 +2083,41 @@ const submitAnalysisQuery = async (
 }
 
 const handleSubmit = async () => {
+  if (isGenerating.value) {
+    const query = input.value.trim()
+    const conversationId = localConversationId.value || props.conversationId
+    if (!query || !conversationId || isSteering.value) return
+    const temporaryId = `steer-${Date.now()}`
+    pendingSteerMessages.value.push({
+      clientId: temporaryId,
+      content: query,
+      timestamp: new Date(),
+    })
+    input.value = ''
+    isSteering.value = true
+    try {
+      const response = await steerConversation(conversationId, query)
+      const queuedMessage = pendingSteerMessages.value.find(item => item.clientId === temporaryId)
+      if (queuedMessage && response.data?.message_id) {
+        queuedMessage.messageId = response.data.message_id
+        if (consumedSteerMessageIds.value.has(queuedMessage.messageId)) {
+          consumeSteerMessages([queuedMessage.messageId])
+        }
+      }
+    } catch (error) {
+      pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
+      input.value = query
+      ElMessage.error(error instanceof Error ? error.message : '追加消息失败')
+    } finally {
+      isSteering.value = false
+      focusInput()
+    }
+    return
+  }
   const hasUploadedFiles = pendingFiles.value.some(
     f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'),
   )
-  if ((!input.value.trim() && !hasUploadedFiles) || isGenerating.value) return
+  if (!input.value.trim() && !hasUploadedFiles) return
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -2333,6 +2399,28 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
+          <div
+            v-if="pendingSteerMessages.length"
+            class="mb-2 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+          >
+            <div class="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <i class="fa-solid fa-chevron-down text-[9px]"></i>
+              <span>{{ pendingSteerMessages.length }} 个队列任务</span>
+            </div>
+            <div class="max-h-[120px] overflow-y-auto">
+              <div
+                v-for="item in pendingSteerMessages"
+                :key="item.clientId"
+                class="flex items-center gap-3 border-b border-slate-100 px-3 py-2.5 text-sm text-slate-700 last:border-b-0"
+              >
+                <span class="min-w-0 flex-1 truncate">{{ item.content }}</span>
+                <span class="flex shrink-0 items-center gap-1.5 text-[10px] text-slate-400">
+                  <i class="fa-solid fa-circle-notch fa-spin text-[9px]"></i>
+                  等待处理
+                </span>
+              </div>
+            </div>
+          </div>
           <div v-if="pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
             <div
               v-for="f in pendingFiles"
@@ -2365,9 +2453,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :user-overridable="userOverridable"
             :model-options="modelOptions"
             :is-generating="isGenerating"
-            :can-submit="Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
+            :can-submit="isGenerating ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
             :input-focused="inputFocused"
-            show-skill-button
+            :show-skill-button="!isGenerating"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"

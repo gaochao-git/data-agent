@@ -1004,7 +1004,7 @@ def test_semantic_query_tool_executes_top_level_sql_in_sql_mode(monkeypatch):
 
 
 def test_semantic_query_tool_validation_and_compile_error_branches(monkeypatch):
-    assert agent_tools._latest_human_query([type("Msg", (), {"type": "human", "content": "伪用户消息"})()]) == "伪用户消息"
+    assert agent_tools._latest_human_query([type("Msg", (), {"type": "human", "content": "伪用户消息"})()]) == ""
 
     missing_config = asyncio.run(agent_tools.semantic_query_tool.coroutine(
         dsl={"metrics": ["订单数"]},

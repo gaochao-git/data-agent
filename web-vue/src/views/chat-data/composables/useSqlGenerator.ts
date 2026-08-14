@@ -94,6 +94,7 @@ export function useSqlGenerator() {
     onContextCompression?: (payload: ChatDataContextCompressionEvent) => void,
     fileIds?: string[],
     onToolLifecycle?: (payload: ToolLifecycleEventData) => void,
+    onSteerConsumed?: (messageIds: string[]) => void,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -232,6 +233,19 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 context_compression 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'steer_consumed') {
+            try {
+              const data = JSON.parse(dataStr)
+              const messageIds = Array.isArray(data?.message_ids)
+                ? data.message_ids.filter((id: unknown): id is string => typeof id === 'string' && Boolean(id))
+                : []
+              if (messageIds.length) onSteerConsumed?.(messageIds)
+            } catch (err) {
+              console.error('解析 steer_consumed 数据失败:', err, dataStr)
             }
             continue
           }

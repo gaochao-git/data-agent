@@ -18,6 +18,7 @@ from .middleware.context_usage import (
 )
 from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
+from .middleware.steering import SteeringMessageTracker, create_steering_middleware
 from .prompts.chat_data import build_unified_system_prompt
 from .tools.calculator import calculator_tool
 from .tools.current_time import get_current_time_tool
@@ -84,6 +85,9 @@ def create_data_agent(
     datasource_group_context: str | None = None,
     source_type: str | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
+    run_id: str | None = None,
+    inbox_service=None,
+    steering_tracker: SteeringMessageTracker | None = None,
 ):
     """创建唯一的 ``chat_data`` Agent。"""
     options = runtime_options or get_chat_data_default_runtime_options()
@@ -129,9 +133,18 @@ def create_data_agent(
     tool_call_history_repair_middleware = create_tool_call_history_repair_middleware(
         state_schema=ChatDataAgentState,
     )
+    steering_middleware = None
+    if run_id and inbox_service and steering_tracker:
+        steering_middleware = create_steering_middleware(
+            run_id=run_id,
+            inbox_service=inbox_service,
+            tracker=steering_tracker,
+            state_schema=ChatDataAgentState,
+        )
     middleware = build_standard_agent_middleware(
         tools,
         tool_call_history_repair_middleware=tool_call_history_repair_middleware,
+        steering_middleware=steering_middleware,
         context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
         tool_result_middleware=tool_result_middleware,

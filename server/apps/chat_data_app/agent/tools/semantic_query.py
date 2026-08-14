@@ -60,8 +60,6 @@ def _latest_human_query(messages: list[Any] | None) -> str:
     for message in reversed(messages or []):
         if isinstance(message, HumanMessage):
             return str(getattr(message, "content", "") or "").strip()
-        if getattr(message, "type", None) == "human":
-            return str(getattr(message, "content", "") or "").strip()
     return ""
 
 

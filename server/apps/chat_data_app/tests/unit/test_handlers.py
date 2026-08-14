@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
 import pytest
+from langchain_core.messages import AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -298,35 +299,26 @@ def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
     assert agent_sql_tools._normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
 
 
-class _FakeMessageChunk:
-    def __init__(
-        self,
-        *,
-        content="",
-        type_="ai",
-        tool_calls=None,
-        tool_call_chunks=None,
-        tool_call_id="",
-        name="",
-    ):
-        self.content = content
-        self.type = type_
-        self.tool_calls = tool_calls or []
-        self.tool_call_chunks = tool_call_chunks or []
-        self.tool_call_id = tool_call_id
-        self.name = name
-
-    def model_dump(self):
-        payload = {"type": self.type, "content": self.content}
-        if self.tool_calls:
-            payload["tool_calls"] = self.tool_calls
-        if self.tool_call_chunks:
-            payload["tool_call_chunks"] = self.tool_call_chunks
-        if self.tool_call_id:
-            payload["tool_call_id"] = self.tool_call_id
-        if self.name:
-            payload["name"] = self.name
-        return payload
+def _FakeMessageChunk(
+    *,
+    content="",
+    type_="ai",
+    tool_calls=None,
+    tool_call_chunks=None,
+    tool_call_id="",
+    name="",
+):
+    """测试工厂：返回真实 LangChain 消息 Chunk，不伪造 type 字段。"""
+    if type_ == "human":
+        return HumanMessageChunk(content=content)
+    if type_ == "tool":
+        return ToolMessageChunk(content=content, tool_call_id=tool_call_id, name=name or None)
+    normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
+    return AIMessageChunk(
+        content=content,
+        tool_calls=normalized_tool_calls,
+        tool_call_chunks=tool_call_chunks or [],
+    )
 
 
 class _FakeGraph:
@@ -1095,6 +1087,10 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
 
     monkeypatch.setattr("apps.chat_data_app.handlers.conversation.get_or_create_conversation", fake_get_or_create)
     monkeypatch.setattr("apps.chat_data_app.handlers._generate_chat_data_stream", fake_stream)
+    monkeypatch.setattr(
+        "apps.chat_data_app.handlers.agent_inbox_service.start_run",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result="run-test"),
+    )
 
     response = asyncio.run(sql_completion_handler(
         conversation_id="conv_sql",

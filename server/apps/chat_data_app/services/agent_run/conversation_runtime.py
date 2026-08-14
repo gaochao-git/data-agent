@@ -8,6 +8,7 @@ from typing import Any
 
 
 AsyncHook = Callable[[], Awaitable[None]]
+AsyncPredicate = Callable[[], Awaitable[bool]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]
 ResourceFinalizer = Callable[[bool], Awaitable[None]]
 
@@ -21,6 +22,8 @@ async def stream_agent_turn(
     persist_partial_history: AsyncHook,
     before_stream: Callable[[], Awaitable[bool]] | None = None,
     after_turn: AsyncHook | None = None,
+    after_stream: AsyncHook | None = None,
+    continue_stream: AsyncPredicate | None = None,
     finalize_stream_kwargs: dict[str, Any] | None = None,
     finalize_resources: ResourceFinalizer | None = None,
     cleanup_success_on_cancel: bool = False,
@@ -38,21 +41,24 @@ async def stream_agent_turn(
         if before_stream and not await before_stream():
             return
 
-        async for sse_event in stream_adapter.stream_events():
-            yield sse_event
+        while True:
+            async for sse_event in stream_adapter.stream_events():
+                yield sse_event
 
-        if stream_adapter.disconnected:
-            await stream_adapter.finish(**(finalize_stream_kwargs or {}))
+            end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
             await persist_turn_history()
-            if finalize_resources:
-                await finalize_resources(True)
-                resources_finalized = True
-            return
+            if after_stream:
+                await after_stream()
+            if stream_adapter.disconnected:
+                if finalize_resources:
+                    await finalize_resources(True)
+                    resources_finalized = True
+                return
+            if not continue_stream or not await continue_stream():
+                break
         if finalize_resources:
             await finalize_resources(True)
             resources_finalized = True
-        end_payload = await stream_adapter.finish(**(finalize_stream_kwargs or {}))
-        await persist_turn_history()
         if after_turn:
             await after_turn()
         yield format_sse("message_end", end_payload)

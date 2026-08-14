@@ -1287,6 +1287,18 @@ export function streamCompletion(conversationId: string, data: {
   })
 }
 
+/** 向运行中的智能体追加纯文本消息。 */
+export function steerConversation(
+  conversationId: string,
+  query: string,
+): Promise<ApiResponse<{ message_id: string }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
+    method: 'post',
+    data: { query },
+  })
+}
+
 /** 流式快速生成 SQL */
 export function streamQuickSql(data: {
   query: string

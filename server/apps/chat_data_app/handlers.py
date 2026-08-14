@@ -9,7 +9,14 @@ from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+    ToolMessageChunk,
+)
 
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
@@ -23,6 +30,7 @@ from .agent import (
 from .agent.skills import format_skills_prompt
 from .services.agent_run.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .services.agent_run.conversation_runtime import stream_agent_turn
+from .services.agent_run.agent_inbox_service import agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
@@ -32,6 +40,7 @@ from .services.agent_run.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
 )
+from .agent.middleware.steering import SteeringMessageTracker
 from .services.semantic.run.semantic_conversation_context import (
     build_agent_prompt_context,
     prepare_semantic_conversation_context,
@@ -163,7 +172,7 @@ def _latest_assistant_timestamp(state: Any) -> str:
     """从 checkpoint state 中读取最后一条 AI 消息的持久化时间。"""
     messages = (getattr(state, "values", None) or {}).get("messages") or []
     for message in reversed(messages):
-        if getattr(message, "type", None) != "ai":
+        if not isinstance(message, AIMessage):
             continue
         additional_kwargs = getattr(message, "additional_kwargs", None) or {}
         timestamp = str(additional_kwargs.get("timestamp") or "").strip()
@@ -275,7 +284,7 @@ async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any
     messages = values.get("messages") if isinstance(values, dict) else []
     latest_ai_message = None
     for message in reversed(messages or []):
-        if getattr(message, "type", None) == "ai":
+        if isinstance(message, AIMessage):
             latest_ai_message = message
             break
     if latest_ai_message is None:
@@ -312,16 +321,25 @@ async def _persist_agent_turn_history(
         state_messages,
         turn_id=turn_id,
     )
-    await conversation_event_service.persist_turn(
-        conversation_id=conversation_id,
-        user_id=user_id,
-        operator_name=username or user_id,
-        turn_id=turn_id,
-        messages=messages,
-        reasoning_segments=stream_adapter.reasoning_segments,
-        context_compression_events=(values or {}).get("context_compression_events") or [],
-        token_usage=sanitize_context_usage_for_response((values or {}).get("token_usage")),
-    )
+    turn_ids = [
+        message_id
+        for message in messages
+        if isinstance(message, HumanMessage)
+        and (message_id := _stream_message_id(message))
+    ]
+    if turn_id and turn_id not in turn_ids:
+        turn_ids.insert(0, turn_id)
+    for current_turn_id in turn_ids:
+        await conversation_event_service.persist_turn(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username or user_id,
+            turn_id=current_turn_id,
+            messages=messages,
+            reasoning_segments=stream_adapter.reasoning_segments,
+            context_compression_events=(values or {}).get("context_compression_events") or [],
+            token_usage=sanitize_context_usage_for_response((values or {}).get("token_usage")),
+        )
 
 
 def _merge_archived_turn_messages(
@@ -384,7 +402,7 @@ def _stream_message_key(message: BaseMessage, index: int) -> tuple[Any, ...] | N
         return ("human", str(message.content or ""))
     if isinstance(message, AIMessage):
         return ("ai", str(message.content or ""))
-    return (message.type, str(getattr(message, "content", "") or ""), index)
+    return (message.__class__.__name__, str(getattr(message, "content", "") or ""), index)
 
 
 def _stream_message_id(message: BaseMessage) -> str:
@@ -690,9 +708,20 @@ class _AgentSseStreamAdapter:
         self.disconnected = False
         self._first_visible_payload_seen = False
         self._first_token_timeout_alarm_emitted = False
+        self._queued_events: list[str] = []
+
+    def set_input_state(self, input_state: dict[str, Any]) -> None:
+        """设置下一次 graph 调用的增量输入。"""
+        self.initial_state = input_state
+
+    def queue_event(self, event: str) -> None:
+        """登记下一次 graph 调用前必须先发送的 SSE 事件。"""
+        self._queued_events.append(event)
 
     async def stream_events(self):
         """输出 token_usage、thinking、tool、message 事件。"""
+        while self._queued_events:
+            yield self._queued_events.pop(0)
         started_at = time.perf_counter()
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
         try:
@@ -763,6 +792,9 @@ class _AgentSseStreamAdapter:
                     archived_messages,
                 )
             return [_format_sse("context_compression", payload["event"])]
+        if payload.get("type") == "steer_consumed" and isinstance(payload.get("message_ids"), list):
+            message_ids = [str(message_id) for message_id in payload["message_ids"] if str(message_id)]
+            return [_format_sse("steer_consumed", {"message_ids": message_ids})] if message_ids else []
         if payload.get("type") == "tool_progress":
             tool_call_id = str(payload.get("tool_call_id") or "").strip()
             tool_name = str(payload.get("tool_name") or "").strip()
@@ -791,13 +823,13 @@ class _AgentSseStreamAdapter:
         has_content = bool(getattr(message_chunk, "content", None))
         has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
         has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-        msg_type = getattr(message_chunk, "type", None)
+        is_tool_message = isinstance(message_chunk, (ToolMessage, ToolMessageChunk))
         return bool(
             has_content
             or has_tool_calls
             or has_tool_call_chunks
             or _format_thinking_event(message_chunk)
-            or (self.include_empty_tool_messages and msg_type == "tool")
+            or (self.include_empty_tool_messages and is_tool_message)
         )
 
     def _record_first_visible_payload(self, started_at: float) -> None:
@@ -833,10 +865,11 @@ class _AgentSseStreamAdapter:
         has_content = bool(getattr(message_chunk, "content", None))
         has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
         has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-        msg_type = getattr(message_chunk, "type", None)
+        is_ai_message = isinstance(message_chunk, (AIMessage, AIMessageChunk))
+        is_tool_message = isinstance(message_chunk, (ToolMessage, ToolMessageChunk))
         thinking_event = _format_thinking_event(message_chunk)
         has_visible_payload = has_content or has_tool_calls or has_tool_call_chunks or thinking_event
-        if not has_visible_payload and not (self.include_empty_tool_messages and msg_type == "tool"):
+        if not has_visible_payload and not (self.include_empty_tool_messages and is_tool_message):
             return
         if thinking_event:
             _append_reasoning_segment(
@@ -846,9 +879,9 @@ class _AgentSseStreamAdapter:
                 self.reasoning_turn_id,
             )
             yield thinking_event
-            if not has_content and not has_tool_calls and not has_tool_call_chunks and msg_type != "tool":
+            if not has_content and not has_tool_calls and not has_tool_call_chunks and not is_tool_message:
                 return
-        if self.debug_label and msg_type == "ai" and has_content:
+        if self.debug_label and is_ai_message and has_content:
             logger.debug("[%s] %s", self.debug_label, str(message_chunk.content)[:200])
         if has_tool_calls:
             for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
@@ -856,7 +889,7 @@ class _AgentSseStreamAdapter:
         if has_tool_call_chunks:
             for tool_event in self.tool_stream_state.handle_tool_call_chunks(getattr(message_chunk, "tool_call_chunks", []) or []):
                 yield tool_event
-        if msg_type == "tool":
+        if is_tool_message:
             tool_payload = self.tool_stream_state.build_tool_message_payload(message_chunk)
             yield self.tool_stream_state.build_completion_event(tool_payload)
             yield _format_sse("tool", tool_payload)
@@ -893,11 +926,15 @@ class _AgentSseStreamAdapter:
 def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str, Any]) -> bool:
     """过滤智能问数 create_agent 流，避免工具内部模型调用进入主对话。"""
     node_name = str(metadata.get("langgraph_node") or "")
-    msg_type = getattr(message_chunk, "type", "ai")
-    if msg_type == "ai" and node_name != "model":
-        logger.debug("[过滤] 跳过来自 %s 节点的 AI 消息", node_name)
-        return False
-    return True
+    if isinstance(message_chunk, (AIMessage, AIMessageChunk)):
+        if node_name != "model":
+            logger.debug("[过滤] 跳过来自 %s 节点的 AI 消息", node_name)
+            return False
+        return True
+    if isinstance(message_chunk, (ToolMessage, ToolMessageChunk)):
+        return node_name == "tools"
+    # 增量输入的 HumanMessage 由前端用户气泡展示，不能再次作为助手正文输出。
+    return False
 
 
 async def _generate_chat_data_stream(
@@ -915,6 +952,7 @@ async def _generate_chat_data_stream(
     skill_names: list[str] | None = None,
     options: Optional[Dict[str, Any]] = None,
     file_ids: list[str] | None = None,
+    run_id: str | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -941,6 +979,70 @@ async def _generate_chat_data_stream(
             normalized_skill_names.append(skill_name)
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
+    heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id)) if run_id else None
+    try:
+        async for event in _run_chat_data_agent_stream(
+            thread_id=thread_id,
+            user_query=user_query,
+            datasource_id=datasource_id,
+            user_id=user_id,
+            username=username,
+            member_datasource_ids=member_datasource_ids,
+            semantic_config_id=semantic_config_id,
+            request=request,
+            model_id=model_id,
+            semantic_config_selection=semantic_config_selection,
+            enable_thinking=enable_thinking,
+            skill_names=normalized_skill_names,
+            options=options,
+            file_ids=file_ids,
+            run_id=run_id,
+            log_phase=log_phase,
+        ):
+            yield event
+    finally:
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+        if run_id:
+            await agent_inbox_service.finish_run(
+                run_id,
+                "cancelled",
+                user_id or "system",
+                username or user_id or "system",
+            )
+
+
+async def _heartbeat_agent_run(run_id: str) -> None:
+    """保持 active run 租约，worker 退出后由后续请求回收。"""
+    while True:
+        await asyncio.sleep(30)
+        if not await agent_inbox_service.heartbeat_run(run_id):
+            return
+
+
+async def _run_chat_data_agent_stream(
+    *,
+    thread_id: str,
+    user_query: str,
+    datasource_id: str | None,
+    user_id: str | None,
+    username: str | None,
+    member_datasource_ids: list[str] | None,
+    semantic_config_id: str | None,
+    request: Request | None,
+    model_id: str | None,
+    semantic_config_selection: dict | None,
+    enable_thinking: bool | None,
+    skill_names: list[str],
+    options: Optional[Dict[str, Any]],
+    file_ids: list[str] | None,
+    run_id: str | None,
+    log_phase,
+):
+    """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
+    normalized_skill_names = skill_names
     semantic_selection_event = _normalize_semantic_selection_payload(semantic_config_selection)
     semantic_context = await prepare_semantic_conversation_context(
         datasource_id=datasource_id,
@@ -1009,6 +1111,7 @@ async def _generate_chat_data_stream(
 
     stream_adapter: _AgentSseStreamAdapter | None = None
     user_message: HumanMessage | None = None
+    steering_tracker = SteeringMessageTracker()
 
     # 解析 file_ids 对应的文件信息，用于追加到用户消息。
     # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
@@ -1108,6 +1211,9 @@ async def _generate_chat_data_stream(
                 datasource_group_context=prompt_context["datasource_group_context"],
                 workspace_runtime=workspace_runtime,
                 source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                run_id=run_id,
+                inbox_service=agent_inbox_service,
+                steering_tracker=steering_tracker,
             )
             log_phase("create_agent")
             stream_adapter = _AgentSseStreamAdapter(
@@ -1152,6 +1258,35 @@ async def _generate_chat_data_stream(
             async def log_agent_stream_done() -> None:
                 log_phase("agent_stream_done")
 
+            async def confirm_consumed_messages() -> None:
+                if run_id:
+                    await agent_inbox_service.mark_consumed(run_id, steering_tracker.drain())
+
+            async def continue_with_pending_messages() -> bool:
+                if not run_id:
+                    return False
+                claimed = await agent_inbox_service.claim_pending_or_finish_run(
+                    thread_id,
+                    user_id or "system",
+                    run_id,
+                    username or user_id or "system",
+                )
+                if not claimed.messages:
+                    return False
+                for message in claimed.messages:
+                    await conversation_event_service.persist_user_message(
+                        conversation_id=thread_id,
+                        user_id=user_id or "system",
+                        operator_name=username or user_id or "system",
+                        message=message,
+                    )
+                steering_tracker.record([str(message.id or "") for message in claimed.messages])
+                stream_adapter.set_input_state({"messages": claimed.messages})
+                stream_adapter.queue_event(_format_sse("steer_consumed", {
+                    "message_ids": [str(message.id or "") for message in claimed.messages],
+                }))
+                return True
+
             async def before_stream() -> bool:
                 if request and await request.is_disconnected():
                     logger.info("客户端已断开，停止流式输出: %s", thread_id)
@@ -1170,14 +1305,20 @@ async def _generate_chat_data_stream(
                 before_stream=before_stream,
                 finalize_resources=finalize_resources,
                 after_turn=log_agent_stream_done,
+                after_stream=confirm_consumed_messages,
+                continue_stream=continue_with_pending_messages,
             ):
                 yield sse_event
 
     except ContextInputLimitExceededError as exc:
+        if run_id:
+            await agent_inbox_service.finish_run(run_id, "failed", user_id or "system", username or user_id or "system")
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
         yield _format_sse("error", {"error": str(exc)})
         yield _format_sse("done", "[DONE]")
     except Exception:
+        if run_id:
+            await agent_inbox_service.finish_run(run_id, "failed", user_id or "system", username or user_id or "system")
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
         yield _format_sse("done", "[DONE]")
@@ -1212,6 +1353,7 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
+    run_id = await agent_inbox_service.start_run(conversation_id, user_id, username or user_id)
 
     return StreamingResponse(
         _generate_chat_data_stream(
@@ -1229,6 +1371,7 @@ async def sql_completion_handler(
             skill_names=skill_names,
             options=options,
             file_ids=file_ids,
+            run_id=run_id,
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}

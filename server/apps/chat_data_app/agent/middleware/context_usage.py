@@ -8,7 +8,7 @@ import weakref
 
 from langchain.agents.middleware import wrap_model_call
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -257,8 +257,8 @@ async def invoke_with_context_usage(*, agent: Any, state: dict[str, Any], system
 
 def build_request_breakdown(*, messages: list[BaseMessage], message_tokens: int, tools: list[Any] | None = None, tools_tokens: int, overhead_tokens: int) -> list[dict[str, Any]]:
     """构造当前模型请求上下文拆分。"""
-    system_messages = [message for message in messages if getattr(message, "type", "") == "system"]
-    non_system_messages = [message for message in messages if getattr(message, "type", "") != "system"]
+    system_messages = [message for message in messages if isinstance(message, SystemMessage)]
+    non_system_messages = [message for message in messages if not isinstance(message, SystemMessage)]
     system_tokens = count_messages_tokens(system_messages)
     non_system_tokens = max(int(message_tokens or 0) - system_tokens, 0)
     items: list[dict[str, Any]] = []
@@ -377,12 +377,12 @@ def build_message_breakdown(
     round_index = 0
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
-        message_type = str(getattr(message, "type", "") or "message")
+        message_type = _message_role(message)
         additional_kwargs = getattr(message, "additional_kwargs", None) or {}
         is_context_summary = bool(additional_kwargs.get("context_summary"))
         redacted = hide_content or is_context_summary
         content = SYSTEM_PROMPT_PLACEHOLDER if redacted else _message_debug_content(message)
-        if message_type == "human" and not is_context_summary:
+        if isinstance(message, HumanMessage) and not is_context_summary:
             round_index += 1
         estimated_tokens = count_messages_tokens([message])
         item = {
@@ -826,6 +826,19 @@ def _message_label(message_type: str, round_index: int) -> str:
         "tool": "工具结果",
     }
     return f"第 {round_index} 轮 · {labels.get(message_type, message_type or '消息')}"
+
+
+def _message_role(message: BaseMessage) -> str:
+    """将 LangChain 标准消息类映射为内部 token 明细角色。"""
+    if isinstance(message, SystemMessage):
+        return "system"
+    if isinstance(message, HumanMessage):
+        return "human"
+    if isinstance(message, AIMessage):
+        return "ai"
+    if isinstance(message, ToolMessage):
+        return "tool"
+    return "message"
 
 
 def _scale_tokens(tokens: int, scale: float) -> int:
