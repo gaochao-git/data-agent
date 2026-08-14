@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ConversationItem } from '../../types'
-import { buildConversationGroups, shouldLoadMoreConversations } from '../conversationHistory'
+import { buildConversationGroups, buildConversationGroupViews, shouldLoadMoreConversations } from '../conversationHistory'
 
 const conversation = (
   id: string,
@@ -63,7 +63,21 @@ describe('conversationHistory', () => {
     expect(groups[0]?.items.map(item => item.id)).toEqual(['favorite', 'new', 'old'])
   })
 
-  it('requests another page when collapsed content does not fill the scroll container', () => {
+  it('builds every backend group first page without requiring totals', () => {
+    const groups = buildConversationGroupViews([
+      { key: 'datasource:ds_a', datasource_id: 'ds_a', conversations: [conversation('a', 'ds_a')], page: 1, page_size: 20, has_more: true },
+      { key: 'system:unclassified', datasource_id: null, conversations: [conversation('u', '')], page: 1, page_size: 20, has_more: false },
+      { key: 'system:pinned', datasource_id: null, conversations: [conversation('p', 'ds_a', { is_favorited: true })], page: 1, page_size: 20, has_more: false },
+    ], [{ id: 'ds_a', group_name: '业务数据' }])
+
+    expect(groups.map(group => [group.key, group.label, group.has_more])).toEqual([
+      ['system:pinned', '置顶', false],
+      ['datasource:ds_a', '业务数据', true],
+      ['system:unclassified', '未分类', false],
+    ])
+  })
+
+  it('only requests another page from an explicit scroll-near-bottom check', () => {
     expect(shouldLoadMoreConversations({
       hasMore: true,
       isLoading: false,

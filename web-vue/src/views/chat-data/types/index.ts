@@ -339,6 +339,26 @@ export interface ConversationItem {
   is_favorited?: boolean
 }
 
+export interface ConversationGroupPage {
+  key: string
+  datasource_id?: string | null
+  conversations: ConversationItem[]
+  page: number
+  page_size: number
+  has_more: boolean
+  next_cursor?: string | null
+}
+
+export interface ConversationGroupView {
+  key: string
+  label: string
+  items: ConversationItem[]
+  page?: number
+  has_more?: boolean
+  next_cursor?: string | null
+  is_loading_more?: boolean
+}
+
 // 消息
 export interface Message {
   id: string

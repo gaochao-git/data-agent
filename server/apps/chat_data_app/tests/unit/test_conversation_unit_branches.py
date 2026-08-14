@@ -102,6 +102,64 @@ async def test_conversation_crud_and_list_branches(conversation_db):
 
 
 @pytest.mark.asyncio
+async def test_grouped_conversations_return_every_group_first_page_without_counts(conversation_db):
+    for conversation_id, datasource_id in [
+        ("ds-a-new", "ds_a"),
+        ("ds-a-old", "ds_a"),
+        ("ds-b", "ds_b"),
+        ("unclassified", ""),
+        ("favorite", "ds_a"),
+    ]:
+        await conversation_module.sync_thread_to_db("u1", conversation_id, "agent_a", title=conversation_id, is_new=True)
+        if datasource_id:
+            await conversation_module.resolve_datasource_binding(conversation_id, "u1", datasource_id)
+    await conversation_module.toggle_favorite("", "favorite", user_id="u1")
+    await conversation_module.sync_thread_to_db("u2", "other-user", "agent_a", title="other", is_new=True)
+    await conversation_module.resolve_datasource_binding("other-user", "u2", "ds_private")
+
+    result = await conversation_module.list_grouped("agent_a", "u1", page_size=1)
+    groups = {group["key"]: group for group in result["groups"]}
+
+    assert set(groups) == {
+        "system:pinned",
+        "datasource:ds_a",
+        "datasource:ds_b",
+        "system:unclassified",
+    }
+    assert groups["system:pinned"]["conversations"][0]["id"] == "favorite"
+    assert groups["datasource:ds_a"]["conversations"][0]["id"] != "favorite"
+    assert groups["datasource:ds_a"]["has_more"] is True
+    assert groups["datasource:ds_a"]["next_cursor"]
+    assert groups["datasource:ds_b"]["has_more"] is False
+    assert "total" not in groups["datasource:ds_a"]
+    assert all(item["id"] != "other-user" for group in groups.values() for item in group["conversations"])
+
+    await conversation_module.sync_thread_to_db("u1", "ds-a-latest", "agent_a", title="latest", is_new=True)
+    await conversation_module.resolve_datasource_binding("ds-a-latest", "u1", "ds_a")
+    next_page = await conversation_module.list_grouped(
+        "agent_a",
+        "u1",
+        page_size=1,
+        group_key="datasource:ds_a",
+        page=2,
+        cursor=groups["datasource:ds_a"]["next_cursor"],
+    )
+    assert next_page["groups"][0]["page"] == 2
+    assert next_page["groups"][0]["has_more"] is False
+    assert next_page["groups"][0]["conversations"][0]["id"] != "ds-a-latest"
+    assert next_page["groups"][0]["conversations"][0]["id"] != groups["datasource:ds_a"]["conversations"][0]["id"]
+
+    with pytest.raises(ValueError, match="无效的会话分组"):
+        await conversation_module.list_grouped("agent_a", "u1", 1, group_key="datasource:")
+    with pytest.raises(ValueError, match="缺少游标"):
+        await conversation_module.list_grouped("agent_a", "u1", 1, group_key="datasource:ds_a", page=2)
+    with pytest.raises(ValueError, match="无效的会话分页游标"):
+        await conversation_module.list_grouped(
+            "agent_a", "u1", 1, group_key="datasource:ds_a", page=2, cursor="invalid",
+        )
+
+
+@pytest.mark.asyncio
 async def test_conversation_additional_db_branches(conversation_db, monkeypatch):
     await conversation_module.sync_thread_to_db("u1", "conv_existing", "agent_a", title="原始标题", is_new=True)
     await conversation_module.sync_thread_to_db("u1", "conv_existing", "agent_a", title="不会重复创建", is_new=True)

@@ -126,6 +126,28 @@ async def test_conversation_crud_routes_success_and_errors(router_state, monkeyp
     assert payload(await conversation_router.list_conversations(request, agent_id=None, agent_ids="missing", page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
     assert payload(await conversation_router.list_conversations(request, agent_id="missing", agent_ids=None, page=1, page_size=20))["code"] == ErrorCode.CHATDATA_UNKNOWN_AGENT
 
+    async def fake_list_grouped(agent_id, user_id, page_size, *, group_key=None, page=1, cursor=None):
+        assert (agent_id, user_id, page_size, group_key, page, cursor) == (
+            "agent_a", "u1", 2, "datasource:ds_a", 2, "cursor-a",
+        )
+        return {"groups": [{"key": group_key, "conversations": [], "has_more": False}]}
+
+    monkeypatch.setattr(conversation_router.conversation, "list_grouped", fake_list_grouped)
+    grouped = payload(await conversation_router.list_conversations(
+        request,
+        agent_id="agent_a",
+        agent_ids=None,
+        page=2,
+        page_size=2,
+        view="grouped",
+        group_key="datasource:ds_a",
+        cursor="cursor-a",
+    ))
+    assert grouped["data"]["groups"][0]["key"] == "datasource:ds_a"
+    assert payload(await conversation_router.list_conversations(
+        request, agent_id=None, agent_ids=None, page=1, page_size=2, view="grouped", group_key=None,
+    ))["code"] == ErrorCode.CHATDATA_BAD_REQUEST
+
     async def get_config(*_args, **_kwargs):
         return conversation_router._agent_configs["agent_a"]
 

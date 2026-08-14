@@ -25,12 +25,12 @@ export function useConversations(agentId: string = 'chat_data') {
   const currentConversationId = ref<string | null>(null)
 
   // 加载会话列表
-  const loadConversations = async (datasourceId?: string): Promise<boolean> => {
+  const loadConversations = async (): Promise<boolean> => {
     loading.value = true
     error.value = null
 
     try {
-      const response = await getConversations(agentId, datasourceId)
+      const response = await getConversations(agentId)
 
       const data = response.data as unknown
       const list = Array.isArray(data)

@@ -1131,7 +1131,7 @@ const loadAiConversationHistoryItems = async (page = 1) => {
     isLoadingMoreAiConversationHistory.value = true
   }
   try {
-    const response = await getConversations(SQL_ASSIST_AGENT_ID, undefined, {
+    const response = await getConversations(SQL_ASSIST_AGENT_ID, {
       page,
       page_size: aiConversationHistoryPageSize,
     })

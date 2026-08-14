@@ -53,21 +53,11 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
--- 已创建过早期版本表时执行，统一历史队列值和默认值。
-UPDATE `chat_data_agent_inbox`
-SET `queue_type` = CASE `queue_type`
-  WHEN 'steer' THEN 'next-step'
-  WHEN 'next_turn' THEN 'next-turn'
-  ELSE `queue_type`
-END
-WHERE `queue_type` IN ('steer', 'next_turn');
-
-ALTER TABLE `chat_data_agent_inbox`
-  MODIFY COLUMN `queue_type` varchar(16) NOT NULL DEFAULT 'next-step'
-  COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理';
-
 ALTER TABLE datasource_table
     ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
+
+ALTER TABLE `user_threads`
+  ADD KEY `idx_thread_history` (`user_id`,`agent_id`,`delete_flag`,`update_time`,`id`);
 ```
 
 ## 依赖变更

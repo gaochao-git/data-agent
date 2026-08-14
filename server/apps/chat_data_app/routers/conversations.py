@@ -260,7 +260,10 @@ async def list_conversations(
     agent_id: str = Query(default=None),
     agent_ids: str = Query(default=None),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100)
+    page_size: int = Query(default=20, ge=1, le=100),
+    view: Literal["flat", "grouped"] = Query(default="flat"),
+    group_key: Optional[str] = Query(default=None),
+    cursor: Optional[str] = Query(default=None),
 ):
     """
     获取会话列表
@@ -270,17 +273,41 @@ async def list_conversations(
     参数：
     - agent_id: 可选，指定则只返回该智能体的会话，不指定则返回所有会话
     - agent_ids: 可选，逗号分隔，指定则返回这些智能体合并后的会话
-    - page: 页码，从 1 开始
+    - page: 平铺模式页码；分组模式仅作为前端展示页码
     - page_size: 每页数量
+    - view: flat 为平铺列表，grouped 为按置顶/数据源分组
+    - group_key: grouped 模式下指定分组时，仅查询该分组下一页
+    - cursor: grouped 分组翻页游标，使用上一页返回的 next_cursor
 
     返回：
     {
         "status": "success",
         "data": {"conversations": [...], "page": 1, "page_size": 20, "has_more": false}
     }
+
+    grouped 首屏返回全部分组的第一页；每个分组包含 has_more 和 next_cursor。
     """
     try:
         user_id, username = _get_current_user_identity(req)
+
+        if view == "grouped":
+            if agent_ids or not agent_id:
+                return business_response(msg="分组会话查询必须指定单个 agent_id", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+            config = get_agent_config(agent_id)
+            if not config:
+                return business_response(msg=f"未知的 agent_id: {agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error")
+            try:
+                result = await conversation.list_grouped(
+                    agent_id,
+                    user_id,
+                    page_size,
+                    group_key=group_key,
+                    page=page,
+                    cursor=cursor,
+                )
+            except ValueError as exc:
+                return business_response(msg=str(exc), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+            return business_response(data=result, msg="获取分组对话列表成功")
 
         offset = (page - 1) * page_size
         if agent_ids:

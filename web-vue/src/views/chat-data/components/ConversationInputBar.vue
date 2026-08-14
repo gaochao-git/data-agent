@@ -381,6 +381,7 @@ onBeforeUnmount(() => {
           <span class="absolute inset-0 rounded-full bg-[#1677FF] opacity-40 animate-ping"></span>
         </button>
         <button
+          v-else
           type="submit"
           :disabled="!canSubmit"
           class="w-8 h-8 flex items-center justify-center border-none rounded-full bg-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:hover:scale-100 disabled:cursor-not-allowed"

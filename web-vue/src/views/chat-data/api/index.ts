@@ -10,6 +10,7 @@ import type {
   ApiResponse,
   DataSource,
   ConversationItem,
+  ConversationGroupPage,
   SemanticConfigItem,
   ChatDataModelOption,
   SkillInfo,
@@ -786,13 +787,24 @@ export function syncAdminDatasourceMetadata(
 /** 获取会话列表 */
 export function getConversations(
   agentId: string,
-  datasourceId?: string,
-  pagination?: { page?: number; page_size?: number }
-): Promise<ApiResponse<ConversationItem[] | { conversations: ConversationItem[]; page?: number; page_size?: number; has_more?: boolean }>> {
+  pagination?: {
+    page?: number
+    page_size?: number
+    view?: 'flat' | 'grouped'
+    group_key?: string
+    cursor?: string
+  }
+): Promise<ApiResponse<ConversationItem[] | {
+  conversations?: ConversationItem[]
+  groups?: ConversationGroupPage[]
+  page?: number
+  page_size?: number
+  has_more?: boolean
+}>> {
   return request({
     url: '/agents/api/chatdata/conversations',
     method: 'get',
-    params: { agent_id: agentId, datasource_id: datasourceId, ...pagination }
+    params: { agent_id: agentId, ...pagination }
   })
 }
 

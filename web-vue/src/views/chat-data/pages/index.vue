@@ -8,9 +8,9 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import useUserStore from '@/store/modules/user'
-import { getDatasources, getConversations, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { BuilderDragFieldData, DataSource, ViewMode, ConversationItem, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo, SemanticConfigSelectionInfo } from '../types'
 import AnalysisConversation from '../components/AnalysisConversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
@@ -27,7 +27,8 @@ import IconModeConversation from '../components/icons/IconModeConversation.vue'
 import IconModeBuilder from '../components/icons/IconModeBuilder.vue'
 import IconModeEditor from '../components/icons/IconModeEditor.vue'
 import { formatSemanticConfigOptionLabel } from '../utils'
-import { buildConversationGroups, type ConversationViewMode } from '../utils/conversationHistory'
+import type { ConversationViewMode } from '../utils/conversationHistory'
+import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -494,23 +495,16 @@ const handleCloseSemanticConfig = () => {
 }
 
 // 会话
-const conversations = ref<ConversationItem[]>([])
 const currentConversationId = ref<string | null>(null)
 const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
-const isLoadingConversations = ref(false)
-const isLoadingMoreConversations = ref(false)
-const hasMoreConversations = ref(false)
-const conversationPage = ref(1)
 const conversationPageSize = 20
 const conversationKey = ref(0)
 const showHistoryPopover = ref(false)
 const hasEnteredConversationOnce = ref(false)
-const conversationsLoaded = ref(false)
 const selectedConversationModelId = ref('')
 const conversationModelStorageUserKey = computed(() => currentUser.value.id || currentUser.value.name || 'default')
 let historyPopoverHideTimer: ReturnType<typeof setTimeout> | null = null
-let conversationLoadSeq = 0
 
 const openHistoryPopover = () => {
   if (historyPopoverHideTimer) {
@@ -584,88 +578,6 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
   }
 }
 
-const normalizeConversationResponse = (
-  payload: unknown,
-  fallbackAgentId = 'chat_data'
-): { items: ConversationItem[]; hasMore: boolean } => {
-  const payloadObj = payload as { conversations?: unknown[]; has_more?: boolean } | null
-  const rawList = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payloadObj?.conversations)
-      ? payloadObj.conversations
-      : []
-  const items: ConversationItem[] = rawList.map((raw) => {
-    const conv = raw as Record<string, any>
-    return {
-      id: conv.id || conv.conversation_id,
-      title: conv.title || conv.first_message_preview || '未命名会话',
-      created_at: conv.update_time || conv.create_time || conv.created_at || '',
-      updated_at: conv.update_time || conv.updated_at || conv.create_time || conv.created_at || '',
-      agent_id: conv.agent_id || fallbackAgentId,
-      datasource_id: typeof conv.datasource_id === 'string' ? conv.datasource_id : '',
-      is_favorited: Boolean(conv.is_favorited),
-    }
-  }).filter((conv) => !!conv.id)
-  const hasMore = !Array.isArray(payload) && Boolean(payloadObj?.has_more)
-  return { items, hasMore }
-}
-
-// 加载会话列表
-const loadConversations = async (page = 1) => {
-  const agentId = 'chat_data'
-  const loadSeq = ++conversationLoadSeq
-  const isFirstPage = page === 1
-  if (isFirstPage) {
-    isLoadingConversations.value = true
-  } else {
-    isLoadingMoreConversations.value = true
-  }
-  try {
-    const res = await getConversations(agentId, undefined, { page, page_size: conversationPageSize })
-    if (loadSeq !== conversationLoadSeq) return
-    const { items, hasMore }: { items: ConversationItem[]; hasMore: boolean } = res.status === 'success'
-      ? normalizeConversationResponse(res.data, agentId)
-      : { items: [], hasMore: false }
-    const merged = isFirstPage ? items : [...conversations.value, ...items]
-    const deduped = Array.from(new Map<string, ConversationItem>(merged.map(item => [item.id, item])).values())
-    conversations.value = deduped.sort((a, b) => {
-      const fa = a.is_favorited ? 1 : 0
-      const fb = b.is_favorited ? 1 : 0
-      if (fa !== fb) return fb - fa
-      return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
-    })
-    conversationPage.value = page
-    hasMoreConversations.value = hasMore
-    conversationsLoaded.value = true
-  } catch (err) {
-    if (loadSeq === conversationLoadSeq) {
-      console.error('加载会话失败:', err)
-    }
-  } finally {
-    if (loadSeq !== conversationLoadSeq) return
-    if (isFirstPage) {
-      isLoadingConversations.value = false
-    } else {
-      isLoadingMoreConversations.value = false
-    }
-  }
-}
-
-const ensureConversationsLoaded = async (force = false) => {
-  if (isLoadingConversations.value || isLoadingMoreConversations.value) return
-  if (!force && conversationsLoaded.value) return
-  if (force) {
-    conversationPage.value = 1
-    hasMoreConversations.value = false
-  }
-  await loadConversations(1)
-}
-
-const loadMoreConversations = async () => {
-  if (!conversationsLoaded.value || isLoadingConversations.value || isLoadingMoreConversations.value || !hasMoreConversations.value) return
-  await loadConversations(conversationPage.value + 1)
-}
-
 // 确保会话 ID 存在（懒创建模式，只在发送消息时才创建）
 const ensureConversationId = async (): Promise<string | null> => {
   if (currentConversationId.value) {
@@ -709,17 +621,30 @@ const conversationViewMode = ref<ConversationViewMode>(
   readLocalStorage(CONVERSATION_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'grouped',
 )
 
+const {
+  conversations,
+  groupedConversations,
+  isLoadingConversations,
+  isLoadingMoreConversations,
+  hasMoreConversations,
+  ensureConversationsLoaded,
+  loadMoreConversations,
+  loadMoreConversationGroup,
+  updateConversationTitle: updateHistoryConversationTitle,
+  refreshAfterFavorite,
+  invalidateInactiveView,
+} = useConversationHistoryBrowser({
+  agentId: 'chat_data',
+  pageSize: conversationPageSize,
+  viewMode: conversationViewMode,
+  datasources: allDatasources,
+})
+
 const toggleConversationViewMode = () => {
   conversationViewMode.value = conversationViewMode.value === 'grouped' ? 'flat' : 'grouped'
   writeLocalStorage(CONVERSATION_VIEW_MODE_KEY, conversationViewMode.value)
+  void ensureConversationsLoaded()
 }
-
-// 使用全部授权数据源解析历史名称，避免嵌入模块过滤导致其他模块会话被误判为未知。
-const groupedConversations = computed(() => buildConversationGroups(
-  conversations.value,
-  allDatasources.value,
-  conversationViewMode.value,
-))
 
 // 切换模式
 const changeMode = (mode: ViewMode) => {
@@ -808,28 +733,15 @@ const handleHistoryConversationSelect = async (id: string) => {
 }
 
 const handleUpdateConversationTitle = (conversationId: string, title: string) => {
-  const conv = conversations.value.find((c) => c.id === conversationId)
-  if (conv) {
-    conv.title = title
-    conv.updated_at = new Date().toISOString()
-  }
+  updateHistoryConversationTitle(conversationId, title)
   if (currentConversationId.value === conversationId) {
     currentConversationTitle.value = title
   }
 }
 
-// 切换会话置顶（复用 is_favorited 收藏能力），更新本地状态并重排使置顶项浮到顶部
-const handleToggleConversationFavorite = (conversationId: string, isFavorited: boolean) => {
-  const conv = conversations.value.find((c) => c.id === conversationId)
-  if (conv) {
-    conv.is_favorited = isFavorited
-  }
-  conversations.value = [...conversations.value].sort((a, b) => {
-    const fa = a.is_favorited ? 1 : 0
-    const fb = b.is_favorited ? 1 : 0
-    if (fa !== fb) return fb - fa
-    return String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at))
-  })
+// 置顶会改变会话所属分组，成功后重载分组首屏，避免同一会话残留在旧目录。
+const handleToggleConversationFavorite = async (conversationId: string, isFavorited: boolean) => {
+  await refreshAfterFavorite(conversationId, isFavorited)
 }
 
 // 首条消息完成后的回调
@@ -846,18 +758,14 @@ const handleFirstMessageComplete = async (convId: string) => {
       const newTitle = res.data.title
       // 更新当前会话标题
       currentConversationTitle.value = newTitle
-      // 更新会话列表中的标题
-      const convIndex = conversations.value.findIndex(c => c.id === convId)
-      const conversation = convIndex >= 0 ? conversations.value[convIndex] : undefined
-      if (conversation) {
-        conversation.title = newTitle
-      }
+      updateHistoryConversationTitle(convId, newTitle)
     }
   } catch (error) {
     console.error('生成标题失败:', error)
   }
   // 刷新会话列表
-  ensureConversationsLoaded(true)
+  invalidateInactiveView()
+  void ensureConversationsLoaded(true)
 }
 
 // 数据源变更
@@ -1565,12 +1473,12 @@ onUnmounted(() => {
 
           <div
             v-if="showHistoryPopover"
-            class="absolute right-0 top-full mt-2 z-[140] w-[360px] max-h-[70vh] bg-white border border-slate-200 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.12)] overflow-hidden"
+            class="absolute right-0 top-full mt-2 z-[140] flex h-[70vh] w-[360px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_10px_30px_rgba(0,0,0,0.12)]"
             @mouseenter="openHistoryPopover"
             @mouseleave="closeHistoryPopoverWithDelay"
           >
-            <div class="px-4 py-3 border-b border-slate-100 text-base font-semibold text-slate-800">历史对话</div>
-            <div class="h-[calc(70vh-56px)] min-h-[260px]">
+            <div class="flex h-14 shrink-0 items-center border-b border-slate-100 px-4 text-base font-semibold text-slate-800">历史对话</div>
+            <div class="min-h-0 flex-1 overflow-hidden">
               <ConversationSidebar
                 active-tab="conversation"
                 :grouped-conversations="groupedConversations"
@@ -1584,6 +1492,7 @@ onUnmounted(() => {
                 @select-conversation="handleHistoryConversationSelect"
                 @new-conversation="handleNewConversation"
                 @load-more-conversations="loadMoreConversations"
+                @load-more-conversation-group="loadMoreConversationGroup"
                 @update-conversation-title="handleUpdateConversationTitle"
                 @toggle-conversation-favorite="handleToggleConversationFavorite"
                 @toggle-conversation-view-mode="toggleConversationViewMode"

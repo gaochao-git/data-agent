@@ -27,7 +27,8 @@ CREATE TABLE `user_threads` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_thread_id` (`thread_id`),
   KEY `idx_user_id` (`user_id`),
-  KEY `idx_agent_id` (`agent_id`)
+  KEY `idx_agent_id` (`agent_id`),
+  KEY `idx_thread_history` (`user_id`,`agent_id`,`delete_flag`,`update_time`,`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8mb4 COMMENT='用户会话表'
 """
 

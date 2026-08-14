@@ -6,7 +6,14 @@
  */
 import { ref, reactive, computed, watch, onUnmounted, nextTick, type ComponentPublicInstance } from 'vue'
 import { getSemanticConfigs, updateConversationTitle as apiUpdateConversationTitle, toggleConversationFavorite as apiToggleConversationFavorite } from '../../api'
-import type { SemanticConfigItem, SemanticDimension, SemanticMetric, TableInfo } from '../../types'
+import type {
+  ConversationGroupView,
+  ConversationItem,
+  SemanticConfigItem,
+  SemanticDimension,
+  SemanticMetric,
+  TableInfo,
+} from '../../types'
 import { getSemanticConfigTableCount, getSemanticConfigsTableCount } from '../../utils'
 import {
   buildFieldDictSection,
@@ -18,19 +25,6 @@ import {
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
-
-interface ConversationItem {
-  id: string
-  title: string
-  created_at: string
-  is_favorited?: boolean
-}
-
-interface ConversationGroup {
-  key: string
-  label: string
-  items: ConversationItem[]
-}
 
 const CONVERSATION_ICON_POOL = [
   { icon: 'fa-comment-dots', color: '#B3DBD2' }, // 普通对话
@@ -49,7 +43,7 @@ const getConversationIconMeta = (conversationId: string | undefined) => {
 
 interface Props {
   activeTab: 'metrics' | 'conversation'
-  groupedConversations?: ConversationGroup[]
+  groupedConversations?: ConversationGroupView[]
   currentConversationId?: string | null
   isLoading?: boolean
   isLoadingMore?: boolean
@@ -86,6 +80,7 @@ const emit = defineEmits<{
   selectConversation: [conversationId: string]
   newConversation: []
   loadMoreConversations: []
+  loadMoreConversationGroup: [groupKey: string]
   updateConversationTitle: [conversationId: string, title: string]
   toggleConversationFavorite: [conversationId: string, isFavorited: boolean]
   toggleConversationViewMode: []
@@ -94,40 +89,10 @@ const emit = defineEmits<{
   fillQuestion: [payload: { fieldName: string; fieldType: 'dimension' | 'metric' }]
 }>()
 
-// 分组文件夹折叠状态使用稳定 key，展示名称变化或与系统分组同名时不会串组。
-const COLLAPSED_GROUPS_KEY = 'chatdata-conversation-collapsed-groups'
-
-const readCollapsedGroups = (): string[] => {
-  try {
-    const raw = sessionStorage.getItem(COLLAPSED_GROUPS_KEY)
-    const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-const collapsedGroups = ref<Set<string>>(new Set(readCollapsedGroups()))
+// 每次打开历史弹窗时全部展开；稳定 key 仅用于本次打开期间的折叠状态。
+const collapsedGroups = ref<Set<string>>(new Set())
 
 const isConversationGroupCollapsed = (key: string): boolean => collapsedGroups.value.has(key)
-
-const conversationScrollRef = ref<HTMLElement | null>(null)
-
-const requestMoreConversationsIfNeeded = async () => {
-  await nextTick()
-  const target = conversationScrollRef.value
-  if (!target) return
-  if (shouldLoadMoreConversations({
-    hasMore: props.hasMore,
-    isLoading: props.isLoading,
-    isLoadingMore: props.isLoadingMore,
-    scrollHeight: target.scrollHeight,
-    scrollTop: target.scrollTop,
-    clientHeight: target.clientHeight,
-  })) {
-    emit('loadMoreConversations')
-  }
-}
 
 const toggleConversationGroup = (key: string) => {
   const next = new Set(collapsedGroups.value)
@@ -137,12 +102,6 @@ const toggleConversationGroup = (key: string) => {
     next.add(key)
   }
   collapsedGroups.value = next
-  try {
-    sessionStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...next]))
-  } catch {
-    // 写入失败只丢失折叠记忆，不影响功能
-  }
-  void requestMoreConversationsIfNeeded()
 }
 
 // 指标集列表
@@ -359,6 +318,7 @@ const selectedConfigId = ref<string | null>(null)
 const expandedConfigIds = ref<Set<string>>(new Set())
 
 const handleConversationScroll = (event: Event) => {
+  if (props.conversationViewMode !== 'flat') return
   const target = event.currentTarget as HTMLElement
   if (shouldLoadMoreConversations({
     hasMore: props.hasMore,
@@ -372,11 +332,19 @@ const handleConversationScroll = (event: Event) => {
   }
 }
 
-watch(
-  () => [props.groupedConversations, props.hasMore, props.isLoading, props.isLoadingMore, props.conversationViewMode],
-  () => void requestMoreConversationsIfNeeded(),
-  { deep: true, flush: 'post', immediate: true },
-)
+const handleConversationGroupScroll = (group: ConversationGroupView, event: Event) => {
+  const target = event.currentTarget as HTMLElement
+  if (shouldLoadMoreConversations({
+    hasMore: Boolean(group.has_more),
+    isLoading: false,
+    isLoadingMore: Boolean(group.is_loading_more),
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+    clientHeight: target.clientHeight,
+  })) {
+    emit('loadMoreConversationGroup', group.key)
+  }
+}
 
 // 会话标题编辑状态
 const editingConversationId = ref<string | null>(null)
@@ -667,7 +635,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full overflow-hidden">
+  <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ==================== 会话 Tab ==================== -->
     <template v-if="activeTab === 'conversation'">
       <!-- 新建会话按钮 -->
@@ -682,7 +650,7 @@ onUnmounted(() => {
       </div>
 
       <!-- 会话列表 -->
-      <div ref="conversationScrollRef" class="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+      <div data-testid="conversation-scroll" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
         <div class="flex justify-end pt-1">
           <button
             type="button"
@@ -722,65 +690,86 @@ onUnmounted(() => {
                   :class="isConversationGroupCollapsed(group.key) ? 'fa-folder' : 'fa-folder-open'"
                 ></i>
                 <span class="min-w-0 flex-1 truncate text-left">{{ group.label }}</span>
-                <span class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-400">{{ group.items.length }}</span>
               </button>
               <template v-if="!group.label || !isConversationGroupCollapsed(group.key)">
                 <div
-                  v-for="conv in group.items"
-                  :key="conv.id"
-                  class="group flex items-center gap-2 py-2.5 px-1 -mx-1 rounded-md cursor-pointer transition-all duration-150"
-                  :class="currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50'"
-                  @click="emit('selectConversation', conv.id)"
+                  class="conversation-group-items scrollbar-thin scrollbar-thumb-black/10"
+                  :class="group.label ? 'ml-[18px] border-l border-slate-200 pl-3' : ''"
+                  :style="group.label && (group.has_more || group.items.length > 8) ? { maxHeight: '320px', overflowY: 'auto' } : undefined"
+                  @scroll="handleConversationGroupScroll(group, $event)"
                 >
-                  <i
-                    :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
-                    :style="{ color: getConversationIconMeta(conv.id).color }"
-                  ></i>
-
-                <!-- 标题编辑态 -->
-                <template v-if="editingConversationId === conv.id">
-                  <input
-                    :ref="setEditingInputRef"
-                    v-model="editingTitle"
-                    type="text"
-                    class="flex-1 min-w-0 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none text-gray-800 leading-relaxed"
-                    :disabled="isSavingTitle"
-                    placeholder="输入新标题"
-                    @click.stop
-                    @keydown="handleEditTitleKeydown(conv.id, $event)"
-                    @blur="confirmEditConversationTitle(conv.id)"
-                  />
-                </template>
-
-                <!-- 标题展示态 -->
-                <template v-else>
-                  <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
-                  <button
-                    type="button"
-                    class="shrink-0 flex h-6 w-6 items-center justify-center rounded transition-all duration-150"
-                    :class="conv.is_favorited
-                      ? 'text-amber-500 opacity-100 hover:bg-amber-100 hover:text-amber-600'
-                      : 'text-gray-400 opacity-0 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100'"
-                    :title="conv.is_favorited ? '取消置顶' : '置顶'"
-                    :disabled="favoritingId === conv.id"
-                    @click.stop="toggleConversationFavoriteState(conv)"
+                  <div
+                    v-for="conv in group.items"
+                    :key="conv.id"
+                    class="group flex items-center gap-2 rounded-md py-2.5 cursor-pointer transition-all duration-150"
+                    :class="[
+                      group.label ? 'px-2' : 'px-1',
+                      currentConversationId === conv.id ? 'text-blue-500 font-medium bg-blue-50/60' : 'text-gray-800 hover:text-blue-500 hover:bg-gray-50',
+                    ]"
+                    @click="emit('selectConversation', conv.id)"
                   >
-                    <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
-                  </button>
+                    <i
+                      :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
+                      :style="{ color: getConversationIconMeta(conv.id).color }"
+                    ></i>
+
+                    <!-- 标题编辑态 -->
+                    <template v-if="editingConversationId === conv.id">
+                      <input
+                        :ref="setEditingInputRef"
+                        v-model="editingTitle"
+                        type="text"
+                        class="flex-1 min-w-0 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 outline-none text-gray-800 leading-relaxed"
+                        :disabled="isSavingTitle"
+                        placeholder="输入新标题"
+                        @click.stop
+                        @keydown="handleEditTitleKeydown(conv.id, $event)"
+                        @blur="confirmEditConversationTitle(conv.id)"
+                      />
+                    </template>
+
+                    <!-- 标题展示态 -->
+                    <template v-else>
+                      <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+                      <button
+                        type="button"
+                        class="shrink-0 flex h-6 w-6 items-center justify-center rounded transition-all duration-150"
+                        :class="conv.is_favorited
+                          ? 'text-amber-500 opacity-100 hover:bg-amber-100 hover:text-amber-600'
+                          : 'text-gray-400 opacity-0 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100'"
+                        :title="conv.is_favorited ? '取消置顶' : '置顶'"
+                        :disabled="favoritingId === conv.id"
+                        @click.stop="toggleConversationFavoriteState(conv)"
+                      >
+                        <i :class="['fa-solid text-[10px]', favoritingId === conv.id ? 'fa-spinner fa-spin' : 'fa-thumbtack']"></i>
+                      </button>
+                      <button
+                        type="button"
+                        class="shrink-0 flex h-6 w-6 items-center justify-center rounded text-gray-400 opacity-0 transition-all duration-150 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100"
+                        title="修改标题"
+                        @click.stop="startEditConversationTitle(conv, $event)"
+                      >
+                        <i class="fa-solid fa-pen text-[10px]"></i>
+                      </button>
+                    </template>
+                  </div>
+                  <div v-if="group.is_loading_more" class="flex items-center justify-center gap-2 py-2 text-xs text-gray-400">
+                    <i class="fa-solid fa-spinner fa-spin"></i>
+                    <span>加载更多...</span>
+                  </div>
                   <button
+                    v-else-if="group.has_more"
                     type="button"
-                    class="shrink-0 flex h-6 w-6 items-center justify-center rounded text-gray-400 opacity-0 transition-all duration-150 hover:bg-blue-100 hover:text-blue-600 group-hover:opacity-100"
-                    title="修改标题"
-                    @click.stop="startEditConversationTitle(conv, $event)"
+                    class="flex h-8 w-full items-center justify-center text-xs text-slate-400 transition-colors hover:text-[#1f82d9]"
+                    @click="emit('loadMoreConversationGroup', group.key)"
                   >
-                    <i class="fa-solid fa-pen text-[10px]"></i>
+                    加载更多
                   </button>
-                </template>
-              </div>
+                </div>
               </template>
             </div>
           </template>
-          <div v-if="isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">
+          <div v-if="conversationViewMode === 'flat' && isLoadingMore" class="flex items-center justify-center gap-2 py-3 text-xs text-gray-400">
             <i class="fa-solid fa-spinner fa-spin"></i>
             <span>加载更多...</span>
           </div>

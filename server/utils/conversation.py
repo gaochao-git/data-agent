@@ -5,6 +5,9 @@
 使用 SQLAlchemy 统一管理业务数据库操作
 """
 
+import base64
+import binascii
+import json
 import uuid
 from datetime import datetime
 import re
@@ -22,6 +25,10 @@ from .models import UserThread
 
 logger = get_logger(__name__)
 conversation_dao = ConversationDao(session_context=lambda: get_session())
+
+PINNED_GROUP_KEY = "system:pinned"
+UNCLASSIFIED_GROUP_KEY = "system:unclassified"
+DATASOURCE_GROUP_PREFIX = "datasource:"
 
 
 # ============ 内部函数 ============
@@ -167,6 +174,103 @@ async def list_by_agent_ids(agent_ids: List[str], user_id: str = None, limit: in
     threads = await conversation_dao.list_threads_by_agent_ids(agent_ids=agent_ids, user_id=user_id, limit=limit, offset=offset)
 
     return [_format_thread(t) for t in threads]
+
+
+def _thread_group_key(thread: UserThread) -> str:
+    if bool(thread.is_favorited):
+        return PINNED_GROUP_KEY
+    datasource_id = str(thread.datasource_id or "").strip()
+    return f"{DATASOURCE_GROUP_PREFIX}{datasource_id}" if datasource_id else UNCLASSIFIED_GROUP_KEY
+
+
+def _parse_group_key(group_key: str) -> tuple[str, Optional[str]]:
+    normalized = str(group_key or "").strip()
+    if normalized == PINNED_GROUP_KEY:
+        return "pinned", None
+    if normalized == UNCLASSIFIED_GROUP_KEY:
+        return "unclassified", None
+    if normalized.startswith(DATASOURCE_GROUP_PREFIX):
+        datasource_id = normalized[len(DATASOURCE_GROUP_PREFIX):].strip()
+        if datasource_id:
+            return "datasource", datasource_id
+    raise ValueError("无效的会话分组")
+
+
+def _encode_group_cursor(thread: UserThread) -> str:
+    payload = json.dumps(
+        {"update_time": thread.update_time.isoformat(), "id": thread.id},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_group_cursor(cursor: Optional[str]) -> tuple[Optional[datetime], Optional[int]]:
+    normalized = str(cursor or "").strip()
+    if not normalized:
+        return None, None
+    try:
+        padded = normalized + "=" * (-len(normalized) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        return datetime.fromisoformat(str(payload["update_time"])), int(payload["id"])
+    except (binascii.Error, json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("无效的会话分页游标") from exc
+
+
+def _format_conversation_group(group_key: str, rows: List[UserThread], page: int, page_size: int) -> Dict[str, Any]:
+    datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX):] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
+    visible_rows = rows[:page_size]
+    has_more = len(rows) > page_size
+    return {
+        "key": group_key,
+        "datasource_id": datasource_id,
+        "conversations": [_format_thread(thread) for thread in visible_rows],
+        "page": page,
+        "page_size": page_size,
+        "has_more": has_more,
+        "next_cursor": _encode_group_cursor(visible_rows[-1]) if has_more and visible_rows else None,
+    }
+
+
+async def list_grouped(
+    agent_id: str,
+    user_id: str,
+    page_size: int,
+    *,
+    group_key: Optional[str] = None,
+    page: int = 1,
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
+    """返回全部分组首屏，或返回指定分组的一页，不执行总量统计。"""
+    if group_key:
+        if page > 1 and not cursor:
+            raise ValueError("会话分组翻页缺少游标")
+        group_type, datasource_id = _parse_group_key(group_key)
+        cursor_update_time, cursor_id = _decode_group_cursor(cursor)
+        rows = await conversation_dao.list_threads_in_group(
+            agent_id=agent_id,
+            user_id=user_id,
+            group_type=group_type,
+            datasource_id=datasource_id,
+            limit=page_size + 1,
+            cursor_update_time=cursor_update_time,
+            cursor_id=cursor_id,
+        )
+        return {"groups": [_format_conversation_group(group_key, rows, page, page_size)]}
+
+    rows = await conversation_dao.list_thread_group_first_pages(
+        agent_id=agent_id,
+        user_id=user_id,
+        limit_per_group=page_size + 1,
+    )
+    grouped_rows: Dict[str, List[UserThread]] = {}
+    for thread in rows:
+        grouped_rows.setdefault(_thread_group_key(thread), []).append(thread)
+    return {
+        "groups": [
+            _format_conversation_group(key, group_rows, 1, page_size)
+            for key, group_rows in grouped_rows.items()
+        ]
+    }
 
 
 async def list_all(agent_configs: Dict[str, Dict[str, Any]], user_id: str = None, limit: int = 50) -> List[Dict[str, Any]]:

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, List, Optional
 
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import and_, case, func, literal, or_, select, update as sa_update
+from sqlalchemy.orm import aliased
 
 from utils.database import get_session as default_get_session
 from utils.models import UserThread
@@ -88,6 +89,87 @@ class ConversationDao:
                 query = query.where(UserThread.user_id == user_id)
             query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
             result = await session.execute(query)
+            return list(result.scalars().all())
+
+    @staticmethod
+    def _list_conditions(agent_id: str, user_id: Optional[str]) -> list[Any]:
+        conditions = [UserThread.agent_id == agent_id, UserThread.delete_flag == 0]
+        if user_id:
+            conditions.append(UserThread.user_id == user_id)
+        return conditions
+
+    async def list_thread_group_first_pages(
+        self,
+        *,
+        agent_id: str,
+        user_id: Optional[str],
+        limit_per_group: int,
+    ) -> List[UserThread]:
+        """一次查询返回每个历史会话分组的首屏，额外一条用于判断 has_more。"""
+        datasource_group = func.trim(func.coalesce(UserThread.datasource_id, ""))
+        group_type = case(
+            (UserThread.is_favorited == 1, literal("pinned")),
+            (datasource_group == "", literal("unclassified")),
+            else_=literal("datasource"),
+        )
+        group_datasource = case(
+            (UserThread.is_favorited == 1, literal("")),
+            else_=datasource_group,
+        )
+        group_rank = func.row_number().over(
+            partition_by=(group_type, group_datasource),
+            order_by=(UserThread.update_time.desc(), UserThread.id.desc()),
+        ).label("group_rank")
+        ranked = select(UserThread, group_rank).where(
+            *self._list_conditions(agent_id, user_id)
+        ).subquery()
+        ranked_thread = aliased(UserThread, ranked)
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(ranked_thread)
+                .where(ranked.c.group_rank <= limit_per_group)
+                .order_by(
+                    ranked_thread.is_favorited.desc(),
+                    ranked_thread.update_time.desc(),
+                    ranked_thread.id.desc(),
+                )
+            )
+            return list(result.scalars().all())
+
+    async def list_threads_in_group(
+        self,
+        *,
+        agent_id: str,
+        user_id: Optional[str],
+        group_type: str,
+        datasource_id: Optional[str],
+        limit: int,
+        cursor_update_time: Optional[datetime] = None,
+        cursor_id: Optional[int] = None,
+    ) -> List[UserThread]:
+        """按稳定分组筛选会话；收藏会话只属于 pinned 分组。"""
+        conditions = self._list_conditions(agent_id, user_id)
+        normalized_datasource = func.trim(func.coalesce(UserThread.datasource_id, ""))
+        if group_type == "pinned":
+            conditions.append(UserThread.is_favorited == 1)
+        else:
+            conditions.append(func.coalesce(UserThread.is_favorited, 0) != 1)
+            if group_type == "unclassified":
+                conditions.append(normalized_datasource == "")
+            else:
+                conditions.append(normalized_datasource == datasource_id)
+        if cursor_update_time is not None and cursor_id is not None:
+            conditions.append(or_(
+                UserThread.update_time < cursor_update_time,
+                and_(UserThread.update_time == cursor_update_time, UserThread.id < cursor_id),
+            ))
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(UserThread)
+                .where(*conditions)
+                .order_by(UserThread.update_time.desc(), UserThread.id.desc())
+                .limit(limit)
+            )
             return list(result.scalars().all())
 
     async def sync_thread(
