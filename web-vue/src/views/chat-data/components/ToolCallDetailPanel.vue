@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ToolCallInfo } from '../types'
+import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
 
 interface Props {
   toolCall?: ToolCallInfo | null
@@ -13,6 +14,12 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const formatJson = (value: unknown) => props.formatText(JSON.stringify(value || {}, null, 2))
+
+const toolDisplayName = computed(() => getToolDisplayName(props.toolCall?.tool_name))
+const toolDescription = computed(() => {
+  const toolCall = props.toolCall
+  return toolCall ? getToolCompactDescription(toolCall.tool_name, toolCall.args || {}) : ''
+})
 
 const paramsExpanded = ref(true)
 const resultExpanded = ref(true)
@@ -36,7 +43,10 @@ const toolResult = computed(() => {
 <template>
   <div v-if="toolCall" class="rounded-xl border border-slate-100 bg-white shadow-sm">
     <div class="border-b border-slate-100 px-4 py-3">
-      <div class="min-w-0 truncate font-mono text-xs text-slate-500" :title="toolCall.tool_name">{{ toolCall.tool_name }}</div>
+      <div class="flex min-w-0 items-center gap-2 text-xs text-slate-500" :title="toolDescription || toolCall.tool_name">
+        <span class="shrink-0 font-medium">{{ toolDisplayName }}</span>
+        <span v-if="toolDescription" class="min-w-0 truncate font-mono text-slate-400">{{ toolDescription }}</span>
+      </div>
     </div>
 
     <div class="divide-y divide-slate-100">

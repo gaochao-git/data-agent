@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getToolDisplayName } from '../toolDisplay'
+import { getToolCompactDescription, getToolDisplayName } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -20,6 +20,7 @@ describe('toolDisplay', () => {
       present_artifacts: '展示文件',
       get_current_time: '获取当前时间',
       semantic_search: '语义检索',
+      search_dataset: '检索语义模型',
       dsl2sql_tool: '编译 SQL',
       semantic_query_tool: '查询数据',
       calculator_tool: '精确计算',
@@ -37,5 +38,27 @@ describe('toolDisplay', () => {
     expect(getToolDisplayName('semantic_tool')).toBe('工具调用')
     expect(getToolDisplayName('  ')).toBe('工具调用')
     expect(getToolDisplayName(null)).toBe('工具调用')
+  })
+
+  it('extracts the primary argument shown after compact tool names', () => {
+    expect(getToolCompactDescription('search_dataset', { query: '产品分类模型' })).toBe('产品分类模型')
+    expect(getToolCompactDescription('file_write', {
+      file_path: '/mnt/user-data/outputs/语义模型分析报告.md',
+    })).toBe('/mnt/user-data/outputs/语义模型分析报告.md')
+    expect(getToolCompactDescription('file_read', { path: String.raw`workspace\reports\a.md` })).toBe('workspace/reports/a.md')
+    expect(getToolCompactDescription('file_delete', {
+      file_path: '/mnt/user-data/workspace/临时文件.md',
+    })).toBe('/mnt/user-data/workspace/临时文件.md')
+    expect(getToolCompactDescription('file_move', {
+      source_path: 'workspace/草稿.md',
+      target_path: 'outputs/报告.md',
+    })).toBe('workspace/草稿.md -> outputs/报告.md')
+    expect(getToolCompactDescription('present_artifacts', {
+      files: ['/mnt/user-data/outputs/报告.md'],
+    })).toBe('/mnt/user-data/outputs/报告.md')
+    expect(getToolCompactDescription('present_artifacts', {
+      files: ['/mnt/user-data/outputs/报告.md', '/mnt/user-data/outputs/明细.xlsx'],
+    })).toBe('/mnt/user-data/outputs/报告.md 等 2 个文件')
+    expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 })

@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { getToolDisplayName } from '../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName } from '../utils/toolDisplay'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -131,13 +131,6 @@ const isRunning = computed(() => props.toolCall.status === 'generating' || props
 const isCompleted = computed(() => props.toolCall.status === 'completed')
 const isError = computed(() => props.toolCall.status === 'error')
 
-const normalizeVisiblePath = (path: unknown): string => {
-  return String(path || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-}
-
 const getResultField = (field: string): string => {
   const result = String(props.toolCall.result || '')
   const match = result.match(new RegExp(`^${field}=([^\\n]+)`, 'm'))
@@ -145,17 +138,7 @@ const getResultField = (field: string): string => {
 }
 
 const compactDescription = computed(() => {
-  const args = props.toolCall.args || {}
-  if (props.toolCall.tool_name === 'file_read') {
-    return normalizeVisiblePath(args.file_path || args.path)
-  }
-  if (props.toolCall.tool_name === 'file_edit') {
-    return normalizeVisiblePath(args.file_path || args.path)
-  }
-  if (props.toolCall.tool_name === 'semantic_query_tool') {
-    return normalizeVisiblePath(args.save_as)
-  }
-  return ''
+  return getToolCompactDescription(props.toolCall.tool_name, props.toolCall.args || {})
 })
 
 const generatedSql = computed(() => extractGeneratedSqlFromToolCall(props.toolCall))

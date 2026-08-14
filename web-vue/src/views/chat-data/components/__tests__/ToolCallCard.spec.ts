@@ -19,4 +19,78 @@ describe('ToolCallCard', () => {
     expect(wrapper.text()).toContain('/mnt/user-data/workspace/reports/word.md')
     expect(wrapper.find('[title="/mnt/user-data/workspace/reports/word.md"]').exists()).toBe(true)
   })
+
+  it('shows the search query after the mapped dataset-search tool name', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-search',
+          tool_name: 'search_dataset',
+          args: { query: '产品分类模型' },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('检索语义模型')
+    expect(wrapper.text()).toContain('产品分类模型')
+  })
+
+  it('shows the full file path after the write-file tool name', () => {
+    const filePath = '/mnt/user-data/outputs/语义模型分析报告.md'
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-write',
+          tool_name: 'file_write',
+          args: { file_path: filePath, content: '# 报告' },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('写入文件')
+    expect(wrapper.text()).toContain(filePath)
+    expect(wrapper.find(`[title="${filePath}"]`).exists()).toBe(true)
+  })
+
+  it('shows presented file paths after the artifact tool name', () => {
+    const filePath = '/mnt/user-data/outputs/财付通数据分析报告.md'
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-present',
+          tool_name: 'present_artifacts',
+          args: { files: [filePath] },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('展示文件')
+    expect(wrapper.text()).toContain(filePath)
+    expect(wrapper.find(`[title="${filePath}"]`).exists()).toBe(true)
+  })
+
+  it('shows the deleted file path after the delete-file tool name', () => {
+    const filePath = '/mnt/user-data/workspace/临时文件.md'
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-delete',
+          tool_name: 'file_delete',
+          args: { file_path: filePath },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('删除文件')
+    expect(wrapper.text()).toContain(filePath)
+    expect(wrapper.find(`[title="${filePath}"]`).exists()).toBe(true)
+  })
 })
