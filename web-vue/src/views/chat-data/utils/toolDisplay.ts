@@ -34,31 +34,75 @@ const normalizeVisiblePath = (value: unknown): string => (
     .replace(/\/+/g, '/')
 )
 
+const compactInlineText = (value: unknown, maxLength = 120): string => {
+  const text = String(value || '').trim().replace(/\s+/g, ' ')
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+}
+
+const joinPathDetail = (path: unknown, detail: unknown): string => {
+  const normalizedPath = normalizeVisiblePath(path)
+  const normalizedDetail = compactInlineText(detail)
+  if (!normalizedPath) return normalizedDetail
+  if (!normalizedDetail) return normalizedPath
+  return `${normalizedPath} · ${normalizedDetail}`
+}
+
+type ToolArgs = Record<string, unknown>
+type DescriptionBuilder = (args: ToolArgs) => string
+
+const filePathDescription: DescriptionBuilder = args => normalizeVisiblePath(args.file_path || args.path)
+
+const transferDescription: DescriptionBuilder = (args) => {
+  const source = normalizeVisiblePath(args.source_path)
+  const target = normalizeVisiblePath(args.target_path || args.destination_path)
+  return source && target ? `${source} -> ${target}` : source || target
+}
+
+const presentArtifactsDescription: DescriptionBuilder = (args) => {
+  const files = Array.isArray(args.files)
+    ? args.files.map(normalizeVisiblePath).filter(Boolean)
+    : []
+  if (files.length === 0) return ''
+  return files.length === 1 ? files[0]! : `${files[0]} 等 ${files.length} 个文件`
+}
+
+const calculatorDescription: DescriptionBuilder = (args) => {
+  const calculations = Array.isArray(args.calculations) ? args.calculations : []
+  if (calculations.length === 0) return ''
+  const first = calculations[0]
+  const firstText = first && typeof first === 'object'
+    ? compactInlineText((first as ToolArgs).name || (first as ToolArgs).expression)
+    : compactInlineText(first)
+  return calculations.length === 1 ? firstText : `${firstText} 等 ${calculations.length} 项`
+}
+
+const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
+  search_dataset: args => compactInlineText(args.query),
+  semantic_search: args => compactInlineText(args.query || args.semantic_config_id || args.operation),
+  file_read: filePathDescription,
+  file_edit: filePathDescription,
+  file_write: filePathDescription,
+  file_delete: filePathDescription,
+  file_move: transferDescription,
+  file_copy: transferDescription,
+  file_glob: args => joinPathDetail(args.path || 'workspace', args.pattern),
+  file_grep: args => joinPathDetail(args.path || 'workspace', args.pattern),
+  dir_create: args => normalizeVisiblePath(args.path),
+  dir_list: args => normalizeVisiblePath(args.path || 'workspace'),
+  dir_delete: args => normalizeVisiblePath(args.path),
+  parse_document: transferDescription,
+  present_artifacts: presentArtifactsDescription,
+  semantic_query_tool: args => normalizeVisiblePath(args.save_as),
+  dsl2sql_tool: args => compactInlineText(args.user_query || args.semantic_config_id),
+  calculator_tool: calculatorDescription,
+  officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
+  bash_run: args => compactInlineText(args.command),
+}
+
 export function getToolCompactDescription(
   toolName?: string | null,
-  args: Record<string, unknown> = {},
+  args: ToolArgs = {},
 ): string {
   const name = String(toolName || '').trim()
-  if (name === 'search_dataset') {
-    return String(args.query || '').trim()
-  }
-  if (name === 'file_read' || name === 'file_edit' || name === 'file_write' || name === 'file_delete') {
-    return normalizeVisiblePath(args.file_path || args.path)
-  }
-  if (name === 'file_move' || name === 'file_copy') {
-    const source = normalizeVisiblePath(args.source_path)
-    const target = normalizeVisiblePath(args.target_path || args.destination_path)
-    return source && target ? `${source} -> ${target}` : source || target
-  }
-  if (name === 'present_artifacts') {
-    const files = Array.isArray(args.files)
-      ? args.files.map(normalizeVisiblePath).filter(Boolean)
-      : []
-    if (files.length === 0) return ''
-    return files.length === 1 ? files[0]! : `${files[0]} 等 ${files.length} 个文件`
-  }
-  if (name === 'semantic_query_tool') {
-    return normalizeVisiblePath(args.save_as)
-  }
-  return ''
+  return TOOL_DESCRIPTION_BUILDERS[name]?.(args) || ''
 }
