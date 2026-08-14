@@ -18,6 +18,8 @@ import type {
   SqlHistoryItem,
   DashboardSpecPayload,
   DatasourceTableIndexItem,
+  PendingUserQuestion,
+  UserQuestionAnswer,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1355,6 +1357,41 @@ export function listSteerMessages(
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
     method: 'get',
+  })
+}
+
+export function getPendingUserQuestion(
+  conversationId: string,
+): Promise<ApiResponse<PendingUserQuestion | null>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/pending-question`,
+    method: 'get',
+  })
+}
+
+export function answerUserQuestion(
+  conversationId: string,
+  questionId: string,
+  answers: UserQuestionAnswer[],
+  signal?: AbortSignal,
+): Promise<Response> {
+  return requestStream({
+    url: `/agents/api/chatdata/conversations/${conversationId}/questions/${questionId}/answer`,
+    method: 'POST',
+    data: { answers },
+    signal,
+  })
+}
+
+export function cancelUserQuestion(
+  conversationId: string,
+  questionId: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  return requestStream({
+    url: `/agents/api/chatdata/conversations/${conversationId}/questions/${questionId}/cancel`,
+    method: 'POST',
+    signal,
   })
 }
 

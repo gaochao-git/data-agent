@@ -20,6 +20,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   officecli_run: '运行 OfficeCLI',
   get_current_time: '获取当前时间',
   present_artifacts: '展示文件',
+  ask_user_question: '询问用户',
 }
 
 export function getToolDisplayName(toolName?: string | null): string {
@@ -97,6 +98,13 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
+  ask_user_question: args => {
+    const questions = Array.isArray(args.questions) ? args.questions : []
+    const first = questions[0]
+    if (!first || typeof first !== 'object') return ''
+    const text = compactInlineText((first as ToolArgs).question)
+    return questions.length > 1 ? `${text} 等 ${questions.length} 个问题` : text
+  },
 }
 
 export function getToolCompactDescription(

@@ -152,6 +152,45 @@ async def test_agent_sse_stream_adapter_emits_queued_and_custom_steer_events():
     assert '"message_ids": ["message-2"]' in events[1]
 
 
+@pytest.mark.asyncio
+async def test_stream_agent_turn_emits_question_and_skips_message_end():
+    from apps.chat_data_app.services.agent_run.conversation_runtime import stream_agent_turn
+
+    question = {"question_id": "q1", "questions": [{"id": "x", "question": "请选择"}]}
+    calls = []
+
+    class InterruptAdapter:
+        disconnected = False
+
+        async def stream_events(self):
+            if False:
+                yield ""
+
+        async def finish(self, **_kwargs):
+            return {"usage": None}
+
+        def pending_interrupt(self):
+            return question
+
+    async def noop():
+        return None
+
+    async def on_interrupt(payload):
+        calls.append(payload)
+
+    events = [event async for event in stream_agent_turn(
+        stream_adapter=InterruptAdapter(),
+        format_sse=handlers._format_sse,
+        persist_user_message=noop,
+        persist_turn_history=noop,
+        persist_partial_history=noop,
+        on_interrupt=on_interrupt,
+    )]
+
+    assert calls == [question]
+    assert [sse_event_name(event) for event in events] == ["question_requested", "done"]
+
+
 def FakeChunk(
     content="",
     *,
@@ -676,6 +715,47 @@ async def test_generate_chat_data_stream_disconnect_uses_clean_query_state(monke
 
     assert chunks == []
     assert graph.initial_state is None
+
+
+@pytest.mark.asyncio
+async def test_resume_disconnect_before_graph_restores_pending_question(monkeypatch):
+    calls = []
+
+    class Graph:
+        initial_state = None
+
+        async def astream(self, initial_state, *_args, **_kwargs):
+            self.initial_state = initial_state
+            if False:
+                yield None
+
+    class DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def restore(run_id, user_id, operator_name):
+        calls.append((run_id, user_id, operator_name))
+
+    graph = Graph()
+    _override_semantic_context(monkeypatch)
+    monkeypatch.setattr(handlers, "get_checkpointer", lambda: FakeCheckpointer())
+    monkeypatch.setattr(handlers, "create_data_agent", lambda *_args, **_kwargs: graph)
+    monkeypatch.setattr(handlers.agent_inbox_service, "restore_question_answer", restore)
+
+    chunks = await collect_stream(handlers._generate_chat_data_stream(
+        thread_id="conv",
+        user_query="查订单",
+        user_id="u1",
+        username="用户一",
+        request=DisconnectedRequest(),
+        run_id="run-1",
+        resume_answer={"answers": []},
+        resume_turn_id="turn-1",
+    ))
+
+    assert chunks == []
+    assert graph.initial_state is None
+    assert calls == [("run-1", "u1", "用户一")]
 
 
 @pytest.mark.asyncio

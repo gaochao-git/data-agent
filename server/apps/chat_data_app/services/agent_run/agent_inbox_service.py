@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -36,6 +37,14 @@ class SteerMessageNotPendingError(RuntimeError):
     pass
 
 
+class AgentQuestionNotFoundError(RuntimeError):
+    pass
+
+
+class AgentQuestionNotWaitingError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ClaimedAgentMessages:
     run_id: str
@@ -51,6 +60,7 @@ class AgentInboxService:
         conversation_id: str,
         user_id: str,
         operator_name: str,
+        runtime_context: dict[str, Any] | None = None,
     ) -> tuple[str, list[HumanMessage]]:
         """开启新运行，返回 (run_id, 遗留排队消息)。
 
@@ -64,12 +74,17 @@ class AgentInboxService:
                 raise AgentRunNotActiveError("会话不存在")
             active_run = await self._dao.get_active_run(session, conversation_id, user_id)
             if active_run and active_run.lease_expire_time and active_run.lease_expire_time <= now:
+                content = self._load_run_content(active_run.content)
                 await self._dao.requeue_messages(session, active_run.run_id, now)
-                active_run.status = "failed"
+                self._restore_unstarted_question(content)
+                active_run.content = json.dumps(content, ensure_ascii=False)
+                active_run.status = "waiting_user" if content.get("pending_question") else "failed"
+                active_run.lease_expire_time = None
                 active_run.update_time = now
                 active_run.update_by = user_id
                 active_run.update_by_name = operator_name
-                active_run = None
+                if active_run.status == "failed":
+                    active_run = None
             if active_run:
                 raise AgentRunConflictError("当前会话已有运行中的任务")
             run_id = uuid4().hex
@@ -79,7 +94,7 @@ class AgentInboxService:
                 run_id=run_id,
                 message_id=run_id,
                 record_type="run",
-                content="",
+                content=json.dumps({"runtime_context": runtime_context or {}}, ensure_ascii=False),
                 status="active",
                 lease_expire_time=now + timedelta(seconds=RUN_LEASE_SECONDS),
                 delete_flag=0,
@@ -103,6 +118,124 @@ class AgentInboxService:
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
             run.update_time = now
             return True
+
+    async def mark_waiting_for_user(
+        self,
+        run_id: str,
+        question: dict[str, Any],
+        user_id: str,
+        operator_name: str,
+    ) -> None:
+        now = datetime.now()
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None or run.status != "active":
+                raise AgentRunNotActiveError("当前运行已结束")
+            content = self._load_run_content(run.content)
+            content["pending_question"] = question
+            content.pop("resuming_question", None)
+            content.pop("pending_answer", None)
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.status = "waiting_user"
+            run.lease_expire_time = None
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
+
+    async def get_pending_question(self, conversation_id: str, user_id: str) -> dict[str, Any] | None:
+        async with get_session() as session:
+            thread = await self._dao.lock_thread(session, conversation_id, user_id)
+            if thread is None:
+                raise AgentRunNotActiveError("会话不存在")
+            run = await self._dao.get_active_run(session, conversation_id, user_id)
+            if run and run.status == "active" and run.lease_expire_time and run.lease_expire_time <= datetime.now():
+                content = self._load_run_content(run.content)
+                self._restore_unstarted_question(content)
+                run.content = json.dumps(content, ensure_ascii=False)
+                if content.get("pending_question"):
+                    run.status = "waiting_user"
+                    run.lease_expire_time = None
+            if run is None or run.status != "waiting_user":
+                return None
+            return self._question_response(run)
+
+    async def claim_question_answer(
+        self,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        question_id: str,
+        answer: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        now = datetime.now()
+        async with get_session() as session:
+            thread = await self._dao.lock_thread(session, conversation_id, user_id)
+            if thread is None:
+                raise AgentQuestionNotFoundError("待回答问题不存在")
+            run = await self._dao.get_active_run(session, conversation_id, user_id)
+            if run is None:
+                raise AgentQuestionNotFoundError("待回答问题不存在")
+            if run.status != "waiting_user":
+                raise AgentQuestionNotWaitingError("问题已回答或运行已恢复")
+            content = self._load_run_content(run.content)
+            question = content.get("pending_question") or {}
+            if str(question.get("question_id") or "") != question_id:
+                raise AgentQuestionNotFoundError("待回答问题不存在")
+            self._validate_question_answer(question, answer)
+            # Keep the question separately while the checkpoint is being
+            # resumed. It must not be exposed as pending after the answer has
+            # been claimed, otherwise a later stream failure can resurrect an
+            # interrupt that LangGraph has already consumed.
+            content["resuming_question"] = content.pop("pending_question")
+            content["pending_answer"] = answer
+            content["resume_started"] = False
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.status = "active"
+            run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
+            return run.run_id, content.get("runtime_context") or {}
+
+    async def mark_question_resume_started(self, run_id: str) -> None:
+        """Record that LangGraph has started processing the claimed answer."""
+        now = datetime.now()
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None or run.status != "active":
+                return
+            content = self._load_run_content(run.content)
+            if not isinstance(content.get("resuming_question"), dict):
+                return
+            content["resume_started"] = True
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.update_time = now
+
+    async def restore_question_answer(
+        self,
+        run_id: str,
+        user_id: str,
+        operator_name: str,
+    ) -> None:
+        """Roll back a claim when the resume stream could not be created."""
+        now = datetime.now()
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None or run.status != "active":
+                return
+            content = self._load_run_content(run.content)
+            question = content.pop("resuming_question", None)
+            if not isinstance(question, dict) or "pending_answer" not in content:
+                return
+            content.pop("pending_answer", None)
+            content.pop("resume_started", None)
+            content["pending_question"] = question
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.status = "waiting_user"
+            run.lease_expire_time = None
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
 
     async def enqueue_message(
         self,
@@ -195,6 +328,12 @@ class AgentInboxService:
             rows = await self._claim_step_and_turn(session, run_id, now)
             if rows:
                 return ClaimedAgentMessages(run_id, [self._to_human_message(row) for row in rows])
+            content = self._load_run_content(run.content)
+            content.pop("pending_question", None)
+            content.pop("resuming_question", None)
+            content.pop("pending_answer", None)
+            content.pop("resume_started", None)
+            run.content = json.dumps(content, ensure_ascii=False)
             run.status = "finished"
             run.update_time = now
             run.update_by = user_id
@@ -208,7 +347,15 @@ class AgentInboxService:
             if run:
                 if status in {"failed", "cancelled"}:
                     await self._dao.requeue_messages(session, run_id, now)
-                run.status = status
+                content = self._load_run_content(run.content)
+                self._restore_unstarted_question(content)
+                run.content = json.dumps(content, ensure_ascii=False)
+                # A claimed answer is already in the resume lifecycle. If the
+                # resumed stream fails, do not expose the old question again;
+                # the checkpoint may already have consumed its interrupt.
+                run.status = "waiting_user" if content.get("pending_question") else status
+                if run.status == "waiting_user":
+                    run.lease_expire_time = None
                 run.update_time = now
                 run.update_by = user_id
                 run.update_by_name = operator_name
@@ -296,6 +443,7 @@ class AgentInboxService:
             rows = await self._dao.list_run_messages(session, latest_run.run_id) if latest_run else []
             return {
                 "has_active_run": active_run is not None,
+                "run_status": active_run.status if active_run else None,
                 "messages": [
                     {
                         "message_id": row.message_id,
@@ -308,6 +456,58 @@ class AgentInboxService:
                     for row in rows
                 ],
             }
+
+    @staticmethod
+    def _load_run_content(content: str) -> dict[str, Any]:
+        try:
+            value = json.loads(content or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def _question_response(self, run: ChatDataAgentInbox) -> dict[str, Any] | None:
+        question = self._load_run_content(run.content).get("pending_question")
+        if not isinstance(question, dict):
+            return None
+        return {"run_id": run.run_id, **question}
+
+    @staticmethod
+    def _restore_unstarted_question(content: dict[str, Any]) -> None:
+        question = content.get("resuming_question")
+        if not isinstance(question, dict) or content.get("resume_started") is True:
+            return
+        content["pending_question"] = content.pop("resuming_question")
+        content.pop("pending_answer", None)
+        content.pop("resume_started", None)
+
+    @staticmethod
+    def _validate_question_answer(question: dict[str, Any], answer: dict[str, Any]) -> None:
+        if answer.get("cancelled") is True:
+            return
+        questions = question.get("questions") or []
+        submitted = answer.get("answers") if isinstance(answer, dict) else None
+        if not isinstance(submitted, list):
+            raise ValueError("answers 必须是数组")
+        submitted_by_id = {str(item.get("id") or ""): item for item in submitted if isinstance(item, dict)}
+        if len(submitted_by_id) != len(submitted):
+            raise ValueError("回答的问题 ID 不能重复且必须是对象")
+        if set(submitted_by_id) != {str(item.get("id") or "") for item in questions}:
+            raise ValueError("回答的问题 ID 与待回答问题不一致")
+        for item in questions:
+            current = submitted_by_id[str(item.get("id") or "")]
+            if current.get("skipped") is True:
+                continue
+            selected = current.get("selected") or []
+            custom = str(current.get("custom") or "").strip()
+            if not isinstance(selected, list) or not all(isinstance(value, str) for value in selected):
+                raise ValueError("selected 必须是字符串数组")
+            allowed = {str(option.get("label") or "") for option in item.get("options") or []}
+            if any(value not in allowed for value in selected):
+                raise ValueError("回答包含无效选项")
+            if not item.get("multi_select") and len(selected) > 1:
+                raise ValueError("单选问题只能选择一个选项")
+            if not selected and not custom:
+                raise ValueError("每个问题都必须选择选项或填写自定义回答")
 
     async def _claim_step_and_turn(self, session, run_id: str, now: datetime) -> list[ChatDataAgentInbox]:
         """领取一个模型轮次的输入：全部 next-step，加一条 FIFO next-turn。"""

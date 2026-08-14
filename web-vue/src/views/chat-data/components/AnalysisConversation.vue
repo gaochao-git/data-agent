@@ -5,12 +5,12 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo } from '../types'
+import type { ChatDataContextCompressionEvent, ChatDataModelOption, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticConfigSelectionInfo, SkillInfo, ThinkingSegment, ToolCallInfo, UserQuestionAnswer } from '../types'
 import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { cancelSteerMessage, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
+import { answerUserQuestion, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -30,6 +30,7 @@ import { parseDateTimeValue, formatLocalDateTime, hideSemanticConfigSelectionPay
 import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../utils/inboxQueue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
+import UserQuestionCard from './UserQuestionCard.vue'
 
 interface Props {
   datasource?: DataSource | null
@@ -87,6 +88,8 @@ const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
+const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
+const isSubmittingQuestion = ref(false)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
@@ -135,6 +138,21 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
   }
   if (hasActiveRun.value && !isGenerating.value && (options?.restartPolling ?? true)) {
     startSteerRestorePolling()
+  }
+}
+
+const restorePendingUserQuestion = async () => {
+  const conversationId = localConversationId.value || props.conversationId
+  if (!conversationId) return
+  try {
+    const response = await getPendingUserQuestion(conversationId)
+    pendingUserQuestion.value = response.data || null
+    if (pendingUserQuestion.value && !activeAssistantMessageId.value) {
+      const lastAssistant = [...messages.value].reverse().find(item => item.role === 'assistant')
+      if (lastAssistant) activeAssistantMessageId.value = lastAssistant.id
+    }
+  } catch {
+    // 恢复失败保留当前卡片，避免网络抖动导致问题消失。
   }
 }
 
@@ -233,6 +251,7 @@ onMounted(() => {
   focusInput()
   document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
   restorePendingSteerQueue()
+  restorePendingUserQuestion()
 })
 
 onUnmounted(() => {
@@ -402,6 +421,9 @@ type AnalysisSubmitOptions = {
   appendUserMessage?: boolean
   fileIds?: string[]
   attachments?: MessageAttachment[]
+  responseFactory?: (signal: AbortSignal) => Promise<Response>
+  preserveAssistant?: boolean
+  interruptedQuestion?: PendingUserQuestion
 }
 
 const resetTokenUsagePanel = (clearUsage = true) => {
@@ -2063,7 +2085,7 @@ const submitAnalysisQuery = async (
   requestText: string,
   options: AnalysisSubmitOptions & { skillName?: string | null; messageSkill?: Message['skill']; restoreInputText?: string } = {}
 ) => {
-  if ((!requestText.trim() && !options.fileIds?.length) || isGenerating.value) return
+  if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory) || isGenerating.value) return
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
     : (props.semanticConfigSelection || null)
@@ -2082,11 +2104,13 @@ const submitAnalysisQuery = async (
   let assistantMessage = getExistingAssistantMessage(options.assistantMessageId)
   if (assistantMessage) {
     activeAssistantMessageId.value = assistantMessage.id
-    assistantMessage.content = ''
-    assistantMessage.error = undefined
-    assistantMessage.toolCalls = []
-    assistantMessage.thinkingSegments = []
-    assistantMessage.segments = []
+    if (!options.preserveAssistant) {
+      assistantMessage.content = ''
+      assistantMessage.error = undefined
+      assistantMessage.toolCalls = []
+      assistantMessage.thinkingSegments = []
+      assistantMessage.segments = []
+    }
     assistantMessage.semanticConfigSelection = effectiveSemanticConfigSelection || undefined
     assistantMessage.isStreaming = true
   } else {
@@ -2149,6 +2173,15 @@ const submitAnalysisQuery = async (
       },
       () => {},
       (error) => {
+        if (options.interruptedQuestion) {
+          pendingUserQuestion.value = options.interruptedQuestion
+          const active = activeAssistantMessageId.value
+            ? messages.value.find(item => item.id === activeAssistantMessageId.value)
+            : null
+          if (active?.role === 'assistant') active.isStreaming = false
+          ElMessage.error(error || '提交回答失败')
+          return
+        }
         finalizeUnfinishedToolCalls('error', error)
         setActiveAssistantError(error)
       },
@@ -2202,12 +2235,46 @@ const submitAnalysisQuery = async (
         admittedInboxMessageIds.value = new Set([...admittedInboxMessageIds.value, ...messageIds])
         admitPendingMessages(messageIds)
       },
+      (question) => {
+        pendingUserQuestion.value = question
+        hasActiveRun.value = true
+        const active = activeAssistantMessageId.value
+          ? messages.value.find(item => item.id === activeAssistantMessageId.value)
+          : null
+        if (active?.role === 'assistant') active.isStreaming = false
+      },
+      options.responseFactory,
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
+  }
+}
+
+const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled = false) => {
+  const question = pendingUserQuestion.value
+  const conversationId = localConversationId.value || props.conversationId
+  if (!question || !conversationId || isSubmittingQuestion.value || isGenerating.value) return
+  isSubmittingQuestion.value = true
+  pendingUserQuestion.value = null
+  const resumeAssistant = activeAssistantMessageId.value
+    ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
+    : [...messages.value].reverse().find(item => item.role === 'assistant')
+  try {
+    await submitAnalysisQuery('', {
+      appendUserMessage: false,
+      assistantMessageId: resumeAssistant?.id,
+      preserveAssistant: true,
+      interruptedQuestion: question,
+      responseFactory: signal => cancelled
+        ? cancelUserQuestion(conversationId, question.question_id, signal)
+        : answerUserQuestion(conversationId, question.question_id, answers || [], signal),
+    })
+  } finally {
+    isSubmittingQuestion.value = false
+    restorePendingUserQuestion()
   }
 }
 
@@ -2618,6 +2685,13 @@ const handleKeyDown = (event: KeyboardEvent) => {
               </div>
             </div>
           </div>
+          <UserQuestionCard
+            v-if="pendingUserQuestion"
+            :question="pendingUserQuestion"
+            :submitting="isSubmittingQuestion"
+            @submit="resumePendingQuestion($event)"
+            @cancel="resumePendingQuestion(undefined, true)"
+          />
           <div v-if="pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
             <div
               v-for="f in pendingFiles"

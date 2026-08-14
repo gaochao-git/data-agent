@@ -26,6 +26,7 @@ describe('toolDisplay', () => {
       calculator_tool: '精确计算',
       bash_run: '运行脚本',
       officecli_run: '运行 OfficeCLI',
+      ask_user_question: '询问用户',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
@@ -88,6 +89,9 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('bash_run', {
       command: 'python3 scripts/build_report.py\n--output outputs/report.md',
     })).toBe('python3 scripts/build_report.py --output outputs/report.md')
+    expect(getToolCompactDescription('ask_user_question', {
+      questions: [{ question: '请选择统计范围' }],
+    })).toBe('请选择统计范围')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 })

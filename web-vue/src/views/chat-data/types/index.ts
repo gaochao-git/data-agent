@@ -553,7 +553,33 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'inbox_admitted' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+
+export interface UserQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface UserQuestionItem {
+  id: string
+  question: string
+  header?: string
+  options: UserQuestionOption[]
+  multi_select: boolean
+}
+
+export interface PendingUserQuestion {
+  question_id: string
+  turn_id?: string
+  questions: UserQuestionItem[]
+}
+
+export interface UserQuestionAnswer {
+  id: string
+  selected: string[]
+  custom: string
+  skipped?: boolean
+}
 
 // 工具状态
 export type ToolStatus = 'running' | 'completed' | 'error'

@@ -579,3 +579,74 @@ async def test_list_steer_messages_restores_queue(steer_router_state):
     assert calls["list_pending"] == {"conversation_id": "conv-1", "user_id": "u1"}
     assert body["data"]["has_active_run"] is True
     assert [item["content"] for item in body["data"]["messages"]] == ["排队一"]
+
+
+@pytest.mark.asyncio
+async def test_pending_question_is_scoped_to_current_user(router_state, monkeypatch):
+    calls = {}
+
+    async def pending(conversation_id, user_id):
+        calls["pending"] = (conversation_id, user_id)
+        return {"question_id": "q1", "questions": []}
+
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    response = await conversation_router.get_pending_question("conv-1", FakeRequest())
+
+    assert payload(response)["data"]["question_id"] == "q1"
+    assert calls["pending"] == ("conv-1", "u1")
+
+
+@pytest.mark.asyncio
+async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatch):
+    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+        return "chat_data"
+
+    async def pending(_conversation_id, _user_id):
+        return {"question_id": "q1", "turn_id": "turn-1", "questions": []}
+
+    async def duplicate(*_args, **_kwargs):
+        raise conversation_router.AgentQuestionNotWaitingError("问题已回答或运行已恢复")
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", duplicate)
+
+    response = await conversation_router.answer_question(
+        "conv-1",
+        "q1",
+        conversation_router.QuestionAnswerRequest(answers=[]),
+        FakeRequest(),
+    )
+    assert payload(response)["code"] == ErrorCode.CHATDATA_QUESTION_NOT_WAITING
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_resume_question_restores_claim_when_stream_creation_fails(router_state, monkeypatch):
+    calls = {}
+
+    async def get_agent_id(_db_path, _conversation_id, _user_id=None):
+        return "chat_data"
+
+    async def pending(_conversation_id, _user_id):
+        return {"question_id": "q1", "turn_id": "turn-1", "questions": []}
+
+    async def claim(*_args, **_kwargs):
+        return "run-1", {"query": "查询订单"}
+
+    async def restore(run_id, user_id, username):
+        calls["restore"] = (run_id, user_id, username)
+
+    def fail_resume(**_kwargs):
+        raise RuntimeError("stream creation failed")
+
+    monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "get_pending_question", pending)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "claim_question_answer", claim)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "restore_question_answer", restore)
+    monkeypatch.setattr("apps.chat_data_app.handlers.resume_chat_data_question_handler", fail_resume)
+
+    with pytest.raises(RuntimeError, match="stream creation failed"):
+        await conversation_router._resume_question("conv-1", "q1", {"answers": []}, FakeRequest())
+
+    assert calls["restore"] == ("run-1", "u1", "用户一")

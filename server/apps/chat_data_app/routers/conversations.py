@@ -7,7 +7,7 @@ import inspect
 from typing import Callable, Literal, Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Query, Request, status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from utils.error_codes import ErrorCode
 from utils import conversation
@@ -17,6 +17,8 @@ from auth import get_forwarded_user, AuthenticationError
 
 from ..services.agent_run.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..services.agent_run.agent_inbox_service import (
+    AgentQuestionNotFoundError,
+    AgentQuestionNotWaitingError,
     AgentRunConflictError,
     AgentRunNotActiveError,
     SteerMessageNotFoundError,
@@ -61,6 +63,17 @@ class SteerMessageUpdateRequest(BaseModel):
     """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
     content: Optional[str] = None
     queue_type: Optional[SteerQueueType] = None
+
+
+class QuestionAnswerItem(BaseModel):
+    id: str
+    selected: List[str] = Field(default_factory=list)
+    custom: str = ""
+    skipped: bool = False
+
+
+class QuestionAnswerRequest(BaseModel):
+    answers: List[QuestionAnswerItem]
 
 
 # ============ Agent 配置注册 ============
@@ -601,6 +614,146 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
         )
 
 
+@router.get("/{conversation_id}/pending-question")
+async def get_pending_question(conversation_id: str, req: Request):
+    """读取 checkpoint 中等待当前用户回答的问题。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        question = await agent_inbox_service.get_pending_question(conversation_id, user_id)
+        return business_response(data=question, msg="ok")
+    except AgentRunNotActiveError:
+        return business_response(
+            msg="对话不存在",
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("读取待回答问题失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="读取待回答问题失败，请稍后重试",
+            code=ErrorCode.CHATDATA_QUESTION_ANSWER_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+async def _resume_question(
+    conversation_id: str,
+    question_id: str,
+    answer: dict[str, Any],
+    req: Request,
+):
+    user_id, username = _get_current_user_identity(req)
+    existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
+    if existing_agent_id != AGENT_ID:
+        raise AgentQuestionNotFoundError("待回答问题不存在")
+    pending = await agent_inbox_service.get_pending_question(conversation_id, user_id)
+    turn_id = str((pending or {}).get("turn_id") or "")
+    run_id, runtime_context = await agent_inbox_service.claim_question_answer(
+        conversation_id,
+        user_id,
+        username,
+        question_id,
+        answer,
+    )
+    # 延迟导入用于打破 handlers -> routers 注册链的循环依赖。
+    from ..handlers import resume_chat_data_question_handler
+    try:
+        return resume_chat_data_question_handler(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            username=username,
+            run_id=run_id,
+            runtime_context=runtime_context,
+            answer=answer,
+            turn_id=turn_id,
+            request=req,
+        )
+    except Exception:
+        await agent_inbox_service.restore_question_answer(run_id, user_id, username)
+        raise
+
+
+@router.post("/{conversation_id}/questions/{question_id}/answer", responses=SSE_RESPONSES)
+async def answer_question(
+    conversation_id: str,
+    question_id: str,
+    request: QuestionAnswerRequest,
+    req: Request,
+):
+    """原子领取待回答问题并恢复原 LangGraph 运行。"""
+    try:
+        return await _resume_question(
+            conversation_id,
+            question_id,
+            {"answers": [item.model_dump() for item in request.answers]},
+            req,
+        )
+    except ValueError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_400_BAD_REQUEST,
+        )
+    except AgentQuestionNotFoundError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_QUESTION_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except AgentQuestionNotWaitingError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_QUESTION_NOT_WAITING,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("提交问题回答失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="提交回答失败，请稍后重试",
+            code=ErrorCode.CHATDATA_QUESTION_ANSWER_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.post("/{conversation_id}/questions/{question_id}/cancel", responses=SSE_RESPONSES)
+async def cancel_question(conversation_id: str, question_id: str, req: Request):
+    """取消当前问题并让 Agent 自行决定如何收尾。"""
+    try:
+        return await _resume_question(conversation_id, question_id, {"cancelled": True, "answers": []}, req)
+    except AgentQuestionNotFoundError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_QUESTION_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except AgentQuestionNotWaitingError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_QUESTION_NOT_WAITING,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("取消待回答问题失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="取消问题失败，请稍后重试",
+            code=ErrorCode.CHATDATA_QUESTION_ANSWER_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 @router.get("/{conversation_id}/steer")
 async def list_steer_messages(conversation_id: str, req: Request):
     """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""

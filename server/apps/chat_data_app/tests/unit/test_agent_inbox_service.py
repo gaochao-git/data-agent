@@ -11,6 +11,7 @@ from apps.chat_data_app.agent.middleware.steering import SteeringMessageTracker,
 from apps.chat_data_app.services.agent_run import agent_inbox_service as inbox_module
 from apps.chat_data_app.services.agent_run.agent_inbox_service import (
     AgentInboxService,
+    AgentQuestionNotWaitingError,
     AgentRunConflictError,
     AgentRunNotActiveError,
 )
@@ -83,6 +84,134 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
             select(ChatDataAgentInbox).order_by(ChatDataAgentInbox.id)
         )).scalars())
     assert [row.status for row in rows] == ["finished", "consumed", "consumed"]
+
+
+@pytest.mark.asyncio
+async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    runtime_context = {"query": "查询订单", "model_id": "model-a"}
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一", runtime_context)
+    question = {
+        "question_id": "question-1",
+        "turn_id": "turn-1",
+        "questions": [{
+            "id": "scope",
+            "question": "选择范围",
+            "options": [{"label": "全部"}, {"label": "本月"}],
+            "multi_select": False,
+        }],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
+
+    answer = {"answers": [{"id": "scope", "selected": ["本月"], "custom": ""}]}
+    claimed_run_id, restored_context = await service.claim_question_answer(
+        "conv-1", "user-1", "用户一", "question-1", answer,
+    )
+    assert claimed_run_id == run_id
+    assert restored_context == runtime_context
+    assert await service.get_pending_question("conv-1", "user-1") is None
+    with pytest.raises(AgentQuestionNotWaitingError):
+        await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert run.status == "active"
+    assert run.lease_expire_time is not None
+
+    await service.finish_run(run_id, "failed", "user-1", "用户一")
+    assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
+
+    await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+    await service.mark_question_resume_started(run_id)
+    await service.finish_run(run_id, "failed", "user-1", "用户一")
+    assert await service.get_pending_question("conv-1", "user-1") is None
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_agent_question_claim_can_be_restored_before_resume_starts(inbox_service):
+    service, create_thread, _get_session = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "questions": [{"id": "scope", "question": "选择范围"}],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    answer = {"answers": [{"id": "scope", "selected": [], "custom": "本月"}]}
+    await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+
+    await service.restore_question_answer(run_id, "user-1", "用户一")
+
+    assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
+
+
+@pytest.mark.asyncio
+async def test_expired_unstarted_question_resume_returns_to_waiting(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "questions": [{"id": "scope", "question": "选择范围"}],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    answer = {"answers": [{"id": "scope", "selected": [], "custom": "本月"}]}
+    await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+        run.lease_expire_time = datetime.now() - timedelta(seconds=1)
+
+    assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
+
+
+@pytest.mark.asyncio
+async def test_agent_question_validates_options_and_supports_cancel(inbox_service):
+    service, create_thread, _get_session = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "questions": [{
+            "id": "scope",
+            "question": "选择范围",
+            "options": [{"label": "全部"}],
+            "multi_select": False,
+        }],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    with pytest.raises(ValueError, match="无效选项"):
+        await service.claim_question_answer(
+            "conv-1", "user-1", "用户一", "question-1",
+            {"answers": [{"id": "scope", "selected": ["不存在"], "custom": ""}]},
+        )
+    with pytest.raises(ValueError, match="不能重复"):
+        await service.claim_question_answer(
+            "conv-1", "user-1", "用户一", "question-1",
+            {"answers": [
+                {"id": "scope", "selected": ["全部"], "custom": ""},
+                {"id": "scope", "selected": ["全部"], "custom": ""},
+            ]},
+        )
+    claimed_run_id, _ = await service.claim_question_answer(
+        "conv-1", "user-1", "用户一", "question-1", {"cancelled": True, "answers": []},
+    )
+    assert claimed_run_id == run_id
 
 
 @pytest.mark.asyncio

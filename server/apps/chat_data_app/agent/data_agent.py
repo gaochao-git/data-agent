@@ -30,6 +30,7 @@ from .tools.bash_run import create_bash_run_tool
 from .tools.officecli_run import create_officecli_run_tool
 from .tools.semantic_query import semantic_query_tool
 from .tools.semantic_search import create_semantic_search
+from .tools.ask_user_question import ask_user_question_tool
 
 
 def assemble_tools(
@@ -65,6 +66,7 @@ def assemble_tools(
         ),
         semantic_query_tool,
         calculator_tool,
+        ask_user_question_tool,
         create_officecli_run_tool(workspace_runtime),
     ]
     if runtime_options.bash_enabled:

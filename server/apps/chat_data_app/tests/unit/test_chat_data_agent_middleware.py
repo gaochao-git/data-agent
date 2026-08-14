@@ -1042,9 +1042,10 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "get_current_time",
         "semantic_search",
         "dsl2sql_tool",
-        "semantic_query_tool",
-        "calculator_tool",
-        "officecli_run",
+            "semantic_query_tool",
+            "calculator_tool",
+            "ask_user_question",
+            "officecli_run",
     ]
     assert len(captured["middleware"]) == 7
     assert captured["middleware"][0].name == "ToolCallHistoryRepairMiddleware"

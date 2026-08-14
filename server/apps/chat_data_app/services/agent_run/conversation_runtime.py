@@ -9,6 +9,7 @@ from typing import Any
 
 AsyncHook = Callable[[], Awaitable[None]]
 AsyncPredicate = Callable[[], Awaitable[bool]]
+AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]
 ResourceFinalizer = Callable[[bool], Awaitable[None]]
 
@@ -24,6 +25,7 @@ async def stream_agent_turn(
     after_turn: AsyncHook | None = None,
     after_stream: AsyncHook | None = None,
     continue_stream: AsyncPredicate | None = None,
+    on_interrupt: AsyncInterruptHook | None = None,
     finalize_stream_kwargs: dict[str, Any] | None = None,
     finalize_resources: ResourceFinalizer | None = None,
     cleanup_success_on_cancel: bool = False,
@@ -49,6 +51,17 @@ async def stream_agent_turn(
             await persist_turn_history()
             if after_stream:
                 await after_stream()
+            pending_interrupt = getattr(stream_adapter, "pending_interrupt", None)
+            interrupt_payload = pending_interrupt() if callable(pending_interrupt) else None
+            if interrupt_payload:
+                if on_interrupt:
+                    await on_interrupt(interrupt_payload)
+                if finalize_resources:
+                    await finalize_resources(True)
+                    resources_finalized = True
+                yield format_sse("question_requested", interrupt_payload)
+                yield format_sse("done", "[DONE]")
+                return
             if stream_adapter.disconnected:
                 if finalize_resources:
                     await finalize_resources(True)

@@ -37,7 +37,7 @@ class AgentInboxDao:
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status == "active",
+                ChatDataAgentInbox.status.in_(("active", "waiting_user")),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.desc())
@@ -206,6 +206,22 @@ class AgentInboxDao:
                 ChatDataAgentInbox.run_id == run_id,
                 ChatDataAgentInbox.record_type == "run",
                 ChatDataAgentInbox.status == "active",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def get_run_by_id_for_update(
+        self,
+        session: AsyncSession,
+        run_id: str,
+    ) -> ChatDataAgentInbox | None:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "run",
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .with_for_update()

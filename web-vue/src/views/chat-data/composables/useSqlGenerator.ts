@@ -15,6 +15,7 @@ import type {
   ChatDataMessageEndPayload,
   SemanticConfigSelectionInfo,
   ToolLifecycleEventData,
+  PendingUserQuestion,
 } from '../types'
 
 /**
@@ -95,6 +96,8 @@ export function useSqlGenerator() {
     fileIds?: string[],
     onToolLifecycle?: (payload: ToolLifecycleEventData) => void,
     onInboxAdmitted?: (messageIds: string[]) => void,
+    onQuestionRequested?: (question: PendingUserQuestion) => void,
+    responseFactory?: (signal: AbortSignal) => Promise<Response>,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -142,7 +145,7 @@ export function useSqlGenerator() {
         options.skill_names = [skillName]
       }
 
-      const response = await streamCompletion(conversationId, {
+      const response = responseFactory ? await responseFactory(currentController.signal) : await streamCompletion(conversationId, {
         query,
         agent_id: agentId,
         options,
@@ -169,6 +172,7 @@ export function useSqlGenerator() {
       const decoder = new TextDecoder()
       let buffer = ''
       let streamEnded = false
+      let interrupted = false
       const lifecycleToolCallIds = new Set<string>()
 
       while (true) {
@@ -246,6 +250,19 @@ export function useSqlGenerator() {
               if (messageIds.length) onInboxAdmitted?.(messageIds)
             } catch (err) {
               console.error('解析 inbox_admitted 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'question_requested') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data.question_id === 'string' && Array.isArray(data.questions)) {
+                interrupted = true
+                onQuestionRequested?.(data as PendingUserQuestion)
+              }
+            } catch (err) {
+              console.error('解析 question_requested 数据失败:', err, dataStr)
             }
             continue
           }
@@ -335,7 +352,7 @@ export function useSqlGenerator() {
       }
 
       // 流结束，调用 onResult 通知完成
-      onResult?.({} as NL2SQLResult)
+      if (!interrupted) onResult?.({} as NL2SQLResult)
     } catch (err) {
       // 用户主动取消不算错误
       if (err instanceof DOMException && err.name === 'AbortError') {

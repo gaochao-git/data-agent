@@ -17,6 +17,7 @@ from langchain_core.messages import (
     ToolMessage,
     ToolMessageChunk,
 )
+from langgraph.types import Command
 
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
@@ -76,6 +77,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "officecli_run": "运行 OfficeCLI",
     "get_current_time": "获取当前时间",
     "present_artifacts": "展示文件",
+    "ask_user_question": "询问用户",
 }
 
 
@@ -687,6 +689,7 @@ class _AgentSseStreamAdapter:
         disconnect_log_id: str = "",
         include_empty_tool_messages: bool = False,
         on_first_message=None,
+        on_stream_started=None,
         debug_label: str | None = None,
         reasoning_turn_id: str | None = None,
     ):
@@ -699,6 +702,7 @@ class _AgentSseStreamAdapter:
         self.disconnect_log_id = disconnect_log_id
         self.include_empty_tool_messages = include_empty_tool_messages
         self.on_first_message = on_first_message
+        self.on_stream_started = on_stream_started
         self.debug_label = debug_label
         self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
@@ -725,12 +729,17 @@ class _AgentSseStreamAdapter:
             yield self._queued_events.pop(0)
         started_at = time.perf_counter()
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
+        stream_started = False
         try:
             async for event in self.agent.astream(
                 self.initial_state,
                 config=self.config,
                 stream_mode=["messages", "custom"],
             ):
+                if not stream_started:
+                    stream_started = True
+                    if self.on_stream_started:
+                        await self.on_stream_started()
                 if await self._handle_disconnect():
                     return
 
@@ -771,6 +780,17 @@ class _AgentSseStreamAdapter:
             self.state = await _persist_latest_ai_message_timestamp(self.agent, self.config, self.state)
         usage = self._resolve_end_usage(prefer_latest_usage)
         return _message_end_payload_from_state(self.state, usage)
+
+    def pending_interrupt(self) -> dict[str, Any] | None:
+        """Return the single durable LangGraph interrupt payload, if present."""
+        interrupts = getattr(self.state, "interrupts", None) or ()
+        if not interrupts:
+            return None
+        value = getattr(interrupts[0], "value", None)
+        if not isinstance(value, dict):
+            logger.warning("忽略非结构化 Agent interrupt: %r", value)
+            return None
+        return dict(value)
 
     async def _handle_disconnect(self) -> bool:
         if not self.request or not await self.request.is_disconnected():
@@ -955,6 +975,8 @@ async def _generate_chat_data_stream(
     file_ids: list[str] | None = None,
     run_id: str | None = None,
     adopted_messages: list[HumanMessage] | None = None,
+    resume_answer: dict[str, Any] | None = None,
+    resume_turn_id: str | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -982,6 +1004,7 @@ async def _generate_chat_data_stream(
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
     heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id)) if run_id else None
+    terminal_status: str | None = None
     try:
         async for event in _run_chat_data_agent_stream(
             thread_id=thread_id,
@@ -1000,18 +1023,27 @@ async def _generate_chat_data_stream(
             file_ids=file_ids,
             run_id=run_id,
             adopted_messages=adopted_messages,
+            resume_answer=resume_answer,
+            resume_turn_id=resume_turn_id,
             log_phase=log_phase,
         ):
             yield event
+        terminal_status = "finished"
+    except asyncio.CancelledError:
+        terminal_status = "cancelled"
+        raise
+    except Exception:
+        terminal_status = "failed"
+        raise
     finally:
         if heartbeat_task:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        if run_id:
+        if run_id and terminal_status in {"cancelled", "failed"}:
             await agent_inbox_service.finish_run(
                 run_id,
-                "cancelled",
+                terminal_status,
                 user_id or "system",
                 username or user_id or "system",
             )
@@ -1043,6 +1075,8 @@ async def _run_chat_data_agent_stream(
     file_ids: list[str] | None,
     run_id: str | None,
     adopted_messages: list[HumanMessage] | None = None,
+    resume_answer: dict[str, Any] | None = None,
+    resume_turn_id: str | None = None,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
@@ -1172,27 +1206,29 @@ async def _run_chat_data_agent_stream(
             message_kwargs: dict[str, Any] = {}
             if normalized_skill_names:
                 message_kwargs["skill_names"] = normalized_skill_names
-            user_message = _build_user_message(
+            user_message = None if resume_answer is not None else _build_user_message(
                 message_content,
                 semantic_selection_event,
                 **message_kwargs,
             )
-
-            initial_state = _build_agent_context_state(
-                user_id=user_id,
-                operator_name=username,
-                conversation_id=thread_id,
-                messages=[*(adopted_messages or []), user_message],
-                execution_context={
-                    "datasource_id": datasource_id,
-                    "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
-                    "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
-                },
-                workspace={
-                    "workspace_root": workspace_paths["root"],
-                    "workspace_backend": runtime_options.workspace_backend,
-                },
-            )
+            if resume_answer is not None:
+                initial_state = Command(resume=resume_answer)
+            else:
+                initial_state = _build_agent_context_state(
+                    user_id=user_id,
+                    operator_name=username,
+                    conversation_id=thread_id,
+                    messages=[*(adopted_messages or []), user_message],
+                    execution_context={
+                        "datasource_id": datasource_id,
+                        "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
+                        "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
+                    },
+                    workspace={
+                        "workspace_root": workspace_paths["root"],
+                        "workspace_backend": runtime_options.workspace_backend,
+                    },
+                )
             system_prompt = build_unified_system_prompt(
                 runtime_options,
                 data_context=data_context,
@@ -1240,9 +1276,18 @@ async def _run_chat_data_agent_stream(
                 debug_label="AI Content from model",
                 include_empty_tool_messages=True,
                 on_first_message=lambda: log_phase("first_model_chunk"),
-                reasoning_turn_id=str(user_message.additional_kwargs.get("reasoning_turn_id") or "") or None,
+                on_stream_started=(
+                    (lambda: agent_inbox_service.mark_question_resume_started(run_id))
+                    if resume_answer is not None and run_id
+                    else None
+                ),
+                reasoning_turn_id=resume_turn_id or (
+                    str(user_message.additional_kwargs.get("reasoning_turn_id") or "") if user_message else None
+                ),
             )
             async def persist_user_message() -> None:
+                if user_message is None:
+                    return
                 await conversation_event_service.persist_user_message(
                     conversation_id=thread_id,
                     user_id=user_id,
@@ -1257,7 +1302,7 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=str(user_message.id or ""),
+                    turn_id=resume_turn_id or str(user_message.id or ""),
                 )
 
             async def persist_partial_history() -> None:
@@ -1266,11 +1311,22 @@ async def _run_chat_data_agent_stream(
                     conversation_id=thread_id,
                     user_id=user_id,
                     username=username,
-                    turn_id=str(user_message.id or ""),
+                    turn_id=resume_turn_id or str(user_message.id or ""),
                 )
 
             async def log_agent_stream_done() -> None:
                 log_phase("agent_stream_done")
+
+            async def mark_waiting_for_user(question: dict[str, Any]) -> None:
+                if not run_id:
+                    return
+                question["turn_id"] = resume_turn_id or str(user_message.id or "")
+                await agent_inbox_service.mark_waiting_for_user(
+                    run_id,
+                    question,
+                    user_id or "system",
+                    username or user_id or "system",
+                )
 
             async def confirm_consumed_messages() -> None:
                 if run_id:
@@ -1298,6 +1354,12 @@ async def _run_chat_data_agent_stream(
             async def before_stream() -> bool:
                 if request and await request.is_disconnected():
                     logger.info("客户端已断开，停止流式输出: %s", thread_id)
+                    if resume_answer is not None and run_id:
+                        await agent_inbox_service.restore_question_answer(
+                            run_id,
+                            user_id or "system",
+                            username or user_id or "system",
+                        )
                     return False
                 return True
 
@@ -1325,6 +1387,7 @@ async def _run_chat_data_agent_stream(
                 after_turn=log_agent_stream_done,
                 after_stream=confirm_consumed_messages,
                 continue_stream=continue_with_pending_messages,
+                on_interrupt=mark_waiting_for_user,
             ):
                 yield sse_event
 
@@ -1371,7 +1434,23 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation("", AGENT_ID, conversation_id, user_id)
-    run_id, adopted_messages = await agent_inbox_service.start_run(conversation_id, user_id, username or user_id)
+    runtime_context = {
+        "query": query,
+        "datasource_id": datasource_id,
+        "member_datasource_ids": member_datasource_ids,
+        "semantic_config_id": semantic_config_id,
+        "model_id": model_id,
+        "semantic_config_selection": semantic_config_selection,
+        "enable_thinking": enable_thinking,
+        "skill_names": skill_names,
+        "options": options_data,
+    }
+    run_id, adopted_messages = await agent_inbox_service.start_run(
+        conversation_id,
+        user_id,
+        username or user_id,
+        runtime_context,
+    )
 
     return StreamingResponse(
         _generate_chat_data_stream(
@@ -1394,4 +1473,40 @@ async def sql_completion_handler(
         ),
         media_type="text/event-stream",
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
+    )
+
+
+def resume_chat_data_question_handler(
+    *,
+    conversation_id: str,
+    user_id: str,
+    username: str,
+    run_id: str,
+    runtime_context: dict[str, Any],
+    answer: dict[str, Any],
+    turn_id: str,
+    request: Request | None,
+) -> StreamingResponse:
+    """Resume a checkpointed ChatData interrupt on any service worker."""
+    return StreamingResponse(
+        _generate_chat_data_stream(
+            thread_id=conversation_id,
+            user_query=str(runtime_context.get("query") or ""),
+            datasource_id=runtime_context.get("datasource_id"),
+            user_id=user_id,
+            username=username,
+            member_datasource_ids=runtime_context.get("member_datasource_ids") or [],
+            semantic_config_id=runtime_context.get("semantic_config_id"),
+            request=request,
+            model_id=runtime_context.get("model_id"),
+            semantic_config_selection=runtime_context.get("semantic_config_selection"),
+            enable_thinking=runtime_context.get("enable_thinking"),
+            skill_names=runtime_context.get("skill_names") or [],
+            options=runtime_context.get("options") or {},
+            run_id=run_id,
+            resume_answer=answer,
+            resume_turn_id=turn_id,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
