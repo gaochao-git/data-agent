@@ -56,23 +56,25 @@ def inbox_service(monkeypatch):
             ))
 
     service = AgentInboxService()
+    owner_tokens = {}
     original_start_run = service.start_run
 
     async def start_and_prepare(*args, **kwargs):
         result = await original_start_run(*args, **kwargs)
-        await service.prepare_pending_run(result[0])
+        prepared = await service.prepare_pending_run(result[0])
+        owner_tokens[result[0]] = prepared["owner_token"]
         return result
 
     # These tests exercise the inbox lifecycle after a worker has claimed a
     # run. Runtime-specific pending behavior is covered separately.
     service.start_run = start_and_prepare
-    yield service, create_thread, get_test_session
+    yield service, create_thread, get_test_session, owner_tokens
     asyncio.run(engine.dispose())
 
 
 @pytest.mark.asyncio
 async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
 
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
@@ -87,8 +89,9 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
     assert [message.id for message in claimed.messages] == [first_id, second_id]
 
     await service.mark_consumed(run_id, [first_id, second_id])
-    final_claim = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一")
+    final_claim = await service.claim_pending_or_finish_run("conv-1", "user-1", run_id, "用户一", owners[run_id])
     assert final_claim.messages == []
+    await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
 
     async with get_session() as session:
         rows = list((await session.execute(
@@ -99,7 +102,7 @@ async def test_agent_inbox_run_and_message_lifecycle(inbox_service):
 
 @pytest.mark.asyncio
 async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     runtime_context = {"query": "查询订单", "model_id": "model-a"}
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一", runtime_context)
@@ -113,7 +116,7 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
             "multi_select": False,
         }],
     }
-    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
     assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
 
     answer = {"answers": [{"id": "scope", "selected": ["本月"], "custom": ""}]}
@@ -134,12 +137,16 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
     assert run.status == "pending"
     assert run.lease_expire_time is None
 
-    await service.finish_run(run_id, "failed", "user-1", "用户一")
+    prepared = await service.prepare_pending_run(run_id)
+    owners[run_id] = prepared["owner_token"]
+    await service.finish_run(run_id, "failed", "user-1", "用户一", owners[run_id])
     assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
 
     await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
-    await service.mark_question_resume_started(run_id)
-    await service.finish_run(run_id, "failed", "user-1", "用户一")
+    prepared = await service.prepare_pending_run(run_id)
+    owners[run_id] = prepared["owner_token"]
+    await service.mark_question_resume_started(run_id, owners[run_id])
+    await service.finish_run(run_id, "failed", "user-1", "用户一", owners[run_id])
     assert await service.get_pending_question("conv-1", "user-1") is None
 
     async with get_session() as session:
@@ -152,32 +159,34 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
 
 @pytest.mark.asyncio
 async def test_agent_question_claim_can_be_restored_before_resume_starts(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     question = {
         "question_id": "question-1",
         "questions": [{"id": "scope", "question": "选择范围"}],
     }
-    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
     answer = {"answers": [{"id": "scope", "selected": [], "custom": "本月"}]}
     await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
 
-    await service.restore_question_answer(run_id, "user-1", "用户一")
+    prepared = await service.prepare_pending_run(run_id)
+    owners[run_id] = prepared["owner_token"]
+    await service.restore_question_answer(run_id, "user-1", "用户一", owners[run_id])
 
     assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
 
 
 @pytest.mark.asyncio
 async def test_expired_unstarted_question_resume_returns_to_waiting(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     question = {
         "question_id": "question-1",
         "questions": [{"id": "scope", "question": "选择范围"}],
     }
-    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
     answer = {"answers": [{"id": "scope", "selected": [], "custom": "本月"}]}
     await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
 
@@ -195,7 +204,7 @@ async def test_expired_unstarted_question_resume_returns_to_waiting(inbox_servic
 
 @pytest.mark.asyncio
 async def test_agent_question_validates_options_and_supports_cancel(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     question = {
@@ -207,7 +216,7 @@ async def test_agent_question_validates_options_and_supports_cancel(inbox_servic
             "multi_select": False,
         }],
     }
-    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一")
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
     with pytest.raises(ValueError, match="无效选项"):
         await service.claim_question_answer(
             "conv-1", "user-1", "用户一", "question-1",
@@ -229,7 +238,7 @@ async def test_agent_question_validates_options_and_supports_cancel(inbox_servic
 
 @pytest.mark.asyncio
 async def test_agent_inbox_final_check_claims_message_before_finishing(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "结束边界消息")
@@ -247,7 +256,7 @@ async def test_agent_inbox_final_check_claims_message_before_finishing(inbox_ser
 
 @pytest.mark.asyncio
 async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "重试消息", queue_type="next-step")
@@ -265,7 +274,7 @@ async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
 
 @pytest.mark.asyncio
 async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "失败后重试", queue_type="next-step")
@@ -281,7 +290,7 @@ async def test_failed_run_requeues_claimed_messages_for_next_run(inbox_service):
 @pytest.mark.asyncio
 async def test_expired_run_requeues_claimed_messages_when_new_run_starts(inbox_service):
     """模拟 worker 崩溃未收口：run lease 过期后，新 worker 接管同一消息。"""
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "租约回收", queue_type="next-step")
@@ -301,7 +310,7 @@ async def test_expired_run_requeues_claimed_messages_when_new_run_starts(inbox_s
 
 @pytest.mark.asyncio
 async def test_expired_run_rejects_steer_and_allows_new_completion(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     async with get_session() as session:
@@ -321,7 +330,7 @@ async def test_expired_run_rejects_steer_and_allows_new_completion(inbox_service
 
 @pytest.mark.asyncio
 async def test_cancel_active_run_waits_for_worker_and_preserves_queue(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "停止后继续")
@@ -341,7 +350,7 @@ async def test_cancel_active_run_waits_for_worker_and_preserves_queue(inbox_serv
 
 @pytest.mark.asyncio
 async def test_cancelling_run_cannot_claim_messages(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     step_id = await service.enqueue_message(
@@ -369,7 +378,7 @@ async def test_cancelling_run_cannot_claim_messages(inbox_service):
 
 @pytest.mark.asyncio
 async def test_stale_run_id_cannot_cancel_newer_run(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     old_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     await service.finish_run(old_run_id, "cancelled", "user-1", "用户一")
@@ -387,7 +396,7 @@ async def test_stale_run_id_cannot_cancel_newer_run(inbox_service):
 
 @pytest.mark.asyncio
 async def test_agent_inbox_rejects_missing_or_unowned_conversation(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
 
     with pytest.raises(AgentRunNotActiveError):
@@ -401,7 +410,7 @@ async def test_steering_middleware_persists_and_admits_next_step(monkeypatch):
     call_log = {}
 
     class FakeInboxService:
-        async def claim_pending_messages(self, run_id, *, queue_type=None):
+        async def claim_pending_messages(self, run_id, *, queue_type=None, owner_token=None):
             call_log["claim"] = (run_id, queue_type)
             return inbox_module.ClaimedAgentMessages(
                 run_id,
@@ -418,6 +427,7 @@ async def test_steering_middleware_persists_and_admits_next_step(monkeypatch):
     )
     middleware = create_steering_middleware(
         run_id="run-1",
+        owner_token="owner-1",
         inbox_service=FakeInboxService(),
         admit_messages=admit,
         tracker=SteeringMessageTracker(),
@@ -441,7 +451,7 @@ async def test_steering_middleware_injects_before_plain_model_call(monkeypatch):
     claim_calls = 0
 
     class FakeInboxService:
-        async def claim_pending_messages(self, run_id, *, queue_type=None):
+        async def claim_pending_messages(self, run_id, *, queue_type=None, owner_token=None):
             nonlocal claim_calls
             claim_calls += 1
             assert run_id == "run-1"
@@ -460,6 +470,7 @@ async def test_steering_middleware_injects_before_plain_model_call(monkeypatch):
     )
     middleware = create_steering_middleware(
         run_id="run-1",
+        owner_token="owner-1",
         inbox_service=FakeInboxService(),
         admit_messages=admit,
         tracker=SteeringMessageTracker(),
@@ -479,13 +490,14 @@ async def test_steering_middleware_does_not_claim_without_messages():
     claim_calls = 0
 
     class FakeInboxService:
-        async def claim_pending_messages(self, _run_id, *, queue_type=None):
+        async def claim_pending_messages(self, _run_id, *, queue_type=None, owner_token=None):
             nonlocal claim_calls
             claim_calls += 1
             return inbox_module.ClaimedAgentMessages("run-1", [])
 
     middleware = create_steering_middleware(
         run_id="run-1",
+        owner_token="owner-1",
         inbox_service=FakeInboxService(),
         admit_messages=lambda _messages: asyncio.sleep(0),
         tracker=SteeringMessageTracker(),
@@ -500,7 +512,7 @@ async def test_steering_middleware_does_not_claim_without_messages():
 @pytest.mark.asyncio
 async def test_steering_middleware_does_not_ack_when_admission_persistence_fails(monkeypatch):
     class FakeInboxService:
-        async def claim_pending_messages(self, _run_id, *, queue_type=None):
+        async def claim_pending_messages(self, _run_id, *, queue_type=None, owner_token=None):
             assert queue_type == "next-step"
             return inbox_module.ClaimedAgentMessages(
                 "run-1",
@@ -518,6 +530,7 @@ async def test_steering_middleware_does_not_ack_when_admission_persistence_fails
     )
     middleware = create_steering_middleware(
         run_id="run-1",
+        owner_token="owner-1",
         inbox_service=FakeInboxService(),
         admit_messages=fail_admission,
         tracker=tracker,
@@ -532,7 +545,7 @@ async def test_steering_middleware_does_not_ack_when_admission_persistence_fails
 
 @pytest.mark.asyncio
 async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
 
@@ -548,7 +561,7 @@ async def test_agent_inbox_queue_type_separates_next_step_from_next_turn(inbox_s
 
 @pytest.mark.asyncio
 async def test_agent_inbox_enqueue_rejects_unknown_queue_type(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     await service.start_run("conv-1", "user-1", "用户一")
 
@@ -558,7 +571,7 @@ async def test_agent_inbox_enqueue_rejects_unknown_queue_type(inbox_service):
 
 @pytest.mark.asyncio
 async def test_agent_inbox_update_pending_message_content_and_type(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "原始内容")
@@ -579,7 +592,7 @@ async def test_agent_inbox_update_pending_message_content_and_type(inbox_service
 
 @pytest.mark.asyncio
 async def test_agent_inbox_update_rejects_missing_and_claimed_messages(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "将被领取", queue_type="next-step")
@@ -596,7 +609,7 @@ async def test_agent_inbox_update_rejects_missing_and_claimed_messages(inbox_ser
 
 @pytest.mark.asyncio
 async def test_agent_inbox_cancel_pending_message(inbox_service):
-    service, create_thread, get_session = inbox_service
+    service, create_thread, get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "排队中")
@@ -615,7 +628,7 @@ async def test_agent_inbox_cancel_pending_message(inbox_service):
 
 @pytest.mark.asyncio
 async def test_agent_inbox_update_requires_active_run_and_ownership(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
 
     with pytest.raises(AgentRunNotActiveError):
@@ -632,7 +645,7 @@ async def test_agent_inbox_update_requires_active_run_and_ownership(inbox_servic
 
 @pytest.mark.asyncio
 async def test_agent_inbox_turn_end_claims_all_next_step_and_one_next_turn(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     next_id = await service.enqueue_message("conv-1", "user-1", "用户一", "下一轮任务")
@@ -649,7 +662,7 @@ async def test_agent_inbox_turn_end_claims_all_next_step_and_one_next_turn(inbox
 
 @pytest.mark.asyncio
 async def test_agent_inbox_lists_claimed_message_for_refresh_restore(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
     run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
     await service.enqueue_message("conv-1", "user-1", "用户一", "排队一")
@@ -678,7 +691,7 @@ async def test_agent_inbox_lists_claimed_message_for_refresh_restore(inbox_servi
 
 @pytest.mark.asyncio
 async def test_agent_inbox_list_message_states_rejects_unowned(inbox_service):
-    service, create_thread, _get_session = inbox_service
+    service, create_thread, _get_session, owners = inbox_service
     await create_thread()
 
     with pytest.raises(AgentRunNotActiveError):

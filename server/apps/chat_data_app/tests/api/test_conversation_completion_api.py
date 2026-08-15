@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 from contextlib import asynccontextmanager
@@ -17,6 +18,9 @@ from apps.chat_data_app.services.agent_run.agent_inbox_service import ClaimedAge
 @pytest.fixture(autouse=True)
 def _stub_conversation_event_writes(monkeypatch):
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
+    run_contexts = {}
+    event_queues = {}
+    event_sequences = {}
 
     async def noop_event_write(**_kwargs):
         return None
@@ -25,6 +29,8 @@ def _stub_conversation_event_writes(monkeypatch):
     monkeypatch.setattr(handler_module.conversation_event_service, "persist_turn", noop_event_write)
 
     async def start_run(*_args, **_kwargs):
+        runtime_context = _args[3] if len(_args) > 3 else _kwargs.get("runtime_context") or {}
+        run_contexts["run-test"] = runtime_context
         return "run-test", []
 
     async def no_messages(*_args, **_kwargs):
@@ -33,11 +39,57 @@ def _stub_conversation_event_writes(monkeypatch):
     async def noop(*_args, **_kwargs):
         return None
 
+    async def stream(*, run_id, last_event_id="0-0", is_disconnected=None):
+        _ = last_event_id, is_disconnected
+        queue = event_queues.setdefault(run_id, asyncio.Queue())
+        while True:
+            payload = await queue.get()
+            event_sequences[run_id] = event_sequences.get(run_id, 0) + 1
+            yield {
+                "stream_id": f"test-{event_sequences[run_id]}-0",
+                "payload": payload,
+            }
+            if payload.startswith("event: done\n"):
+                return
+
+    def submit(*, run_id, conversation_id, user_id, operator_name):
+        async def run():
+            queue = event_queues.setdefault(run_id, asyncio.Queue())
+            context = run_contexts[run_id]
+            try:
+                async for payload in handler_module._generate_chat_data_stream(
+                    thread_id=conversation_id,
+                    user_query=context.get("query") or "",
+                    datasource_id=context.get("datasource_id"),
+                    user_id=user_id,
+                    username=operator_name,
+                    member_datasource_ids=context.get("member_datasource_ids") or [],
+                    semantic_config_id=context.get("semantic_config_id"),
+                    request=None,
+                    model_id=context.get("model_id"),
+                    semantic_config_selection=context.get("semantic_config_selection"),
+                    enable_thinking=context.get("enable_thinking"),
+                    skill_names=context.get("skill_names") or [],
+                    options=context.get("options") or {},
+                    file_ids=context.get("file_ids") or [],
+                    run_id=run_id,
+                    owner_token="test-owner",
+                    adopted_messages=[],
+                ):
+                    await queue.put(payload)
+            except Exception:
+                await queue.put(handler_module._format_sse("done", "[DONE]"))
+
+        asyncio.create_task(run())
+
     monkeypatch.setattr(handler_module.agent_inbox_service, "start_run", start_run)
     monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_messages", no_messages)
     monkeypatch.setattr(handler_module.agent_inbox_service, "claim_pending_or_finish_run", no_messages)
     monkeypatch.setattr(handler_module.agent_inbox_service, "mark_consumed", noop)
     monkeypatch.setattr(handler_module.agent_inbox_service, "finish_run", noop)
+    monkeypatch.setattr(handler_module.agent_inbox_service, "complete_run", noop)
+    monkeypatch.setattr(handler_module.agent_run_runtime, "submit", submit)
+    monkeypatch.setattr(conversation_router.agent_run_event_service, "stream", stream)
 
 
 def FakeMessageChunk(
@@ -120,9 +172,10 @@ def _tool_event_contents(stream_text: str) -> list[str]:
     """解析 SSE 工具事件中的原始工具结果。"""
     contents = []
     for event in stream_text.split("\n\n"):
-        if not event.startswith("event: tool\n"):
+        event_without_id = event.removeprefix(event.split("\n", 1)[0] + "\n") if event.startswith("id: ") else event
+        if not event_without_id.startswith("event: tool\n"):
             continue
-        payload = json.loads(event.split("data: ", 1)[1])
+        payload = json.loads(event_without_id.split("data: ", 1)[1])
         contents.append(str(payload.get("content") or ""))
     return contents
 

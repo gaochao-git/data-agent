@@ -733,7 +733,7 @@ async def test_resume_disconnect_before_graph_restores_pending_question(monkeypa
         async def is_disconnected(self):
             return True
 
-    async def restore(run_id, user_id, operator_name):
+    async def restore(run_id, user_id, operator_name, _owner_token):
         calls.append((run_id, user_id, operator_name))
 
     graph = Graph()
@@ -766,13 +766,13 @@ async def test_heartbeat_cancels_owner_when_run_is_stopping(monkeypatch):
         def done(self):
             return False
 
-        def cancel(self):
+        def cancel(self, *_args):
             self.cancelled = True
 
     async def no_wait(_seconds):
         return None
 
-    async def heartbeat(_run_id):
+    async def heartbeat(_run_id, _owner_token=None):
         return "cancelling"
 
     owner = OwnerTask()

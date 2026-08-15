@@ -76,6 +76,7 @@ class ChatDataAgentInbox(Base):
     conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     record_type: Mapped[str] = mapped_column(String(16), nullable=False)
     queue_type: Mapped[str] = mapped_column(

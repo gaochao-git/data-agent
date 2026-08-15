@@ -645,7 +645,7 @@ async def test_answer_question_rejects_duplicate_resume(router_state, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_resume_question_restores_claim_when_stream_creation_fails(router_state, monkeypatch):
+async def test_resume_question_leaves_claim_for_runtime_when_stream_creation_fails(router_state, monkeypatch):
     calls = {}
 
     async def get_agent_id(_db_path, _conversation_id, _user_id=None):
@@ -672,4 +672,6 @@ async def test_resume_question_restores_claim_when_stream_creation_fails(router_
     with pytest.raises(RuntimeError, match="stream creation failed"):
         await conversation_router._resume_question("conv-1", "q1", {"answers": []}, FakeRequest())
 
-    assert calls["restore"] == ("run-1", "u1", "用户一")
+    # The HTTP request has no owner token. Runtime owns rollback/recovery after
+    # it claims the pending resume, so the router must not mutate the Run here.
+    assert calls == {}

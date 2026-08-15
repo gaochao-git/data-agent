@@ -88,6 +88,7 @@ def create_data_agent(
     source_type: str | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_id: str | None = None,
+    owner_token: str | None = None,
     inbox_service=None,
     admit_inbox_messages=None,
     steering_tracker: SteeringMessageTracker | None = None,
@@ -137,9 +138,10 @@ def create_data_agent(
         state_schema=ChatDataAgentState,
     )
     steering_middleware = None
-    if run_id and inbox_service and admit_inbox_messages and steering_tracker:
+    if run_id and owner_token and inbox_service and admit_inbox_messages and steering_tracker:
         steering_middleware = create_steering_middleware(
             run_id=run_id,
+            owner_token=owner_token,
             inbox_service=inbox_service,
             admit_messages=admit_inbox_messages,
             tracker=steering_tracker,

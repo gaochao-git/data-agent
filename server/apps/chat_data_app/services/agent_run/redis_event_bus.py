@@ -16,6 +16,9 @@ PERSIST_GROUP = "chatdata-run-event-persistence"
 STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "86400")), 60)
 
 _PUBLISH_SCRIPT = """
+if redis.call('EXISTS', KEYS[3]) == 0 and tonumber(ARGV[7]) > 0 then
+  redis.call('SET', KEYS[3], ARGV[7])
+end
 local seq = redis.call('INCR', KEYS[3])
 local seq_text = tostring(seq)
 local stream_id = redis.call('XADD', KEYS[1], '*',
@@ -26,6 +29,7 @@ redis.call('XADD', KEYS[2], '*',
   'run_id', ARGV[1], 'conversation_id', ARGV[2], 'user_id', ARGV[3],
   'event_id', ARGV[4], 'event_type', ARGV[5], 'sequence_no', seq_text,
   'payload', ARGV[6], 'stream_id', stream_id)
+redis.call('EXPIRE', KEYS[1], ARGV[8])
 return {stream_id, seq_text}
 """
 
@@ -63,6 +67,7 @@ class RedisEventBus:
         event_id: str,
         event_type: str,
         payload: str,
+        initial_sequence: int = 0,
     ) -> str:
         result = await self.redis.eval(
             _PUBLISH_SCRIPT,
@@ -76,10 +81,13 @@ class RedisEventBus:
             event_id,
             event_type,
             payload,
+            str(initial_sequence),
+            str(STREAM_TTL_SECONDS),
         )
-        await self.redis.expire(self.run_stream_key(run_id), STREAM_TTL_SECONDS)
-        await self.redis.expire(f"{self.run_stream_key(run_id)}:sequence", STREAM_TTL_SECONDS)
         return str(result[0])
+
+    async def sequence_exists(self, run_id: str) -> bool:
+        return bool(await self.redis.exists(f"{self.run_stream_key(run_id)}:sequence"))
 
     async def read_run(self, run_id: str, cursor: str, *, block_ms: int = 15000, count: int = 100) -> list[dict[str, str]]:
         result = await self.redis.xread(
@@ -88,6 +96,9 @@ class RedisEventBus:
             block=block_ms,
         )
         return [self._decode_event(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
+
+    async def run_stream_exists(self, run_id: str) -> bool:
+        return bool(await self.redis.exists(self.run_stream_key(run_id)))
 
     async def read_persistence_batch(
         self,

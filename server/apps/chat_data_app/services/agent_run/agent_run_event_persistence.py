@@ -55,7 +55,10 @@ class AgentRunEventPersistence:
                     conversation_id=event["conversation_id"],
                     user_id=event["user_id"],
                     sequence_no=int(event["sequence_no"]),
-                    event_id=event["event_id"],
+                    # The Redis stream ID is the SSE cursor. Persist it as
+                    # the durable event key so a Redis-expired cursor can be
+                    # translated back to MySQL sequence_no.
+                    event_id=event["stream_id"],
                     event_type=event["event_type"],
                     payload=event["payload"],
                     now=None,

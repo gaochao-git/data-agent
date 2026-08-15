@@ -213,6 +213,23 @@ class AgentInboxDao:
         )
         return result.scalar_one_or_none()
 
+    async def get_run_owner_for_update(
+        self,
+        session: AsyncSession,
+        run_id: str,
+    ) -> tuple[str | None, str | None] | None:
+        result = await session.execute(
+            select(ChatDataAgentInbox.status, ChatDataAgentInbox.owner_token)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .with_for_update()
+        )
+        row = result.one_or_none()
+        return (row[0], row[1]) if row else None
+
     async def get_run_by_id(
         self,
         session: AsyncSession,

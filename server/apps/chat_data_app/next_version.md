@@ -32,6 +32,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
   `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
   `run_id` varchar(64) NOT NULL COMMENT '运行ID',
+  `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
   `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
@@ -52,6 +53,10 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_conv` (`conversation_id`, `user_id`, `record_type`, `status`),
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
+
+-- 如果 chat_data_agent_inbox 已经存在且建表时没有 owner_token，再单独执行：
+-- ALTER TABLE `chat_data_agent_inbox`
+--   ADD COLUMN `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token' AFTER `run_id`;
 
 CREATE TABLE `chat_data_agent_run_event` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',

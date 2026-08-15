@@ -690,20 +690,16 @@ async def _resume_question(
     )
     # 延迟导入用于打破 handlers -> routers 注册链的循环依赖。
     from ..handlers import resume_chat_data_question_handler
-    try:
-        return await resume_chat_data_question_handler(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            username=username,
-            run_id=run_id,
-            runtime_context=runtime_context,
-            answer=answer,
-            turn_id=turn_id,
-            request=req,
-        )
-    except Exception:
-        await agent_inbox_service.restore_question_answer(run_id, user_id, username)
-        raise
+    return await resume_chat_data_question_handler(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        username=username,
+        run_id=run_id,
+        runtime_context=runtime_context,
+        answer=answer,
+        turn_id=turn_id,
+        request=req,
+    )
 
 
 @router.post("/{conversation_id}/questions/{question_id}/answer", responses=SSE_RESPONSES)

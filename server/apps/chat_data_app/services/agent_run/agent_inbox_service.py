@@ -45,6 +45,10 @@ class AgentQuestionNotWaitingError(RuntimeError):
     pass
 
 
+class AgentRunLeaseLostError(RuntimeError):
+    """当前执行者已失去 Run 所有权，禁止继续写入运行状态。"""
+
+
 @dataclass(frozen=True)
 class ClaimedAgentMessages:
     run_id: str
@@ -54,6 +58,7 @@ class ClaimedAgentMessages:
 class AgentInboxService:
     def __init__(self, dao: AgentInboxDao = agent_inbox_dao):
         self._dao = dao
+        self._owner_tokens: dict[str, str] = {}
 
     async def start_run(
         self,
@@ -118,6 +123,9 @@ class AgentInboxService:
             if active is not None and active.run_id != run_id:
                 return None
             run.status = "active"
+            owner_token = uuid4().hex
+            run.owner_token = owner_token
+            self._owner_tokens[run_id] = owner_token
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
             run.update_time = now
             content = self._load_run_content(run.content)
@@ -126,6 +134,7 @@ class AgentInboxService:
             pending_answer = content.get("pending_answer")
             return {
                 "run_id": run_id,
+                "owner_token": owner_token,
                 "conversation_id": run.conversation_id,
                 "user_id": run.user_id,
                 "operator_name": content.get("runtime_context", {}).get("operator_name") or run.user_id,
@@ -139,12 +148,14 @@ class AgentInboxService:
                 ),
             }
 
-    async def heartbeat_run(self, run_id: str) -> str:
+    async def heartbeat_run(self, run_id: str, owner_token: str | None = None) -> str:
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_active_run_by_id(session, run_id)
             if run is None:
                 return "inactive"
+            self._assert_owner(run, owner_token)
             if run.status == "cancelling":
                 return "cancelling"
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
@@ -157,22 +168,27 @@ class AgentInboxService:
         question: dict[str, Any],
         user_id: str,
         operator_name: str,
+        owner_token: str | None = None,
     ) -> None:
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "active":
                 raise AgentRunNotActiveError("当前运行已结束")
+            self._assert_owner(run, owner_token)
             content = self._load_run_content(run.content)
             content["pending_question"] = question
             content.pop("resuming_question", None)
             content.pop("pending_answer", None)
             run.content = json.dumps(content, ensure_ascii=False)
             run.status = "waiting_user"
+            run.owner_token = None
             run.lease_expire_time = None
             run.update_time = now
             run.update_by = user_id
             run.update_by_name = operator_name
+            self._owner_tokens.pop(run_id, None)
 
     async def get_pending_question(self, conversation_id: str, user_id: str) -> dict[str, Any] | None:
         now = datetime.now()
@@ -226,13 +242,15 @@ class AgentInboxService:
             run.update_by_name = operator_name
             return run.run_id, content.get("runtime_context") or {}
 
-    async def mark_question_resume_started(self, run_id: str) -> None:
+    async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
         """Record that LangGraph has started processing the claimed answer."""
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status not in {"active", "pending"}:
                 return
+            self._assert_owner(run, owner_token)
             content = self._load_run_content(run.content)
             if not isinstance(content.get("resuming_question"), dict):
                 return
@@ -245,13 +263,16 @@ class AgentInboxService:
         run_id: str,
         user_id: str,
         operator_name: str,
+        owner_token: str | None = None,
     ) -> None:
         """Roll back a claim when the resume stream could not be created."""
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status not in {"active", "pending"}:
                 return
+            self._assert_owner(run, owner_token)
             content = self._load_run_content(run.content)
             question = content.pop("resuming_question", None)
             if not isinstance(question, dict) or "pending_answer" not in content:
@@ -313,12 +334,15 @@ class AgentInboxService:
         run_id: str,
         *,
         queue_type: str | None = "next-step",
+        owner_token: str | None = None,
     ) -> ClaimedAgentMessages:
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run is None or run.status != "active":
                 return ClaimedAgentMessages(run_id, [])
+            self._assert_owner(run, owner_token)
             rows = await self._dao.claim_messages(
                 session,
                 run_id,
@@ -328,11 +352,16 @@ class AgentInboxService:
             )
             return ClaimedAgentMessages(run_id, [self._to_human_message(row) for row in rows])
 
-    async def mark_consumed(self, run_id: str, message_ids: list[str]) -> None:
+    async def mark_consumed(self, run_id: str, message_ids: list[str], owner_token: str | None = None) -> None:
         if not message_ids:
             return
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None:
+                return
+            self._assert_owner(run, owner_token)
             rows = await self._dao.get_claimed_messages(session, run_id, message_ids)
             for row in rows:
                 row.status = "consumed"
@@ -346,18 +375,22 @@ class AgentInboxService:
         user_id: str,
         run_id: str,
         operator_name: str,
+        owner_token: str | None = None,
     ) -> ClaimedAgentMessages:
         """轮次收尾：领取全部 next-step 和一条 next-turn；无消息时结束运行。
 
         next-step 是赶不上上一模型边界的即时引导；next-turn 严格按 FIFO 每轮一条，
         避免多条普通用户消息被合并成同一次模型调用。
         """
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             await self._dao.lock_thread(session, conversation_id, user_id)
             run = await self._dao.get_active_run(session, conversation_id, user_id)
             if run is None or run.run_id != run_id:
                 return ClaimedAgentMessages(run_id, [])
+            if run.status in {"active", "cancelling"}:
+                self._assert_owner(run, owner_token)
             if run.status == "cancelling":
                 await self._cancel_run(session, run, now, user_id, operator_name)
                 return ClaimedAgentMessages(run_id, [])
@@ -366,23 +399,24 @@ class AgentInboxService:
             rows = await self._claim_step_and_turn(session, run_id, now)
             if rows:
                 return ClaimedAgentMessages(run_id, [self._to_human_message(row) for row in rows])
-            content = self._load_run_content(run.content)
-            content.pop("pending_question", None)
-            content.pop("resuming_question", None)
-            content.pop("pending_answer", None)
-            content.pop("resume_started", None)
-            run.content = json.dumps(content, ensure_ascii=False)
-            run.status = "finished"
-            run.update_time = now
-            run.update_by = user_id
-            run.update_by_name = operator_name
+            # The caller emits message_end/done after this check. Keep the
+            # Run active until those terminal events have been published.
             return ClaimedAgentMessages(run_id, [])
 
-    async def finish_run(self, run_id: str, status: str, user_id: str, operator_name: str) -> None:
+    async def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        user_id: str,
+        operator_name: str,
+        owner_token: str | None = None,
+    ) -> None:
+        owner_token = self._resolve_owner_token(run_id, owner_token)
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_run_by_id_for_update(session, run_id)
             if run and run.status in {"pending", "active", "cancelling"}:
+                self._assert_owner(run, owner_token)
                 if status in {"failed", "cancelled"}:
                     await self._dao.requeue_messages(session, run_id, now)
                 content = self._load_run_content(run.content)
@@ -393,9 +427,38 @@ class AgentInboxService:
                 # the checkpoint may already have consumed its interrupt.
                 run.status = "waiting_user" if content.get("pending_question") else status
                 run.lease_expire_time = None
+                run.owner_token = None
                 run.update_time = now
                 run.update_by = user_id
                 run.update_by_name = operator_name
+                self._owner_tokens.pop(run_id, None)
+
+    async def complete_run(
+        self,
+        run_id: str,
+        user_id: str,
+        operator_name: str,
+        owner_token: str | None = None,
+    ) -> None:
+        """在最后一个 SSE 事件已发布后收口成功 Run。"""
+        owner_token = self._resolve_owner_token(run_id, owner_token)
+        now = datetime.now()
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None or run.status not in {"active", "pending"}:
+                return
+            self._assert_owner(run, owner_token)
+            content = self._load_run_content(run.content)
+            for key in ("pending_question", "resuming_question", "pending_answer", "resume_started"):
+                content.pop(key, None)
+            run.content = json.dumps(content, ensure_ascii=False)
+            run.owner_token = None
+            run.status = "finished"
+            run.lease_expire_time = None
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
+            self._owner_tokens.pop(run_id, None)
 
     async def cancel_active_run(
         self,
@@ -561,6 +624,7 @@ class AgentInboxService:
         self._restore_unstarted_question(content)
         run.content = json.dumps(content, ensure_ascii=False)
         run.status = "waiting_user" if content.get("pending_question") else "cancelled"
+        run.owner_token = None
         run.lease_expire_time = None
         run.update_time = now
         run.update_by = user_id
@@ -586,6 +650,7 @@ class AgentInboxService:
         run.status = "waiting_user" if content.get("pending_question") else (
             "cancelled" if run.status == "cancelling" else "failed"
         )
+        run.owner_token = None
         run.lease_expire_time = None
         run.update_time = now
         run.update_by = user_id
@@ -599,6 +664,14 @@ class AgentInboxService:
         except (TypeError, json.JSONDecodeError):
             return {}
         return value if isinstance(value, dict) else {}
+
+    def _resolve_owner_token(self, run_id: str, owner_token: str | None) -> str | None:
+        return owner_token or self._owner_tokens.get(run_id)
+
+    @staticmethod
+    def _assert_owner(run: ChatDataAgentInbox, owner_token: str | None) -> None:
+        if not owner_token or not run.owner_token or owner_token != run.owner_token:
+            raise AgentRunLeaseLostError("当前运行已由其他 Worker 接管")
 
     def _question_response(self, run: ChatDataAgentInbox) -> dict[str, Any] | None:
         question = self._load_run_content(run.content).get("pending_question")

@@ -30,6 +30,7 @@ class SteeringMessageTracker:
 def create_steering_middleware(
     *,
     run_id: str,
+    owner_token: str,
     inbox_service: AgentInboxService,
     admit_messages: Callable[[list[HumanMessage]], Awaitable[None]],
     tracker: SteeringMessageTracker,
@@ -46,7 +47,11 @@ def create_steering_middleware(
         messages = state.get("messages") or []
         if not messages:
             return None
-        claimed = await inbox_service.claim_pending_messages(run_id, queue_type="next-step")
+        claimed = await inbox_service.claim_pending_messages(
+            run_id,
+            queue_type="next-step",
+            owner_token=owner_token,
+        )
         if not claimed.messages:
             return None
         await admit_messages(claimed.messages)

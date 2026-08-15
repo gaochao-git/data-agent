@@ -31,7 +31,7 @@ from .agent import (
 from .agent.skills import format_skills_prompt
 from .services.agent_run.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
 from .services.agent_run.conversation_runtime import stream_agent_turn
-from .services.agent_run.agent_inbox_service import agent_inbox_service
+from .services.agent_run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service
 from .services.agent_run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
@@ -80,6 +80,10 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "present_artifacts": "展示文件",
     "ask_user_question": "询问用户",
 }
+
+
+class AgentRunStreamFailedError(RuntimeError):
+    """SSE 已发送用户可见错误，外层只需按失败状态收口 Run。"""
 
 
 def _get_timestamp() -> str:
@@ -976,6 +980,7 @@ async def _generate_chat_data_stream(
     adopted_messages: list[HumanMessage] | None = None,
     resume_answer: dict[str, Any] | None = None,
     resume_turn_id: str | None = None,
+    owner_token: str | None = None,
 ):
     """流式执行单一 ChatData Agent。"""
     started_at = time.perf_counter()
@@ -1003,7 +1008,10 @@ async def _generate_chat_data_stream(
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
     owner_task = asyncio.current_task()
-    heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id, owner_task)) if run_id else None
+    heartbeat_task = (
+        asyncio.create_task(_heartbeat_agent_run(run_id, owner_task, owner_token))
+        if run_id else None
+    )
     terminal_status: str | None = None
     try:
         async for event in _run_chat_data_agent_stream(
@@ -1025,13 +1033,16 @@ async def _generate_chat_data_stream(
             adopted_messages=adopted_messages,
             resume_answer=resume_answer,
             resume_turn_id=resume_turn_id,
+            owner_token=owner_token,
             log_phase=log_phase,
         ):
             yield event
         terminal_status = "finished"
-    except asyncio.CancelledError:
-        terminal_status = "cancelled"
+    except asyncio.CancelledError as exc:
+        terminal_status = "cancelled" if exc.args and exc.args[0] == "agent_run_cancelled" else None
         raise
+    except AgentRunStreamFailedError:
+        terminal_status = "failed"
     except Exception:
         terminal_status = "failed"
         raise
@@ -1040,25 +1051,47 @@ async def _generate_chat_data_stream(
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        if run_id and terminal_status in {None, "cancelled", "failed"}:
-            await agent_inbox_service.finish_run(
-                run_id,
-                terminal_status or "cancelled",
-                user_id or "system",
-                username or user_id or "system",
-            )
+        try:
+            if run_id and terminal_status == "finished" and owner_token:
+                await agent_inbox_service.complete_run(
+                    run_id,
+                    user_id or "system",
+                    username or user_id or "system",
+                    owner_token,
+                )
+            elif run_id and terminal_status in {"cancelled", "failed"}:
+                await agent_inbox_service.finish_run(
+                    run_id,
+                    terminal_status or "cancelled",
+                    user_id or "system",
+                    username or user_id or "system",
+                    owner_token,
+                )
+        except AgentRunLeaseLostError:
+            logger.info("智能问数 Run 租约已丢失，跳过旧 Worker 收口: run_id=%s", run_id)
 
 
-async def _heartbeat_agent_run(run_id: str, owner_task: asyncio.Task | None) -> None:
+async def _heartbeat_agent_run(
+    run_id: str,
+    owner_task: asyncio.Task | None,
+    owner_token: str | None = None,
+) -> None:
     """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
         await asyncio.sleep(2)
-        heartbeat_status = await agent_inbox_service.heartbeat_run(run_id)
+        try:
+            heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
+        except AgentRunLeaseLostError:
+            if owner_task and not owner_task.done():
+                owner_task.cancel("agent_run_lease_lost")
+            return
         if heartbeat_status == "cancelling":
             if owner_task and not owner_task.done():
-                owner_task.cancel()
+                owner_task.cancel("agent_run_cancelled")
             return
         if heartbeat_status != "active":
+            if owner_task and not owner_task.done():
+                owner_task.cancel("agent_run_lease_lost")
             return
 
 
@@ -1082,6 +1115,7 @@ async def _run_chat_data_agent_stream(
     adopted_messages: list[HumanMessage] | None = None,
     resume_answer: dict[str, Any] | None = None,
     resume_turn_id: str | None = None,
+    owner_token: str | None = None,
     log_phase,
 ):
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
@@ -1099,7 +1133,7 @@ async def _run_chat_data_agent_stream(
         logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
         yield _format_sse("error", {"error": semantic_context.semantic_config_error})
         yield _format_sse("done", "[DONE]")
-        return
+        raise AgentRunStreamFailedError from None
     datasource_id = semantic_context.datasource_id
     if datasource_id and semantic_context.datasource_meta is not None:
         bound_datasource_id = await conversation.resolve_datasource_binding(
@@ -1110,7 +1144,7 @@ async def _run_chat_data_agent_stream(
         if bound_datasource_id != datasource_id:
             yield _format_sse("error", {"error": "当前会话已绑定其他数据源组，请新建会话后再切换。"})
             yield _format_sse("done", "[DONE]")
-            return
+            raise AgentRunStreamFailedError from None
     semantic_config_id = semantic_context.semantic_config_id
     if semantic_context.semantic_config:
         logger.info(
@@ -1266,6 +1300,7 @@ async def _run_chat_data_agent_stream(
                 workspace_runtime=workspace_runtime,
                 source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
                 run_id=run_id,
+                owner_token=owner_token,
                 inbox_service=agent_inbox_service,
                 admit_inbox_messages=admit_inbox_messages,
                 steering_tracker=steering_tracker,
@@ -1282,7 +1317,7 @@ async def _run_chat_data_agent_stream(
                 include_empty_tool_messages=True,
                 on_first_message=lambda: log_phase("first_model_chunk"),
                 on_stream_started=(
-                    (lambda: agent_inbox_service.mark_question_resume_started(run_id))
+                    (lambda: agent_inbox_service.mark_question_resume_started(run_id, owner_token))
                     if resume_answer is not None and run_id
                     else None
                 ),
@@ -1331,11 +1366,12 @@ async def _run_chat_data_agent_stream(
                     question,
                     user_id or "system",
                     username or user_id or "system",
+                    owner_token,
                 )
 
             async def confirm_consumed_messages() -> None:
                 if run_id:
-                    await agent_inbox_service.mark_consumed(run_id, steering_tracker.drain())
+                    await agent_inbox_service.mark_consumed(run_id, steering_tracker.drain(), owner_token)
 
             async def continue_with_pending_messages() -> bool:
                 if not run_id:
@@ -1345,6 +1381,7 @@ async def _run_chat_data_agent_stream(
                     user_id or "system",
                     run_id,
                     username or user_id or "system",
+                    owner_token,
                 )
                 if not claimed.messages:
                     return False
@@ -1364,25 +1401,15 @@ async def _run_chat_data_agent_stream(
                             run_id,
                             user_id or "system",
                             username or user_id or "system",
-                        )
-                    elif run_id:
-                        await agent_inbox_service.finish_run(
-                            run_id,
-                            "cancelled",
-                            user_id or "system",
-                            username or user_id or "system",
+                            owner_token,
                         )
                     return False
                 return True
 
             async def cancel_disconnected_run() -> None:
-                if run_id:
-                    await agent_inbox_service.finish_run(
-                        run_id,
-                        "cancelled",
-                        user_id or "system",
-                        username or user_id or "system",
-                    )
+                # A subscriber disconnect is not a user cancellation. The
+                # background Runtime continues and can be re-subscribed.
+                return None
 
             # 上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
             # 先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
@@ -1414,17 +1441,15 @@ async def _run_chat_data_agent_stream(
                 yield sse_event
 
     except ContextInputLimitExceededError as exc:
-        if run_id:
-            await agent_inbox_service.finish_run(run_id, "failed", user_id or "system", username or user_id or "system")
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
         yield _format_sse("error", {"error": str(exc)})
         yield _format_sse("done", "[DONE]")
+        raise AgentRunStreamFailedError from None
     except Exception:
-        if run_id:
-            await agent_inbox_service.finish_run(run_id, "failed", user_id or "system", username or user_id or "system")
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
         yield _format_sse("error", {"error": "智能问数执行失败，请稍后重试。"})
         yield _format_sse("done", "[DONE]")
+        raise AgentRunStreamFailedError from None
 
 
 async def sql_completion_handler(
@@ -1467,6 +1492,7 @@ async def sql_completion_handler(
         "skill_names": skill_names,
         "operator_name": username or user_id,
         "options": options_data,
+        "file_ids": file_ids or [],
     }
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,
@@ -1480,24 +1506,6 @@ async def sql_completion_handler(
         conversation_id=conversation_id,
         user_id=user_id,
         operator_name=username or user_id,
-        stream_factory=lambda: _generate_chat_data_stream(
-            thread_id=conversation_id,
-            user_query=query,
-            datasource_id=datasource_id,
-            user_id=user_id,
-            username=username,
-            member_datasource_ids=member_datasource_ids,
-            semantic_config_id=semantic_config_id,
-            request=None,
-            model_id=model_id,
-            semantic_config_selection=semantic_config_selection,
-            enable_thinking=enable_thinking,
-            skill_names=skill_names,
-            options=options,
-            file_ids=file_ids,
-            run_id=run_id,
-            adopted_messages=adopted_messages,
-        ),
     )
     return StreamingResponse(
         _stream_run_events(run_id, request=request),

@@ -62,6 +62,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
   `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
   `run_id` varchar(64) NOT NULL COMMENT '运行ID',
+  `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
   `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
   `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
   `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
