@@ -1193,6 +1193,8 @@ async def _run_chat_data_agent_stream(
     user_message: HumanMessage | None = None
     steering_tracker = SteeringMessageTracker()
     stream_adapter_ref: dict[str, _AgentSseStreamAdapter] = {}
+    model_snapshot_tasks: list[asyncio.Task[None]] = []
+    model_snapshot_lock = asyncio.Lock()
 
     # 解析 file_ids 对应的文件信息，用于追加到用户消息。
     # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
@@ -1291,18 +1293,51 @@ async def _run_chat_data_agent_stream(
                         message=message,
                     )
 
-            async def persist_model_snapshot(state: dict[str, Any]) -> None:
+            async def write_model_snapshot(state: dict[str, Any]) -> None:
                 adapter = stream_adapter_ref.get("value")
                 if adapter is None:
                     return
-                await _persist_agent_turn_history(
-                    adapter,
-                    conversation_id=thread_id,
-                    user_id=user_id,
-                    username=username,
-                    turn_id=resume_turn_id or str(user_message.id or ""),
-                    state_override=state,
+                async with model_snapshot_lock:
+                    await _persist_agent_turn_history(
+                        adapter,
+                        conversation_id=thread_id,
+                        user_id=user_id,
+                        username=username,
+                        turn_id=resume_turn_id or str(user_message.id or ""),
+                        state_override=state,
+                    )
+
+            async def persist_model_snapshot(state: dict[str, Any]) -> None:
+                """Queue the snapshot so model-to-tool transition stays immediate."""
+                snapshot = dict(state or {})
+                if isinstance(snapshot.get("messages"), list):
+                    snapshot["messages"] = list(snapshot["messages"])
+                if isinstance(snapshot.get("context_compression_events"), list):
+                    snapshot["context_compression_events"] = list(snapshot["context_compression_events"])
+                task = asyncio.create_task(
+                    write_model_snapshot(snapshot),
+                    name=f"chatdata-model-snapshot-{thread_id}",
                 )
+                model_snapshot_tasks.append(task)
+
+                def consume_snapshot_result(done_task: asyncio.Task[None]) -> None:
+                    if not done_task.cancelled():
+                        done_task.exception()
+
+                task.add_done_callback(consume_snapshot_result)
+
+            async def flush_model_snapshots() -> None:
+                """Wait for queued snapshots in submission order before final history."""
+                while model_snapshot_tasks:
+                    task = model_snapshot_tasks.pop(0)
+                    try:
+                        await task
+                    except Exception as exc:
+                        logger.warning(
+                            "模型调用完成后的会话历史快照写入失败: conversation_id=%s",
+                            thread_id,
+                            exc_info=(type(exc), exc, exc.__traceback__),
+                        )
 
             agent = create_data_agent(
                 runtime_options,
@@ -1356,6 +1391,7 @@ async def _run_chat_data_agent_stream(
                 log_phase("persist_user_message")
 
             async def persist_turn_history() -> None:
+                await flush_model_snapshots()
                 await _persist_agent_turn_history(
                     stream_adapter,
                     conversation_id=thread_id,
@@ -1365,6 +1401,7 @@ async def _run_chat_data_agent_stream(
                 )
 
             async def persist_partial_history() -> None:
+                await flush_model_snapshots()
                 await _persist_partial_agent_turn_history(
                     stream_adapter,
                     conversation_id=thread_id,
