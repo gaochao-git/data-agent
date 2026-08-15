@@ -129,4 +129,38 @@ describe('useConversationHistoryBrowser', () => {
 
     expect(history.groupedConversations.value[0]?.items[0]?.id).toBe('a-2')
   })
+
+  it('inserts a newly created conversation and updates its running status', async () => {
+    const history = useConversationHistoryBrowser({
+      agentId: 'chat_data',
+      pageSize: 20,
+      viewMode: ref('grouped'),
+      datasources: ref([{ id: 'ds_a', group_name: '数据源 A' }] as any),
+    })
+
+    history.upsertConversation({
+      id: 'new-1',
+      title: '新会话',
+      datasource_id: '',
+      created_at: '2026-08-16 10:00:00',
+      updated_at: '2026-08-16 10:00:00',
+      is_favorited: false,
+      run_status: null,
+    })
+    history.updateConversationRunStatus('new-1', 'active')
+
+    expect(history.groupedConversations.value[0]?.key).toBe('system:unclassified')
+    expect(history.groupedConversations.value[0]?.items[0]?.run_status).toBe('active')
+
+    history.upsertConversation({
+      id: 'new-1',
+      datasource_id: 'ds_a',
+      created_at: '2026-08-16 10:00:00',
+      updated_at: '2026-08-16 10:01:00',
+      run_status: 'active',
+    })
+
+    expect(history.groupedConversations.value.map(group => group.key)).toEqual(['datasource:ds_a'])
+    expect(history.groupedConversations.value[0]?.items[0]?.id).toBe('new-1')
+  })
 })

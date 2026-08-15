@@ -589,6 +589,16 @@ const ensureConversationId = async (): Promise<string | null> => {
       currentConversationId.value = res.data.id
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = selectedDatasourceId.value || null
+      upsertHistoryConversation({
+        id: res.data.id,
+        title: '新会话',
+        agent_id: 'chat_data',
+        datasource_id: selectedDatasourceId.value || '',
+        created_at: res.data.create_time || new Date().toISOString(),
+        updated_at: res.data.create_time || new Date().toISOString(),
+        is_favorited: false,
+        run_status: null,
+      })
       return res.data.id
     }
   } catch (err) {
@@ -632,6 +642,7 @@ const {
   loadMoreConversationGroup,
   updateConversationTitle: updateHistoryConversationTitle,
   updateConversationRunStatus: updateHistoryConversationRunStatus,
+  upsertConversation: upsertHistoryConversation,
   refreshAfterFavorite,
   invalidateInactiveView,
 } = useConversationHistoryBrowser({
@@ -752,25 +763,33 @@ const handleToggleConversationFavorite = async (conversationId: string, isFavori
   await refreshAfterFavorite(conversationId, isFavorited)
 }
 
-// 首条消息完成后的回调
-const handleFirstMessageComplete = async (convId: string) => {
+// 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
+const handleFirstMessageStarted = async (convId: string) => {
   hasEnteredConversationOnce.value = true
-  const boundDatasourceId = await loadConversationDatasourceId(convId)
+  const datasourcePromise = loadConversationDatasourceId(convId)
+  const titlePromise = generateConversationTitle(convId)
+    .catch(error => {
+      console.error('生成标题失败:', error)
+      return null
+    })
+  const [boundDatasourceId, res] = await Promise.all([datasourcePromise, titlePromise])
+
   if (currentConversationId.value === convId && boundDatasourceId) {
     currentConversationDatasourceId.value = boundDatasourceId
   }
-  try {
-    // 生成会话标题
-    const res = await generateConversationTitle(convId)
-    if (res.status === 'success' && res.data?.title) {
-      const newTitle = res.data.title
-      // 更新当前会话标题
-      currentConversationTitle.value = newTitle
-      updateHistoryConversationTitle(convId, newTitle)
-    }
-  } catch (error) {
-    console.error('生成标题失败:', error)
+  let generatedTitle = currentConversationTitle.value
+  if (res?.status === 'success' && res.data?.title) {
+    generatedTitle = res.data.title
+    if (currentConversationId.value === convId) currentConversationTitle.value = generatedTitle
+    updateHistoryConversationTitle(convId, generatedTitle)
   }
+
+  upsertHistoryConversation({
+    id: convId,
+    title: generatedTitle,
+    ...(boundDatasourceId ? { datasource_id: boundDatasourceId } : {}),
+    updated_at: new Date().toISOString(),
+  })
   // 刷新会话列表
   invalidateInactiveView()
   void ensureConversationsLoaded(true)
@@ -1740,7 +1759,7 @@ onUnmounted(() => {
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   v-model:selected-model-id="selectedConversationModelId"
                   class="h-full"
-                  @first-message-complete="handleFirstMessageComplete"
+                  @first-message-started="handleFirstMessageStarted"
                   @run-status-changed="handleConversationRunStatusChanged"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"

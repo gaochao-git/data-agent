@@ -46,6 +46,8 @@ const mergeConversations = (current: ConversationItem[], incoming: ConversationI
   return sortConversations([...merged.values()])
 }
 
+type ConversationUpsert = Pick<ConversationItem, 'id'> & Partial<Omit<ConversationItem, 'id'>>
+
 export const useConversationHistoryBrowser = (options: {
   agentId: string
   pageSize: number
@@ -204,6 +206,59 @@ export const useConversationHistoryBrowser = (options: {
     })
   }
 
+  const upsertConversation = (conversation: ConversationUpsert) => {
+    if (!conversation.id) return
+
+    const cachedConversation = [
+      ...flatConversations.value,
+      ...groupPages.value.flatMap(group => group.conversations),
+    ].find(item => item.id === conversation.id)
+    const mergedConversation = cachedConversation
+      ? { ...cachedConversation, ...conversation }
+      : conversation.title && conversation.created_at
+        ? conversation as ConversationItem
+        : null
+    if (!mergedConversation) return
+
+    const upsert = (items: ConversationItem[]) => {
+      const index = items.findIndex(item => item.id === conversation.id)
+      if (index >= 0) items[index] = { ...items[index], ...mergedConversation }
+      else items.unshift(mergedConversation)
+    }
+
+    upsert(flatConversations.value)
+    flatConversations.value = sortConversations(flatConversations.value)
+
+    const groupKey = mergedConversation.is_favorited
+      ? 'system:pinned'
+      : mergedConversation.datasource_id
+        ? `datasource:${mergedConversation.datasource_id}`
+        : 'system:unclassified'
+    const existingGroup = groupPages.value.find(group => group.key === groupKey)
+    groupPages.value.forEach(group => {
+      if (group.key !== groupKey) {
+        group.conversations = group.conversations.filter(item => item.id !== conversation.id)
+      }
+    })
+    groupPages.value = groupPages.value.filter(group => (
+      group.conversations.length > 0 || group.has_more || group.key === groupKey
+    ))
+    if (existingGroup) {
+      upsert(existingGroup.conversations)
+      existingGroup.conversations = sortConversations(existingGroup.conversations)
+      return
+    }
+    groupPages.value.push({
+      key: groupKey,
+      datasource_id: mergedConversation.is_favorited ? null : mergedConversation.datasource_id || null,
+      conversations: [mergedConversation],
+      page: 1,
+      page_size: options.pageSize,
+      has_more: false,
+      next_cursor: null,
+    })
+  }
+
   const refreshAfterFavorite = async (conversationId: string, isFavorited: boolean) => {
     flatConversations.value.filter(item => item.id === conversationId).forEach(item => {
       item.is_favorited = isFavorited
@@ -229,6 +284,7 @@ export const useConversationHistoryBrowser = (options: {
     loadMoreConversationGroup: loadMoreGroup,
     updateConversationTitle: updateTitle,
     updateConversationRunStatus: updateRunStatus,
+    upsertConversation,
     refreshAfterFavorite,
     invalidateInactiveView,
   }

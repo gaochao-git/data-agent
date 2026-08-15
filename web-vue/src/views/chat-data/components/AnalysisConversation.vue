@@ -57,7 +57,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
-  firstMessageComplete: [conversationId: string]
+  firstMessageStarted: [conversationId: string]
   runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
@@ -2173,6 +2173,8 @@ const submitAnalysisQuery = async (
   options: AnalysisSubmitOptions & { skillName?: string | null; messageSkill?: Message['skill']; restoreInputText?: string } = {}
 ) => {
   if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory) || isGenerating.value) return
+  const isFirstMessage = options.appendUserMessage !== false
+    && !messages.value.some(item => item.role === 'user')
   const effectiveSemanticConfigSelection = options.semanticConfigSelection !== undefined
     ? options.semanticConfigSelection
     : (props.semanticConfigSelection || null)
@@ -2255,7 +2257,6 @@ const submitAnalysisQuery = async (
         finalizeUnfinishedToolCalls('completed')
         finishStreamingMessages()
         scheduleWorkspaceFilesRefresh()
-        emit('firstMessageComplete', convId)
       },
       () => {},
       (error) => {
@@ -2324,7 +2325,7 @@ const submitAnalysisQuery = async (
       (question) => {
         pendingUserQuestion.value = question
         hasActiveRun.value = true
-        emit('runStatusChanged', conversationId, 'waiting_user')
+        emit('runStatusChanged', convId, 'waiting_user')
         const active = activeAssistantMessageId.value
           ? messages.value.find(item => item.id === activeAssistantMessageId.value)
           : null
@@ -2340,6 +2341,9 @@ const submitAnalysisQuery = async (
       (eventId) => {
         activeRunEventId.value = eventId
         window.sessionStorage.setItem(runEventIdStorageKey(convId, activeRunId.value || ''), eventId)
+      },
+      () => {
+        if (isFirstMessage) emit('firstMessageStarted', convId)
       },
     )
   } catch (err) {

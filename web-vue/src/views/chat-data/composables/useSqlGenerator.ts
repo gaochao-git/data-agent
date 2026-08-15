@@ -104,6 +104,7 @@ export function useSqlGenerator() {
     onRunStarted?: (runId: string) => void,
     responseFactory?: (signal: AbortSignal) => Promise<Response>,
     onRunEvent?: (eventId: string) => void,
+    onFirstEvent?: () => void,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -182,6 +183,7 @@ export function useSqlGenerator() {
       let buffer = ''
       let streamEnded = false
       let interrupted = false
+      let firstEventHandled = false
       const lifecycleToolCallIds = new Set<string>()
 
       while (true) {
@@ -193,6 +195,10 @@ export function useSqlGenerator() {
         buffer = remaining
 
         for (const { event, data: dataStr, id } of events) {
+          if (!firstEventHandled) {
+            firstEventHandled = true
+            onFirstEvent?.()
+          }
           if (id) onRunEvent?.(id)
           // 处理结束事件（与 React 版本一致）
           if (event === 'done' || dataStr === '[DONE]') {
