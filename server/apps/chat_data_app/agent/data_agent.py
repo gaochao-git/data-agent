@@ -16,6 +16,7 @@ from .middleware.context_usage import (
     bind_context_usage_middleware,
     create_request_context_usage_middleware,
 )
+from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.tool_result import create_tool_result_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.steering import SteeringMessageTracker, create_steering_middleware
@@ -92,6 +93,7 @@ def create_data_agent(
     inbox_service=None,
     admit_inbox_messages=None,
     steering_tracker: SteeringMessageTracker | None = None,
+    persist_model_snapshot=None,
 ):
     """创建唯一的 ``chat_data`` Agent。"""
     options = runtime_options or get_chat_data_default_runtime_options()
@@ -147,6 +149,12 @@ def create_data_agent(
             tracker=steering_tracker,
             state_schema=ChatDataAgentState,
         )
+    after_model_history_middleware = None
+    if persist_model_snapshot is not None:
+        after_model_history_middleware = create_after_model_history_middleware(
+            persist_model_snapshot,
+            state_schema=ChatDataAgentState,
+        )
     middleware = build_standard_agent_middleware(
         tools,
         tool_call_history_repair_middleware=tool_call_history_repair_middleware,
@@ -154,6 +162,7 @@ def create_data_agent(
         context_compression_middleware=context_compression_middleware,
         context_usage_middleware=context_usage_middleware,
         tool_result_middleware=tool_result_middleware,
+        after_model_history_middleware=after_model_history_middleware,
         include_response_timestamp=True,
         include_tool_call_normalizer=True,
     )

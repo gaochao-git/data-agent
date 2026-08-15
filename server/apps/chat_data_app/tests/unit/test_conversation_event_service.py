@@ -214,6 +214,44 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
 
 
 @pytest.mark.asyncio
+async def test_repeated_turn_snapshot_updates_existing_message(conversation_event_service):
+    service, create_thread = conversation_event_service
+    await create_thread("conv-snapshot", "user-1")
+    user_message = HumanMessage(content="持续输出", id="turn-snapshot")
+
+    await service.persist_user_message(
+        conversation_id="conv-snapshot",
+        user_id="user-1",
+        operator_name="用户一",
+        message=user_message,
+    )
+    await service.persist_turn(
+        conversation_id="conv-snapshot",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-snapshot",
+        messages=[user_message, AIMessage(content="第一阶段", id="assistant-snapshot")],
+        reasoning_segments=[],
+    )
+    await service.persist_turn(
+        conversation_id="conv-snapshot",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-snapshot",
+        messages=[user_message, AIMessage(content="第一阶段的完整回答", id="assistant-snapshot")],
+        reasoning_segments=[],
+    )
+
+    history = await service.load_history(conversation_id="conv-snapshot", user_id="user-1")
+
+    assert [event["event_type"] for event in history["history_events"]] == [
+        "user_message",
+        "assistant_message",
+    ]
+    assert history["messages"][-1]["content"] == "第一阶段的完整回答"
+
+
+@pytest.mark.asyncio
 async def test_event_append_retries_connection_errors_and_propagates_final_failure(monkeypatch):
     class RetryDao:
         def __init__(self, failures):

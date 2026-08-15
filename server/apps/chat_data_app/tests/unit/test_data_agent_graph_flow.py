@@ -104,6 +104,42 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     assert bound == [(agent, {"context_model": "primary-model"})]
 
 
+def test_create_data_agent_registers_after_model_history_middleware(monkeypatch, tmp_path):
+    captured = {}
+    runtime, options = _runtime(tmp_path)
+
+    def fake_create_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
+
+    async def persist_snapshot(_state):
+        return None
+
+    data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        system_prompt="system",
+        model_id="primary-model",
+        datasource_id="ds_a",
+        persist_model_snapshot=persist_snapshot,
+    )
+
+    assert [middleware.name for middleware in captured["middleware"]] == [
+        "ToolCallHistoryRepairMiddleware",
+        "AfterModelHistoryMiddleware",
+        "ContextCompressionMiddleware",
+        "ContextUsageMiddleware",
+        "ResponseTimestampMiddleware",
+        "ToolCallNameNormalizerMiddleware",
+        "ToolResultMiddleware",
+        "ToolErrorMiddleware",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_tool_call_name_normalizer_middleware():
     middleware = create_tool_call_name_normalizer_middleware([SimpleNamespace(name="semantic_search")])

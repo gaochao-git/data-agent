@@ -108,4 +108,4 @@ Run 实时事件使用 Redis Streams：
 - `chatdata:run:{run_id}:events`：前端 SSE 实时订阅和断线续传。
 - `chatdata:run-events:persist`：Consumer Group 异步批量持久化到 `chat_data_agent_run_event`。
 - `chat_data_agent_run_event` 仍保留，作为长期事件历史和 Redis 故障后的补偿来源。
-- `chat_data_conversation_event` 只保存最终会话展示历史，LangGraph checkpoint 只保存 Agent 执行状态。
+- `chat_data_conversation_event` 保存用户消息以及每次模型调用完成后的会话展示快照；同一消息通过 `event_key` 幂等更新，整轮结束时再做最终收口。LangGraph checkpoint 只保存 Agent 执行状态。

@@ -86,6 +86,7 @@ def build_standard_agent_middleware(
     tool_result_middleware: Any | None = None,
     tool_call_history_repair_middleware: Any | None = None,
     steering_middleware: Any | None = None,
+    after_model_history_middleware: Any | None = None,
     include_response_timestamp: bool = False,
     include_tool_call_normalizer: bool = False,
 ) -> list[Any]:
@@ -95,6 +96,8 @@ def build_standard_agent_middleware(
         middleware.append(tool_call_history_repair_middleware)
     if steering_middleware is not None:
         middleware.append(steering_middleware)
+    if after_model_history_middleware is not None:
+        middleware.append(after_model_history_middleware)
     if context_compression_middleware is not None:
         middleware.append(context_compression_middleware)
     if context_usage_middleware is not None:

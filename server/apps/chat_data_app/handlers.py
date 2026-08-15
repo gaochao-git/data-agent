@@ -318,9 +318,12 @@ async def _persist_agent_turn_history(
     user_id: str,
     username: str | None,
     turn_id: str,
+    state_override: dict[str, Any] | None = None,
 ) -> None:
     """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
-    values = getattr(getattr(stream_adapter, "state", None), "values", None)
+    values = state_override
+    if values is None:
+        values = getattr(getattr(stream_adapter, "state", None), "values", None)
     state_messages = values.get("messages") if isinstance(values, dict) else []
     if not isinstance(state_messages, list):
         return
@@ -1189,6 +1192,7 @@ async def _run_chat_data_agent_stream(
     stream_adapter: _AgentSseStreamAdapter | None = None
     user_message: HumanMessage | None = None
     steering_tracker = SteeringMessageTracker()
+    stream_adapter_ref: dict[str, _AgentSseStreamAdapter] = {}
 
     # 解析 file_ids 对应的文件信息，用于追加到用户消息。
     # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
@@ -1287,6 +1291,19 @@ async def _run_chat_data_agent_stream(
                         message=message,
                     )
 
+            async def persist_model_snapshot(state: dict[str, Any]) -> None:
+                adapter = stream_adapter_ref.get("value")
+                if adapter is None:
+                    return
+                await _persist_agent_turn_history(
+                    adapter,
+                    conversation_id=thread_id,
+                    user_id=user_id,
+                    username=username,
+                    turn_id=resume_turn_id or str(user_message.id or ""),
+                    state_override=state,
+                )
+
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
@@ -1304,6 +1321,7 @@ async def _run_chat_data_agent_stream(
                 inbox_service=agent_inbox_service,
                 admit_inbox_messages=admit_inbox_messages,
                 steering_tracker=steering_tracker,
+                persist_model_snapshot=persist_model_snapshot,
             )
             log_phase("create_agent")
             stream_adapter = _AgentSseStreamAdapter(
@@ -1325,6 +1343,7 @@ async def _run_chat_data_agent_stream(
                     str(user_message.additional_kwargs.get("reasoning_turn_id") or "") if user_message else None
                 ),
             )
+            stream_adapter_ref["value"] = stream_adapter
             async def persist_user_message() -> None:
                 if user_message is None:
                     return

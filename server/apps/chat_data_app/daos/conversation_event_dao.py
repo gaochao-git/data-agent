@@ -52,17 +52,29 @@ class ConversationEventDao:
             if thread_id is None:
                 raise LookupError(f"conversation not found: {conversation_id}")
 
-            persisted_keys = set(
-                (await session.scalars(
-                    select(ChatDataConversationEvent.event_key).where(
-                        ChatDataConversationEvent.conversation_id == conversation_id,
-                        ChatDataConversationEvent.event_key.in_(event_keys),
-                    )
-                )).all()
-            )
-            pending = [event for event in candidates if str(event["event_key"]).strip() not in persisted_keys]
+            existing_rows = list((await session.scalars(
+                select(ChatDataConversationEvent).where(
+                    ChatDataConversationEvent.conversation_id == conversation_id,
+                    ChatDataConversationEvent.event_key.in_(event_keys),
+                )
+            )).all())
+            existing_by_key = {row.event_key: row for row in existing_rows}
+            pending = [event for event in candidates if str(event["event_key"]).strip() not in existing_by_key]
+            for event in candidates:
+                event_key = str(event["event_key"]).strip()
+                row = existing_by_key.get(event_key)
+                if row is None:
+                    continue
+                row.turn_id = str(event.get("turn_id") or "")
+                row.event_type = str(event.get("event_type") or "message")
+                row.payload = str(event.get("payload") or "{}")
+                row.update_by = user_id
+                row.update_by_name = operator_name
+                row.update_time = now
+
             if not pending:
-                return []
+                await session.flush()
+                return existing_rows
 
             max_sequence = await session.scalar(
                 select(func.max(ChatDataConversationEvent.sequence_no)).where(
