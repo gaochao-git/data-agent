@@ -26,6 +26,7 @@ async def stream_agent_turn(
     after_stream: AsyncHook | None = None,
     continue_stream: AsyncPredicate | None = None,
     on_interrupt: AsyncInterruptHook | None = None,
+    on_disconnect: AsyncHook | None = None,
     finalize_stream_kwargs: dict[str, Any] | None = None,
     finalize_resources: ResourceFinalizer | None = None,
     cleanup_success_on_cancel: bool = False,
@@ -63,6 +64,8 @@ async def stream_agent_turn(
                 yield format_sse("done", "[DONE]")
                 return
             if stream_adapter.disconnected:
+                if on_disconnect:
+                    await on_disconnect()
                 if finalize_resources:
                     await finalize_resources(True)
                     resources_finalized = True

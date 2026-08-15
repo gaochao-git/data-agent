@@ -482,11 +482,21 @@ def steer_router_state(router_state, monkeypatch):
             ],
         }
 
+    async def cancel_run(conversation_id, user_id, operator_name, run_id):
+        calls["cancel_run"] = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "operator_name": operator_name,
+            "run_id": run_id,
+        }
+        return True
+
     monkeypatch.setattr(conversation_router.conversation, "get_agent_id", get_agent_id)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "enqueue_message", enqueue)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "update_pending_message", update)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_pending_message", cancel)
     monkeypatch.setattr(conversation_router.agent_inbox_service, "list_message_states", list_pending)
+    monkeypatch.setattr(conversation_router.agent_inbox_service, "cancel_active_run", cancel_run)
     return calls
 
 
@@ -508,6 +518,19 @@ async def test_steer_enqueue_default_and_explicit_queue_type(steer_router_state)
 async def test_steer_enqueue_rejects_blank_content(steer_router_state):
     response = await conversation_router.steer("conv-1", conversation_router.SteerRequest(query="   "), FakeRequest())
     assert payload(response)["code"] == ErrorCode.CHATDATA_REQUIRED_FIELD
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_run_success(steer_router_state):
+    calls = steer_router_state
+    response = await conversation_router.cancel_active_run("conv-1", FakeRequest(), "run-1")
+    assert payload(response)["data"] == {"cancelled": True}
+    assert calls["cancel_run"] == {
+        "conversation_id": "conv-1",
+        "user_id": "u1",
+        "operator_name": "用户一",
+        "run_id": "run-1",
+    }
 
 
 @pytest.mark.asyncio

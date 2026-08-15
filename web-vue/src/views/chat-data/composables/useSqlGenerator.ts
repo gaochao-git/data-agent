@@ -97,6 +97,7 @@ export function useSqlGenerator() {
     onToolLifecycle?: (payload: ToolLifecycleEventData) => void,
     onInboxAdmitted?: (messageIds: string[]) => void,
     onQuestionRequested?: (question: PendingUserQuestion) => void,
+    onRunStarted?: (runId: string) => void,
     responseFactory?: (signal: AbortSignal) => Promise<Response>,
   ): Promise<void> => {
     if (!conversationId) {
@@ -163,6 +164,9 @@ export function useSqlGenerator() {
         }
         throw new Error(errorMsg)
       }
+
+      const responseRunId = response.headers.get('X-ChatData-Run-Id')
+      if (responseRunId) onRunStarted?.(responseRunId)
 
       const reader = response.body?.getReader()
       if (!reader) {

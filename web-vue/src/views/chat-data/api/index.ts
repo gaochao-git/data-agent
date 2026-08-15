@@ -1314,6 +1314,18 @@ export function steerConversation(
   })
 }
 
+/** 显式停止当前 Agent 运行，未消费的队列消息由下一次 completion 接管。 */
+export function cancelConversationRun(
+  conversationId: string,
+  runId: string,
+): Promise<ApiResponse<{ cancelled: boolean }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/run`,
+    method: 'delete',
+    params: { run_id: runId },
+  })
+}
+
 /** 编辑排队中的追加消息内容或切换队列类型。 */
 export function updateSteerMessage(
   conversationId: string,
@@ -1346,6 +1358,8 @@ export function listSteerMessages(
   conversationId: string,
 ): Promise<ApiResponse<{
   has_active_run: boolean
+  run_id?: string | null
+  run_status?: 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
   messages: Array<{
     message_id: string
     content: string

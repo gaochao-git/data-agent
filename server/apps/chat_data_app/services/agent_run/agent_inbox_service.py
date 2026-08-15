@@ -73,18 +73,13 @@ class AgentInboxService:
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
             active_run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if active_run and active_run.lease_expire_time and active_run.lease_expire_time <= now:
-                content = self._load_run_content(active_run.content)
-                await self._dao.requeue_messages(session, active_run.run_id, now)
-                self._restore_unstarted_question(content)
-                active_run.content = json.dumps(content, ensure_ascii=False)
-                active_run.status = "waiting_user" if content.get("pending_question") else "failed"
-                active_run.lease_expire_time = None
-                active_run.update_time = now
-                active_run.update_by = user_id
-                active_run.update_by_name = operator_name
-                if active_run.status == "failed":
-                    active_run = None
+            active_run = await self._reap_expired_run(
+                session,
+                active_run,
+                now,
+                user_id,
+                operator_name,
+            )
             if active_run:
                 raise AgentRunConflictError("当前会话已有运行中的任务")
             run_id = uuid4().hex
@@ -109,15 +104,17 @@ class AgentInboxService:
             rows = await self._claim_step_and_turn(session, run_id, now)
             return run_id, [self._to_human_message(row) for row in rows]
 
-    async def heartbeat_run(self, run_id: str) -> bool:
+    async def heartbeat_run(self, run_id: str) -> str:
         now = datetime.now()
         async with get_session() as session:
             run = await self._dao.get_active_run_by_id(session, run_id)
             if run is None:
-                return False
+                return "inactive"
+            if run.status == "cancelling":
+                return "cancelling"
             run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
             run.update_time = now
-            return True
+            return "active"
 
     async def mark_waiting_for_user(
         self,
@@ -143,18 +140,13 @@ class AgentInboxService:
             run.update_by_name = operator_name
 
     async def get_pending_question(self, conversation_id: str, user_id: str) -> dict[str, Any] | None:
+        now = datetime.now()
         async with get_session() as session:
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
             run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run and run.status == "active" and run.lease_expire_time and run.lease_expire_time <= datetime.now():
-                content = self._load_run_content(run.content)
-                self._restore_unstarted_question(content)
-                run.content = json.dumps(content, ensure_ascii=False)
-                if content.get("pending_question"):
-                    run.status = "waiting_user"
-                    run.lease_expire_time = None
+            run = await self._reap_expired_run(session, run, now, user_id, user_id)
             if run is None or run.status != "waiting_user":
                 return None
             return self._question_response(run)
@@ -256,7 +248,8 @@ class AgentInboxService:
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
             run = await self._dao.get_active_run(session, conversation_id, user_id)
-            if run is None:
+            run = await self._reap_expired_run(session, run, now, user_id, operator_name)
+            if run is None or run.status != "active":
                 raise AgentRunNotActiveError("当前会话没有运行中的任务")
             message_id = uuid4().hex
             session.add(ChatDataAgentInbox(
@@ -286,6 +279,9 @@ class AgentInboxService:
     ) -> ClaimedAgentMessages:
         now = datetime.now()
         async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None or run.status != "active":
+                return ClaimedAgentMessages(run_id, [])
             rows = await self._dao.claim_messages(
                 session,
                 run_id,
@@ -325,6 +321,11 @@ class AgentInboxService:
             run = await self._dao.get_active_run(session, conversation_id, user_id)
             if run is None or run.run_id != run_id:
                 return ClaimedAgentMessages(run_id, [])
+            if run.status == "cancelling":
+                await self._cancel_run(session, run, now, user_id, operator_name)
+                return ClaimedAgentMessages(run_id, [])
+            if run.status != "active":
+                return ClaimedAgentMessages(run_id, [])
             rows = await self._claim_step_and_turn(session, run_id, now)
             if rows:
                 return ClaimedAgentMessages(run_id, [self._to_human_message(row) for row in rows])
@@ -343,8 +344,8 @@ class AgentInboxService:
     async def finish_run(self, run_id: str, status: str, user_id: str, operator_name: str) -> None:
         now = datetime.now()
         async with get_session() as session:
-            run = await self._dao.get_active_run_by_id(session, run_id)
-            if run:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run and run.status in {"active", "cancelling"}:
                 if status in {"failed", "cancelled"}:
                     await self._dao.requeue_messages(session, run_id, now)
                 content = self._load_run_content(run.content)
@@ -354,11 +355,33 @@ class AgentInboxService:
                 # resumed stream fails, do not expose the old question again;
                 # the checkpoint may already have consumed its interrupt.
                 run.status = "waiting_user" if content.get("pending_question") else status
-                if run.status == "waiting_user":
-                    run.lease_expire_time = None
+                run.lease_expire_time = None
                 run.update_time = now
                 run.update_by = user_id
                 run.update_by_name = operator_name
+
+    async def cancel_active_run(
+        self,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        run_id: str,
+    ) -> bool:
+        """显式停止当前执行；保留 pending，并把 claimed 恢复为 pending 供下一轮接管。"""
+        now = datetime.now()
+        async with get_session() as session:
+            thread = await self._dao.lock_thread(session, conversation_id, user_id)
+            if thread is None:
+                raise AgentRunNotActiveError("会话不存在")
+            run = await self._dao.get_active_run(session, conversation_id, user_id)
+            if run is None or run.run_id != run_id or run.status != "active":
+                return False
+            run.status = "cancelling"
+            run.lease_expire_time = now + timedelta(seconds=5)
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
+            return True
 
     async def update_pending_message(
         self,
@@ -434,16 +457,25 @@ class AgentInboxService:
         user_id: str,
     ) -> dict[str, Any]:
         """读取当前 active run 的完整队列状态，供刷新和断线重连恢复。"""
+        now = datetime.now()
         async with get_session() as session:
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
             active_run = await self._dao.get_active_run(session, conversation_id, user_id)
+            active_run = await self._reap_expired_run(
+                session,
+                active_run,
+                now,
+                user_id,
+                user_id,
+            )
             latest_run = active_run or await self._dao.get_latest_run(session, conversation_id, user_id)
             rows = await self._dao.list_run_messages(session, latest_run.run_id) if latest_run else []
             return {
                 "has_active_run": active_run is not None,
-                "run_status": active_run.status if active_run else None,
+                "run_id": latest_run.run_id if latest_run else None,
+                "run_status": latest_run.status if latest_run else None,
                 "messages": [
                     {
                         "message_id": row.message_id,
@@ -456,6 +488,51 @@ class AgentInboxService:
                     for row in rows
                 ],
             }
+
+    async def _cancel_run(
+        self,
+        session,
+        run: ChatDataAgentInbox,
+        now: datetime,
+        user_id: str,
+        operator_name: str,
+    ) -> None:
+        """在持有 Run 行锁时完成取消收口。"""
+        await self._dao.requeue_messages(session, run.run_id, now)
+        content = self._load_run_content(run.content)
+        self._restore_unstarted_question(content)
+        run.content = json.dumps(content, ensure_ascii=False)
+        run.status = "waiting_user" if content.get("pending_question") else "cancelled"
+        run.lease_expire_time = None
+        run.update_time = now
+        run.update_by = user_id
+        run.update_by_name = operator_name
+
+    async def _reap_expired_run(
+        self,
+        session,
+        run: ChatDataAgentInbox | None,
+        now: datetime,
+        user_id: str,
+        operator_name: str,
+    ) -> ChatDataAgentInbox | None:
+        """原子收口失去心跳的运行；未消费消息留给下一次正常 completion。"""
+        if run is None or run.status not in {"active", "cancelling"}:
+            return run
+        if run.lease_expire_time is None or run.lease_expire_time > now:
+            return run
+        await self._dao.requeue_messages(session, run.run_id, now)
+        content = self._load_run_content(run.content)
+        self._restore_unstarted_question(content)
+        run.content = json.dumps(content, ensure_ascii=False)
+        run.status = "waiting_user" if content.get("pending_question") else (
+            "cancelled" if run.status == "cancelling" else "failed"
+        )
+        run.lease_expire_time = None
+        run.update_time = now
+        run.update_by = user_id
+        run.update_by_name = operator_name
+        return run if run.status == "waiting_user" else None
 
     @staticmethod
     def _load_run_content(content: str) -> dict[str, Any]:

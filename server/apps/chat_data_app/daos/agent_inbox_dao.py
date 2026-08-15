@@ -37,11 +37,12 @@ class AgentInboxDao:
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status.in_(("active", "waiting_user")),
+                ChatDataAgentInbox.status.in_(("active", "cancelling", "waiting_user")),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.desc())
             .limit(1)
+            .with_for_update()
         )
         return result.scalar_one_or_none()
 
@@ -205,7 +206,7 @@ class AgentInboxDao:
             .where(
                 ChatDataAgentInbox.run_id == run_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status == "active",
+                ChatDataAgentInbox.status.in_(("active", "cancelling")),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .with_for_update()

@@ -1100,6 +1100,7 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
         username="测试用户",
     ))
     assert response.media_type == "text/event-stream"
+    assert response.headers["X-ChatData-Run-Id"] == "run-test"
     assert captured["conversation"] == ("", "chat_data", "conv_sql", "u1")
     chunks = asyncio.run(_collect_async_iter(response.body_iterator))
     assert chunks == ["event: done\ndata: [DONE]\n\n"]

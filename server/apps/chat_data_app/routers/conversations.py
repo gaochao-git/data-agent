@@ -614,6 +614,33 @@ async def steer(conversation_id: str, request: SteerRequest, req: Request):
         )
 
 
+@router.delete("/{conversation_id}/run")
+async def cancel_active_run(conversation_id: str, req: Request, run_id: str = Query(..., min_length=1)):
+    """停止当前 Agent 执行；未消费的队列消息保留给下一次 completion。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
+        if existing_agent_id != AGENT_ID:
+            return business_response(
+                msg="对话不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        cancelled = await agent_inbox_service.cancel_active_run(conversation_id, user_id, username, run_id)
+        return business_response(data={"cancelled": cancelled}, msg="已停止" if cancelled else "当前没有运行中的任务")
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("停止 Agent 运行失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="停止运行失败，请稍后重试",
+            code=ErrorCode.CHATDATA_AGENT_RUN_CANCEL_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @router.get("/{conversation_id}/pending-question")
 async def get_pending_question(conversation_id: str, req: Request):
     """读取 checkpoint 中等待当前用户回答的问题。"""

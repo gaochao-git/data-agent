@@ -88,6 +88,27 @@ async def test_stream_agent_turn_persists_disconnected_turn_without_end_events()
 
 
 @pytest.mark.asyncio
+async def test_stream_agent_turn_notifies_disconnect_before_cleanup():
+    calls: list[str] = []
+    adapter = _FakeStreamAdapter([], disconnected=True)
+
+    async def hook(name: str):
+        calls.append(name)
+
+    events = await _collect(stream_agent_turn(
+        stream_adapter=adapter,
+        format_sse=lambda event, _data: f"event: {event}\n\n",
+        persist_user_message=lambda: hook("user"),
+        persist_turn_history=lambda: hook("history"),
+        persist_partial_history=lambda: hook("partial"),
+        on_disconnect=lambda: hook("disconnect"),
+    ))
+
+    assert events == []
+    assert calls == ["user", "history", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_turn_persists_partial_history_and_cleans_resources_on_error():
     calls: list[str] = []
     adapter = _FakeStreamAdapter([], error=RuntimeError("stream failed"))

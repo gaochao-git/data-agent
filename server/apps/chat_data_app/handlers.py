@@ -1003,7 +1003,8 @@ async def _generate_chat_data_stream(
             normalized_skill_names.append(skill_name)
     logger.info(f"开始执行智能问数，thread_id: {thread_id}, semantic_config_id: {semantic_config_id}")
 
-    heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id)) if run_id else None
+    owner_task = asyncio.current_task()
+    heartbeat_task = asyncio.create_task(_heartbeat_agent_run(run_id, owner_task)) if run_id else None
     terminal_status: str | None = None
     try:
         async for event in _run_chat_data_agent_stream(
@@ -1040,20 +1041,25 @@ async def _generate_chat_data_stream(
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        if run_id and terminal_status in {"cancelled", "failed"}:
+        if run_id and terminal_status in {None, "cancelled", "failed"}:
             await agent_inbox_service.finish_run(
                 run_id,
-                terminal_status,
+                terminal_status or "cancelled",
                 user_id or "system",
                 username or user_id or "system",
             )
 
 
-async def _heartbeat_agent_run(run_id: str) -> None:
-    """保持 active run 租约，worker 退出后由后续请求回收。"""
+async def _heartbeat_agent_run(run_id: str, owner_task: asyncio.Task | None) -> None:
+    """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
-        await asyncio.sleep(30)
-        if not await agent_inbox_service.heartbeat_run(run_id):
+        await asyncio.sleep(2)
+        heartbeat_status = await agent_inbox_service.heartbeat_run(run_id)
+        if heartbeat_status == "cancelling":
+            if owner_task and not owner_task.done():
+                owner_task.cancel()
+            return
+        if heartbeat_status != "active":
             return
 
 
@@ -1360,8 +1366,24 @@ async def _run_chat_data_agent_stream(
                             user_id or "system",
                             username or user_id or "system",
                         )
+                    elif run_id:
+                        await agent_inbox_service.finish_run(
+                            run_id,
+                            "cancelled",
+                            user_id or "system",
+                            username or user_id or "system",
+                        )
                     return False
                 return True
+
+            async def cancel_disconnected_run() -> None:
+                if run_id:
+                    await agent_inbox_service.finish_run(
+                        run_id,
+                        "cancelled",
+                        user_id or "system",
+                        username or user_id or "system",
+                    )
 
             # 上一轮异常遗留的排队消息由本轮接管，作为新一轮的首批输入：
             # 先持久化并通知前端上屏，再随 initial_state 进入本轮对话。
@@ -1388,6 +1410,7 @@ async def _run_chat_data_agent_stream(
                 after_stream=confirm_consumed_messages,
                 continue_stream=continue_with_pending_messages,
                 on_interrupt=mark_waiting_for_user,
+                on_disconnect=cancel_disconnected_run,
             ):
                 yield sse_event
 
@@ -1472,7 +1495,11 @@ async def sql_completion_handler(
             adopted_messages=adopted_messages,
         ),
         media_type="text/event-stream",
-        headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-ChatData-Run-Id': run_id,
+        }
     )
 
 
@@ -1508,5 +1535,9 @@ def resume_chat_data_question_handler(
             resume_turn_id=turn_id,
         ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-ChatData-Run-Id": run_id,
+        },
     )

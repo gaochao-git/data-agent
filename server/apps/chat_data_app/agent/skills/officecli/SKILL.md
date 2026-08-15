@@ -24,28 +24,25 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
 4. `officecli_run(command_args=[...])` 的每个数组元素就是一个独立参数，**不要加引号、不要把整条命令拼成一个字符串**。文件路径一律用完整绝对路径；含空格、方括号或中文时照原样写（如 `"/mnt/user-data/workspace/我的 报告.docx"`），加引号会被当成文件名的一部分。
 5. 不确定命令、元素路径或属性名时，先用 `officecli help <format> <element>` 查询，不要猜测。`docx`、`xlsx`、`pptx` 分别对应 Word、Excel、PowerPoint。
 
-质量规则：生成或修改 Office 文件时，按需读取 `/mnt/skills/officecli/references/delivery-quality.md`。它定义了通用校验门，以及 Word、Excel、PowerPoint 的交付底线。
+质量规则：生成或修改 Office 文件时，按需读取 `/mnt/skills/officecli/references/delivery-quality.md`。它定义通用校验门；Word 排版口径统一为标准汇报模版与党政机关公文两套，不允许第三套通用默认值。
 
 ## 工作流程
 
 1. 执行 `officecli_run(command_args=["--version"])` 验证 OfficeCLI 可用。
-2. 根据文件类型按需用 `file_read` 读取一份参考文档：
-   - Word（含原生图表）：`/mnt/skills/officecli/references/word.md`
-   - 国央企内部管理汇报：`/mnt/skills/officecli/references/internal-management-report.md`
-   - Excel：`/mnt/skills/officecli/references/excel.md`
-   - PowerPoint：`/mnt/skills/officecli/references/powerpoint.md`
-   - 党政机关公文：`/mnt/skills/officecli/references/gb-t-9704-2012.md`
+2. 按文件类型读取参考文档（Word 强制，其余按需）：
+   - 普通报告：生成前必须读取 `/mnt/skills/officecli/references/standard-report.md`（样式口径唯一事实源）。
+   - 党政机关公文：生成前必须读取 `/mnt/skills/officecli/references/gb-t-9704-2012.md`。
+   - Word 命令手册（只含命令用法与结构校验，不含排版口径）：`/mnt/skills/officecli/references/word.md`。
+   - Excel：`/mnt/skills/officecli/references/excel.md`；PowerPoint：`/mnt/skills/officecli/references/powerpoint.md`。
 3. 先确定 Word 起始文件，优先级如下：
    - 用户提供或明确指定模板：保留用户模板，不套系统默认模板。
-   - 党政机关正式公文：按 `/mnt/skills/officecli/references/gb-t-9704-2012.md` 和用户单位模板处理，不使用内部管理汇报模板冒充正式公文。
-   - 订单分析报告且需要专项结构：使用订单分析报告模板。
-   - 新建经营分析、专题汇报、工作总结、情况报告、调研报告等内部材料，且用户未指定格式：必须使用 `/mnt/skills/officecli/assets/internal-management-report-template.docx`，并读取 `/mnt/skills/officecli/references/internal-management-report.md`；禁止从 `officecli create` 的极简 Word 文档直接开始。
-   - 其他新建 Word：属于国央企内部管理材料且用户未指定格式时，也优先使用内部管理汇报模板；合同、制度表单、正式公文等场景应使用对应专用模板或规范。没有适用模板时，才使用 `create` 并显式定义完整样式。
+   - 党政机关正式公文（请示、通知、决定、函等）：按 `/mnt/skills/officecli/references/gb-t-9704-2012.md` 和用户单位模板处理，不使用标准汇报模版冒充正式公文。
+   - 其他新建 Word（经营分析、专题汇报、工作总结、情况报告、调研报告等普通报告）：默认执行标准汇报模版的样式约定，读取 `/mnt/skills/officecli/references/standard-report.md`，从 `officecli create` 起步并按样式映射表逐级显式设置字体/字号/行距（按标准配置，不是自由发挥）；可用 `view annotated` 查看样板 `/mnt/skills/officecli/assets/standard-report-template.docx` 获取各级具体属性配置；用户提供模板或明确要求样式时按用户执行。
 4. 编辑已有上传文件时，先复制到 workspace，例如：`file_copy(source_path="/mnt/user-data/uploads/原文件.docx", destination_path="/mnt/user-data/workspace/修订稿.docx")`。不要覆盖 uploads 中的原文件。
-   使用系统模板时同样必须先复制到 workspace，例如：`file_copy(source_path="/mnt/skills/officecli/assets/internal-management-report-template.docx", destination_path="/mnt/user-data/workspace/内部汇报.docx")`。`/mnt/skills/` 下的模板和参考资料只读，禁止直接作为 OfficeCLI 的写入目标；复制后再执行 `merge`、`add`、`set` 或其他编辑操作。
+   技能内的 .docx 是只读样式样板，仅供 `view`/`get` 查看参考；新建起点按第 3 条执行；`/mnt/skills/` 禁止作为 OfficeCLI 的写入目标。
 5. 用 `view`、`get` 或 `query` 读取当前文件结构，例如 `officecli_run(command_args=["view", "/mnt/user-data/workspace/报告.docx", "outline"])`；每次编辑前重新读取目标结构。DOM 选择器（如 `/body/p[1]`、`/slide[1]`、`/Sheet1/A1`）是文档内部定位，作为独立数组元素原样传入即可。
 6. 用 `create`、`add`、`set`、`remove`、`move` 或 `batch` 完成修改，例如 `officecli_run(command_args=["set", "/mnt/user-data/workspace/报告.docx", "/body/p[1]", "--prop", "bold=true"])`。`batch` 仅在已通过 `help` 确认 JSON 结构时使用；**`batch` 不接受内联 JSON 位置参数**，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再用 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交（详见各格式参考文档的 batch 章节）；不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
-7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用。）
+7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；`view screenshot` 在当前环境会触发钥匙串弹窗并阻塞，同样禁用，视觉检查用 `view html`。）
 8. 用 `file_copy` 把最终文件复制到 `/mnt/user-data/outputs/<业务名>.<docx|xlsx|pptx>`，确认文件存在后调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>"])`。
 
 ## 输出要求

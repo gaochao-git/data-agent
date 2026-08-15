@@ -10,7 +10,7 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { answerUserQuestion, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -86,10 +86,14 @@ const editingSteerId = ref<string | null>(null)
 const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
+const activeRunStatus = ref<string | null>(null)
+const ownedRunStorageKey = 'chatdata-active-run-conversation'
+const activeRunId = ref<string | null>(null)
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
 const isSubmittingQuestion = ref(false)
+const isStoppingRun = ref(false)
 const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
@@ -129,10 +133,18 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
     const response = await listSteerMessages(conversationId)
     const serverMessages = response.data?.messages ?? []
     hasActiveRun.value = Boolean(response.data?.has_active_run)
+    activeRunId.value = response.data?.run_id || null
+    activeRunStatus.value = response.data?.run_status ?? null
     const persistedMessageIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
-    const reconciled = reconcileInboxSnapshot(pendingSteerMessages.value, serverMessages, persistedMessageIds)
+    const reconciled = reconcileInboxSnapshot(
+      pendingSteerMessages.value,
+      serverMessages,
+      persistedMessageIds,
+      hasActiveRun.value,
+    )
     pendingSteerMessages.value = reconciled.queue
     admitPendingMessages(reconciled.admittedMessageIds)
+    reconcileOwnedRunMarker(conversationId)
   } catch {
     // 恢复失败保持本地现状，不打断用户操作
   }
@@ -154,6 +166,57 @@ const restorePendingUserQuestion = async () => {
   } catch {
     // 恢复失败保留当前卡片，避免网络抖动导致问题消失。
   }
+}
+
+const recoverInterruptedPageRun = async () => {
+  await restorePendingSteerQueue({ restartPolling: false })
+  const storedRun = readOwnedRun()
+  if (!storedRun || storedRun.conversationId !== (localConversationId.value || props.conversationId)) return
+  if (storedRun.runId !== activeRunId.value || !hasActiveRun.value) {
+    clearOwnedRun(storedRun.runId)
+    return
+  }
+  if (activeRunStatus.value === 'waiting_user') return
+  const conversationId = localConversationId.value || props.conversationId
+  if (!conversationId) return
+  try {
+    await cancelConversationRun(conversationId, storedRun.runId)
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 250))
+      await restorePendingSteerQueue({ restartPolling: false })
+      if (!hasActiveRun.value) break
+    }
+  } catch {
+    // 恢复失败时保留服务端状态；发送 steer 失败后仍会自动降级为 completion。
+  }
+}
+
+const readOwnedRun = (): { conversationId: string; runId: string } | null => {
+  const raw = window.sessionStorage.getItem(ownedRunStorageKey)
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw)
+    if (typeof value?.conversationId === 'string' && typeof value?.runId === 'string') return value
+  } catch {
+    // 清理旧版本只保存 conversationId 的标记，避免误取消新 Run。
+  }
+  window.sessionStorage.removeItem(ownedRunStorageKey)
+  return null
+}
+
+const saveOwnedRun = (conversationId: string, runId: string) => {
+  window.sessionStorage.setItem(ownedRunStorageKey, JSON.stringify({ conversationId, runId }))
+}
+
+const clearOwnedRun = (runId?: string) => {
+  const owned = readOwnedRun()
+  if (!runId || owned?.runId === runId) window.sessionStorage.removeItem(ownedRunStorageKey)
+}
+
+const reconcileOwnedRunMarker = (conversationId: string) => {
+  const owned = readOwnedRun()
+  if (!owned || owned.conversationId !== conversationId) return
+  if (activeRunId.value !== owned.runId || !hasActiveRun.value) clearOwnedRun(owned.runId)
 }
 
 const stopSteerRestorePolling = () => {
@@ -250,7 +313,7 @@ const removePendingSteerMessage = async (item: { clientId: string; messageId?: s
 onMounted(() => {
   focusInput()
   document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
-  restorePendingSteerQueue()
+  void recoverInterruptedPageRun()
   restorePendingUserQuestion()
 })
 
@@ -1184,7 +1247,17 @@ const scheduleWorkspaceFilesRefresh = () => {
 }
 
 const OFFICE_HTML_PREVIEW_EXTENSIONS = new Set(['docx', 'xlsx', 'pptx'])
-const BINARY_PREVIEW_EXTENSIONS = new Set(['pdf', ...OFFICE_HTML_PREVIEW_EXTENSIONS])
+const IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+const IMAGE_PREVIEW_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+}
+const BINARY_PREVIEW_EXTENSIONS = new Set(['pdf', ...OFFICE_HTML_PREVIEW_EXTENSIONS, ...IMAGE_PREVIEW_EXTENSIONS])
 const isBinaryPreviewPath = (path: string) => {
   const ext = path.split('.').pop()?.toLowerCase() || ''
   return BINARY_PREVIEW_EXTENSIONS.has(ext)
@@ -1317,7 +1390,7 @@ const loadWorkspaceBinaryFile = async (
     const arrayBuffer = await blob.arrayBuffer()
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     const ext = path.split('.').pop()?.toLowerCase() || ''
-    const mime = blob.type || 'application/octet-stream'
+    const mime = IMAGE_PREVIEW_MIME[ext] || blob.type || 'application/octet-stream'
     const url = URL.createObjectURL(new Blob([arrayBuffer], { type: mime }))
     const previousUrl = workspaceFileBlobs.value[path]?.url
     if (previousUrl) URL.revokeObjectURL(previousUrl)
@@ -1404,6 +1477,7 @@ const selectedConsoleFileExt = computed(() => {
 })
 const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pdf')
 const selectedConsoleIsOfficeFile = computed(() => OFFICE_HTML_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
+const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
 const workspaceFilePreviewHeightClass = computed(() => (
   isWorkspaceFilePreviewFullscreen.value ? 'h-[calc(100vh-48px)]' : 'h-[46vh]'
@@ -2157,7 +2231,6 @@ const submitAnalysisQuery = async (
       return
     }
     localConversationId.value = convId
-
     await generateSqlStream(
       requestText,
       true,
@@ -2243,6 +2316,10 @@ const submitAnalysisQuery = async (
           : null
         if (active?.role === 'assistant') active.isStreaming = false
       },
+      (runId) => {
+        activeRunId.value = runId
+        saveOwnedRun(convId, runId)
+      },
       options.responseFactory,
     )
   } catch (err) {
@@ -2250,6 +2327,7 @@ const submitAnalysisQuery = async (
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
+    await restorePendingSteerQueue({ restartPolling: false })
   }
 }
 
@@ -2279,6 +2357,11 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
 }
 
 const handleSubmit = async () => {
+  if (isStoppingRun.value) return
+  if (activeRunStatus.value === 'cancelling') {
+    ElMessage.info('当前任务正在停止，请稍后再发送')
+    return
+  }
   // 本地正在流式生成，或刷新后服务端仍有运行中的任务：输入都进入队列
   if (isGenerating.value || hasActiveRun.value) {
     const query = input.value.trim()
@@ -2307,6 +2390,11 @@ const handleSubmit = async () => {
     } catch (error) {
       pendingSteerMessages.value = pendingSteerMessages.value.filter(item => item.clientId !== temporaryId)
       input.value = query
+      await restorePendingSteerQueue({ restartPolling: false })
+      if (!hasActiveRun.value) {
+        void submitAnalysisQuery(query)
+        return
+      }
       ElMessage.error(error instanceof Error ? error.message : '追加消息失败')
     } finally {
       isSteering.value = false
@@ -2392,12 +2480,30 @@ const handleSubmit = async () => {
   })
 }
 
-const handleStop = () => {
+const handleStop = async () => {
+  if (isStoppingRun.value) return
+  const conversationId = localConversationId.value || props.conversationId
+  isStoppingRun.value = true
   stopGeneration()
   finalizeUnfinishedToolCalls('error', '已停止')
   finishStreamingMessages()
   activeAssistantMessageId.value = null
-  isGenerating.value = false
+  try {
+    if (conversationId) {
+      if (activeRunId.value) await cancelConversationRun(conversationId, activeRunId.value)
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 250))
+        await restorePendingSteerQueue({ restartPolling: false })
+        if (!hasActiveRun.value) break
+      }
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
+  } finally {
+    isGenerating.value = false
+    isStoppingRun.value = false
+    await restorePendingSteerQueue({ restartPolling: false })
+  }
 }
 
 const handleKeyDown = (event: KeyboardEvent) => {
@@ -2989,6 +3095,16 @@ const handleKeyDown = (event: KeyboardEvent) => {
                 <span v-if="selectedConsoleOfficePreviewReason === 'preview_too_large'">文件过大，暂不支持预览，请下载查看。</span>
                 <span v-else>当前环境不能预览 Office 文件，请下载查看。</span>
               </div>
+              <div
+                v-else-if="selectedConsoleIsImage && selectedConsoleBinaryBlob?.url"
+                :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center overflow-auto rounded-md border border-slate-100 bg-white p-2' : 'flex h-[46vh] items-center justify-center overflow-auto rounded-md border border-slate-100 bg-white p-2'"
+              >
+                <img :src="selectedConsoleBinaryBlob.url" :alt="selectedConsoleFilePath || ''" class="max-h-full max-w-full object-contain" />
+              </div>
+              <div
+                v-else-if="selectedConsoleIsImage && loadingWorkspaceFilePath === selectedConsoleFilePath"
+                :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
+              >图片加载中...</div>
               <div v-else-if="selectedConsoleBinaryBlob?.error" :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-red-400' : 'flex h-[46vh] items-center justify-center text-xs text-red-400'">文件加载失败，请重试。</div>
               <pre v-else :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700' : 'm-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700'">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
             </div>

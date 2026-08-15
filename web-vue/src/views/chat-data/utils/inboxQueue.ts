@@ -48,6 +48,7 @@ export const reconcileInboxSnapshot = (
   localItems: InboxQueueItem[],
   serverItems: InboxServerMessage[],
   persistedMessageIds: Set<string>,
+  retainMissingItems = true,
 ): { queue: InboxQueueItem[]; admittedMessageIds: string[] } => {
   const serverById = new Map(serverItems.map(item => [item.message_id, item]))
   const queue: InboxQueueItem[] = []
@@ -61,7 +62,7 @@ export const reconcileInboxSnapshot = (
     if (persistedMessageIds.has(item.messageId)) continue
     const serverItem = serverById.get(item.messageId)
     if (!serverItem) {
-      queue.push(item)
+      if (retainMissingItems) queue.push(item)
       continue
     }
     serverById.delete(item.messageId)

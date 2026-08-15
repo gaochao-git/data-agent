@@ -759,6 +759,32 @@ async def test_resume_disconnect_before_graph_restores_pending_question(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_cancels_owner_when_run_is_stopping(monkeypatch):
+    class OwnerTask:
+        cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self):
+            self.cancelled = True
+
+    async def no_wait(_seconds):
+        return None
+
+    async def heartbeat(_run_id):
+        return "cancelling"
+
+    owner = OwnerTask()
+    monkeypatch.setattr(handlers.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(handlers.agent_inbox_service, "heartbeat_run", heartbeat)
+
+    await handlers._heartbeat_agent_run("run-1", owner)
+
+    assert owner.cancelled is True
+
+
+@pytest.mark.asyncio
 async def test_generate_chat_data_stream_initial_state_uses_context_groups(monkeypatch):
     class Graph:
         def __init__(self):

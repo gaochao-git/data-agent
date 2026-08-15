@@ -2,9 +2,11 @@
 
 OfficeCLI 对 `.docx` 提供语义路径 API（`/body/p[1]/r[2]`），几乎不需碰原始 XML。本文件覆盖读取、创建、结构化编辑、报告级配方、字段/目录、模板合并（`merge`）与交付前 QA。所有命令都通过 `officecli_run(command_args=[...])` 执行——**每个元素是一个独立参数，不要加引号、不要拼接成一条命令**。
 
+> 排版口径说明：本文件只定义命令用法与结构校验，**不含独立排版口径**；示例中的字体/字号取值与 `standard-report.md` 样式映射表一致，照抄示例即符合标准。报告排版以标准汇报模版（`standard-report.md`）与党政机关公文（`gb-t-9704-2012.md`）两套口径为准。
+
 ## 执行模型（必读）
 
-- 调用形态：`officecli_run(command_args=["add", "/mnt/user-data/workspace/report.docx", "/body", "--type", "paragraph", "--prop", "text=营收增长", "--prop", "style=Heading1"])`。路径、flag、值都是数组里的独立字符串。
+- 调用形态：`officecli_run(command_args=["add", "/mnt/user-data/workspace/report.docx", "/body", "--type", "paragraph", "--prop", "text=营收增长", "--prop", "font.ea=仿宋_GB2312", "--prop", "size=16"])`。路径、flag、值都是数组里的独立字符串。
 - **不要给路径加引号。** 在 argv 模型里引号会变成文件名的一部分，导致定位失败。上游 shell 文档写"ALWAYS quote `/body/p[1]`"在我们的模型下是**错的**——shell 才需要引号防 glob，我们没有 shell。
 - **`$` 安全、但 `\n`/`\t` 仍生效。** 无 shell，所以 `"$50M"` 原样写入、不会被展开；但 `--prop text=` 里的 `\n` 解释成软换行（`<w:br/>`）、`\t` 解释成制表符（`<w:tab/>`），表格单元格 `c1="a\nb"` 同理。这是 CLI 层行为，与调用方式无关。
 - **禁 `open`/`close`。** 当前工具不启用常驻进程；成功的修改命令会由运行时同步 `workspace`/`outputs` 文件。需要显式确认 OfficeCLI 刷新文件时再调用 `save`，不必每条修改后重复调用。`batch` 可一次提交整个 JSON 数组。
@@ -21,7 +23,7 @@ officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "tex
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "annotated"]) # 每 run 的值 + 样式/字体/字号 + 警告
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "html"])      # 读返回的 HTML 路径：第一批视觉检查（层级、空段、缺 TOC）
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "svg"])       # 矢量预览
-officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "screenshot", "--grid", "auto", "-o", "/mnt/user-data/workspace/sheet.png"])  # 整文档拼图（每页一格），再用 file_read 看
+officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "screenshot", "--grid", "auto", "-o", "/mnt/user-data/workspace/sheet.png"])
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "issues"])    # 空段、缺 alt、间距异常
 officecli_run(command_args=["view", "/mnt/user-data/workspace/report.docx", "stats"])     # 段落计数、字体/样式分布
 ```
@@ -50,13 +52,15 @@ officecli_run(command_args=["query", "/mnt/user-data/workspace/report.docx", 'fi
 段落 `p` 是块；run `r` 是块内一致字符格式。段落级属性（style、对齐、间距、缩进）设在 `p`；字体/字号/颜色/粗体设在 `r`。
 
 ```text
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=执行摘要", "--prop", "style=Heading1", "--prop", "size=18", "--prop", "bold=true", "--prop", "spaceAfter=12"])
+officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=一、执行摘要", "--prop", "font.ea=黑体", "--prop", "font.latin=Times New Roman", "--prop", "size=16", "--prop", "bold=true", "--prop", "spaceAfter=12"])
 officecli_run(command_args=["set", "F", "/body/p[1]/r[1]", "--prop", "color=1F4E79"])
 ```
 
-纵向间距用 `spaceBefore`/`spaceAfter`，**绝不用空段落堆叠**（会被 `view issues` 标红）。左缩进用 `--prop indent=720`（twips）、`firstLineIndent=360`、`hangingIndent=720`；行首空格会触发 issues。
+纵向间距用 `spaceBefore`/`spaceAfter`，**绝不用空段落堆叠**（会被 `view issues` 标红）。左缩进用 `--prop indent=720`（twips）；首行缩进按标准正文用 `--prop firstLineIndent=32pt`（三号 16pt 的 2 字符）；行首空格会触发 issues。
 
-> ⚠️ **`create` 产出的是极简文档，不含内置 Heading 样式。** `style=Heading1` 会回退为"按原样引用"（help 有 `WARNING: style 'Heading1' not found`）。两种处理：① 用带样式的真实模板 `file_copy` 进来再编辑；② 显式给 `size`/`bold` 等尺寸，不依赖样式定义。TOC 只认内置 Heading 样式或带 `outlineLvl` 的自定义段落样式。
+**单位（易错点）**：`size` 的单位是**磅**，`size=16` 即 16pt（三号），照 standard-report.md 映射表的 pt 值原样写，**不要按 OOXML 半磅（w:sz）翻倍**——半磅只在你用 `raw-set` 直接改 `w:sz` 时才出现。`indent`/`firstLineIndent` 裸数是 twips、也可带单位（`32pt`）；`spaceBefore`/`spaceAfter`/`lineSpacing` 一律带单位（`12pt`、`0.5cm`、`1.5x`）。
+
+> ⚠️ **`create` 产出的是极简文档，不含内置 Heading 样式。** `style=Heading1` 会回退为"按原样引用"（help 有 `WARNING: style 'Heading1' not found`）。报告类文档按 `standard-report.md` 样式映射表逐级显式设置字体/字号/行距（可 `view annotated` 样板 `standard-report-template.docx` 照抄具体配置）；用户提供了带样式的模板时以用户模板为准。TOC 只认内置 Heading 样式或带 `outlineLvl` 的自定义段落样式。
 
 ### 表格
 
@@ -174,7 +178,7 @@ officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop"
 ```text
 # 1) 用 file_write 把 batch JSON 写入 workspace 临时文件（无 shell 转义顾虑）
 file_write(file_path="/mnt/user-data/workspace/_batch.json",
-           content='[{"command":"add","parent":"/body","type":"paragraph","props":{"text":"条款一","style":"Heading2","size":"14","bold":"true"}},{"command":"set","path":"/body/p[1]/r[1]","props":{"color":"1F4E79"}}]')
+           content='[{"command":"add","parent":"/body","type":"paragraph","props":{"text":"（一）条款一","font.ea":"楷体_GB2312","font.latin":"Times New Roman","size":"16"}},{"command":"set","path":"/body/p[1]/r[1]","props":{"color":"1F4E79"}}]')
 # 2) 用 --input 交给 batch（--input 指向的文件在 workspace 内，只读，不在 uploads）
 officecli_run(command_args=["batch", "/mnt/user-data/workspace/report.docx", "--input", "/mnt/user-data/workspace/_batch.json"])
 # 3) 可选清理
@@ -204,14 +208,12 @@ officecli_run(command_args=["merge", "/mnt/user-data/workspace/tpl.docx", "/mnt/
 
 每一条都经 `validate` 通过。占位符写法 `F` 在真实调用时替换为完整路径（如 `/mnt/user-data/workspace/report.docx`），不能把字面量 `F` 传给工具。
 
-**(a) 富封面页（填满 ≥60%）。** 保密横幅 + 标题 + 副标题 + 受送方/项目/日期块 + 关键主题条，再强制下节换页：
+**(a) 封面页（标准汇报模版式）。** 主标题 + 副标题 + 汇报信息块，再强制下节换页进入正文；取值一律来自 standard-report.md 映射表：
 ```text
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=CONFIDENTIAL — 仅限客户使用", "--prop", "align=center", "--prop", "size=9", "--prop", "color=C00000", "--prop", "spaceAfter=24"])
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=战略增长复盘", "--prop", "style=Title", "--prop", "size=32", "--prop", "bold=true", "--prop", "align=center", "--prop", "font=Cambria", "--prop", "spaceAfter=8"])
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=FY26 展望与情景规划", "--prop", "italic=true", "--prop", "size=16", "--prop", "align=center", "--prop", "spaceAfter=36"])
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=呈送：Acme 公司管理层", "--prop", "align=center", "--prop", "size=11"])
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=关键主题：1) 毛利韧性 2) EMEA 扩张 3) 资本配置", "--prop", "align=center", "--prop", "italic=true", "--prop", "size=10"])
-officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=执行摘要", "--prop", "style=Heading1", "--prop", "pageBreakBefore=true"])
+officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=经营分析专题汇报", "--prop", "font.ea=方正小标宋简体", "--prop", "font.latin=Times New Roman", "--prop", "size=22", "--prop", "align=center", "--prop", "spaceAfter=8"])
+officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=（副标题或主题语）", "--prop", "font.ea=楷体_GB2312", "--prop", "font.latin=Times New Roman", "--prop", "size=16", "--prop", "align=center", "--prop", "spaceAfter=36"])
+officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=汇报单位　2026年8月", "--prop", "font.ea=仿宋_GB2312", "--prop", "font.latin=Times New Roman", "--prop", "size=14", "--prop", "align=center"])
+officecli_run(command_args=["add", "F", "/body", "--type", "paragraph", "--prop", "text=一、执行摘要", "--prop", "font.ea=黑体", "--prop", "font.latin=Times New Roman", "--prop", "size=16", "--prop", "bold=true", "--prop", "pageBreakBefore=true"])
 ```
 
 **(b) Page X of Y 复合页脚。** 加页脚段落，再三个子操作拼出活值（官方 `help docx footer` 配方）：
@@ -250,8 +252,7 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 ## 设计质量线（每份文档须满足）
 
 - **清晰层级**：非平凡文档必有 Title → H1 → H2 → 正文，不能是未排版 Normal 段落墙。`view outline` 若是一长条平铺列表即缺层级。
-- **显式标题字号**（Word 默认样式字号会漂）：H1 ≥ 18pt（长报告 20pt），H2 = 14pt 粗体，H3 = 12pt 粗体，正文 11–12pt，行距 1.15–1.5x。优先 `style=Heading1` 而非内联尺寸（换主题只改定义一次）；无法信任模板样式时显式给尺寸。
-- **一种正文 + 一种强调**：一种可读正文字体（Calibri/Cambria/Georgia/Times New Roman）；强调色用于标题或表头，不彩虹式排版。
+- **排版口径外置**：字体/字号/行距以标准汇报模版（`standard-report.md`）或党政机关公文（`gb-t-9704-2012.md`）为准，本文件不提供第三套通用口径；新建文档按映射表逐级显式配置（create 无内置样式），用户模板带标题样式时可沿用其样式。
 - **间距靠属性**：用 `spaceBefore`/`spaceAfter`；空段落行会破坏分页并被 issues 标红。
 - **排版质量**：新内容用弯引号（' " " "）而非 ASCII；范围用 en-dash（–），括号插用 em-dash（—）。
 - **>1 页必有页眉页脚页码**：走活 `PAGE` 域，绝不写字面 "Page 1"。
@@ -265,7 +266,7 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 2. `officecli_run(command_args=["view", "F", "outline"])` — 标题层级（无 H1→H3 跳跃）、TOC 是否存在、节数。
 3. `officecli_run(command_args=["view", "F", "text", "--max-lines", "400"])` — 错别字、残留 `\$`/`\t`/`\n` 字面、占位符令牌。
 4. `officecli_run(command_args=["validate", "F"])` — schema 校验（交付门在落盘文件上重跑）。
-5. **视觉整页拼图**（能读图的 agent）：`view screenshot --grid auto -o /mnt/user-data/workspace/sheet.png` 然后 `file_read` 看。能看到分页、空白页、标题节奏、页边距、TOC/封面位置。Windows+Word 走真实 Word 渲染每页，其余走 HTML。截图失败则退回 `view html` 并在交付时标注"跨页对齐/节奏未视觉验证"。"validate 通过"不等于"可交付"，"看起来像真文档"才是。
+5. **视觉检查**：优先 `view html`。**macOS 环境禁用 `view screenshot`**：拉起的渲染组件触发钥匙串密码弹窗、后台进程阻塞至超时，不得尝试或重试；Linux 无头环境无钥匙串机制、Windows+Word 可走真实 Word 渲染整页拼图（分页、空白页、标题节奏、页边距、TOC/封面位置），这两类环境验证一次后可启用。截图拼图可能把页面放在画布左侧、右侧/底部留空灰底（渲染视口大于纸面），这是渲染特性，不是文档版式问题。无法视觉验证时在交付标注"跨页对齐/节奏未视觉验证"。"validate 通过"不等于"可交付"。
 6. 任一失败→修复→**重跑整轮**（一次修复常引入新问题）。
 
 **域按结构判断，不按可见文本**：PAGE 页脚 `get /footer[N] --depth 3` 应见 begin/instrText/separate/cached/end 的 run 链（单个 PAGE ≥5 个 run，复合 "Page X of Y" ≥11 个）；只有一个含 "Page" 的 run = 域缺失，重加 `--prop field=page`。TOC `get /toc[1] --depth 2` 看域结构；页码可能读 `1 1 1 1` 直到重算。MERGEFIELD 用 `query 'field[fieldType=mergefield]'` 确认每槽一个、别处无字面 `{{name}}`。
@@ -290,5 +291,7 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 | 单元格多子弹段落 | `c1="a\nb"` 是单段落软换行；真子弹要独立段落（配方 e） |
 | 能用 dotted-attr 却用 `raw-set` | 优先 L2 dotted-attr（`pbdr.bottom=`/`ind.left=`），非必要不碰 L3 `raw-set` |
 | 下段继承上一段 Heading 样式 | 在下一段显式 `--prop style=Normal` |
-| `create` 后用 `style=Heading1` | 极简文档无内置样式，会回退引用；用真实模板或显式给尺寸 |
+| `create` 后用 `style=Heading1` | 极简文档无内置样式，会回退引用；报告按 `standard-report.md` 映射表显式设置，或沿用用户模板样式 |
+| `size` 按半磅翻倍（22pt 写 44） | `size` 单位是磅，映射表 pt 值原样写；半磅只出现在 `raw-set` 改 `w:sz` 时 |
+| 行距写成 `line` | 属性名是 `lineSpacing=28pt` 配 `lineRule=exact`；不存在 `line` |
 | `merge` 写成 `-o` | 位置参数：先 `<template>` 再 `<output>`，数据走 `--data` |

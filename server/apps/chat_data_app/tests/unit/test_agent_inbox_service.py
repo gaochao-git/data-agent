@@ -287,6 +287,92 @@ async def test_expired_run_requeues_claimed_messages_when_new_run_starts(inbox_s
 
 
 @pytest.mark.asyncio
+async def test_expired_run_rejects_steer_and_allows_new_completion(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    async with get_session() as session:
+        run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+        run.lease_expire_time = datetime.now() - timedelta(seconds=1)
+
+    with pytest.raises(AgentRunNotActiveError):
+        await service.enqueue_message("conv-1", "user-1", "用户一", "不应进入死队列")
+
+    next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
+    assert next_run_id != run_id
+    assert adopted == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_run_waits_for_worker_and_preserves_queue(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+    message_id = await service.enqueue_message("conv-1", "user-1", "用户一", "停止后继续")
+
+    assert await service.cancel_active_run("conv-1", "user-1", "用户一", run_id) is True
+    assert await service.heartbeat_run(run_id) == "cancelling"
+    with pytest.raises(AgentRunConflictError):
+        await service.start_run("conv-1", "user-1", "用户一")
+    with pytest.raises(AgentRunNotActiveError):
+        await service.enqueue_message("conv-1", "user-1", "用户一", "停止中不能继续排队")
+
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
+    next_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
+    assert next_run_id != run_id
+    assert [message.id for message in adopted] == [message_id]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_run_cannot_claim_messages(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    step_id = await service.enqueue_message(
+        "conv-1", "user-1", "用户一", "立即消息", queue_type="next-step",
+    )
+    turn_id = await service.enqueue_message("conv-1", "user-1", "用户一", "下轮消息")
+    assert await service.cancel_active_run("conv-1", "user-1", "用户一", run_id) is True
+
+    assert (await service.claim_pending_messages(run_id)).messages == []
+    assert (await service.claim_pending_or_finish_run(
+        "conv-1", "user-1", run_id, "用户一",
+    )).messages == []
+
+    async with get_session() as session:
+        rows = list((await session.execute(
+            select(ChatDataAgentInbox).where(ChatDataAgentInbox.run_id == run_id)
+            .order_by(ChatDataAgentInbox.id)
+        )).scalars())
+    assert rows[0].status == "cancelled"
+    assert [(row.message_id, row.status) for row in rows[1:]] == [
+        (step_id, "pending"),
+        (turn_id, "pending"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_run_id_cannot_cancel_newer_run(inbox_service):
+    service, create_thread, get_session = inbox_service
+    await create_thread()
+    old_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    await service.finish_run(old_run_id, "cancelled", "user-1", "用户一")
+    new_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+
+    assert await service.cancel_active_run("conv-1", "user-1", "用户一", old_run_id) is False
+
+    async with get_session() as session:
+        new_run = (await session.execute(select(ChatDataAgentInbox).where(
+            ChatDataAgentInbox.run_id == new_run_id,
+            ChatDataAgentInbox.record_type == "run",
+        ))).scalar_one()
+    assert new_run.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_agent_inbox_rejects_missing_or_unowned_conversation(inbox_service):
     service, create_thread, _get_session = inbox_service
     await create_thread()
@@ -559,6 +645,8 @@ async def test_agent_inbox_lists_claimed_message_for_refresh_restore(inbox_servi
     queue = await service.list_message_states("conv-1", "user-1")
 
     assert queue["has_active_run"] is True
+    assert queue["run_id"] == run_id
+    assert queue["run_status"] == "active"
     assert [item["content"] for item in queue["messages"]] == ["排队一", "排队二"]
     assert [item["queue_type"] for item in queue["messages"]] == ["next-turn", "next-step"]
     assert all(item["message_id"] for item in queue["messages"])
@@ -567,6 +655,12 @@ async def test_agent_inbox_lists_claimed_message_for_refresh_restore(inbox_servi
     queue = await service.list_message_states("conv-1", "user-1")
     state = next(item for item in queue["messages"] if item["message_id"] == claimed_id)
     assert state["status"] == "claimed"
+
+    await service.finish_run(run_id, "cancelled", "user-1", "用户一")
+    queue = await service.list_message_states("conv-1", "user-1")
+    assert queue["has_active_run"] is False
+    assert queue["run_id"] == run_id
+    assert queue["run_status"] == "cancelled"
 
 
 @pytest.mark.asyncio
