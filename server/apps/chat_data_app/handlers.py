@@ -903,8 +903,6 @@ class _AgentSseStreamAdapter:
             yield thinking_event
             if not has_content and not has_tool_calls and not has_tool_call_chunks and not is_tool_message:
                 return
-        if self.debug_label and is_ai_message and has_content:
-            logger.debug("[%s] %s", self.debug_label, str(message_chunk.content)[:200])
         if has_tool_calls:
             for tool_event in self.tool_stream_state.handle_tool_calls(getattr(message_chunk, "tool_calls", []) or []):
                 yield tool_event
