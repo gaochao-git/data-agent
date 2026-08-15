@@ -631,6 +631,7 @@ const {
   loadMoreConversations,
   loadMoreConversationGroup,
   updateConversationTitle: updateHistoryConversationTitle,
+  updateConversationRunStatus: updateHistoryConversationRunStatus,
   refreshAfterFavorite,
   invalidateInactiveView,
 } = useConversationHistoryBrowser({
@@ -737,6 +738,13 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   if (currentConversationId.value === conversationId) {
     currentConversationTitle.value = title
   }
+}
+
+const handleConversationRunStatusChanged = (
+  conversationId: string,
+  status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
+) => {
+  updateHistoryConversationRunStatus(conversationId, status)
 }
 
 // 置顶会改变会话所属分组，成功后重载分组首屏，避免同一会话残留在旧目录。
@@ -1733,6 +1741,7 @@ onUnmounted(() => {
                   v-model:selected-model-id="selectedConversationModelId"
                   class="h-full"
                   @first-message-complete="handleFirstMessageComplete"
+                  @run-status-changed="handleConversationRunStatusChanged"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                   @semantic-config-selected="handleConversationSemanticConfigSelected"

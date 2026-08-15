@@ -55,7 +55,18 @@ def inbox_service(monkeypatch):
                 update_by_name=user_id,
             ))
 
-    yield AgentInboxService(), create_thread, get_test_session
+    service = AgentInboxService()
+    original_start_run = service.start_run
+
+    async def start_and_prepare(*args, **kwargs):
+        result = await original_start_run(*args, **kwargs)
+        await service.prepare_pending_run(result[0])
+        return result
+
+    # These tests exercise the inbox lifecycle after a worker has claimed a
+    # run. Runtime-specific pending behavior is covered separately.
+    service.start_run = start_and_prepare
+    yield service, create_thread, get_test_session
     asyncio.run(engine.dispose())
 
 
@@ -120,8 +131,8 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
             ChatDataAgentInbox.run_id == run_id,
             ChatDataAgentInbox.record_type == "run",
         ))).scalar_one()
-    assert run.status == "active"
-    assert run.lease_expire_time is not None
+    assert run.status == "pending"
+    assert run.lease_expire_time is None
 
     await service.finish_run(run_id, "failed", "user-1", "用户一")
     assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
@@ -177,7 +188,9 @@ async def test_expired_unstarted_question_resume_returns_to_waiting(inbox_servic
         ))).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
-    assert await service.get_pending_question("conv-1", "user-1") == {"run_id": run_id, **question}
+    # Answer submission is durable as a pending resume. An expired pending
+    # resume must be picked up by Runtime, not exposed as a new question.
+    assert await service.get_pending_question("conv-1", "user-1") is None
 
 
 @pytest.mark.asyncio

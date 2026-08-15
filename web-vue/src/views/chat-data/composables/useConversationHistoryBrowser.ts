@@ -30,6 +30,9 @@ const normalizeConversation = (raw: unknown, fallbackAgentId: string): Conversat
     agent_id: String(conversation.agent_id || fallbackAgentId),
     datasource_id: typeof conversation.datasource_id === 'string' ? conversation.datasource_id : '',
     is_favorited: Boolean(conversation.is_favorited),
+    run_status: conversation.run_status === null || conversation.run_status === undefined
+      ? null
+      : String(conversation.run_status) as ConversationItem['run_status'],
   }
 }
 
@@ -191,6 +194,16 @@ export const useConversationHistoryBrowser = (options: {
     })
   }
 
+  const updateRunStatus = (conversationId: string, status: ConversationItem['run_status']) => {
+    const cachedItems = [
+      ...flatConversations.value,
+      ...groupPages.value.flatMap(group => group.conversations),
+    ]
+    cachedItems.filter(item => item.id === conversationId).forEach(item => {
+      item.run_status = status
+    })
+  }
+
   const refreshAfterFavorite = async (conversationId: string, isFavorited: boolean) => {
     flatConversations.value.filter(item => item.id === conversationId).forEach(item => {
       item.is_favorited = isFavorited
@@ -215,6 +228,7 @@ export const useConversationHistoryBrowser = (options: {
     loadMoreConversations: loadMoreFlat,
     loadMoreConversationGroup: loadMoreGroup,
     updateConversationTitle: updateTitle,
+    updateConversationRunStatus: updateRunStatus,
     refreshAfterFavorite,
     invalidateInactiveView,
   }

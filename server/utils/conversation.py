@@ -62,17 +62,27 @@ def _get_title_llm():
     return get_chat_data_llm(streaming=False, max_tokens=30)
 
 
-def _format_thread(t: UserThread) -> Dict[str, Any]:
+def _format_thread(t: UserThread, run_status: Optional[str] = None) -> Dict[str, Any]:
     """转换会话列表返回结构"""
-    return {
+    result = {
         "id": t.thread_id,
         "title": t.thread_title,
         "agent_id": t.agent_id,
         "datasource_id": t.datasource_id or "",
         "create_time": t.create_time.strftime('%Y-%m-%d %H:%M:%S') if t.create_time else "",
         "update_time": t.update_time.strftime('%Y-%m-%d %H:%M:%S') if t.update_time else "",
-        "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False
+        "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False,
     }
+    result["run_status"] = run_status
+    return result
+
+
+async def _format_threads(rows: List[UserThread], user_id: Optional[str]) -> List[Dict[str, Any]]:
+    statuses = await conversation_dao.list_active_run_statuses(
+        [thread.thread_id for thread in rows],
+        user_id,
+    )
+    return [_format_thread(thread, statuses.get(thread.thread_id)) for thread in rows]
 
 
 def _clean_title(title: str, fallback: str = "") -> str:
@@ -163,7 +173,7 @@ async def list(db_path: str, agent_id: str, user_id: str = None, limit: int = 50
     """
     threads = await conversation_dao.list_threads(agent_id=agent_id, user_id=user_id, limit=limit, offset=offset)
 
-    return [_format_thread(t) for t in threads]
+    return await _format_threads(threads, user_id)
 
 
 async def list_by_agent_ids(agent_ids: List[str], user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -173,7 +183,7 @@ async def list_by_agent_ids(agent_ids: List[str], user_id: str = None, limit: in
 
     threads = await conversation_dao.list_threads_by_agent_ids(agent_ids=agent_ids, user_id=user_id, limit=limit, offset=offset)
 
-    return [_format_thread(t) for t in threads]
+    return await _format_threads(threads, user_id)
 
 
 def _thread_group_key(thread: UserThread) -> str:
@@ -216,14 +226,20 @@ def _decode_group_cursor(cursor: Optional[str]) -> tuple[Optional[datetime], Opt
         raise ValueError("无效的会话分页游标") from exc
 
 
-def _format_conversation_group(group_key: str, rows: List[UserThread], page: int, page_size: int) -> Dict[str, Any]:
+def _format_conversation_group(
+    group_key: str,
+    rows: List[UserThread],
+    page: int,
+    page_size: int,
+    statuses: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX):] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
     visible_rows = rows[:page_size]
     has_more = len(rows) > page_size
     return {
         "key": group_key,
         "datasource_id": datasource_id,
-        "conversations": [_format_thread(thread) for thread in visible_rows],
+        "conversations": [_format_thread(thread, (statuses or {}).get(thread.thread_id)) for thread in visible_rows],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
@@ -255,7 +271,11 @@ async def list_grouped(
             cursor_update_time=cursor_update_time,
             cursor_id=cursor_id,
         )
-        return {"groups": [_format_conversation_group(group_key, rows, page, page_size)]}
+        statuses = await conversation_dao.list_active_run_statuses(
+            [thread.thread_id for thread in rows[:page_size]],
+            user_id,
+        )
+        return {"groups": [_format_conversation_group(group_key, rows, page, page_size, statuses)]}
 
     rows = await conversation_dao.list_thread_group_first_pages(
         agent_id=agent_id,
@@ -265,9 +285,13 @@ async def list_grouped(
     grouped_rows: Dict[str, List[UserThread]] = {}
     for thread in rows:
         grouped_rows.setdefault(_thread_group_key(thread), []).append(thread)
+    statuses = await conversation_dao.list_active_run_statuses(
+        [thread.thread_id for thread in rows],
+        user_id,
+    )
     return {
         "groups": [
-            _format_conversation_group(key, group_rows, 1, page_size)
+            _format_conversation_group(key, group_rows, 1, page_size, statuses)
             for key, group_rows in grouped_rows.items()
         ]
     }

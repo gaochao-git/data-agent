@@ -10,7 +10,7 @@ import { useSqlGenerator } from '../composables/useSqlGenerator'
 import { useConversationHistory } from '../composables/useConversationHistory'
 import { useDeepThinking } from '../composables/useDeepThinking'
 import { useSkillCommandMenu } from '../composables/useSkillCommandMenu'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, updateSteerMessage, uploadFile } from '../api'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getChatDataConfig, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceOfficeHtmlPreview, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../api'
 import type { Dashboard } from '../api/dashboard'
 import type { ChatDataRuntimeOptions, ConversationWorkspaceFile } from '../api'
 import QuickQueries, { type FallbackQuery } from './QuickQueries.vue'
@@ -58,6 +58,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   firstMessageComplete: [conversationId: string]
+  runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
@@ -89,6 +90,8 @@ const hasActiveRun = ref(false)
 const activeRunStatus = ref<string | null>(null)
 const ownedRunStorageKey = 'chatdata-active-run-conversation'
 const activeRunId = ref<string | null>(null)
+const activeRunEventId = ref('0-0')
+const runEventIdStorageKey = (conversationId: string, runId: string) => `chatdata-run-event-id:${conversationId}:${runId}`
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
@@ -135,6 +138,18 @@ const restorePendingSteerQueue = async (options?: { restartPolling?: boolean }) 
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
     activeRunStatus.value = response.data?.run_status ?? null
+    emit(
+      'runStatusChanged',
+      conversationId,
+      hasActiveRun.value
+        ? activeRunStatus.value as 'pending' | 'active' | 'cancelling' | 'waiting_user' | null
+        : null,
+    )
+    if (activeRunId.value) {
+      activeRunEventId.value = window.sessionStorage.getItem(runEventIdStorageKey(conversationId, activeRunId.value)) || '0-0'
+    } else {
+      activeRunEventId.value = '0-0'
+    }
     const persistedMessageIds = new Set(messages.value.filter(item => item.role === 'user').map(item => item.id))
     const reconciled = reconcileInboxSnapshot(
       pendingSteerMessages.value,
@@ -170,25 +185,23 @@ const restorePendingUserQuestion = async () => {
 
 const recoverInterruptedPageRun = async () => {
   await restorePendingSteerQueue({ restartPolling: false })
-  const storedRun = readOwnedRun()
-  if (!storedRun || storedRun.conversationId !== (localConversationId.value || props.conversationId)) return
-  if (storedRun.runId !== activeRunId.value || !hasActiveRun.value) {
-    clearOwnedRun(storedRun.runId)
-    return
-  }
-  if (activeRunStatus.value === 'waiting_user') return
   const conversationId = localConversationId.value || props.conversationId
-  if (!conversationId) return
-  try {
-    await cancelConversationRun(conversationId, storedRun.runId)
-    for (let attempt = 0; attempt < 24; attempt += 1) {
-      await new Promise(resolve => window.setTimeout(resolve, 250))
-      await restorePendingSteerQueue({ restartPolling: false })
-      if (!hasActiveRun.value) break
-    }
-  } catch {
-    // 恢复失败时保留服务端状态；发送 steer 失败后仍会自动降级为 completion。
+  if (!conversationId || !hasActiveRun.value || !activeRunId.value) return
+  if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
+  while (isLoadingHistory.value) {
+    await new Promise(resolve => window.setTimeout(resolve, 50))
   }
+  const runId = activeRunId.value
+  await submitAnalysisQuery('', {
+    appendUserMessage: false,
+    preserveAssistant: true,
+    responseFactory: signal => streamRunEvents(
+      conversationId,
+      runId,
+      activeRunEventId.value,
+      signal,
+    ),
+  })
 }
 
 const readOwnedRun = (): { conversationId: string; runId: string } | null => {
@@ -2311,16 +2324,23 @@ const submitAnalysisQuery = async (
       (question) => {
         pendingUserQuestion.value = question
         hasActiveRun.value = true
+        emit('runStatusChanged', conversationId, 'waiting_user')
         const active = activeAssistantMessageId.value
           ? messages.value.find(item => item.id === activeAssistantMessageId.value)
           : null
         if (active?.role === 'assistant') active.isStreaming = false
       },
       (runId) => {
+        if (activeRunId.value !== runId) activeRunEventId.value = '0-0'
         activeRunId.value = runId
         saveOwnedRun(convId, runId)
+        emit('runStatusChanged', convId, 'active')
       },
       options.responseFactory,
+      (eventId) => {
+        activeRunEventId.value = eventId
+        window.sessionStorage.setItem(runEventIdStorageKey(convId, activeRunId.value || ''), eventId)
+      },
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'

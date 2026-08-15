@@ -1359,7 +1359,7 @@ export function listSteerMessages(
 ): Promise<ApiResponse<{
   has_active_run: boolean
   run_id?: string | null
-  run_status?: 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
   messages: Array<{
     message_id: string
     content: string
@@ -1380,6 +1380,21 @@ export function getPendingUserQuestion(
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/pending-question`,
     method: 'get',
+  })
+}
+
+/** 订阅后台 Run 的持久化 SSE 事件，支持按序号断线续传。 */
+export function streamRunEvents(
+  conversationId: string,
+  runId: string,
+  lastEventId = '0-0',
+  signal?: AbortSignal,
+): Promise<Response> {
+  return requestStream({
+    url: `/agents/api/chatdata/conversations/${conversationId}/runs/${runId}/events`,
+    method: 'get',
+    headers: { 'Last-Event-ID': lastEventId },
+    signal,
   })
 }
 

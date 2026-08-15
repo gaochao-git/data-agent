@@ -9,7 +9,7 @@ from sqlalchemy import and_, case, func, literal, or_, select, update as sa_upda
 from sqlalchemy.orm import aliased
 
 from utils.database import get_session as default_get_session
-from utils.models import UserThread
+from utils.models import ChatDataAgentInbox, UserThread
 
 
 class ConversationDao:
@@ -90,6 +90,42 @@ class ConversationDao:
             query = query.order_by(UserThread.is_favorited.desc(), UserThread.update_time.desc(), UserThread.id.desc()).offset(max(offset, 0)).limit(limit)
             result = await session.execute(query)
             return list(result.scalars().all())
+
+    async def list_active_run_statuses(
+        self,
+        conversation_ids: list[str],
+        user_id: Optional[str],
+    ) -> dict[str, str]:
+        """批量读取会话的有效运行状态，避免历史列表产生 N+1 查询。"""
+        if not conversation_ids:
+            return {}
+        now = datetime.now()
+        conditions = [
+            ChatDataAgentInbox.conversation_id.in_(conversation_ids),
+            ChatDataAgentInbox.record_type == "run",
+            ChatDataAgentInbox.delete_flag == 0,
+            or_(
+                ChatDataAgentInbox.status.in_(("pending", "waiting_user")),
+                and_(
+                    ChatDataAgentInbox.status.in_(("active", "cancelling")),
+                    ChatDataAgentInbox.lease_expire_time > now,
+                ),
+            ),
+        ]
+        if user_id:
+            conditions.append(ChatDataAgentInbox.user_id == user_id)
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(ChatDataAgentInbox.conversation_id, ChatDataAgentInbox.status)
+                .where(*conditions)
+            )
+            statuses: dict[str, str] = {}
+            priority = {"cancelling": 4, "waiting_user": 3, "active": 2, "pending": 1}
+            for conversation_id, status in result.all():
+                current = statuses.get(conversation_id)
+                if current is None or priority.get(status, 0) > priority.get(current, 0):
+                    statuses[conversation_id] = status
+            return statuses
 
     @staticmethod
     def _list_conditions(agent_id: str, user_id: Optional[str]) -> list[Any]:

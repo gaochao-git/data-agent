@@ -62,6 +62,7 @@ def test_conversation_formatting_helpers():
         "create_time": "2026-01-02 03:04:05",
         "update_time": "2026-01-02 03:04:05",
         "is_favorited": True,
+        "run_status": None,
     }
     assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))["datasource_id"] == ""
     assert conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "create_time": None, "update_time": None, "is_favorited": None}))["is_favorited"] is False

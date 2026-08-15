@@ -33,6 +33,7 @@ from .services.agent_run.context_budget import ContextInputLimitExceededError, s
 from .services.agent_run.conversation_runtime import stream_agent_turn
 from .services.agent_run.agent_inbox_service import agent_inbox_service
 from .services.agent_run.conversation_event_service import conversation_event_service
+from .services.agent_run.agent_run_runtime import agent_run_runtime
 from .services.agent_run.conversation_context import build_conversation_prompt_context
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime, ensure_conversation_workspace
@@ -1466,6 +1467,7 @@ async def sql_completion_handler(
         "semantic_config_selection": semantic_config_selection,
         "enable_thinking": enable_thinking,
         "skill_names": skill_names,
+        "operator_name": username or user_id,
         "options": options_data,
     }
     run_id, adopted_messages = await agent_inbox_service.start_run(
@@ -1475,8 +1477,12 @@ async def sql_completion_handler(
         runtime_context,
     )
 
-    return StreamingResponse(
-        _generate_chat_data_stream(
+    agent_run_runtime.submit(
+        run_id=run_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=username or user_id,
+        stream_factory=lambda: _generate_chat_data_stream(
             thread_id=conversation_id,
             user_query=query,
             datasource_id=datasource_id,
@@ -1484,7 +1490,7 @@ async def sql_completion_handler(
             username=username,
             member_datasource_ids=member_datasource_ids,
             semantic_config_id=semantic_config_id,
-            request=request,
+            request=None,
             model_id=model_id,
             semantic_config_selection=semantic_config_selection,
             enable_thinking=enable_thinking,
@@ -1494,16 +1500,35 @@ async def sql_completion_handler(
             run_id=run_id,
             adopted_messages=adopted_messages,
         ),
+    )
+    return StreamingResponse(
+        _stream_run_events(run_id, request=request),
         media_type="text/event-stream",
         headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-ChatData-Run-Id': run_id,
-        }
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-ChatData-Run-Id": run_id,
+        },
     )
 
 
-def resume_chat_data_question_handler(
+async def _stream_run_events(
+    run_id: str,
+    last_event_id: str = "0-0",
+    request: Request | None = None,
+):
+    """订阅后台 Run 的 Redis Stream 事件。"""
+    from .services.agent_run.agent_run_event_service import agent_run_event_service
+
+    async for event in agent_run_event_service.stream(
+        run_id=run_id,
+        last_event_id=last_event_id,
+        is_disconnected=request.is_disconnected if request else None,
+    ):
+        yield f"id: {event['stream_id']}\n{event['payload']}"
+
+
+async def resume_chat_data_question_handler(
     *,
     conversation_id: str,
     user_id: str,
@@ -1514,26 +1539,16 @@ def resume_chat_data_question_handler(
     turn_id: str,
     request: Request | None,
 ) -> StreamingResponse:
-    """Resume a checkpointed ChatData interrupt on any service worker."""
+    """Queue a checkpoint resume and subscribe to its durable Run events."""
+    _ = runtime_context, answer, turn_id
+    agent_run_runtime.submit(
+        run_id=run_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=username,
+    )
     return StreamingResponse(
-        _generate_chat_data_stream(
-            thread_id=conversation_id,
-            user_query=str(runtime_context.get("query") or ""),
-            datasource_id=runtime_context.get("datasource_id"),
-            user_id=user_id,
-            username=username,
-            member_datasource_ids=runtime_context.get("member_datasource_ids") or [],
-            semantic_config_id=runtime_context.get("semantic_config_id"),
-            request=request,
-            model_id=runtime_context.get("model_id"),
-            semantic_config_selection=runtime_context.get("semantic_config_selection"),
-            enable_thinking=runtime_context.get("enable_thinking"),
-            skill_names=runtime_context.get("skill_names") or [],
-            options=runtime_context.get("options") or {},
-            run_id=run_id,
-            resume_answer=answer,
-            resume_turn_id=turn_id,
-        ),
+        _stream_run_events(run_id, request=request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

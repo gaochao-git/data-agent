@@ -53,6 +53,28 @@ CREATE TABLE `chat_data_agent_inbox` (
   KEY `idx_agent_inbox_run` (`run_id`, `record_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
 
+CREATE TABLE `chat_data_agent_run_event` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `run_id` varchar(64) NOT NULL COMMENT '运行ID',
+  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
+  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
+  `sequence_no` bigint(20) NOT NULL COMMENT '运行内严格递增事件序号',
+  `event_id` varchar(255) NOT NULL COMMENT '事件幂等ID',
+  `event_type` varchar(32) NOT NULL COMMENT 'SSE事件类型',
+  `payload` mediumtext NOT NULL COMMENT 'SSE事件原文',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0未删除 1已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '修改人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_agent_run_event` (`run_id`,`event_id`),
+  KEY `idx_agent_run_event_seq` (`run_id`,`sequence_no`),
+  KEY `idx_agent_run_event_conv` (`conversation_id`,`user_id`,`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData后台运行可重放事件';
+
 ALTER TABLE datasource_table
     ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
 
@@ -66,4 +88,19 @@ ALTER TABLE `user_threads`
 
 ```bash
 python -m pip install opensandbox==0.1.15
+python -m pip install redis==7.0.1
 ```
+
+Redis 配置：
+
+```env
+CHAT_DATA_REDIS_URL=redis://127.0.0.1:6379/0
+CHAT_DATA_REDIS_STREAM_TTL_SECONDS=86400
+```
+
+Run 实时事件使用 Redis Streams：
+
+- `chatdata:run:{run_id}:events`：前端 SSE 实时订阅和断线续传。
+- `chatdata:run-events:persist`：Consumer Group 异步批量持久化到 `chat_data_agent_run_event`。
+- `chat_data_agent_run_event` 仍保留，作为长期事件历史和 Redis 故障后的补偿来源。
+- `chat_data_conversation_event` 只保存最终会话展示历史，LangGraph checkpoint 只保存 Agent 执行状态。

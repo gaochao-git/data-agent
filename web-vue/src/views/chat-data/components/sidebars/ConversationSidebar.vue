@@ -26,19 +26,18 @@ import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
-const CONVERSATION_ICON_POOL = [
-  { icon: 'fa-comment-dots', color: '#B3DBD2' }, // 普通对话
-  { icon: 'fa-chart-line', color: '#B3DBD2' },   // 聚合查询
-  { icon: 'fa-table', color: '#B3DBD2' },        // 明细查询
-] as const
+const getRunStatusLabel = (status: ConversationItem['run_status']): string => {
+  if (status === 'pending') return '排队中'
+  if (status === 'active') return '运行中'
+  if (status === 'waiting_user') return '等待回答'
+  if (status === 'cancelling') return '停止中'
+  return ''
+}
 
-const getConversationIconMeta = (conversationId: string | undefined) => {
-  const id = conversationId || ''
-  let hash = 0
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash * 31 + id.charCodeAt(i)) >>> 0
-  }
-  return CONVERSATION_ICON_POOL[hash % CONVERSATION_ICON_POOL.length] || CONVERSATION_ICON_POOL[0]
+const getRunStatusClass = (status: ConversationItem['run_status']): string => {
+  if (status === 'waiting_user') return 'text-amber-500'
+  if (status === 'cancelling') return 'text-slate-400'
+  return 'text-blue-500'
 }
 
 interface Props {
@@ -708,11 +707,6 @@ onUnmounted(() => {
                     ]"
                     @click="emit('selectConversation', conv.id)"
                   >
-                    <i
-                      :class="['fa-solid text-xs shrink-0', getConversationIconMeta(conv.id).icon]"
-                      :style="{ color: getConversationIconMeta(conv.id).color }"
-                    ></i>
-
                     <!-- 标题编辑态 -->
                     <template v-if="editingConversationId === conv.id">
                       <input
@@ -730,7 +724,14 @@ onUnmounted(() => {
 
                     <!-- 标题展示态 -->
                     <template v-else>
-                      <span class="flex-1 text-sm overflow-hidden text-ellipsis whitespace-nowrap leading-relaxed">{{ conv.title }}</span>
+                      <span
+                        v-if="getRunStatusLabel(conv.run_status)"
+                        :class="['flex shrink-0 items-center gap-1 text-[11px]', getRunStatusClass(conv.run_status)]"
+                        :title="getRunStatusLabel(conv.run_status)"
+                      >
+                        <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
+                      </span>
+                      <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
                       <button
                         type="button"
                         class="shrink-0 flex h-6 w-6 items-center justify-center rounded transition-all duration-150"

@@ -22,10 +22,10 @@ import type {
  * 解析 SSE 事件流
  */
 function parseSSEEvents(buffer: string): {
-  events: Array<{ event: SSEEventType; data: string }>
+  events: Array<{ event: SSEEventType; data: string; id?: string }>
   remaining: string
 } {
-  const events: Array<{ event: SSEEventType; data: string }> = []
+  const events: Array<{ event: SSEEventType; data: string; id?: string }> = []
   const blocks = buffer.split('\n\n')
   const remaining = blocks.pop() || ''
 
@@ -35,17 +35,21 @@ function parseSSEEvents(buffer: string): {
     const lines = block.split('\n')
     let eventType: SSEEventType = 'message'
     let dataStr = ''
+    let eventId: string | undefined
 
     for (const line of lines) {
       if (line.startsWith('event:')) {
         eventType = line.substring(6).trim() as SSEEventType
+      } else if (line.startsWith('id:')) {
+        const parsedId = line.substring(3).trim()
+        if (parsedId) eventId = parsedId
       } else if (line.startsWith('data:')) {
         dataStr = line.substring(5).trim()
       }
     }
 
     if (dataStr) {
-      events.push({ event: eventType, data: dataStr })
+      events.push({ event: eventType, data: dataStr, id: eventId })
     }
   }
 
@@ -99,6 +103,7 @@ export function useSqlGenerator() {
     onQuestionRequested?: (question: PendingUserQuestion) => void,
     onRunStarted?: (runId: string) => void,
     responseFactory?: (signal: AbortSignal) => Promise<Response>,
+    onRunEvent?: (eventId: string) => void,
   ): Promise<void> => {
     if (!conversationId) {
       onError?.('会话 ID 不能为空')
@@ -187,7 +192,8 @@ export function useSqlGenerator() {
         const { events, remaining } = parseSSEEvents(buffer)
         buffer = remaining
 
-        for (const { event, data: dataStr } of events) {
+        for (const { event, data: dataStr, id } of events) {
+          if (id) onRunEvent?.(id)
           // 处理结束事件（与 React 版本一致）
           if (event === 'done' || dataStr === '[DONE]') {
             streamEnded = true

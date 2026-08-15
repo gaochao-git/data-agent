@@ -7,6 +7,7 @@ import inspect
 from typing import Callable, Literal, Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Query, Request, status as http_status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from utils.error_codes import ErrorCode
@@ -25,6 +26,7 @@ from ..services.agent_run.agent_inbox_service import (
     SteerMessageNotPendingError,
     agent_inbox_service,
 )
+from ..services.agent_run.agent_run_event_service import agent_run_event_service
 from .. import AGENT_ID
 
 logger = get_logger(__name__)
@@ -689,7 +691,7 @@ async def _resume_question(
     # 延迟导入用于打破 handlers -> routers 注册链的循环依赖。
     from ..handlers import resume_chat_data_question_handler
     try:
-        return resume_chat_data_question_handler(
+        return await resume_chat_data_question_handler(
             conversation_id=conversation_id,
             user_id=user_id,
             username=username,
@@ -798,9 +800,59 @@ async def list_steer_messages(conversation_id: str, req: Request):
     except AuthenticationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except Exception:
-        logger.error("读取队列消息失败: conversation_id=%s", conversation_id, exc_info=True)
+        logger.error("读取队列状态失败: conversation_id=%s", conversation_id, exc_info=True)
         return business_response(
-            msg="读取队列消息失败，请稍后重试",
+            msg="读取队列状态失败，请稍后重试",
+            code=ErrorCode.CHATDATA_STEER_LIST_FAILED,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get("/{conversation_id}/runs/{run_id}/events", responses=SSE_RESPONSES)
+async def stream_run_events(
+    conversation_id: str,
+    run_id: str,
+    req: Request,
+):
+    """重新订阅后台 Run 的可重放 SSE 事件。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        snapshot = await agent_inbox_service.get_run_snapshot(conversation_id, user_id, run_id)
+        if snapshot is None:
+            return business_response(
+                msg="运行不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+
+        last_event_id = req.headers.get("Last-Event-ID") or "0-0"
+
+        async def event_stream():
+            async for event in agent_run_event_service.stream(
+                run_id=run_id,
+                last_event_id=last_event_id,
+                is_disconnected=req.is_disconnected,
+            ):
+                yield f"id: {event['stream_id']}\n{event['payload']}"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "X-ChatData-Run-Id": run_id,
+            },
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("订阅 Run 事件失败: conversation_id=%s run_id=%s", conversation_id, run_id, exc_info=True)
+        return business_response(
+            msg="订阅运行事件失败，请稍后重试",
             code=ErrorCode.CHATDATA_STEER_LIST_FAILED,
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,

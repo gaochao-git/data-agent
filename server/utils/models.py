@@ -105,6 +105,34 @@ class ChatDataAgentInbox(Base):
     )
 
 
+class ChatDataAgentRunEvent(Base):
+    """后台 Run 的可重放 SSE 事件。"""
+
+    __tablename__ = "chat_data_agent_run_event"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "event_id", name="uniq_agent_run_event"),
+        Index("idx_agent_run_event_seq", "run_id", "sequence_no"),
+        Index("idx_agent_run_event_conv", "conversation_id", "user_id", "create_time"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
     __tablename__ = "uploaded_files"

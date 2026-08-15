@@ -37,7 +37,7 @@ class AgentInboxDao:
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.status.in_(("active", "cancelling", "waiting_user")),
+                ChatDataAgentInbox.status.in_(("pending", "active", "cancelling", "waiting_user")),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.desc())
@@ -212,6 +212,50 @@ class AgentInboxDao:
             .with_for_update()
         )
         return result.scalar_one_or_none()
+
+    async def get_run_by_id(
+        self,
+        session: AsyncSession,
+        run_id: str,
+    ) -> ChatDataAgentInbox | None:
+        result = await session.execute(
+            select(ChatDataAgentInbox).where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_pending_runs(self, session: AsyncSession, limit: int = 20) -> list[ChatDataAgentInbox]:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.status == "pending",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_claimed_messages(
+        self,
+        session: AsyncSession,
+        run_id: str,
+    ) -> list[ChatDataAgentInbox]:
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "message",
+                ChatDataAgentInbox.status == "claimed",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.asc())
+        )
+        return list(result.scalars().all())
 
     async def get_run_by_id_for_update(
         self,
