@@ -341,6 +341,10 @@ async def _persist_agent_turn_history(
     if turn_id and turn_id not in turn_ids:
         turn_ids.insert(0, turn_id)
     for current_turn_id in turn_ids:
+        usage = (values or {}).get("token_usage")
+        latest_usage = getattr(stream_adapter, "latest_token_usage", None)
+        if isinstance(latest_usage, dict) and (latest_usage.get("breakdown") or latest_usage.get("llm_calls")):
+            usage = latest_usage
         await conversation_event_service.persist_turn(
             conversation_id=conversation_id,
             user_id=user_id,
@@ -349,7 +353,7 @@ async def _persist_agent_turn_history(
             messages=messages,
             reasoning_segments=stream_adapter.reasoning_segments,
             context_compression_events=(values or {}).get("context_compression_events") or [],
-            token_usage=sanitize_context_usage_for_response((values or {}).get("token_usage")),
+            token_usage=sanitize_context_usage_for_response(usage),
         )
 
 

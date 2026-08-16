@@ -133,7 +133,11 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
         "再给出结论",
         "最终结论",
     ]
-    assert history["token_usage"] == {"used": 35, "total": 100}
+    assert history["token_usage"] == {
+        "used": 35,
+        "total": 100,
+        "llm_calls": [{"input_tokens": 35}],
+    }
     assert all(event["event_type"] != "token_usage" for event in history["history_events"])
     assert await service.get_first_user_message(conversation_id="conv-1", user_id="user-1") == "查询订单"
 
@@ -302,7 +306,7 @@ async def test_token_usage_failure_does_not_clear_visible_history():
             return [EventRow()]
 
         async def get_latest_token_usage_payload(self, **_kwargs):
-            raise RuntimeError("JSON_REMOVE unavailable")
+            raise RuntimeError("token usage unavailable")
 
     history = await ConversationEventService(TokenFailureDao()).load_history(
         conversation_id="conv-1",

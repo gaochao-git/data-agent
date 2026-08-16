@@ -244,7 +244,7 @@ async def test_conversation_get_detail_reads_event_store_without_checkpoint(conv
     assert "task_stages" not in detail
     assert detail["reasoning_segments"] == []
     assert detail["token_usage"]["used"] == 12
-    assert "breakdown" not in detail["token_usage"]
+    assert detail["token_usage"]["breakdown"] == token_usage["breakdown"]
     assert detail["datasource_id"] == "ds_a"
     assert await conversation_module.get_detail("missing", "u1") is None
 

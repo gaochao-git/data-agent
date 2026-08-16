@@ -502,9 +502,15 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
         state=SimpleNamespace(values={
             "messages": [user, second_ai, second_tool, final_ai],
             "context_compression_events": [],
+            "token_usage": {"used": 8, "total": 100},
         }),
         archived_turn_messages=[user, first_ai, first_tool, second_ai, second_tool],
         reasoning_segments=[],
+        latest_token_usage={
+            "used": 24,
+            "total": 100,
+            "breakdown": [{"key": "messages", "tokens": 24}],
+        },
     )
 
     async def persist_turn(**kwargs):
@@ -530,6 +536,11 @@ async def test_persist_turn_history_merges_pre_compression_tools_with_final_stat
         "assistant-final",
     ]
     assert messages[2].content == "第一份完整结果"
+    assert persisted[0]["token_usage"] == {
+        "used": 24,
+        "total": 100,
+        "breakdown": [{"key": "messages", "tokens": 24}],
+    }
 
 
 def test_message_end_payload_prefers_persisted_ai_timestamp():

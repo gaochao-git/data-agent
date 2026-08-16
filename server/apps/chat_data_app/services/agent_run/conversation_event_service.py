@@ -72,7 +72,7 @@ class ConversationEventService:
             messages=list(messages or []),
             reasoning_segments=list(reasoning_segments or []),
             context_compression_events=list(context_compression_events or []),
-            token_usage=_compact_token_usage(token_usage),
+            token_usage=token_usage,
         )
         if not events:
             return
@@ -291,18 +291,6 @@ def _build_turn_events(
             payload=token_usage,
         ))
     return events
-
-
-def _compact_token_usage(token_usage: dict[str, Any] | None) -> dict[str, Any] | None:
-    """历史页只需恢复总体占用，不重复保存消息和工具级明细。"""
-    if not isinstance(token_usage, dict):
-        return None
-    compact = {
-        key: value
-        for key, value in token_usage.items()
-        if key not in {"breakdown", "llm_calls"}
-    }
-    return compact or None
 
 
 def _turn_start_index(messages: list[BaseMessage], turn_id: str) -> int | None:
