@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -66,6 +67,25 @@ async def test_publish_sets_stream_ttl_in_same_redis_script():
     assert stream_id == "1740000000000-0"
     assert len(redis.eval_calls) == 1
     script, numkeys, args = redis.eval_calls[0]
-    assert numkeys == 3
+    assert numkeys == 4
     assert "redis.call('EXPIRE', KEYS[1], ARGV[8])" in script
+    assert "redis.call('GET', KEYS[4])" in script
+    assert "redis.call('SET', KEYS[4], stream_id, 'EX', ARGV[8])" in script
+    assert args[3] == "chatdata:run:run-1:event:event-1"
     assert args[-1].isdigit()
+
+
+def test_redis_client_uses_health_check_keepalive_and_retry_settings():
+    bus = RedisEventBus("redis://unused")
+    with patch(
+        "apps.chat_data_app.services.agent_run.redis_event_bus.Redis.from_url",
+        return_value=object(),
+    ) as from_url:
+        assert bus.redis is not None
+
+    kwargs = from_url.call_args.kwargs
+    assert kwargs["decode_responses"] is True
+    assert kwargs["health_check_interval"] == 30
+    assert kwargs["socket_keepalive"] is True
+    assert kwargs["socket_connect_timeout"] == 5.0
+    assert kwargs["retry"]._retries == 2

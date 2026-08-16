@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.backoff import ExponentialBackoff
+from redis.retry import Retry
 
 
 RUN_STREAM_PREFIX = "chatdata:run:"
@@ -14,8 +16,25 @@ RUN_STREAM_SUFFIX = ":events"
 PERSIST_STREAM_KEY = "chatdata:run-events:persist"
 PERSIST_GROUP = "chatdata-run-event-persistence"
 STREAM_TTL_SECONDS = max(int(os.getenv("CHAT_DATA_REDIS_STREAM_TTL_SECONDS", "86400")), 60)
+REDIS_HEALTH_CHECK_INTERVAL_SECONDS = max(
+    int(os.getenv("CHAT_DATA_REDIS_HEALTH_CHECK_INTERVAL_SECONDS", "30")),
+    0,
+)
+REDIS_CONNECT_TIMEOUT_SECONDS = max(
+    float(os.getenv("CHAT_DATA_REDIS_CONNECT_TIMEOUT_SECONDS", "5")),
+    1.0,
+)
+REDIS_COMMAND_RETRIES = max(int(os.getenv("CHAT_DATA_REDIS_COMMAND_RETRIES", "2")), 0)
+REDIS_COMMAND_RETRY = Retry(
+    ExponentialBackoff(base=0.1, cap=1.0),
+    retries=REDIS_COMMAND_RETRIES,
+)
 
 _PUBLISH_SCRIPT = """
+local existing_stream_id = redis.call('GET', KEYS[4])
+if existing_stream_id then
+  return {existing_stream_id, 'duplicate'}
+end
 if redis.call('EXISTS', KEYS[3]) == 0 and tonumber(ARGV[7]) > 0 then
   redis.call('SET', KEYS[3], ARGV[7])
 end
@@ -30,6 +49,7 @@ redis.call('XADD', KEYS[2], '*',
   'event_id', ARGV[4], 'event_type', ARGV[5], 'sequence_no', seq_text,
   'payload', ARGV[6], 'stream_id', stream_id)
 redis.call('EXPIRE', KEYS[1], ARGV[8])
+redis.call('SET', KEYS[4], stream_id, 'EX', ARGV[8])
 return {stream_id, seq_text}
 """
 
@@ -46,7 +66,14 @@ class RedisEventBus:
         if self._redis is None:
             if not self._url:
                 raise ValueError("CHAT_DATA_REDIS_URL 未配置")
-            self._redis = Redis.from_url(self._url, decode_responses=True)
+            self._redis = Redis.from_url(
+                self._url,
+                decode_responses=True,
+                health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
+                socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                socket_keepalive=True,
+                retry=REDIS_COMMAND_RETRY,
+            )
         return self._redis
 
     async def start(self) -> None:
@@ -71,10 +98,11 @@ class RedisEventBus:
     ) -> str:
         result = await self.redis.eval(
             _PUBLISH_SCRIPT,
-            3,
+            4,
             self.run_stream_key(run_id),
             PERSIST_STREAM_KEY,
             f"{self.run_stream_key(run_id)}:sequence",
+            self.event_dedupe_key(run_id, event_id),
             run_id,
             conversation_id,
             user_id,
@@ -151,6 +179,10 @@ class RedisEventBus:
     @staticmethod
     def run_stream_key(run_id: str) -> str:
         return f"{RUN_STREAM_PREFIX}{run_id}{RUN_STREAM_SUFFIX}"
+
+    @staticmethod
+    def event_dedupe_key(run_id: str, event_id: str) -> str:
+        return f"{RUN_STREAM_PREFIX}{run_id}:event:{event_id}"
 
     @staticmethod
     def _decode_event(stream_id: str, fields: Mapping[str, Any]) -> dict[str, str]:
