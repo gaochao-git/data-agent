@@ -614,6 +614,33 @@ def test_database_session_commit_rollback_and_info(monkeypatch):
     assert fake_engine.disposed is True
 
 
+def test_create_engine_uses_bounded_recyclable_pool(monkeypatch):
+    captured = {}
+
+    class FakeEngine:
+        pass
+
+    def fake_create_async_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return FakeEngine()
+
+    monkeypatch.setattr(database, "create_async_engine", fake_create_async_engine)
+    monkeypatch.setattr(database, "get_database_url", lambda: "mysql://test")
+
+    engine = database.create_engine()
+
+    assert isinstance(engine, FakeEngine)
+    assert captured["kwargs"] == {
+        "pool_size": database.DB_POOL_SIZE,
+        "max_overflow": database.DB_MAX_OVERFLOW,
+        "pool_timeout": database.DB_POOL_TIMEOUT_SECONDS,
+        "pool_recycle": database.DB_POOL_RECYCLE_SECONDS,
+        "pool_pre_ping": True,
+        "echo": False,
+    }
+
+
 def test_database_dispose_and_close_noop_branches(monkeypatch):
     database._engine = None
     database._session_factory = object()
