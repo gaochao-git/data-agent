@@ -23,6 +23,7 @@ from .metadata import (
     get_metadata_adapter_registry,
 )
 from .permission import (
+    datasource_requires_http_permission,
     filter_datasource_members_by_allowed_org_codes,
     filter_datasources_by_allowed_org_codes,
     get_allowed_org_codes_by_executor,
@@ -507,7 +508,19 @@ class DataSourceManager:
     ) -> List[Dict[str, Any]]:
         """异步获取当前用户有机构权限的数据源。"""
         datasources = await self.get_all_datasources_async(include_tables=include_tables)
-        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        include_http_permission = any(
+            datasource_requires_http_permission(datasource)
+            for datasource in datasources
+            if isinstance(datasource, dict)
+        )
+        if include_http_permission:
+            allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        else:
+            allowed_org_codes = await get_allowed_org_codes_by_executor(
+                user_id,
+                username,
+                include_http_permission=False,
+            )
         return filter_datasources_by_allowed_org_codes(datasources, allowed_org_codes)
 
     async def can_access_datasource_async(
@@ -614,7 +627,14 @@ class DataSourceManager:
         username: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """按当前用户机构权限过滤已读取的数据源执行对象。"""
-        allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        if datasource_requires_http_permission(datasource):
+            allowed_org_codes = await get_allowed_org_codes_by_executor(user_id, username)
+        else:
+            allowed_org_codes = await get_allowed_org_codes_by_executor(
+                user_id,
+                username,
+                include_http_permission=False,
+            )
         filtered_datasource = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
         if not filtered_datasource:
             raise ValueError("当前用户无可用执行对象权限")

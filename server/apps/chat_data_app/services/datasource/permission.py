@@ -81,12 +81,48 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
     return org_codes
 
 
-async def get_allowed_org_codes_by_executor(user_id: Optional[str], username: Optional[str]) -> Dict[str, Set[str]]:
-    """Return allowed org codes grouped by executor type."""
+async def get_allowed_org_codes_by_executor(
+    user_id: Optional[str],
+    username: Optional[str],
+    *,
+    include_http_permission: bool = True,
+) -> Dict[str, Set[str]]:
+    """Return allowed org codes grouped by executor type.
+
+    HTTP permission lookup is optional because direct-only datasource groups do
+    not use that permission domain. The default keeps the existing behavior
+    for callers that do not know the datasource executor types.
+    """
     return {
         "direct": {str(code).strip() for code in DIRECT_ORG_CODES if str(code).strip()},
-        "http": await get_http_permission_org_codes(user_id, username),
+        "http": (
+            await get_http_permission_org_codes(user_id, username)
+            if include_http_permission
+            else set()
+        ),
     }
+
+
+def datasource_requires_http_permission(datasource: Dict[str, Any]) -> bool:
+    """Return whether a datasource may contain an HTTP execution target.
+
+    Unknown or incomplete member metadata keeps the conservative old path and
+    therefore still performs the HTTP permission lookup.
+    """
+    member_sources = datasource.get("member_sources")
+    if not isinstance(member_sources, list) or not member_sources:
+        return True
+
+    datasource_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
+    for member in member_sources:
+        if not isinstance(member, dict):
+            return True
+        executor_type = str(member.get("query_executor_type") or datasource_executor_type).strip().lower() or "direct"
+        if executor_type not in {"direct", "http"}:
+            return True
+        if executor_type == "http":
+            return True
+    return False
 
 
 def filter_datasource_members_by_allowed_org_codes(datasource: Dict[str, Any], allowed_org_codes: Dict[str, Set[str]]) -> Optional[Dict[str, Any]]:

@@ -446,6 +446,38 @@ def test_execution_permission_allowed_codes_and_filter_edge_cases(monkeypatch):
     ) is None
 
 
+def test_execution_permission_skips_http_lookup_when_not_required(monkeypatch):
+    async def fail_http_lookup(*_args, **_kwargs):
+        raise AssertionError("direct-only execution must not query HTTP permissions")
+
+    monkeypatch.setattr(execution_permission, "get_http_permission_org_codes", fail_http_lookup)
+    allowed = asyncio.run(
+        execution_permission.get_allowed_org_codes_by_executor(
+            "u1",
+            "用户1",
+            include_http_permission=False,
+        )
+    )
+    assert allowed["direct"]
+    assert allowed["http"] == set()
+
+
+def test_datasource_requires_http_permission_is_conservative():
+    assert execution_permission.datasource_requires_http_permission({
+        "query_executor_type": "direct",
+        "member_sources": [
+            {"member_datasource_id": "m1", "query_executor_type": "direct"},
+        ],
+    }) is False
+    assert execution_permission.datasource_requires_http_permission({
+        "query_executor_type": "direct",
+        "member_sources": [
+            {"member_datasource_id": "m1", "query_executor_type": "http"},
+        ],
+    }) is True
+    assert execution_permission.datasource_requires_http_permission({}) is True
+
+
 class _SaveStore:
     def __init__(self):
         self.saved_kwargs = None
